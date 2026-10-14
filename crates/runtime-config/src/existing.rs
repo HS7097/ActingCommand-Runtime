@@ -52,20 +52,6 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ReadAtAssembly,
     ),
     row(
-        "frame_retention_failed_run_successes",
-        Key,
-        Integer,
-        Code,
-        ReadAtAssembly,
-    ),
-    row(
-        "frame_retention_failed_run_days",
-        Key,
-        Integer,
-        Code,
-        ReadAtAssembly,
-    ),
-    row(
         "frame_retention_dedup_error",
         Key,
         Boolean,

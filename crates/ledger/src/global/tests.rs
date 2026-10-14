@@ -2983,3 +2983,6 @@ mod retention_events;
 // Workflow #395 (LEDG-395): per-phase deadlines of the offline material and runtime fact reads.
 #[path = "tests/gate_395.rs"]
 mod gate_395;
+// Workflow #382 L-5b: replay refuses an eviction intent that carries retired failed-run evidence.
+#[path = "tests/gate_l5b.rs"]
+mod gate_l5b;

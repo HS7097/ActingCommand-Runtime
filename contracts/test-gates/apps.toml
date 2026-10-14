@@ -298,3 +298,12 @@ tests = [
     "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_stray_word_naming_it",
 ]
 incident = ["#382 A1-FLAG"]
+
+# A configuration naming a retired failed-run (K/T) key is refused as unknown at load, by a start and by check-config, and the key table has no row for it (Workflow #382 L-5b)
+[[gate]]
+key = "46"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::l5b_a_configuration_naming_a_retired_failed_run_key_is_refused_as_unknown",
+]
+incident = ["#382 L-5b"]

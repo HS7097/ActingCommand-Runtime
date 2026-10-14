@@ -2409,11 +2409,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): invalid failed run retention policy.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #382 L-5b). actingd and the host refused a failed-run (K/T) retention policy outside its bounds: frame_retention_failed_run_successes outside 1..=1024 or frame_retention_failed_run_days outside 1..=36500. The K/T policy is retired, and with it both configuration keys and the contract type FailedRunRetentionPolicy; a configuration that still names either key does not decode (config_decode_failed), and an instruction naming it is config_key_unknown.",
+      "common_causes": "A configuration written for a Runtime before v0.12.0 that set a K/T key.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted. Remove the key from the configuration."
     },
     "invalid_governance_identity_card": {
       "category": "error",

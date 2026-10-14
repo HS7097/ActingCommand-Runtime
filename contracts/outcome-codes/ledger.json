@@ -135,11 +135,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The ledger reports artifact eviction failed run basis conflict.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #382 L-5b). Replay refused a sealed failed-run (K/T) eviction intent whose evaluation time was not its own ledger time. The failed_run evidence is no member of an eviction intent any more: a stored intent that still carries it does not decode, and replay refuses it as corrupt_ledger_record.",
+      "common_causes": "A ledger written before the K/T policy was retired.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "artifact_eviction_guard_required": {
       "category": "error",

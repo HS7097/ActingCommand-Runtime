@@ -17,7 +17,6 @@ actingcommand_contract::outcome_codes! {
         ArtifactEventNotFound => "artifact_event_not_found": error / none,
         ArtifactEvictionCloseConflict => "artifact_eviction_close_conflict": error / none,
         ArtifactEvictionFailed => "artifact_eviction_failed": error / none,
-        ArtifactEvictionFailedRunBasisConflict => "artifact_eviction_failed_run_basis_conflict": error / none,
         ArtifactEvictionGuardRequired => "artifact_eviction_guard_required": error / none,
         ArtifactEvictionIntentInvalid => "artifact_eviction_intent_invalid": error / none,
         ArtifactEvictionIntentMissing => "artifact_eviction_intent_missing": error / none,
