@@ -359,3 +359,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
 ]
 incident = ["#389 MCP-14"]
+
+# A MuMu resolution reason, as provider startup records it and check-config notes it, carries the context its resolving step recorded as values: what was counted, how many and whether exactly, the resolver rung, and how the adb, the MuMu folder and the capture DLL were configured (Workflow #378 A7; key after the wave 12 reservations apps 50 to 53)
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
+]
+incident = ["#378 A7"]
