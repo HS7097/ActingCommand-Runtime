@@ -363,8 +363,6 @@ impl HostShared {
             })
     }
 
-    /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
-    /// each step of a contained run (the kernel's `step_pacing()`).
     /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
     /// when a run joins the readings it handed to recognition.
     pub(super) fn recognition_join_timeout(&self) -> RuntimeHostResult<Duration> {
@@ -381,6 +379,8 @@ impl HostShared {
             })
     }
 
+    /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
+    /// each step of a contained run (the kernel's `step_pacing()`).
     pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {
         lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
             .sample_timeout_retries()

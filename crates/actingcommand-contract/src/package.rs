@@ -414,6 +414,8 @@ pub enum MaintenanceUse {
     ReturnHome,
     /// Workflow #384 D2-S2: the standard package's recognition maintenance package, the one
     /// package the scheduler runs to read an instance's facts (at most one per server).
+    // Interface anchor `package` (contracts/component-interfaces.md): a reader without this use
+    // refuses the declaration; A8 declares the revision once.
     Recognition,
 }
 

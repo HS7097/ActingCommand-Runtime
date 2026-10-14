@@ -812,6 +812,8 @@ struct InstanceConfig {
     /// Workflow #384 D2-S2 (D2 model §3.2, v1.4.2): the instance's recognition maintenance
     /// package, `{package}`: a location only, never a digest. A relative path resolves against
     /// the configuration file's directory; nothing is opened at assembly.
+    // Interface anchor `actingd-config` revision 5 (contracts/component-interfaces.md): an
+    // earlier Runtime refuses a file that names it; A8 declares the revision once.
     #[serde(default)]
     recognition_package: Option<RecognitionPackageConfigFile>,
     /// Slice #316-B4: `false` turns the stuck-recovery ladder off for this instance
