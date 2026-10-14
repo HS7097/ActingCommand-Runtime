@@ -985,7 +985,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     assert_eq!(state.taps.load(Ordering::Acquire), 2);
 }
 
-// Workflow #336 PKG-S2 (option 丙), model M-PKG v1.1 §4.3 S2-T5 (exec gate 53): a Lab `do`
+// Workflow #336 PKG-S2 (option 丙), model M-PKG v1.1 §4.3 S2-T5 (exec gate 55): a Lab `do`
 // records its package by `package_id` only, and `resource restore` pairs the recorded
 // operation with the original package by that id: the same package restores, also when one of
 // its files changed in place; a package with another id is refused.

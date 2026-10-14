@@ -666,9 +666,9 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #336 PKG-S2 (option 丙): a select step and a truth set without sha256 are admitted and compared as before, the comparison report names the truth set by path only, and a Lab do records its package by package_id while resource restore pairs by that id (same id restores, also changed in place; another id is refused) (M-PKG v1.1 §4.3 S2-T5, S2-T7; key after the wave 9 reservations 51 and 52)
+# Workflow #336 PKG-S2 (option 丙): a select step and a truth set without sha256 are admitted and compared as before, the comparison report names the truth set by path only, and a Lab do records its package by package_id while resource restore pairs by that id (same id restores, also changed in place; another id is refused) (M-PKG v1.1 §4.3 S2-T5, S2-T7; key 55 as the coordinator assigned it: 53 is reserved for D2-S3)
 [[gate]]
-key = "53"
+key = "55"
 coverage = "Y"
 tests = [
     "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::s2_t7_a_select_step_without_a_policy_pin_is_admitted",

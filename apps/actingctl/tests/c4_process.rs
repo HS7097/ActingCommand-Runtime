@@ -449,6 +449,10 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     let replayed = raw_exchange(&info, &request);
     assert_eq!(replayed, first);
 
+    // Workflow #336 PKG-S2 (M-PKG v1.1 §4.3, S2-T6): a replay names its package by
+    // `package_id`, so the conflicting request names another package (another `package_id`).
+    let other_package = root.path().join("other-task.zip");
+    let other_sha256 = write_contained_task_package(&other_package, "neutral.semantic.other");
     let conflicting = RuntimeRequest::new(
         request_id,
         correlation_id,
@@ -459,7 +463,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("conflicting holder id"),
-            ContainedTaskRequest::new(package.display().to_string(), "0".repeat(64))
+            ContainedTaskRequest::new(other_package.display().to_string(), &other_sha256)
                 .expect("conflicting contained task request"),
         ),
     )
@@ -469,6 +473,10 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     assert_eq!(
         denied.error_projection().expect("denial projection").code,
         actingcommand_contract::RuntimeErrorCode::ProtocolInvalid
+    );
+    assert_eq!(
+        denied.outcome().code().as_str(),
+        "contained_task_request_package_reused"
     );
 
     let ledger_client = RuntimeClient::connect(RuntimeClientConfig::new(
@@ -729,26 +737,31 @@ fn raw_exchange(info: &RuntimeInfo, request: &RuntimeRequest) -> RuntimeReceipt 
 }
 
 fn write_neutral_contained_task_package(path: &Path) -> String {
+    write_contained_task_package(path, "neutral.semantic.task")
+}
+
+// The neutral contained task package under `package_id`; only `control.json` names the id.
+fn write_contained_task_package(path: &Path, package_id: &str) -> String {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let files: &[(&str, &[u8])] = &[
-        (
-            "control.json",
-            br#"{
+    let control = format!(
+        r#"{{
                 "schema_version":"Lab-1y.control.v1",
-                "package_id":"neutral.semantic.task",
+                "package_id":"{package_id}",
                 "execution_mode":"navigable_route",
                 "game":"neutral",
                 "server":"test",
-                "resolution":{"width":16,"height":9},
+                "resolution":{{"width":16,"height":9}},
                 "entry_task_id":"task",
                 "capture_interval_ms":1,
                 "step_timeout_ms":50,
                 "timeout_ms":3000,
                 "max_steps":2
-            }"#,
-        ),
+            }}"#
+    );
+    let files: &[(&str, &[u8])] = &[
+        ("control.json", control.as_bytes()),
         (
             "resources/manifest.json",
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #336 PKG-S2 (option 丙), model M-PKG v1.1 §4.3 (host gate 64): a package is named by
+// Workflow #336 PKG-S2 (option 丙), model M-PKG v1.1 §4.3 (host gate 68): a package is named by
 // its `package_id`. A reading's source names that id, not the package's content (S2-T4), and a
 // replayed request is the same package when its package, admitted again, has the recorded id,
 // whatever changed in place (S2-T6).
