@@ -167,8 +167,14 @@ fn wake(ids: &IdentifierIssuer, kind: AgentWakeKind) -> AgentWakeData {
 
 // The JSON object that holds `member`, wherever it is nested.
 fn holder<'a>(value: &'a mut Value, member: &str) -> Option<&'a mut Map<String, Value>> {
+    // Looked up through a shared borrow first, so the mutable one is taken on one path only.
+    if value
+        .as_object()
+        .is_some_and(|object| object.contains_key(member))
+    {
+        return value.as_object_mut();
+    }
     match value {
-        Value::Object(object) if object.contains_key(member) => Some(object),
         Value::Object(object) => object.values_mut().find_map(|child| holder(child, member)),
         Value::Array(items) => items.iter_mut().find_map(|child| holder(child, member)),
         _ => None,
