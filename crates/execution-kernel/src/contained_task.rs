@@ -378,6 +378,10 @@ type OcrEvaluationObserver<'a> = dyn FnMut(
     ) -> Result<(), ContainedTaskError>
     + 'a;
 
+/// A fresh frame's scene (its passed page, or the scene of a frame on which no page passed) and
+/// the timing it was taken under (Workflow #390 EXEC-2).
+type FreshFrameObservation = (Result<PageObservation, Scene>, ContainedTaskTimingContext);
+
 impl<E> ContainedTaskRunError<E> {
     /// A task failure with a code of the runtime host, which the host still holds as its
     /// spelling (A2b registers the host's codes and retypes this constructor).
@@ -4646,10 +4650,7 @@ impl PreparedContainedTask {
         timing: ContainedTaskTimingContext,
         window: Duration,
         retries: &mut SampleRetries,
-    ) -> Result<
-        (Result<PageObservation, Scene>, ContainedTaskTimingContext),
-        ContainedTaskRunError<R::Error>,
-    > {
+    ) -> Result<FreshFrameObservation, ContainedTaskRunError<R::Error>> {
         loop {
             let step_timing = timing.with_deadline(runtime.observation_now() + window);
             match self.capture_frame_scene(runtime, None, None, step_timing, None, None) {
