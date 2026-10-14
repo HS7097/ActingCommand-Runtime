@@ -33,7 +33,7 @@ use actingcommand_contract::{
 };
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::Scene;
-use actingcommand_recognition_pack::RecognitionEvaluator;
+use actingcommand_recognition_pack::{RecognitionEvaluator, RememberedOcrObservations};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::thread;
@@ -893,7 +893,8 @@ impl PreparedContainedTask {
             }
         };
         // Workflow #384 D2-S2 (model §3.5): the entry frame goes to recognition when the entry
-        // page carries marks the run reads.
+        // page carries marks the run reads. A linear frame is captured without the run's
+        // collector, so its page gate keeps no observation for the marks (Workflow #396 REC-6).
         if let Some(observed) = &observation {
             self.hand_off_reading_frame(
                 runtime,
@@ -901,6 +902,7 @@ impl PreparedContainedTask {
                 &observed.page_label,
                 &observed.scene,
                 observed.captured_at,
+                RememberedOcrObservations::default(),
             )?;
         }
         // Workflow #384 D2-S2 (model §3.4): with a requested key set, a segment that reaches no
@@ -958,6 +960,7 @@ impl PreparedContainedTask {
                 &reached.page_label,
                 &reached.scene,
                 reached.captured_at,
+                RememberedOcrObservations::default(),
             )?;
             dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
             let next = match step.run.map(|run| &plan.runs[run]) {

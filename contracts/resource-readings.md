@@ -41,7 +41,7 @@ file. The following is the member only, not a complete task:
 | `id` | `[A-Za-z0-9_\-/.:]`, `1..=128` bytes, unique in the task | `InvalidValue` @ `/resource_readings/<i>/id` |
 | `fact_key` | starts with `resource.` or `inventory.`, satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` |
 | `page_id` | an identifier like `id` (not `any`) naming a page the task declares: its entry, target, error or `scheduling_outcome` pages, or a page one of its operations leaves, reaches or passes through (Workflow #384 D2-S2; it was a terminal page only); the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id`; before any input the Runtime refuses a page its detector does not hold (`page_undeclared`) |
-| `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the terminal frame is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
+| `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the frame handed to recognition is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
 | `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`, `clock_hms`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
 | `minimum_confidence_milli` | `1..=1000` | `InvalidValue` @ `…/minimum_confidence_milli` |
@@ -99,7 +99,9 @@ the frames it reaches their pages on:
   time and hands the frame to recognition. The run does not wait: the marks' OCR targets are
   evaluated on their own thread while the run goes on. A page-graph run hands off from its
   observations (its entry and every page it then recognizes); a `linear_steps` run from its
-  entry frame and the frame each step arrives on.
+  entry frame and the frame each step arrives on. Workflow #396 REC-6: a mark's target that the
+  page gate observed on a page-graph frame goes with the frame, and its recognition takes that
+  observation instead of calling the provider again.
 - **Join.** A successful run joins its readings in `finish_success`, after the operation `0.8`
   fields report (when the task has one) and always before `Finalizing`: frame by frame in
   hand-off order it waits for the frame's recognition, all frames together for at most the

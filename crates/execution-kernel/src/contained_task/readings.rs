@@ -10,7 +10,9 @@
 
 use super::*;
 use actingcommand_contract::ocr_confidence_milli;
-use actingcommand_recognition_pack::{OcrObservationEvaluation, RecognitionPackResult};
+use actingcommand_recognition_pack::{
+    OcrObservationEvaluation, RecognitionPackResult, RememberedOcrObservations,
+};
 use std::sync::mpsc;
 
 /// The recognition results of one handed-off frame, one per mark in mark order.
@@ -199,6 +201,11 @@ impl<'a> ReadingRelay<'a> {
         self.requested
     }
 
+    /// Every reading mark of the run, whether or not the requested key set reads it.
+    pub(super) fn declarations(&self) -> &'a [ResourceReadingDeclaration] {
+        self.declarations
+    }
+
     fn wanted(&self, declaration: &ResourceReadingDeclaration) -> bool {
         self.requested
             .is_none_or(|keys| keys.contains(&declaration.fact_key))
@@ -230,13 +237,15 @@ impl<'a> ReadingRelay<'a> {
 
     /// Hands `scene` to recognition for `declarations` and returns at once. The recognition
     /// runs on its own thread; when no thread can be started, it runs here, so the marks are
-    /// still read.
+    /// still read. Workflow #396 REC-6: a mark's target that the page gate observed on this
+    /// frame (`remembered`) takes that observation instead of calling the provider again.
     fn hand_off(
         &mut self,
         evaluator: &RecognitionEvaluator,
         scene: &Scene,
         captured_at: SystemTime,
         declarations: Vec<ResourceReadingDeclaration>,
+        remembered: RememberedOcrObservations,
     ) -> Result<(), ContainedTaskError> {
         let evaluator = Arc::clone(
             self.evaluator
@@ -250,7 +259,12 @@ impl<'a> ReadingRelay<'a> {
             .iter()
             .map(|declaration| declaration.target_id.clone())
             .collect::<Vec<_>>();
-        let job = Arc::new((evaluator, scene, targets));
+        let job = Arc::new(ReadingJob {
+            evaluator,
+            scene,
+            targets,
+            remembered,
+        });
         let (sender, results) = mpsc::channel();
         let here = sender.clone();
         let thread_job = Arc::clone(&job);
@@ -272,11 +286,22 @@ impl<'a> ReadingRelay<'a> {
     }
 }
 
+/// One handed-off frame's recognition work: the run's evaluator, the frame, its marks' targets
+/// in mark order and the page gate's observations of them on that frame (Workflow #396 REC-6).
+struct ReadingJob {
+    evaluator: Arc<RecognitionEvaluator>,
+    scene: Scene,
+    targets: Vec<String>,
+    remembered: RememberedOcrObservations,
+}
+
 /// The OCR evaluation of every mark's target on one handed-off frame, in mark order.
-fn read_marks(job: &(Arc<RecognitionEvaluator>, Scene, Vec<String>)) -> MarkResults {
-    let (evaluator, scene, targets) = job;
-    let context = evaluator.scene_context(scene);
-    targets
+fn read_marks(job: &ReadingJob) -> MarkResults {
+    let context = job
+        .evaluator
+        .scene_context(&job.scene)
+        .with_remembered_observations(job.remembered.clone());
+    job.targets
         .iter()
         .map(|target| context.evaluate_ocr_observation(target))
         .collect()
@@ -286,6 +311,8 @@ impl PreparedContainedTask {
     /// The run reached `page_label` on the frame it captured last, at `captured_at`. When the
     /// frame starts a pass of a page the run reads marks on, the runtime is told the frame was
     /// handed off and the frame goes to recognition; the run does not wait (model §3.5).
+    /// `remembered` holds the page gate's observations of the run's reading targets on that frame
+    /// (Workflow #396 REC-6), which the recognition takes instead of calling the provider again.
     pub(super) fn hand_off_reading_frame<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -293,6 +320,7 @@ impl PreparedContainedTask {
         page_label: &str,
         scene: &Scene,
         captured_at: SystemTime,
+        remembered: RememberedOcrObservations,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let Some(relay) = ocr_collector.reading_relay.as_mut() else {
             return Ok(());
@@ -304,7 +332,13 @@ impl PreparedContainedTask {
         runtime
             .record(ContainedTaskTrace::ResourceReadingFrame { captured_at })
             .map_err(ContainedTaskRunError::Boundary)?;
-        relay.hand_off(&self.evaluator, scene, captured_at, declarations)?;
+        relay.hand_off(
+            &self.evaluator,
+            scene,
+            captured_at,
+            declarations,
+            remembered,
+        )?;
         Ok(())
     }
 

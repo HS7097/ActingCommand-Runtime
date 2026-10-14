@@ -834,6 +834,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
 
     /// Workflow #396 REC-6: the OCR targets this run collects or reads (fields, the collection
     /// mode's targets, readings), whose observation by a page gate is kept for the same frame.
+    /// Workflow #384 D2-S2: the readings are the reading marks of the run's relay; a frame handed
+    /// to recognition takes the gate's observations of their targets.
     fn remembered_ocr_targets(&self) -> HashSet<String> {
         let fields = self
             .fields
@@ -845,9 +847,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             .into_iter()
             .flat_map(|prepared| prepared.target_ids.iter().cloned());
         let readings = self
-            .resource_readings
-            .into_iter()
-            .flatten()
+            .reading_relay
+            .iter()
+            .flat_map(|relay| relay.declarations().iter())
             .map(|reading| reading.target_id.clone());
         fields.chain(collected).chain(readings).collect()
     }
@@ -2406,7 +2408,7 @@ impl PreparedContainedTask {
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
-        program.validate_resource_reading_targets(&bundle, &evaluator)?;
+        program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -5089,13 +5091,15 @@ impl PreparedContainedTask {
                 return Err(error.into());
             }
             // Workflow #384 D2-S2 (model §3.5): a frame on which the run reaches a page it reads
-            // marks on goes to recognition; the run does not wait for it.
+            // marks on goes to recognition; the run does not wait for it. Workflow #396 REC-6:
+            // the page gate's observations of its marks' targets on this frame go with it.
             self.hand_off_reading_frame(
                 runtime,
                 ocr_collector,
                 &page_label,
                 &scene,
                 frame.captured_at,
+                remembered_ocr,
             )?;
             Ok(Ok(PageObservation {
                 page_label,
@@ -5106,7 +5110,6 @@ impl PreparedContainedTask {
                 frame_started,
                 sample_scenes,
                 sampling: sampled.then_some((timing, sample_deadline)),
-                remembered_ocr,
             }))
         })();
         let capture_ended = Instant::now();
@@ -5296,9 +5299,6 @@ struct PageObservation {
     frame_started: Instant,
     sample_scenes: Vec<Scene>,
     sampling: Option<(ContainedTaskTimingContext, Instant)>,
-    /// Workflow #396 REC-6: the page gate's observations of reading targets on this frame, which
-    /// the terminal frame's readings take instead of calling the provider again.
-    remembered_ocr: actingcommand_recognition_pack::RememberedOcrObservations,
 }
 
 fn sample_geometry_matches(
@@ -6513,11 +6513,13 @@ impl TaskProgram {
     }
 
     /// Before any input: each reading's target is one OCR target that does not locate text and is
-    /// not marked personal by the projection metadata. Workflow #396 REC-6: a page gate may name
-    /// it, and the gate's observation of the terminal frame is the reading's.
+    /// not marked personal by the projection metadata, and its page is one the task declares.
+    /// Workflow #396 REC-6: a page gate may name it, and the gate's observation of the frame
+    /// handed to recognition (Workflow #384 D2-S2) is the reading's.
     fn validate_resource_reading_targets(
         &self,
         bundle: &LoadedBundle,
+        detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<(), ContainedTaskError> {
         for (index, reading) in self.resource_readings.iter().flatten().enumerate() {
@@ -11580,7 +11582,6 @@ mod retry_wiring_tests {
         let mut task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/home".to_owned(),
@@ -11675,7 +11676,6 @@ mod retry_wiring_tests {
         let task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/terminal".to_owned(),
@@ -11718,7 +11718,6 @@ mod retry_wiring_tests {
             .page_id = "any".to_owned();
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/terminal".to_owned(),
@@ -11757,7 +11756,6 @@ mod retry_wiring_tests {
         frame.pixels[3..6].fill(0);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/home".to_owned(),
