@@ -373,7 +373,13 @@ fn d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record() {
     .expect("runtime host");
 
     let (receipt, _) = run_reading_package(&host, &package, &bytes);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "the first run's outcome: {:?}; the Runtime's fatal error: {:?}",
+        receipt.outcome(),
+        host.fatal_error()
+    );
     let k1 = reading_record(&host, "resource.k1");
     let k2 = reading_record(&host, "resource.k2");
     assert_eq!(
@@ -406,7 +412,13 @@ fn d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record() {
         .store(2, Ordering::Release);
     provider.terminal_low.store(true, Ordering::Release);
     let (receipt, correlation_id) = run_reading_package(&host, &package, &bytes);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "the second run's outcome: {:?}; the Runtime's fatal error: {:?}",
+        receipt.outcome(),
+        host.fatal_error()
+    );
     assert_eq!(reading_record(&host, "resource.k2"), k2);
     let (k1_rerun, _) = snapshot_run_and_frame(&reading_record(&host, "resource.k1"));
     assert_ne!(k1_rerun, k1_run, "the home page is read again");
