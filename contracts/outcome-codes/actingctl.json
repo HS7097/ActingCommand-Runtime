@@ -549,7 +549,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_stop_run: no run of this server has the handle.",
+      "description": "ac_stop_run: no run of this server has the handle; actingctl run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id given (run_state not_found).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1727,6 +1727,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl codes or ac_outcome_code could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "run_evidence_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was printed, read from the run's ledger events, as ac_run_evidence answers it (Workflow #389 MCP-6).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

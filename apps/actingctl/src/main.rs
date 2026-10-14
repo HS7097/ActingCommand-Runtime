@@ -53,6 +53,10 @@ mod diagnose;
 mod overview;
 // ---- Workflow #389 MCP-8 (end) ----
 
+// ---- Workflow #389 MCP-6 (begin): `run evidence` (MCP `ac_run_evidence`).
+mod run_evidence;
+// ---- Workflow #389 MCP-6 (end) ----
+
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -180,6 +184,12 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-8 (end) ----
+    // ---- Workflow #389 MCP-6 (begin): `run evidence` takes `--request-id` or `--run-id` and
+    // leaves before `Invocation::parse`; its flags are `flags_of`'s. ----
+    if let Some(exit) = run_evidence::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-6 (end) ----
     match run(arguments, detail) {
         Ok(Done {
             members,
@@ -1102,8 +1112,8 @@ impl Invocation {
                     }
                     key_prefix = Some(prefix);
                 }
-                // Every flag of the table has its arm (`codes`, whose flags `code_lookup`
-                // parses, never comes here).
+                // Every flag of the table has its arm (`codes` and `run evidence`, whose flags
+                // `code_lookup` and `run_evidence` parse, never come here).
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -1296,19 +1306,27 @@ impl Command {
     }
 }
 
-/// Workflow #382 A1-FLAG: the flags a subcommand of [`Invocation::parse`] takes (`emulator` by
-/// its action), as its usage lists them; `None` for a word that is no such subcommand. Any other
-/// flag, a flag given twice and a word that is no flag are refused by name (Fail Loud: nothing
-/// is ignored silently). The offline `codes` leaves before `Invocation::parse` and reads its
-/// flags here (Workflow #389 MCP-14).
-fn flags_of(command: &str, emulator_action: Option<&str>) -> Option<&'static [&'static str]> {
+/// Workflow #382 A1-FLAG: the flags a subcommand of [`Invocation::parse`] takes (`emulator` and
+/// `run` by their action), as its usage lists them; `None` for a word that is no such subcommand.
+/// Any other flag, a flag given twice and a word that is no flag are refused by name (Fail Loud:
+/// nothing is ignored silently). The offline `codes` leaves before `Invocation::parse` and reads
+/// its flags here (Workflow #389 MCP-14), as `run evidence` does (Workflow #389 MCP-6).
+fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static str]> {
     let flags: &'static [&'static str] = match command {
         // Workflow #389 MCP-14: the list flags of `codes`; its code is a positional word.
         "codes" => &["--prefix", "--owner", "--limit", "--cursor"],
+        // Workflow #389 MCP-6: `run evidence`, by request_id or run_id, a page of steps.
+        "run" if action == Some(run_evidence::ACTION) => &[
+            "--state-root",
+            "--request-id",
+            "--run-id",
+            "--from-step",
+            "--limit",
+        ],
         "agent-publish-facts" => &["--state-root", "--record-file"],
         "agent-apply-resource-targets" => &["--state-root", "--policy-file"],
         "config" | "monitor-status" | "selfcheck" => &["--state-root"],
-        "emulator" if emulator_action == Some("discover") => &["--state-root"],
+        "emulator" if action == Some("discover") => &["--state-root"],
         "task-offset" | "observe" | "reset" | "monitor-clear" | "emulator" | "resume" => {
             &["--state-root", "--instance"]
         }

@@ -472,6 +472,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::run_list::runs,
     },
     // End of MCP-3.
+    // ---- Workflow #389 MCP-6 (begin): `ac_run_evidence` ↔ `actingctl run evidence`; observer
+    // before U-3, a general read after it (command table §4.7). ----
+    ToolDef {
+        name: "ac_run_evidence",
+        title: "Run evidence",
+        tier: Tier::Observer,
+        description: super::run_evidence::DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::run_evidence::input_schema,
+        result_schema: super::run_evidence::result_schema,
+        run: super::run_evidence::run,
+    },
+    // ---- Workflow #389 MCP-6 (end) ----
     ToolDef {
         name: "ac_resources_list",
         title: "Targetable resources",
