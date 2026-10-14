@@ -453,6 +453,8 @@ include!("cli_basics.rs");
 
 include!("session_record.rs");
 
+include!("declaration_exclusions.rs");
+
 #[test]
 fn session_record_start_requires_task_id() {
     let _guard = env_lock();

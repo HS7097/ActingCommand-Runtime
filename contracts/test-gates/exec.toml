@@ -580,3 +580,14 @@ tests = [
     "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t8_every_command_the_checks_can_send_is_on_the_whitelist",
 ]
 incident = ["#398"]
+
+# Resource validation: a repository's declared directories admit its regression case families in place of the "no mapped parser" refusal; unknown JSON elsewhere and a malformed declaration are refused (#396 TOOL-2)
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::declaration_exclusions::tests::declared_directories_cover_only_files_inside_them",
+    "actingcommand-resource-tooling::lib::declaration_exclusions::tests::malformed_exclusion_declarations_are_refused_with_the_field_pointer",
+    "actingcommand-actinglab::bin:actinglab::tests::resource_validate_excludes_declared_regression_cases_and_refuses_unknown_json_elsewhere",
+]
+incident = []
