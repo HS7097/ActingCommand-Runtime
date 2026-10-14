@@ -199,14 +199,6 @@ impl LinkMachine {
             .map(|handset| handset.alias.as_str())
     }
 
-    /// The watched handset of `alias`.
-    pub(super) fn instance_of(&self, alias: &str) -> Option<InstanceId> {
-        self.handsets
-            .iter()
-            .find(|(_, handset)| handset.alias == alias)
-            .map(|(instance_id, _)| *instance_id)
-    }
-
     /// The link state that holds a watched handset: its last known state when that is not
     /// `device`; `None` for a handset at `device` or not yet listed, and for any other
     /// instance.

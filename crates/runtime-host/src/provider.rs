@@ -346,6 +346,15 @@ impl RegistryEntry {
             Self::Fixture(fixture) => fixture.instance_id(),
         }
     }
+
+    /// Workflow #398 RD-2: a bound handset's serial and adb; `None` for every other entry.
+    fn bound_handset(&self) -> Option<(DeviceSerial, String)> {
+        match self {
+            Self::Real(entry) => entry.bound_handset(),
+            #[cfg(feature = "fixture-backends")]
+            Self::Fixture(_) => None,
+        }
+    }
 }
 
 struct ExecutionBackendEntry {
@@ -1064,11 +1073,6 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         let mut adb_path = None;
         let mut handsets = Vec::new();
         for (alias, entry) in &self.entries {
-            let entry = match entry {
-                RegistryEntry::Real(entry) => entry,
-                #[cfg(feature = "fixture-backends")]
-                RegistryEntry::Fixture(_) => continue,
-            };
             if let Some((serial, path)) = entry.bound_handset() {
                 adb_path.get_or_insert(path);
                 handsets.push((alias.clone(), serial));

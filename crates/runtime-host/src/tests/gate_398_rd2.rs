@@ -257,10 +257,11 @@ fn rd2_t2_t6_an_idle_handset_that_leaves_device_waits_once_per_state_and_is_unav
     run.host.close().expect("close host");
 }
 
-// T3 (§4.3): back at `device`, the preparation is not queued at once but after
-// `device_link.settle_ms` (default 3000) on the host clock; it runs on a self-check claim and
-// passes, so the handset is available again with `device.connected = true` and one
-// `device_link_restored`. The settle wait's exact time point is the machine row T3's.
+// T3 (§4.3): back at `device`, the preparation is queued after `device_link.settle_ms` (default
+// 3000) on the host clock; it runs on a self-check claim and passes, so the handset is available
+// again with `device.connected = true` and exactly one `device_link_restored`. When the settle
+// wait ends (0 and 3000 alike) is the machine row T3's, on hand-given times, so this row reads
+// no clock.
 #[test]
 fn rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restored() {
     let run = handset_host();
@@ -268,16 +269,9 @@ fn rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restore
     list(host, DeviceLinkState::Device);
     list(host, DeviceLinkState::Absent);
     list(host, DeviceLinkState::Device);
-    // At once, well inside the settle wait, the timers queue nothing.
+    // A timer run at once (inside the settle wait) or the lease sweep's: once the wait passed,
+    // the preparation is queued.
     host.device_link_tick_for_test().expect("tick");
-    let events = all_events(host);
-    assert!(records_of(&events, HostCode::DeviceLinkRestored).is_empty());
-    assert_eq!(
-        last_availability(&events, POLICY_INSTANCE_ALIAS),
-        (false, "device_link:absent".to_owned())
-    );
-
-    // The lease sweep runs the timers: once the wait passed, the preparation is queued.
     wait_until(GATE_WAIT, || {
         !records_of(&all_events(host), HostCode::DeviceLinkRestored).is_empty()
     });
