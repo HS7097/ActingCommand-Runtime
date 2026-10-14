@@ -242,7 +242,10 @@ fn not_evaluated_ocr_targets(
                     reason: NotEvaluatedReason::DynamicTarget,
                     ..
                 }
-            ) && matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr))
+            ) && matches!(
+                evaluator.target_kind(target_id),
+                Ok(TargetKind::Ocr | TargetKind::ValueTest)
+            )
         })
         .map(|(target_id, _)| target_id.clone())
         .collect()
@@ -271,14 +274,18 @@ fn resolve(
         .map_err(|error| CliError::package_invalid(error.to_string()))?
     {
         // Workflow #396 LAB-3: without an OCR model an action's OCR target stays not evaluated,
-        // as before; `observe` reports it under `lab_ocr_unavailable` (`build`).
-        TargetKind::Ocr if ocr.provider().is_none() => ElementResolution::NotEvaluated {
-            target_id: target_id.clone(),
-            reason: NotEvaluatedReason::DynamicTarget,
-        },
-        // A digest, composite or value test (Workflow #396 REC-6) is evaluated like a color
-        // target and, having no template match, gives no geometry. Workflow #396 LAB-3: so is an OCR target, with the Runtime's
-        // OCR provider; a composite with an OCR member is refused without an OCR model.
+        // as before; `observe` reports it under `lab_ocr_unavailable` (`build`). Workflow #396
+        // REC-6: so does a value test, which reads OCR targets.
+        TargetKind::Ocr | TargetKind::ValueTest if ocr.provider().is_none() => {
+            ElementResolution::NotEvaluated {
+                target_id: target_id.clone(),
+                reason: NotEvaluatedReason::DynamicTarget,
+            }
+        }
+        // A digest or composite is evaluated like a color target and, having no template match,
+        // gives no geometry. Workflow #396 LAB-3: so is an OCR target, with the Runtime's OCR
+        // provider; a composite with an OCR member is refused without an OCR model. Workflow
+        // #396 REC-6: a value test is evaluated likewise.
         TargetKind::Template
         | TargetKind::Color
         | TargetKind::ColorDigest

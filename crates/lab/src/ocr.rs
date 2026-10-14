@@ -16,7 +16,9 @@ use actingcommand_contract::{InstalledProcess, LabError, LabResult};
 use actingcommand_execution_kernel::VisionFfiProvider;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
-use actingcommand_recognition_pack::{RecognitionPack, RecognitionTarget, VisionProvider};
+use actingcommand_recognition_pack::{
+    RecognitionPack, RecognitionTarget, ValueTestRight, VisionProvider,
+};
 use actingcommand_vision_ffi::{
     ONNXRUNTIME_LIBRARY, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VISION_RUNTIME_DIRECTORY,
     VisionListingCode, VisionRuntimeSpec, list_vision_models,
@@ -212,7 +214,8 @@ impl LabOcr {
     }
 
     /// Refuses with [`Self::unavailable_error`] when OCR is unavailable and evaluating one of
-    /// `target_ids` reaches an OCR target: the target itself, or a member of a composite.
+    /// `target_ids` reaches an OCR target: the target itself, a side of a value test (Workflow
+    /// #396 REC-6), or either as a member of a composite.
     pub fn require<'a>(
         &self,
         pack: &RecognitionPack,
@@ -284,8 +287,9 @@ fn with_os_cause(outcome: Outcome, cause: Option<&Outcome>) -> Outcome {
     }
 }
 
-/// The OCR target evaluating `target_id` reaches: the target itself or the first OCR member
-/// of a composite.
+/// The OCR target evaluating `target_id` reaches: the target itself, the OCR target a side of a
+/// value test reads (Workflow #396 REC-6; the left side first), or the first of those a member
+/// of a composite reaches.
 fn reached_ocr_target<'p>(pack: &'p RecognitionPack, target_id: &str) -> Option<&'p str> {
     let ocr = |id: &str| {
         pack.targets.iter().find_map(|target| match target {
@@ -293,12 +297,25 @@ fn reached_ocr_target<'p>(pack: &'p RecognitionPack, target_id: &str) -> Option<
             _ => None,
         })
     };
-    ocr(target_id).or_else(|| {
+    let reached = |id: &str| {
+        ocr(id).or_else(|| {
+            pack.targets.iter().find_map(|target| match target {
+                RecognitionTarget::ValueTest(test) if test.id == id => {
+                    ocr(test.left.target_id.as_str()).or_else(|| match &test.right {
+                        Some(ValueTestRight::Operand(operand)) => ocr(operand.target_id.as_str()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        })
+    };
+    reached(target_id).or_else(|| {
         pack.targets.iter().find_map(|target| match target {
             RecognitionTarget::Composite(composite) if composite.id == target_id => composite
                 .members
                 .iter()
-                .find_map(|member| ocr(member.as_str())),
+                .find_map(|member| reached(member.as_str())),
             _ => None,
         })
     })
