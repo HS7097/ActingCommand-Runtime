@@ -86330,9 +86330,10 @@
       "owner": "runtime-host",
       "layer": "host",
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A Runtime host operation or stage: runtime state observation missing."
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #383 AO-4q). A Runtime host operation or stage: runtime state observation missing, where a status read read back the observation record it had appended. Since 0.12.0 a status read appends no record, so there is nothing to read back."
     },
     "runtime_state_source": {
       "owner": "runtime-host",
