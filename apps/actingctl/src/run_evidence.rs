@@ -28,7 +28,8 @@
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem, RunState};
 use crate::material_export;
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{Outcome, RawSource};
 use actingcommand_contract::{
     ArtifactKind, ArtifactProducer, ArtifactRedactionState, EventActor, EventPayload, EventQuery,
     EventSource, EventType, FrameId, InputAction, InputSamplingEvidence, ProjectedEvent,
@@ -91,7 +92,8 @@ impl Failure {
     /// The failure as an outcome (Workflow #378 A5). An argument failure is the CLI's
     /// `actingctl_usage_invalid` with `argument`, `argument_problem` and, for a range,
     /// `range_min` and `range_max` (MCP answers `arguments_invalid` with the same values). A run
-    /// nobody has is `run_unknown` with the request_id given and `run_state` `not_found`.
+    /// nobody has is `run_unknown` with the request_id given and `run_state` `not_found`. A record
+    /// that does not encode is `actingctl_output_failed`, caused by the encoder's failure.
     pub(crate) fn outcome(&self) -> Outcome {
         match self {
             Self::Argument {
@@ -114,7 +116,11 @@ impl Failure {
                     None => outcome,
                 }
             }
-            Self::Output(_) => Outcome::new(ActingctlCode::ActingctlOutputFailed),
+            Self::Output(error) => Outcome::new(ActingctlCode::ActingctlOutputFailed).caused_by(
+                Outcome::new(ContractCode::ForeignDataError)
+                    .raw_source(RawSource::Json)
+                    .raw_text(error.to_string()),
+            ),
             Self::Runtime(error) => error.outcome(),
         }
     }
