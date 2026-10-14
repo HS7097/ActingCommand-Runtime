@@ -570,47 +570,29 @@ evidence: retention cannot silently reinterpret file loss as authorized eviction
 missing file without an eviction proof stays `Unrecorded`; since Workflow #375 R5a no
 formal opening reads material, so it no longer fails verification.
 
-Failed or cancelled runs may satisfy the status condition through the configured
-K/T policy: by default, three later successful runs with distinct RunIds on the
-same InstanceId, or seven days from the original terminal's ledger timestamp.
-The original Ledger writer derives a per-run terminal index and per-instance
-ordered successes from the authenticated prefix; reconstruction spans owner
-epochs without resetting the count. Duplicate/ambiguous terminals and missing
-instance, owner or terminal time do not qualify. Selection and guarded admission
-use the same rule, with a fresh writer-side check before sealing.
+The K/T policy is retired (Workflow #382 L-5, after #375 R5d). It let a failed or
+cancelled run's frames qualify for an eviction intent after K later successful runs
+on the same InstanceId or T days. Since R5d the frame cleaner admits no eviction
+intent, and the Ledger writer no longer evaluates or seals failed-run evidence: an
+intent the writer builds names only its original `success` source, and its append
+check refuses an intent with `failed_run` evidence (`artifact_eviction_not_eligible`).
+Frames of failed runs follow the frame classes below.
 
-An eviction intent contains exactly one of the original `success` source or
-`failed_run` evidence. The latter records the original terminal reference and
-outcome, its timestamp, effective `successor_successes`/`retention_days`, the
-writer evaluation timestamp, and either the ordered successor terminal references
-or `elapsed_time`. K takes precedence when both conditions hold. Day expiry uses
-checked elapsed time; K is ordered by committed sequence. The intent's own ledger
-timestamp equals the frozen evaluation time. Guarded admission reproduces the
-basis from that prefix and those sealed parameters, independently of the current
-configuration; replay checks the evaluation time and that every sealed terminal
-reference resolves, and does not reproduce the basis. Historical success intents
-retain their required original proof; no missing historical facts are synthesized.
+An eviction intent already in a ledger contains exactly one of the original
+`success` source or `failed_run` evidence. Replay checks that a `failed_run`
+intent's evaluation time equals its own ledger timestamp and that every sealed
+terminal reference resolves, and does not reproduce the basis. Historical success
+intents retain their required original proof; no missing historical facts are
+synthesized.
 
-The failed/cancelled branch retains verified material identity, confirmed close,
-capture summary and matching scheduled settlement. Scheduled failures use their
-existing failed execution settlement; the production scheduled-cancellation path
-already commits a failure terminal and settlement. Non-scheduled cancellations
-retain their cancelled terminal. Warning/nearest-frame evidence, published-fact
-artifacts, input before-frames, Lab association, permanent pins and
-unlinked-warning protections remain. A CaptureSummary pin marks evidence only
-and protects nothing; the writer's own stale-owner recovery report
-(`ledger.recovered`, reason `stale_owner`, `affected_bytes` 0) is not an
-unlinked warning. K/T eligibility does not imply that every failed frame can be
-removed.
-The same try-only material guard, intent-before-action/outcome-after-action and
-round limits apply. Recovery consumes sealed pending intents without changing
-their policy or re-judging eligibility. Under the same try-only guard it
-re-reads the material: absent material records `recovery_absent`; material
-still present with the sealed byte count and SHA-256 is removed once under the
-original Intent and records `deleted` (or `failed`). Nothing is unlinked
+Startup recovery consumes sealed pending intents without changing them or
+re-judging eligibility, under the same try-only material guard,
+intent-before-action/outcome-after-action order and round limits. Under that
+guard it re-reads the material: absent material records `recovery_absent`;
+material still present with the sealed byte count and SHA-256 is removed once
+under the original Intent and records `deleted` (or `failed`). Nothing is unlinked
 without that verification. Disabling periodic retention leaves that startup
-recovery intact. No unpin or synthetic-close permission follows
-from K/T.
+recovery intact.
 
 Explicit Lab unpin uses the existing `LabRequest` event type with a closed
 `ClientPayload::LabPinRelease` target (artifact ID and pin sequence/event ID).
@@ -639,15 +621,19 @@ no separate durable store either.
 
 CaptureSummary pin reasons mark evidence only: since Workflow #332 H2f no summary
 pin, historical ones included, grants retention. Warning/nearest-frame evidence,
-published-fact artifacts, input before-frames and unlinked-warning protections
-remain. Releasing a Lab pin does not remove any of those protections or create
-close, success or K/T evidence. Material guards, the sole eviction
+published-fact artifacts and input before-frames remain protections of eviction
+admission; the unlinked-warning latch stops no frame cleanup (Alice 10-08), and since
+Workflow #375 R5d the cleaner calls no eviction admission (Frame cleaner, below). The
+writer's own stale-owner recovery report (`ledger.recovered`, reason `stale_owner`,
+`affected_bytes` 0) is not an unlinked warning.
+Releasing a Lab pin does not remove any of those protections or create close or
+success evidence. Material guards, the sole eviction
 admission/outcome chain and pending-intent recovery are unchanged; no material
 I/O occurs in the unpin command.
 
 Replay validates integrity, not eligibility (Workflow #332 H2f Q3). Eligibility
 (Warning/nearest-frame, input-before, Lab and unlinked-warning protections, active
-pins, close, success or K/T, capture summary and settlement) is decided only by the
+pins, close, success, capture summary and settlement) is decided only by the
 sole Ledger writer when it admits an Explicit pin release or an eviction Intent.
 An Explicit pin release is judged once, at its append; only an eviction Intent
 is judged at both admission points, when the writer builds it and again at its
