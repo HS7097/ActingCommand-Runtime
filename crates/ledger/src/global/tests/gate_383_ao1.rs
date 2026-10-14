@@ -137,7 +137,13 @@ impl Root {
         maintenance
             .initialize_empty(&database)
             .expect("formal ledger");
-        maintenance.close().expect("release the maintenance owner");
+        // The writer opens once and closes, as on a formal root (the assembly of
+        // `missing_material.rs`): its owner metadata is what every later start reads.
+        maintenance
+            .open_writer(Arc::clone(&database), OWNER.into())
+            .expect("formal writer")
+            .close()
+            .expect("close the formal writer");
         Self {
             directory,
             fallback: tempfile::tempdir().expect("fallback folder"),
