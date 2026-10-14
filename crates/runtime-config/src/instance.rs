@@ -4,13 +4,15 @@
 //! in the file the member of the `instances[]` entry with that `instance_id`. D1b hangs the two
 //! existing stuck-recovery members here, settable while the Runtime runs; D1c gives them the
 //! `recovery_ladder` section's `enabled` and `cooldown_secs` in effect as their defaults (§5.5
-//! `section:`, §2.1 row 18b).
+//! `section:`, §2.1 row 18b). Workflow #398 RD-1b adds `device_kind`, the entry's `device.kind`
+//! (model-398 v1.1 §11.2): reported only for an instance that names it, read at assembly.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder;
 use crate::table::{
-    DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
+    DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
+    instance_key,
 };
 use actingcommand_contract::{FactScalar, InstanceStuckRecovery};
 
@@ -18,6 +20,10 @@ use actingcommand_contract::{FactScalar, InstanceStuckRecovery};
 pub const STUCK_RECOVERY: &str = "stuck_recovery";
 /// The member that sets one instance's stuck-recovery cool-down, in seconds.
 pub const STUCK_RECOVERY_COOLDOWN_SECS: &str = "stuck_recovery_cooldown_secs";
+/// Workflow #398 RD-1b: the kind of device the instance drives, `device.kind` in its entry.
+pub const DEVICE_KIND: &str = "device_kind";
+/// The values of [`DEVICE_KIND`] (model-398 v1.1 §3.1).
+pub const DEVICE_KIND_TOKENS: &[&str] = &["emulator", "handset"];
 
 pub(crate) static ROWS: &[KeyRow] = &[
     KeyRow {
@@ -41,6 +47,16 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::Section(recovery_ladder::COOLDOWN_SECS),
         settable: Settable::Yes,
         reader: "D1c",
+        since: "0.12.0",
+    },
+    KeyRow {
+        name: KeyName::PerInstance(DEVICE_KIND),
+        file_path: FilePath::InstanceMemberAt("device.kind"),
+        value_type: ValueType::String,
+        range: KeyRange::Tokens(DEVICE_KIND_TOKENS),
+        default: DefaultSource::None,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "RD-1b",
         since: "0.12.0",
     },
 ];

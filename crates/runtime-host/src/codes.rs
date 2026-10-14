@@ -2007,6 +2007,8 @@ actingcommand_contract::outcome_locations! {
         InterruptHandle => "interrupt_handle",
         AdbEndpointPending => "adb_endpoint_pending",
         AdbEndpointUnresolved => "adb_endpoint_unresolved",
+        // Workflow #398 RD-1b: a handset the private binding file binds no device to.
+        DeviceEndpointUnbound => "device_endpoint_unbound",
         DeviceRegistryInputOperation => "device_registry_input_operation",
         EmulatorControlBinding => "emulator_control_binding",
         EmulatorControlRegistration => "emulator_control_registration",

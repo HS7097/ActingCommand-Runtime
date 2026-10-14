@@ -63,8 +63,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     )
     .map_err(|code| registered(code, ActingdLocation::ConfigLoad))
     .and_then(|file| {
-        file.assemble()
-            .map_err(|code| registered(code, ActingdLocation::ConfigAssemble))
+        // Workflow #398 RD-1b: the device refusal's detail, when the assembly meets it.
+        let device = file.device_refusal();
+        file.assemble().map_err(|code| {
+            if let Some(device) = device.filter(|device| device.code() == code) {
+                rejection = Some(Rejection::Device(device));
+            }
+            registered(code, ActingdLocation::ConfigAssemble)
+        })
     })
     .and_then(|assembly| {
         let RuntimeAssembly {
@@ -76,7 +82,17 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             resource_packages,
             ignored_env_overrides,
             adb_requirement,
+            unbound_handsets,
+            unused_device_bindings,
         } = assembly;
+        // Workflow #398 RD-1b (model-398 v1.1 §3.6): a handset the private binding file binds
+        // no device to is refused here; a start registers it unavailable and goes on.
+        if let Some(alias) = unbound_handsets.into_iter().next() {
+            let refused = config::DeviceRefusal::Missing(alias);
+            let code = refused.code();
+            rejection = Some(Rejection::Device(refused));
+            return Err(registered(code, ActingdLocation::ConfigAssemble));
+        }
         // Workflow #337: the install root's adb, checked exactly as at startup.
         let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
             let code = refused.code();
@@ -134,6 +150,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             ignored_env_overrides,
             adb_default,
             vision,
+            unused_device_bindings,
         };
         let mut report = summarize(&config_path, &checked, &resource_packages)?;
         // Workflow #361 C3: the plan startup would make, from the ledger read-only.
@@ -170,6 +187,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             if let Some(rejection) = rejection {
                 let (detail, message) = match rejection {
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
+                    Rejection::Device(refused) => (refused.detail(), refused.to_string()),
                     Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
                     Rejection::PolicyState(refused, elapsed_ms) => {
                         // Review P6: a refused plan carries its remedy; a ledger or state
@@ -271,6 +289,9 @@ enum Rejection {
     PolicyState(Box<actingcommand_runtime_host::RuntimeHostError>, u64),
     Vision(config::VisionRefusal),
     VisionFolders(Vec<InvalidModelFolder>),
+    /// Workflow #398 RD-1b: an instance's device declaration, the private binding file or a
+    /// handset without a binding (stage `assemble`).
+    Device(config::DeviceRefusal),
 }
 
 /// Everything `summarize` reports once every check passed: the registry as configured and
@@ -293,6 +314,9 @@ struct CheckedAssembly {
     adb_default: Option<config::ac_adb::AdbDefault>,
     /// Workflow #360: the listed vision root; `None` when `vision` is absent.
     vision: Option<serde_json::Value>,
+    /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
+    /// has, in file order.
+    unused_device_bindings: Vec<String>,
 }
 
 /// Workflow #361 C3: `policy_plan`, startup's catalog plan as previewed from the ledger.
@@ -431,9 +455,11 @@ fn summarize(
                     ActingdLocation::ConfigValidate,
                 )
             })?;
+            // Workflow #398 RD-1b: a handset is addressed by its serial and has no host or port.
             let endpoint = resolved
                 .adb_endpoint()
-                .and_then(ResolvedInstanceEndpoint::bound);
+                .and_then(ResolvedInstanceEndpoint::bound)
+                .filter(|endpoint| endpoint.handset().is_none());
             Ok(json!({
                 "alias": alias,
                 "mode": mode,
@@ -522,6 +548,9 @@ fn summarize(
         "warnings": config::env_override_warnings(&checked.ignored_env_overrides)
             .iter()
             .map(config::env_override_warning_v1)
+            .chain(checked.unused_device_bindings.iter().map(|alias| {
+                format!("{}:{alias}", ActingdCode::DeviceBindingUnused.as_str())
+            }))
             .collect::<Vec<_>>(),
     });
     if let Some(unresolved) = mumu_root_unresolved {

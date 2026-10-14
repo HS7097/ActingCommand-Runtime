@@ -72,6 +72,13 @@ impl TouchBackendChoice {
             Self::AdbShellInput => "adb_shell_input",
         }
     }
+
+    /// #398 R1 §3.1 (RD-1b): a handset has no Nemu IPC input; every other choice stays open to
+    /// both kinds (the automatic choices are refused elsewhere: every instance names its
+    /// backend).
+    pub fn allowed_on(self, kind: crate::DeviceKind) -> bool {
+        !matches!((self, kind), (Self::NemuIpc, crate::DeviceKind::Handset))
+    }
 }
 
 #[derive(Debug, Clone)]

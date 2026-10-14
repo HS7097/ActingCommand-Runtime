@@ -26728,6 +26728,14 @@
       "since": "0.12.0",
       "description": "Stage of an endpoint rebind refusal: the started instance reported ADB port 0."
     },
+    "device_endpoint_unbound": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a session-opening refusal: the instance is a handset the private binding file binds no device to (Workflow #398 RD-1b), so no adb command runs against it."
+    },
     "device_registry_input_operation": {
       "owner": "runtime-host",
       "layer": "host",

@@ -25,9 +25,9 @@ use actingcommand_policy::{
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, CatalogTransitionRequest, DiscoverySpec, ExecutionBackendProvider,
     ExecutionBackendRegistration, ExecutionBackendRegistry, FixtureInstanceSpec, GovernancePolicy,
-    InstanceMode, InstanceSpec, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
-    ProcedureBinding, ProcedureManifest, ProviderAssembly, RecognitionVisionProvider,
-    RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
+    HandsetEndpoint, InstanceMode, InstanceSpec, PerformanceMonitorConfig, PolicyCadence,
+    PolicyInputSnapshot, ProcedureBinding, ProcedureManifest, ProviderAssembly,
+    RecognitionVisionProvider, RuntimeHostConfig, RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionListingCode,
@@ -43,6 +43,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(super) mod ac_adb;
+mod device_binding;
+pub(crate) use device_binding::DeviceRefusal;
 mod manifest;
 #[cfg(test)]
 pub(crate) use manifest::env_overrides_subsystem;
@@ -786,6 +788,14 @@ struct InstanceConfig {
     stuck_recovery_cooldown_secs: Option<u32>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
+    /// `{kind, transport}`; absent is an emulator.
+    #[serde(default)]
+    device: Option<device_binding::InstanceDeviceConfigFile>,
+    /// Workflow #398 RD-1b: a handset's device from the private binding file, bound or unbound,
+    /// set by `assemble`; `None` for an emulator.
+    #[serde(skip)]
+    handset: Option<HandsetEndpoint>,
     /// The daemon-level `device_paths`, copied in by `assemble` so a deferred instance
     /// registered after discovery applies the same paths as an explicit one.
     #[serde(skip)]
@@ -866,6 +876,12 @@ pub(super) struct RuntimeAssembly {
     /// Workflow #337: the install root's adb and the instances that use it, checked by
     /// `ac_adb::require` before any side effect. Internal; never a configuration field.
     pub(super) adb_requirement: ac_adb::AdbRequirement,
+    /// Workflow #398 RD-1b: the handset instances the private binding file binds no device to,
+    /// in configuration order: registered unbound at a start, refused by `check-config`.
+    pub(super) unbound_handsets: Vec<String>,
+    /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
+    /// of the configuration has, in file order (`check-config` notes).
+    pub(super) unused_device_bindings: Vec<String>,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -1213,7 +1229,16 @@ impl ActingdConfigFile {
         // Workflow #387 D1b: the members of the per-instance section as the file names them, the
         // file layer the configuration mechanism resolves (`instances[]` by `instance_id`).
         let mut instance_members = Vec::with_capacity(instances.len());
+        // Workflow #398 RD-1b: the handset instances, in configuration order.
+        let mut handsets = Vec::new();
         for instance in &mut instances {
+            if instance.fixture_backend.is_none()
+                && device_binding::check_device(instance)
+                    .map_err(|_| ActingdCode::DeviceConfigInvalid.code())?
+                    == DeviceKind::Handset
+            {
+                handsets.push(instance.alias.clone());
+            }
             instance.device_paths = device_paths.clone();
             instance.env_overrides = env_overrides.clone();
             if instance.fixture_backend.is_none() {
@@ -1250,6 +1275,14 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::STUCK_RECOVERY_COOLDOWN_SECS.to_owned(),
                 serde_json::json!(instance.stuck_recovery_cooldown_secs),
             );
+            // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
+            if let Some(device) = &instance.device {
+                members.insert(
+                    "device".to_owned(),
+                    serde_json::to_value(device)
+                        .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+                );
+            }
             instance_members.push(serde_json::Value::Object(members));
             instance_ids.push(instance_id);
             if let Some(path) = instance.resource_package.take() {
@@ -1271,6 +1304,18 @@ impl ActingdConfigFile {
                 );
             }
         }
+        // Workflow #398 RD-1b (model-398 v1.1 §3.2, §3.6): the private binding file, read once
+        // and only when a handset is configured.
+        let (unbound_handsets, unused_device_bindings) = if handsets.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            let mut bound = device_binding::bind_handsets(&self.state_root, &handsets)
+                .map_err(|refused| refused.code())?;
+            for instance in &mut instances {
+                instance.handset = bound.endpoints.remove(&instance.alias);
+            }
+            (bound.unbound, bound.unused)
+        };
         let configured_aliases = instances
             .iter()
             .map(|instance| instance.alias.clone())
@@ -1464,7 +1509,34 @@ impl ActingdConfigFile {
             resource_packages,
             ignored_env_overrides,
             adb_requirement,
+            unbound_handsets,
+            unused_device_bindings,
         })
+    }
+
+    /// Workflow #398 RD-1b: the device refusal `assemble` meets first, if any, with its detail:
+    /// the same checks in the same order (each device instance's `device`, then the private
+    /// binding file when a handset is configured). `check-config` and the start attach it when
+    /// `assemble` refuses with its code.
+    pub(super) fn device_refusal(&self) -> Option<DeviceRefusal> {
+        let mut handsets = Vec::new();
+        for instance in self
+            .instances
+            .iter()
+            .filter(|instance| instance.fixture_backend.is_none())
+        {
+            match device_binding::check_device(instance) {
+                Ok(DeviceKind::Handset) => handsets.push(instance.alias.clone()),
+                Ok(DeviceKind::Emulator) => {}
+                Err(refused) => return Some(DeviceRefusal::Config(refused)),
+            }
+        }
+        if handsets.is_empty() {
+            return None;
+        }
+        device_binding::bind_handsets(&self.state_root, &handsets)
+            .err()
+            .map(DeviceRefusal::BindingFile)
     }
 }
 
@@ -1857,6 +1929,12 @@ impl InstanceConfig {
     fn backend(self) -> Result<ConfiguredInstance, Code> {
         if self.fixture_backend.is_some() {
             self.fixture_backend().map(ConfiguredInstance::Spec)
+        } else if self.handset.is_some() {
+            // Workflow #398 RD-1b: a handset is addressed by its serial; it has no host or port.
+            let adb_path = self.configured_adb_path()?;
+            self.device_registration(adb_path, default_device_host(), None)
+                .map(InstanceSpec::real)
+                .map(ConfiguredInstance::Spec)
         } else if let Some(key) = self.binding_key()? {
             self.deferred_backend(key)
         } else {
@@ -1957,27 +2035,22 @@ impl InstanceConfig {
         ) {
             return Err(ActingdCode::CaptureBackendMustBeExplicit.code());
         }
-        // #398 R1 §5.1 (RD-3i): scrcpy is selectable on a real device only.
-        if !capture_requested.allowed_on(self.device_kind()) {
-            return Err(ActingdCode::DeviceConfigInvalid.code());
-        }
+        // #398 R1 §5.1 (RD-3i) and §3.1 (RD-1b): which backends the instance's device kind
+        // has is checked with its `device` member (`device_binding::check_device`).
         Ok((requested, capture_requested))
     }
 
-    /// #398 R1 §3.1: the instance's device kind. RD-1b adds the key `device.kind`; until then
-    /// every configured instance is an emulator.
-    fn device_kind(&self) -> DeviceKind {
-        DeviceKind::Emulator
+    /// Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
+    /// `ac_adb::require`; outside an install root it is still refused.
+    fn configured_adb_path(&self) -> Result<String, Code> {
+        self.adb_path
+            .clone()
+            .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
+            .ok_or(ActingdCode::InstanceConfigInvalid.code())
     }
 
     fn device_backend(self) -> Result<InstanceSpec, Code> {
-        // Workflow #337 (A4): an absent `adb_path` takes the install root's adb, checked by
-        // `ac_adb::require`; outside an install root it is still refused.
-        let adb_path = self
-            .adb_path
-            .clone()
-            .or_else(|| self.adb.selected().map(ac_adb::InstalledAdb::path_string))
-            .ok_or(ActingdCode::InstanceConfigInvalid.code())?;
+        let adb_path = self.configured_adb_path()?;
         let host = self.host.clone().unwrap_or_else(default_device_host);
         let port = self.port.unwrap_or_else(default_device_port);
         self.device_registration(adb_path, host, Some(port))
@@ -2032,14 +2105,28 @@ impl InstanceConfig {
         if let Some(timeout) = bounded_duration(self.command_timeout_ms)? {
             adb.command_timeout = timeout;
         }
-        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`.
-        let target = DeviceTarget {
-            serial: self
-                .serial
-                .map(|serial| DeviceSerial::handset(serial, &self.alias)),
-            host,
-            port: port.unwrap_or(0),
-            connect,
+        // Workflow #398 RD-1a: a configured serial is shown only as `handset:<alias>`. RD-1b
+        // (model-398 v1.1 §3.1): a handset is addressed by its bound serial (an unbound one by
+        // the stand-in no session opens on) and is never `adb connect`ed.
+        let handset = self.handset.clone();
+        let target = match &handset {
+            Some(handset) => DeviceTarget {
+                serial: Some(handset.binding().map_or_else(
+                    || DeviceSerial::unbound_handset(&self.alias),
+                    |binding| binding.serial().clone(),
+                )),
+                host,
+                port: port.unwrap_or(0),
+                connect: false,
+            },
+            None => DeviceTarget {
+                serial: self
+                    .serial
+                    .map(|serial| DeviceSerial::handset(serial, &self.alias)),
+                host,
+                port: port.unwrap_or(0),
+                connect,
+            },
         };
         let mut maatouch = MaaTouchConfig::default();
         // The injected `ACTINGCOMMAND_MINITOUCH_PATH` (only under `allow_env_overrides`)
@@ -2102,6 +2189,10 @@ impl InstanceConfig {
             Some(index) => registration.with_nemu_app_index(index),
             None => Ok(registration),
         })
+        .map(|registration| match handset {
+            Some(handset) => registration.with_handset(handset),
+            None => registration,
+        })
         .map_err(|_| ActingdCode::InstanceRegistrationInvalid.code())
     }
 
@@ -2125,6 +2216,7 @@ impl InstanceConfig {
             || self.handshake_timeout_ms.is_some()
             || self.shutdown_timeout_ms.is_some()
             || self.tap_hold_ms.is_some()
+            || self.device.is_some()
         {
             return Err(ActingdCode::FixtureDeviceFieldsForbidden.code());
         }
@@ -2893,9 +2985,8 @@ mod tests {
         );
     }
 
-    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance is refused as
-    /// `device_config_invalid` (every configured instance is an emulator until RD-1b adds
-    /// `device.kind`).
+    /// #398 R1 RD-3i-T5: `capture_backend: scrcpy` on an emulator instance (no `device`
+    /// member) is refused as `device_config_invalid`.
     #[test]
     fn scrcpy_capture_on_an_emulator_instance_is_refused() {
         let id = IdentifierIssuer::new()

@@ -41,7 +41,7 @@ pub use effective::{
     OVERRIDE_VALUE_JSON, OverridesInvalid, RestoreNote,
 };
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
-pub use instance::{STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS};
+pub use instance::{DEVICE_KIND, DEVICE_KIND_TOKENS, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS};
 pub use recovery_ladder::{
     AlreadyRunning, BurstWindow, CodePattern, CooldownOpensOn, DirectRuns, EntryUnavailable,
     HoldConfig, LadderConfig, LadderRules, MatchedBy, PreparationSuperseded, RecoveryLadderFile,

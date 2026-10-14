@@ -156,9 +156,13 @@ sanitization. The port is a plain payload field,
 because an instance is recognised in the ledger by its ADB port; the audit
 `device_endpoint` keeps its existing redaction wherever it is carried, and this
 event carries no audit endpoint of its own. `serial_configured` states that
-an explicit serial was configured, so the recorded host and port are the
-configured target rather than the resolved transport serial; the resolved serial
-is never parsed. An instance with no ADB target, including a fixture simulation,
+the instance is addressed by a serial (a configured `serial`, or a handset's bound
+serial); such an instance records no host and no port (Workflow #398 RD-1b), and
+the serial itself is never recorded or parsed. A handset also records `device`:
+`{kind, fingerprint, bound_at_unix_ms, bound_via}`, the fingerprint being the
+ledger's salted SHA-256 of the serial, or only `{kind}` while the private binding
+file binds no device to it ([device-binding.md](device-binding.md)); an emulator
+records no `device`. An instance with no ADB target, including a fixture simulation,
 omits host and port, and so does a discovered binding that is still pending
 (the instance was stopped at startup): it carries the discovered index, name
 and provider version with `binding_source` `discovered` and no host or port.

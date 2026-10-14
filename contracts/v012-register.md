@@ -344,6 +344,34 @@ not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h)
 `contained_task_navigation_recovery_exhausted` registered pending by D1c (runtime-host, error,
 `pack_logic_mismatch`) for NAV-5 to emit.
 
+### 1.20 Wave 6 slice RD-1b (#398 model-398 v1.1 §3, §11, §12)
+
+RD-1b brings its own shapes and writes them; [device-binding.md](device-binding.md) is the
+contract. No member carries a device serial: a handset is recorded by its fingerprint and shown
+by its label `handset:<alias>`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RB1 | `runtime.instance_bound` + `device?` (`RuntimeInstanceDeviceBinding`) | new optional member | RD-1b | RD-1b | `{kind, fingerprint?, bound_at_unix_ms?, bound_via?}` (`deny_unknown_fields`): `kind` `handset` (`InstanceDeviceKind`, `emulator` reserved for the record); `fingerprint` the ledger's salted SHA-256 of the serial (`sha256:<64 hex>`, field `device_serial`); `bound_via` `cli`, `mcp`, `ui` or `manual` (`DeviceBoundVia`); the last three present together for a bound handset and absent for an unbound one; only a handset records `device`, so an emulator's record is unchanged |
+| RB2 | `runtime.instance_bound` of an instance addressed by a serial | changed rule | RD-1b | RD-1b | no `adb_host` and no `adb_port` (model-398 §3.4: a configured `serial` recorded the default `127.0.0.1:16384` before); a `device` requires `serial_configured`, `binding_source` `explicit` and physical provenance; refused otherwise with `invalid_instance_binding_device` (contract, error) |
+| RB3 | `SecretField::DeviceSerial` | new enum value of the fingerprint fields | RD-1b | RD-1b | the fingerprint's domain label `device_serial` (`Sha256SecretFingerprinter`); not itself persisted |
+| RB4 | `session.instance.available` = `false` with `source_detector` `runtime.device-link`, `source_snapshot_id` `device_link:unbound` | new source of an existing instance fact record | RD-1b | RD-1b | a handset the private binding file binds no device to; RD-2 adds the other link states under the same prefix ([instance-fact-store.md](instance-fact-store.md), "Backend self-check availability") |
+| RB5 | `<state root>\private\device-bindings.json`, `actingcommand.device-bindings.v1` | private file format, not a ledger shape | RD-1b (reader) | RD-1c (`actingctl devices bind`), or a person | `{schema, bindings: [{alias, serial, bound_at_unix_ms, bound_via}]}`; never exported, archived or recorded (architecture guard RD-1b-T10) |
+| RB6 | `config.parameters.instance`: `instance.<instance id>.device_kind` | new per-instance configuration row | RD-1b | RD-1b | string `emulator` / `handset` from the entry's `device.kind`; default `none`, so only an instance that names `device` has the row (no row for an emulator-only configuration); not settable; key-table `file_path` `InstanceMemberAt("device.kind")` |
+| RB7 | check-config v1: `error.detail` `{alias, device_config_problem}` / `{path, device_binding_problem}` / `{alias}`; warning `device_binding_unused:<alias>`; a handset's `instances[]` `adb_host` / `adb_port` `null` | interface members | RD-1b | RD-1b | schema version stays `v1` (additive); [actingd-check-config.md](actingd-check-config.md), "Devices" |
+| RB8 | `ledger-forensics::InstanceBindings.devices` (fingerprint to instance ids, first-binding order) and `InstanceBinding.device_fingerprint` | read surface | RD-1b | RD-1b | beside the port map ([global-ledger-query.md](global-ledger-query.md)) |
+
+Configuration keys (§5): per instance `device { kind, transport }` (`kind` `emulator` or
+`handset`, absent = emulator; `transport` a handset's only, `usb` or absent; `tcp` reserved and
+refused), parsed, validated and reported by RD-1b, read by RD-1b; no default value (an instance
+without `device` is an emulator). With it the §5 row of `capture_backend` `scrcpy` takes effect:
+a handset may select `scrcpy`. A handset's alias is at most 248 bytes (coordinator ruling
+2026-10-13). The codes `device_config_invalid` (values added), `device_binding_missing`,
+`device_binding_file_invalid`, `device_binding_unused` (actingd), `invalid_instance_binding_device`
+(contract), the location `device_endpoint_unbound` (runtime-host), the keys
+`device_config_problem`, `device_binding_problem` and their vocabularies are catalog entries,
+not rows (§7). The `config.parameters` capacity (§5.1) gains one row per handset instance.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

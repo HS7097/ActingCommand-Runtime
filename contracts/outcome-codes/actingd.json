@@ -2065,11 +2065,63 @@
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "device_config_problem": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration (#398 R1 RD-3i): an instance's device fields do not fit its device kind, for example capture_backend scrcpy on an emulator instance. Every configured instance is an emulator until RD-1b adds the key device.kind.",
+      "description": "actingd refused its configuration (#398 R1 RD-3i, RD-1b): an instance's device fields do not fit its device kind: a handset that names an endpoint, a serial or a discovery key, a transport other than usb, a backend its kind does not have (scrcpy on an emulator; DroidCast or Nemu IPC on a handset), or a handset alias longer than 248 bytes. The value device_config_problem says which.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_binding_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The private binding file <state root>/private/device-bindings.json binds no device to a handset instance (#398 R1 RD-1b). check-config refuses; a start registers the instance unavailable (source device_link:unbound) and runs the other instances.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_binding_file_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "device_binding_problem": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused the private binding file <state root>/private/device-bindings.json (#398 R1 RD-1b): it cannot be read, is not of its shape and schema, binds an alias or a serial twice, or holds a serial of the wrong form. The value device_binding_problem says which; the start is refused.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_binding_unused": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The private binding file binds an alias that no handset instance of the configuration has (#398 R1 RD-1b); a check-config note, not a failure.",
       "common_causes": "TBD",
       "handling": "TBD"
     }

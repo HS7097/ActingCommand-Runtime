@@ -16,6 +16,13 @@ const POLICY_INSTANCE_SEED_SCHEMA: &str = "fact.v1";
 /// records a failed backend self-check publishes (Workflow #317 sc2).
 const BACKEND_SELFCHECK_AVAILABILITY_DETECTOR: &str = "runtime.backend-selfcheck";
 pub(super) const BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX: &str = "backend_selfcheck:";
+/// Workflow #398 RD-1b (model-398 v1.1 §3.6, §4.2): `source_detector` and `source_snapshot_id`
+/// prefix of the `session.instance.available = false` records a handset's device link
+/// publishes, `device_link:<state>`, beside `backend_selfcheck:`.
+const DEVICE_LINK_AVAILABILITY_DETECTOR: &str = "runtime.device-link";
+const DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX: &str = "device_link:";
+/// The device-link state of a handset the private binding file binds no device to.
+pub(super) const DEVICE_LINK_UNBOUND: &str = "unbound";
 
 // Workflow #392 DA-A (model 392 v1.1, section 8.1): the instance's display, recorded and never
 // checked. `display.aspect` has no reader in the Runtime (architecture guard DA-A-T3).
@@ -504,6 +511,39 @@ impl HostShared {
             BACKEND_SELFCHECK_AVAILABILITY_DETECTOR,
             |_| format!("{BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX}{cause}"),
         )
+    }
+
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.6): withdraws the policy availability of a
+    /// handset instance for its device link's `state` (`device_link:<state>`), through
+    /// [`Self::publish_fact`].
+    pub(super) fn publish_device_link_unavailable(
+        &self,
+        instance_alias: &str,
+        state: &str,
+    ) -> RuntimeHostResult<()> {
+        self.publish_policy_instance_availability(
+            instance_alias,
+            false,
+            DEVICE_LINK_AVAILABILITY_DETECTOR,
+            |_| format!("{DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX}{state}"),
+        )
+    }
+
+    /// Workflow #398 RD-1b: whether `record` is a withdrawal for the device link's `state`.
+    pub(super) fn withdrawn_for_device_link(record: Option<&FactRecord>, state: &str) -> bool {
+        record.is_some_and(|record| {
+            record.source_detector == DEVICE_LINK_AVAILABILITY_DETECTOR
+                && record
+                    .source_snapshot_id
+                    .strip_prefix(DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX)
+                    == Some(state)
+                && matches!(
+                    record.content,
+                    FactContent::Inline {
+                        value: ContractFactValue::Boolean(false)
+                    }
+                )
+        })
     }
 
     /// Workflow #317 sc2: republishes the configured seed of `session.instance.available`
