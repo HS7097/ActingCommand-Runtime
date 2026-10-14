@@ -595,6 +595,10 @@ pub(super) struct FakeProvider {
     // INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
     // own (`with_device_endpoints`).
     device_endpoints: bool,
+    // Workflow #383 AO-4q: the scripted answer of an on-demand instance discovery
+    // (`with_discovery`); without one the provider refuses discovery as a provider without a
+    // discovery surface does.
+    discovery: Option<ProviderInstanceDiscovery>,
 }
 
 impl FakeProvider {
@@ -615,7 +619,14 @@ impl FakeProvider {
             vision_provider: None,
             resolved_override: None,
             device_endpoints: false,
+            discovery: None,
         }
+    }
+
+    /// Workflow #383 AO-4q: answers an on-demand instance discovery with `discovery`.
+    fn with_discovery(mut self, discovery: ProviderInstanceDiscovery) -> Self {
+        self.discovery = Some(discovery);
+        self
     }
 
     /// INST-1 (Workflow #390): every physical entry resolves with a bound ADB endpoint of its
@@ -973,6 +984,24 @@ impl ExecutionBackendProvider for FakeProvider {
                     )
             })?;
         entry.state.emulator.read_state()
+    }
+
+    /// Workflow #383 AO-4q: the scripted discovery answer, else the typed refusal of a provider
+    /// without a discovery surface.
+    fn discover_instances(
+        &self,
+    ) -> Result<ProviderInstanceDiscovery, Box<InstanceDiscoveryFailure>> {
+        self.discovery.clone().ok_or_else(|| {
+            Box::new(InstanceDiscoveryFailure {
+                code: actingcommand_contract::codes::SharedCode::InstanceDiscoveryUnavailable
+                    .as_str(),
+                error: DeviceError::fatal("instance discovery unsupported by this provider")
+                    .with_diagnostic(
+                        DeviceErrorCategory::Protocol,
+                        actingcommand_contract::codes::ContractLocation::InstanceDiscoveryUnsupported,
+                    ),
+            })
+        })
     }
 
     /// Workflow #369 review C-2: `Some(port)` binds the fake's discovered endpoint again,

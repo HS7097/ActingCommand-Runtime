@@ -1883,7 +1883,6 @@ actingcommand_contract::outcome_locations! {
         RuntimeRequestDecodeFailed => "runtime_request_decode_failed",
         RuntimeRequestIdReused => "runtime_request_id_reused",
         RuntimeStateObservationKind => "runtime_state_observation_kind",
-        RuntimeStateObservationMissing => "runtime_state_observation_missing",
         RuntimeStateSource => "runtime_state_source",
         SampleActivityInterval => "sample_activity_interval",
         SampleCapacityBeforeBusiness => "sample_capacity_before_business",

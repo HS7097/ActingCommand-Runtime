@@ -240,42 +240,19 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
             .iter()
             .all(|row| row.capabilities().is_none())
     );
-    let initial_source = status.source().expect("committed status source").clone();
-    let source_events = projected_events(
-        &mut owner,
-        EventQuery {
-            from_sequence: Some(initial_source.sequence),
-            to_sequence: Some(initial_source.sequence),
-            ..EventQuery::default()
-        },
-    );
-    assert_eq!(source_events.len(), 1);
-    let source_event = &source_events[0];
-    assert_eq!(source_event.event_id, initial_source.event_id);
-    assert_eq!(
-        source_event.links.request_id(),
-        Some(&initial_request.request_id())
-    );
-    let ProjectionPayload::Full(payload) = &source_event.payload else {
-        panic!("full source fact");
-    };
-    let Some(actingcommand_contract::RuntimeStateFact::Observed {
-        state: actingcommand_contract::RuntimeObservedState::ControlPlane { status: recorded },
-        sampled_started_at_unix_ms,
-        sampled_completed_at_unix_ms,
-    }) = payload.runtime_state()
-    else {
-        panic!("typed control-plane source");
-    };
-    assert_eq!(recorded.instances(), status.instances());
-    assert_eq!(recorded.owner_epoch(), status.owner_epoch());
-    assert_eq!(
-        *sampled_started_at_unix_ms,
-        initial_source.sampled_started_at_unix_ms
-    );
-    assert_eq!(
-        *sampled_completed_at_unix_ms,
-        initial_source.sampled_completed_at_unix_ms
+    // Workflow #383 AO-4q: the status read appends no record; its source names the committed
+    // head and the sampling interval.
+    let initial_source = status.source().expect("status source").clone();
+    initial_source.validate().expect("valid status source");
+    assert!(
+        projected_events(
+            &mut owner,
+            EventQuery {
+                request_id: Some(initial_request.request_id()),
+                ..EventQuery::default()
+            },
+        )
+        .is_empty()
     );
     assert!(
         status
@@ -314,7 +291,7 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
         panic!("expected live runtime status");
     };
     let active = &status.instances()[0];
-    assert!(status.source().unwrap().sequence > initial_source.sequence);
+    assert!(status.source().unwrap().ledger_committed_head > initial_source.ledger_committed_head);
     assert!(active.lease_active());
     assert_eq!(active.queued_request_count(), 1);
     assert!(!active.takeover_cooldown_active());
@@ -417,30 +394,12 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
         assert!(!encoded.contains("neutral.application"));
         assert!(!encoded.contains("resolved_serial"));
         assert!(!encoded.contains("input_adb"));
-        let source = status.source().unwrap();
-        let mut observer = TestClient::connect(&host);
-        let events = projected_events(
-            &mut observer,
-            EventQuery {
-                from_sequence: Some(source.sequence),
-                to_sequence: Some(source.sequence),
-                ..EventQuery::default()
-            },
-        );
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, source.event_id);
-        let ProjectionPayload::Full(payload) = &events[0].payload else {
-            panic!("full status fact")
-        };
-        let Some(actingcommand_contract::RuntimeStateFact::Observed {
-            state: actingcommand_contract::RuntimeObservedState::ControlPlane { status: recorded },
-            ..
-        }) = payload.runtime_state()
-        else {
-            panic!("committed Registry status")
-        };
-        assert_eq!(recorded.instances(), status.instances());
-        drop(observer);
+        // Workflow #383 AO-4q: the answer carries its sampled source; it has no ledger record.
+        status
+            .source()
+            .expect("status source")
+            .validate()
+            .expect("valid status source");
         drop(client);
         host.close().unwrap();
     }

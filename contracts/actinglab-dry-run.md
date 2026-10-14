@@ -287,7 +287,8 @@ to `preview` and `no_effect` alike:
 ## Read audit boundary
 
 A read request leaves the read-only audit events the Runtime itself writes, such as the
-`Observed` event of a status read. These are not side effects for this contract. The previews and
+`command.received` of a read-only observation; a status read writes none (Workflow #383 AO-4q).
+These are not side effects for this contract. The previews and
 refusals added by #341 do not send even a read request: they open no Runtime connection.
 
 ## Agent guidance

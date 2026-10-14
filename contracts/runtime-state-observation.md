@@ -1,35 +1,47 @@
 # Runtime state observations
 
-`Status`, `MonitorStatus`, `ProjectInterface` and `DiscoverInstances` each commit one
-bounded typed `RuntimeStateFact::Observed` in the original request's `command.validated` event.
-The Runtime source/module/actor and request/correlation links identify the owner.
-The response is derived from that committed event. Its `source` gives the EventId,
-sequence and sampling start/end Unix milliseconds; the sampled status carries
-the owner epoch. The existing receipt terminal convention remains unchanged.
-Ledger sequences are gap-free from 1, so the online ledger event count equals
-`status.source.sequence`; `repair_count` belongs only to the legacy segment backend
-and is not applicable to the SQLite ledger (it is null offline as well).
+`Status`, `MonitorStatus`, `ProjectInterface` and `DiscoverInstances` read memory only and
+append no ledger record (Workflow #383 AO-4q; [Ledger observer](ledger-observer.md) §13,
+[v0.12.0 register](v012-register.md) W1). The response carries the sampled state and its
+`source` (`RuntimeStateSource`, runtime-client revision 2):
+
+```json
+{
+  "instance_facts": {"lineage": "<owner epoch>", "revision": 12},
+  "runtime_facts": {"lineage": "<owner epoch>", "revision": 40},
+  "ledger_committed_head": 42,
+  "sampled_started_at_unix_ms": 1790000000000,
+  "sampled_completed_at_unix_ms": 1790000000003
+}
+```
+
+- `instance_facts` and `runtime_facts` are the two memory stores' (lineage, revision) at the
+  sample. They stay absent until AO-3 gives the stores their revisions, and every reader
+  accepts their absence.
+- `ledger_committed_head` is the highest committed ledger sequence when the state was sampled
+  (0 for an empty ledger). It is read inside the sampling interval.
+- The sampled status carries the owner epoch. The existing receipt terminal convention
+  remains unchanged: a status read is `completed` without a terminal.
 
 The owner samples current scheduler/registry state using its existing locks.
 The interval covers those reads; it does not assert a globally atomic instant
-across different locks. At most 1024 instances are observed, and existing native
-event/transport size limits still apply. A missing, invalid or uncommitted
-observation is an explicit error. There is no added polling, state cache or
-permission owner; Scheduler continues to decide lease/admission authority.
+across different locks. Existing native transport size limits still apply. An invalid
+source or a failed read of the committed head is an explicit error. There is no added
+polling, state cache or permission owner; Scheduler continues to decide lease/admission
+authority.
 
-`DiscoverInstances` commits `RuntimeObservedState::InstanceDiscovery { owner_epoch,
+`DiscoverInstances` samples `RuntimeObservedState::InstanceDiscovery { owner_epoch,
 provider_version, instances }`: the provider's discovery answer, each instance with its
 `bound_alias` read under the registry lock after the vendor tool answered, ordered by index.
-The variant has no `source` field; the response `RuntimeInstanceDiscovery` adds the committed
-one. The interval covers the vendor tool run. The event carries the same Internal sensitivity
-as the other state observations; a provider refusal commits no observation
+The variant has no `source` field; the response `RuntimeInstanceDiscovery` adds the sampled
+one. The interval covers the vendor tool run. A provider refusal records its refusal
 (`emulator-control.md`, "Instance discovery query").
 
 ProjectInterface preserves historical pagination position L for its catalog,
 facts, decisions, approvals and diagnostics. The separately sampled current view
-has committed position C in `observed_ledger_position` and `source.sequence`.
+has position C = `source.ledger_committed_head` in `observed_ledger_position`, with C ≥ L.
 Legacy project responses carry the same source under `runtime.source`; L remains
-the historical `runtime.ledger_position`. Each page has its own current observation
+the historical `runtime.ledger_position`. Each page samples its own current view
 while retaining the original historical pagination cursor.
 
 ## Monitor state
