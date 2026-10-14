@@ -76,7 +76,8 @@ typed definitions; adding these interfaces does not install SQL views.
 
 The errors view selects Warning, Error and Fatal without changing the original
 severity. Observation and changes use the explicit families and event types in
-the definition. Health selects the performance and monitor families. Missing
+the definition. Health selects the performance and monitor families and, from ledger
+revision 3, the ledger's gap, probe and dump-import records (table below). Missing
 unload or clock-jump facts are not inferred from other lifecycle observations.
 
 Lab includes direct Lab sources and LabRequest events. Related Runtime events

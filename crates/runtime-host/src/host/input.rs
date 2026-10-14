@@ -3,7 +3,7 @@
 use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, ShapeHostCode};
 use actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -24,6 +24,19 @@ impl HostShared {
         ),
         RequestFailure,
     > {
+        // Workflow #406 (register §1.18): this build decodes the single-touch path drag but no
+        // backend performs it before T-3, so the request is refused before any effect.
+        if matches!(action, InputAction::SingleTouchPathDragV1 { .. }) {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    ShapeHostCode::InputActionUnsupported,
+                    HostLocation::ExecuteInput,
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         let RuntimeInputContext {
             run_links,
             source_step_action_id,

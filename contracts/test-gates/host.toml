@@ -484,3 +484,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic",
 ]
 incident = ["#387"]
+
+# The reserved single-touch path drag is refused before any effect (v012-register §1.18)
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
+]
+incident = ["#383 SH-1"]

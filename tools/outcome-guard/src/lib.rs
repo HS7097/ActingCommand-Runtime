@@ -1491,6 +1491,14 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "B4: the policy's Severe code list (model section 8.1) spells other owners' codes; B4 reviews the list with the policy",
     ),
     // End of the A3 entries.
+    // Workflow #383 SH-1 entry (register S2, P7): a cancelled terminal's reason from the
+    // runtime host's codes.
+    bridge(
+        "crates/actingcommand-contract/src/runtime.rs",
+        "ContainedTaskCancellationReason::from_failure_code",
+        &[Check::G5],
+        "B4: the cancellation reason of a cancelled terminal is read from three runtime-host codes (blackout_run_stopped, perf_run_yielded, perf_hold_expired; v0.12.0 register S2, P7) that the contract cannot name through a registry of its own; B4 reviews it with the policy's code lists",
+    ),
 ];
 
 /// One bridge: a function (`Type::method`, `Trait::method` or a free function's name), or a

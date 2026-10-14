@@ -1852,7 +1852,11 @@ impl RuntimeContainedTask<'_> {
                 RuntimeErrorCode::ContainedTaskPaused.code(),
                 RuntimeErrorCode::ContainedTaskPaused,
             ),
-            ContainedTaskCancellationReason::RecoveredAfterRestart => {
+            // No control asks for a blackout stop or a performance yield before SR-4b and P-k /
+            // P-h write them (register S2, P7): a run's control holding one is invalid state.
+            ContainedTaskCancellationReason::RecoveredAfterRestart
+            | ContainedTaskCancellationReason::BlackoutStop
+            | ContainedTaskCancellationReason::PerformanceYield => {
                 return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::fatal(
                         HostCode::ContainedTaskCancellationStateInvalid,

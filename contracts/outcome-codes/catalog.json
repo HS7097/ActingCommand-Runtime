@@ -1632,6 +1632,14 @@
     "media_type": {
       "type": "name",
       "description": "The media type of a material, for example image/png."
+    },
+    "yield_cause": {
+      "type": "vocab:yield_cause",
+      "description": "Why a held or lengthened policy run was ended to be rerun."
+    },
+    "held_ms": {
+      "type": "duration_ms",
+      "description": "How long a policy run was held at its pace checkpoint, in milliseconds."
     }
   },
   "vocabularies": {
@@ -2101,6 +2109,12 @@
         "policy.planning": {
           "description": "Policy planning."
         },
+        "policy.control_state": {
+          "description": "Policy control state."
+        },
+        "policy.fact_refresh": {
+          "description": "Policy fact refresh."
+        },
         "catalog.activate": {
           "description": "Catalog activate."
         },
@@ -2274,6 +2288,9 @@
         },
         "ledger.recovery": {
           "description": "Ledger recovery."
+        },
+        "ledger.probe": {
+          "description": "Ledger probe."
         },
         "signature.register": {
           "description": "Signature register."
@@ -2779,6 +2796,18 @@
           "description": "Perf balance changed.",
           "category": "info"
         },
+        "perf.pacing_changed": {
+          "description": "Perf pacing changed.",
+          "category": "info"
+        },
+        "perf.dispatch_share_changed": {
+          "description": "Perf dispatch share changed.",
+          "category": "info"
+        },
+        "perf.run_hold": {
+          "description": "Perf run hold.",
+          "category": "info"
+        },
         "fact.published": {
           "description": "Fact published.",
           "category": "info"
@@ -2841,6 +2870,18 @@
         },
         "policy.planning_signal_observed": {
           "description": "Policy planning signal observed.",
+          "category": "info"
+        },
+        "policy.control_state_recorded": {
+          "description": "Policy control state recorded.",
+          "category": "info"
+        },
+        "policy.activity_state_recorded": {
+          "description": "Policy activity state recorded.",
+          "category": "info"
+        },
+        "policy.fact_refresh_transition": {
+          "description": "Policy fact refresh transition.",
           "category": "info"
         },
         "catalog.transition_intent": {
@@ -3163,9 +3204,25 @@
           "description": "Agent session escalated.",
           "category": "warning"
         },
+        "agent.wake_obligation_recorded": {
+          "description": "Agent wake obligation recorded.",
+          "category": "info"
+        },
         "ledger.recovered": {
           "description": "Ledger recovered.",
           "category": "warning"
+        },
+        "ledger.gap_recorded": {
+          "description": "Ledger gap recorded.",
+          "category": "warning"
+        },
+        "ledger.health_observed": {
+          "description": "Ledger health observed.",
+          "category": "warning"
+        },
+        "ledger.dump_imported": {
+          "description": "Ledger dump imported.",
+          "category": "info"
         },
         "signature.registered": {
           "description": "Signature registered.",
@@ -4352,6 +4409,10 @@
     "ledger_source": {
       "description": "A revisioned source whose changes the ledger records (Workflow #383).",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/observer.rs",
+        "enum": "LedgerSource"
+      },
       "tokens": {
         "instance_facts": {
           "description": "The instance fact store."
@@ -4370,6 +4431,10 @@
     "segment_edge": {
       "description": "The edge of a reported stretch of a condition.",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/observer.rs",
+        "enum": "LedgerSegmentEdge"
+      },
       "tokens": {
         "started": {
           "description": "The condition started."
@@ -4420,6 +4485,10 @@
     "pacing_stage": {
       "description": "A performance pacing stage of an instance (Workflow #385): s0 is normal pacing, each later stage a worse responsiveness band.",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/pacing.rs",
+        "enum": "PerformancePacingStage"
+      },
       "tokens": {
         "s0": {
           "description": "Normal: no slowdown, no pause."
@@ -4817,6 +4886,18 @@
         },
         "duplicate_task": {
           "description": "A task named more than once in the document."
+        }
+      }
+    },
+    "yield_cause": {
+      "description": "Why performance pacing ended a policy run to be rerun (Workflow #385).",
+      "review": "pending",
+      "tokens": {
+        "wall_ceiling": {
+          "description": "The run reached its wall-clock ceiling after pacing lengthened it."
+        },
+        "preempted": {
+          "description": "The run was preempted while it was held."
         }
       }
     }
@@ -7653,6 +7734,9 @@
     ],
     "instances_": [
       "actingctl"
+    ],
+    "perf_": [
+      "runtime-host"
     ]
   },
   "fragments": {

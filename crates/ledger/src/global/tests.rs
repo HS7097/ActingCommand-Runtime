@@ -423,6 +423,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             runtime_ms,
             sensitive: false,
             perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_400)),
+            condition: None,
         };
     let policy_failure = |class, runtime_ms| {
         policy_failure_of(
@@ -457,6 +458,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         runtime_ms: 0,
         sensitive: false,
         perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_350)),
+        condition: None,
     };
     let sanitize = |timestamp_unix_ms, severity, origin, links, payload: EventPayloadDraft| {
         EventDraft::new(

@@ -20381,6 +20381,73 @@
       "description": "A run's navigation recovery chain ran out without reaching its entry page (count is the number of steps run; caused by the last locate's code; Workflow #373 M-373 sections 5 and 9). Registered with Workflow #387 D1c for its default trigger item navigation_exhausted; NAV-5 emits it.",
       "common_causes": "The game shows a page the standard pack's navigation data cannot leave, or its recovery chain is too short.",
       "handling": "The recovery ladder's trigger item navigation_exhausted starts at the emulator restart rung by default; check the standard pack's navigation data if it recurs."
+    },
+    "perf_run_yielded": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "yield_cause": "required",
+        "held_ms": "required",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1; P-k and P-h emit it.",
+      "common_causes": "The host stayed slow long enough for a lengthened run to reach its ceiling, or the instance was paused by its share while the run was held.",
+      "handling": "Nothing to repair for one occurrence; the run is rerun."
+    },
+    "perf_hold_expired": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "held_ms": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy run was held at its pace checkpoint longer than the hold limit (timeout_ms) and ended; its cancellation reason is PerformanceYield, it is owed a rerun, and the recovery ladder may start once performance releases the instance (Workflow #385 PERF §7.4, M387 §3.7). Registered by SH-1; P-h emits it.",
+      "common_causes": "The host stayed in the deepest pacing stage longer than the hold limit.",
+      "handling": "Nothing to repair for one occurrence; the run is rerun."
+    },
+    "input_action_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An input request names an action this build decodes but does not perform: the single-touch path drag (InputAction::SingleTouchPathDragV1) is reserved until Workflow #406 T-3. The request is refused before any effect; nothing reaches the device.",
+      "common_causes": "A client built for a later Runtime sent the path drag to this build.",
+      "handling": "Send the action to a Runtime that performs it, or use a supported input action."
     }
   },
   "locations": {

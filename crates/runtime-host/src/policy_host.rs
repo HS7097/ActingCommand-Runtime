@@ -2709,7 +2709,13 @@ impl PolicyHost {
                     control.commit_execution(&catalog.compiled, &intent, admission, &data)?;
                     dispatch.execution = Some(data);
                 }
-                PolicyPayload::PlanningSignalObserved(_) => {
+                // The query reads the dispatch and execution types only; the value records of
+                // the decision memory and the fact-refresh transitions (register L7, L14, D1)
+                // are never replayed here.
+                PolicyPayload::PlanningSignalObserved(_)
+                | PolicyPayload::ControlStateRecorded(_)
+                | PolicyPayload::ActivityStateRecorded(_)
+                | PolicyPayload::FactRefreshTransition(_) => {
                     return Err(fatal(
                         SharedCode::PolicyRecoveryQueryMismatch,
                         HostLocation::RecoverPolicyDispatches,

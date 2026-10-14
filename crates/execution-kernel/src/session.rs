@@ -1974,6 +1974,11 @@ fn execute_action(
         PreparedInputAction::Direct(InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }) => Err(
             DeviceError::fatal("segmented input action was not prepared"),
         ),
+        // Workflow #406 (register §1.18): reserved until T-3; the host refuses it first
+        // (`input_action_unsupported`), and no backend performs it.
+        PreparedInputAction::Direct(InputAction::SingleTouchPathDragV1 { .. }) => Err(
+            DeviceError::fatal("the single-touch path drag is reserved until #406 T-3"),
+        ),
     }
 }
 

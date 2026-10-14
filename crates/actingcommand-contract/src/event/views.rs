@@ -41,6 +41,9 @@ impl LedgerView {
     /// The stored view DDL is built from these lists and compared on every open
     /// (`ledger_view_schema_mismatch`), so a new event type joins a type list only together
     /// with a view schema upgrade. `task.selection_evaluated` is therefore in no type list.
+    /// Ledger revision 3's view schema (Workflow #383 SH-1, register L13): Changes gains the
+    /// value records and the fact-refresh transitions, Health the ledger's gap, probe and
+    /// dump-import records; the new `perf.*` types join Health through their family.
     pub const fn definition(self) -> LedgerViewDefinition {
         use EventType::*;
         match self {
@@ -99,12 +102,16 @@ impl LedgerView {
                     AgentSessionResumed,
                     AgentSessionCompleted,
                     AgentSessionEscalated,
+                    PolicyControlStateRecorded,
+                    PolicyActivityStateRecorded,
+                    PolicyFactRefreshTransition,
+                    AgentWakeObligationRecorded,
                 ],
             },
             Self::Errors => LedgerViewDefinition::MinimumSeverity(EventSeverity::Warning),
             Self::Health => LedgerViewDefinition::Types {
                 families: &[EventFamily::Performance, EventFamily::Monitor],
-                events: &[],
+                events: &[LedgerGapRecorded, LedgerHealthObserved, LedgerDumpImported],
             },
             Self::Lab => LedgerViewDefinition::LabContext,
         }
