@@ -616,6 +616,7 @@ fn selection_record(
         },
         fact_snapshot_id: decision.fact_snapshot_id.clone(),
         input_ledger_position: snapshot.ledger_position,
+        input_fact_revisions: None,
         now_unix_ms,
         input_sha256: decision.input_sha256.clone(),
         selection_result: record_outcome(&decision.outcome)?,

@@ -23,6 +23,12 @@ mod device_self_check;
 pub use device_self_check::*;
 mod task_selection;
 pub use task_selection::*;
+// Workflow #383 SH-1 (register §1.1, §1.2, §1.4): the v0.12.0 shapes of the ledger observer,
+// the decision memory, the fact-refresh transitions and performance pacing.
+mod observer;
+pub use observer::*;
+mod pacing;
+pub use pacing::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -359,6 +365,12 @@ pub struct ObservationPayload {
     action: EventAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     device_diagnostics: Option<DeviceDiagnosticConfig>,
+    /// Workflow #389 (register U1): the channel of a command record's connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel: Option<crate::RuntimeChannel>,
+    /// Workflow #389 (register U1): the counter that handed a Lab request over, on `lab` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<crate::ChannelVia>,
     audit: SanitizedAudit,
 }
 
@@ -1623,6 +1635,12 @@ pub struct OutcomePayload {
     /// Microseconds spent in the input backend call; only `input.committed` may carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     touch_response_us: Option<u64>,
+    /// Workflow #389 (register U1): the channel of a command record's connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel: Option<crate::RuntimeChannel>,
+    /// Workflow #389 (register U1): the counter that handed a Lab request over, on `lab` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<crate::ChannelVia>,
     audit: SanitizedAudit,
 }
 
@@ -1649,6 +1667,12 @@ pub struct DiagnosticOutcomePayload {
     resource_declaration: Option<Box<crate::ResourceDeclarationRejection>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_state: Option<Box<crate::RuntimeStateFact>>,
+    /// Workflow #389 (register U1): the channel of a command record's connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel: Option<crate::RuntimeChannel>,
+    /// Workflow #389 (register U1): the counter that handed a Lab request over, on `lab` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<crate::ChannelVia>,
     audit: SanitizedAudit,
 }
 
@@ -1889,6 +1913,14 @@ pub enum RuntimeLifecyclePhase {
     StandardPackRead {
         outcome: Outcome,
     },
+    /// Workflow #383 (register L5): the stores and the decision memory were loaded from the
+    /// tagged records and opened new lineages; the base record of each new lineage, one entry
+    /// per store.
+    TaggedStateLoaded {
+        stores: Vec<TaggedStateStore>,
+    },
+    /// Workflow #383 (register L6): tagged records are enabled on this state root.
+    TaggedStateEnabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2238,6 +2270,9 @@ pub struct PerformanceSummaryPayload {
     ledger_commits: Option<crate::PerformanceLedgerSample>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capacity: Option<crate::PerformanceCapacitySample>,
+    /// Workflow #385 (register P4): the pacing members, present together from P-m on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pacing: Option<Box<PerformancePacingSummary>>,
     audit: SanitizedAudit,
 }
 
@@ -2850,6 +2885,21 @@ pub struct PolicyFailureRecord {
     pub sensitive: bool,
     #[serde(default = "legacy_performance_context")]
     pub perf_context: Box<PerformanceContext>,
+    /// Workflow #386 (register S1): the run ended by a condition (SCHED §4.2): whether its
+    /// counts were refunded, the pair's how-many-th condition termination in this occurrence and
+    /// when the occurrence's accounting window ends. Absent for an ordinary failure; replay
+    /// settles by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<PolicyConditionSettlement>,
+}
+
+/// How a condition-terminated run settled (Workflow #386 SCHED §4.2, register S1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyConditionSettlement {
+    pub refunded: bool,
+    pub count: u32,
+    pub expires_at_unix_ms: u64,
 }
 
 /// The policy class of a failed scheduled run from its task terminal (Workflow #378 A3, model
@@ -3127,6 +3177,8 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
             sensitive: bool,
             #[serde(default = "legacy_performance_context")]
             perf_context: Box<PerformanceContext>,
+            #[serde(default)]
+            condition: Option<PolicyConditionSettlement>,
         }
 
         let wire = Wire::deserialize(deserializer)?;
@@ -3148,6 +3200,7 @@ impl<'de> Deserialize<'de> for PolicyFailureRecord {
             runtime_ms: wire.runtime_ms,
             sensitive: wire.sensitive,
             perf_context: wire.perf_context,
+            condition: wire.condition,
         })
     }
 }
@@ -3195,6 +3248,12 @@ pub struct PolicyExecutionPayload {
     instance_id: String,
     observed_at_unix_ms: u64,
     policy_result: PolicyExecutionOutcome,
+    /// Workflow #385 (register P6): the run's wall-clock time and its budget-clock time (wall
+    /// time less held time, divided by each step's factor), which settlement compares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wall_elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget_elapsed_ms: Option<u64>,
     audit: SanitizedAudit,
 }
 
@@ -3218,6 +3277,16 @@ impl PolicyExecutionPayload {
     /// How the policy recorded the run (ledger revision 3; was `outcome`).
     pub const fn policy_result(&self) -> &PolicyExecutionOutcome {
         &self.policy_result
+    }
+
+    /// Workflow #385 (register P6): the run's wall-clock time.
+    pub const fn wall_elapsed_ms(&self) -> Option<u64> {
+        self.wall_elapsed_ms
+    }
+
+    /// Workflow #385 (register P6): the run's budget-clock time.
+    pub const fn budget_elapsed_ms(&self) -> Option<u64> {
+        self.budget_elapsed_ms
     }
 }
 
@@ -3313,11 +3382,25 @@ pub struct PolicyDispatchPayload {
     reasons: Vec<PolicyReasonRecord>,
     catalog_hash: String,
     catalog_version: u64,
+    /// Absent (read as 0) when the record carries `input_fact_revisions` instead (register L9);
+    /// a present position is never 0.
+    #[serde(
+        default,
+        skip_serializing_if = "observer::input_ledger_position_absent",
+        deserialize_with = "observer::deserialize_input_ledger_position"
+    )]
     input_ledger_position: u64,
+    /// Workflow #383 (register L9): both stores' (lineage, revision) the decision read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_fact_revisions: Option<Box<InputFactRevisions>>,
     fact_snapshot_id: String,
     approval_fact_ids: Vec<String>,
     #[serde(default)]
     urgency_milli: u16,
+    /// Reserved (register A4, RT335-S4): the dispatched task's priority is locked. Only a
+    /// dispatch intent carries it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    priority_locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     admission: Option<Box<PolicyAdmissionRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3409,8 +3492,20 @@ impl PolicyDispatchPayload {
         self.catalog_version
     }
 
+    /// The ledger position the decision read; 0 when the record carries
+    /// [`Self::input_fact_revisions`] instead (register L9).
     pub const fn input_ledger_position(&self) -> u64 {
         self.input_ledger_position
+    }
+
+    /// Workflow #383 (register L9): both stores' (lineage, revision) the decision read.
+    pub fn input_fact_revisions(&self) -> Option<&InputFactRevisions> {
+        self.input_fact_revisions.as_deref()
+    }
+
+    /// Reserved (register A4): the dispatched task's priority is locked.
+    pub const fn priority_locked(&self) -> bool {
+        self.priority_locked
     }
 
     pub fn fact_snapshot_id(&self) -> &str {
@@ -3545,12 +3640,21 @@ impl AgentWakePayload {
 pub struct AgentSessionPayload {
     action: EventAction,
     session: AgentSessionEventData,
+    /// Reserved (register A2, AGT-3): the artifact that holds the agent's report body (a ledger
+    /// material, never a board post). Only `agent.response_recorded` carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report_artifact: Option<crate::ArtifactId>,
     audit: SanitizedAudit,
 }
 
 impl AgentSessionPayload {
     pub const fn session(&self) -> &AgentSessionEventData {
         &self.session
+    }
+
+    /// Reserved (register A2): the artifact of the agent's report.
+    pub const fn report_artifact(&self) -> Option<&crate::ArtifactId> {
+        self.report_artifact.as_ref()
     }
 }
 
@@ -4590,6 +4694,7 @@ fn redact_sensitive_input(action: &mut InputAction) {
         | InputAction::LongTap { .. }
         | InputAction::Swipe { .. }
         | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+        | InputAction::SingleTouchPathDragV1 { .. }
         | InputAction::Reset => {}
     }
 }
@@ -5200,6 +5305,11 @@ trait PayloadDetail {
     fn outcome(&self) -> Option<&Outcome> {
         None
     }
+
+    /// Workflow #389 (register U1): the channel and `via` of a command record.
+    fn command_channel(&self) -> (Option<crate::RuntimeChannel>, Option<crate::ChannelVia>) {
+        (None, None)
+    }
 }
 
 macro_rules! common_detail_accessors {
@@ -5217,6 +5327,27 @@ macro_rules! common_detail_accessors {
 }
 
 common_detail_accessors!(ObservationPayload);
+
+/// Workflow #389 (register U1): the channel members of the three command record payloads.
+macro_rules! command_channel_accessors {
+    ($type:ty) => {
+        impl $type {
+            /// The channel of the command record's connection.
+            pub const fn channel(&self) -> Option<crate::RuntimeChannel> {
+                self.channel
+            }
+
+            /// The counter that handed a Lab request over.
+            pub const fn via(&self) -> Option<crate::ChannelVia> {
+                self.via
+            }
+        }
+    };
+}
+
+command_channel_accessors!(ObservationPayload);
+command_channel_accessors!(OutcomePayload);
+command_channel_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
@@ -5346,6 +5477,11 @@ impl PerformanceSummaryPayload {
 
     pub const fn ledger_commits(&self) -> Option<&crate::PerformanceLedgerSample> {
         self.ledger_commits.as_ref()
+    }
+
+    /// Workflow #385 (register P4): the pacing members.
+    pub fn pacing(&self) -> Option<&PerformancePacingSummary> {
+        self.pacing.as_deref()
     }
 }
 
@@ -5731,6 +5867,10 @@ impl PayloadDetail for ObservationPayload {
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
     }
+
+    fn command_channel(&self) -> (Option<crate::RuntimeChannel>, Option<crate::ChannelVia>) {
+        (self.channel, self.via)
+    }
 }
 
 impl PayloadDetail for InputIntentPayload {
@@ -5795,6 +5935,10 @@ impl PayloadDetail for OutcomePayload {
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
     }
+
+    fn command_channel(&self) -> (Option<crate::RuntimeChannel>, Option<crate::ChannelVia>) {
+        (self.channel, self.via)
+    }
 }
 
 impl PayloadDetail for DiagnosticOutcomePayload {
@@ -5836,6 +5980,10 @@ impl PayloadDetail for DiagnosticOutcomePayload {
 
     fn outcome(&self) -> Option<&Outcome> {
         Some(&self.outcome)
+    }
+
+    fn command_channel(&self) -> (Option<crate::RuntimeChannel>, Option<crate::ChannelVia>) {
+        (self.channel, self.via)
     }
 }
 
@@ -6579,9 +6727,11 @@ impl PolicyDispatchDraft {
             catalog_hash: self.data.catalog_hash,
             catalog_version: self.data.catalog_version,
             input_ledger_position: self.data.input_ledger_position,
+            input_fact_revisions: None,
             fact_snapshot_id: self.data.fact_snapshot_id,
             approval_fact_ids: self.data.approval_fact_ids,
             urgency_milli: self.data.urgency_milli,
+            priority_locked: false,
             admission: self.admission,
             rejection: self.rejection,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -6602,6 +6752,8 @@ impl PolicyExecutionDraft {
             instance_id: self.data.instance_id,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
             policy_result: self.data.outcome,
+            wall_elapsed_ms: None,
+            budget_elapsed_ms: None,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6664,6 +6816,7 @@ impl PerformanceSummaryDraft {
             third_party_high_load: self.data.third_party_high_load,
             ledger_commits: self.data.ledger_commits,
             capacity: self.data.capacity,
+            pacing: None,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6881,6 +7034,7 @@ impl AgentSessionDraft {
         Ok(AgentSessionPayload {
             action: self.action,
             session: self.session,
+            report_artifact: None,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -6984,6 +7138,15 @@ fn validate_resource_authoring_token(
 }
 
 fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), SanitizationError> {
+    validate_policy_dispatch_fields(data, data.input_ledger_position != 0)
+}
+
+/// The dispatch data's checks; `input_read` says the decision names what it read: a ledger
+/// position, or (a stored record, register L9) both stores' revisions.
+fn validate_policy_dispatch_fields(
+    data: &PolicyDispatchEventData,
+    input_read: bool,
+) -> Result<(), SanitizationError> {
     validate_policy_token(&data.decision_id, "decision_id")?;
     validate_policy_token(&data.task_id, "task_id")?;
     crate::validate_instance_alias(&data.instance_id)
@@ -6996,7 +7159,7 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
     validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
-    if data.catalog_version == 0 || data.input_ledger_position == 0 || data.urgency_milli > 1_000 {
+    if data.catalog_version == 0 || !input_read || data.urgency_milli > 1_000 {
         return Err(SanitizationError::new(
             SanitizationCode::InvalidPolicyDispatchPosition,
             "catalog_version_or_input_position",
@@ -7076,10 +7239,24 @@ fn validate_policy_execution_data(
             validate_policy_token(identity, "failure_identity")?;
         }
         failure.perf_context.validate()?;
+        // Workflow #386 (register S1, SCHED §4.2): a condition termination counts from 1 in its
+        // occurrence, keeps the pair's previous counts (0 when none) and its disposition is
+        // `continue`.
+        if failure.condition.is_some_and(|condition| {
+            condition.count == 0
+                || condition.expires_at_unix_ms == 0
+                || failure.disposition != PolicyFailureDisposition::Continue
+        }) {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidPolicyFailureRecord,
+                "condition",
+            ));
+        }
+        let counted = failure.condition.is_none();
         let retry_scheduled = failure.disposition == PolicyFailureDisposition::RetryScheduled;
-        if failure.consecutive_same_error == 0
+        if (counted && failure.consecutive_same_error == 0)
             || failure.escalation_streak > failure.consecutive_same_error
-            || (!failure.performance_tax_exempt && failure.escalation_streak == 0)
+            || (counted && !failure.performance_tax_exempt && failure.escalation_streak == 0)
             || failure.performance_tax_exempt
                 && (failure.original_class != PolicyFailureClass::Recoverable
                     || failure.effective_class != PolicyFailureClass::Recoverable
@@ -7325,6 +7502,9 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
             })
         }
         PerformancePayload::Summary(value) if value.action == EventAction::PerformanceObserve => {
+            if let Some(pacing) = &value.pacing {
+                pacing.validate()?;
+            }
             validate_performance_summary(&PerformanceSummaryEventData {
                 context: value.context.clone(),
                 foreground: value.foreground.clone(),
@@ -7383,6 +7563,9 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 arbitration: value.arbitration,
             })
         }
+        PerformancePayload::PacingChanged(value)
+        | PerformancePayload::DispatchShareChanged(value)
+        | PerformancePayload::RunHold(value) => value.validate(),
         _ => Err(SanitizationError::new(
             SanitizationCode::InvalidPerformancePayload,
             "performance_payload",
@@ -7496,6 +7679,16 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
             Some(value)
         }
         PolicyPayload::ExecutionRecorded(value) if value.action == EventAction::PolicyExecution => {
+            if value
+                .wall_elapsed_ms
+                .zip(value.budget_elapsed_ms)
+                .is_some_and(|(wall, budget)| budget > wall)
+            {
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidPolicyExecutionTime,
+                    "budget_elapsed_ms",
+                ));
+            }
             validate_policy_execution_data(&PolicyExecutionEventData {
                 decision_id: value.decision_id.clone(),
                 task_id: value.task_id.clone(),
@@ -7503,6 +7696,18 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
                 observed_at_unix_ms: value.observed_at_unix_ms,
                 outcome: value.policy_result.clone(),
             })?;
+            None
+        }
+        PolicyPayload::ControlStateRecorded(value) => {
+            value.validate()?;
+            None
+        }
+        PolicyPayload::ActivityStateRecorded(value) => {
+            value.validate()?;
+            None
+        }
+        PolicyPayload::FactRefreshTransition(value) => {
+            value.validate()?;
             None
         }
         PolicyPayload::PlanningSignalObserved(value)
@@ -7529,22 +7734,31 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
     let Some(value) = dispatch else {
         return Ok(());
     };
-    validate_policy_dispatch_data(&PolicyDispatchEventData {
-        decision_id: value.decision_id.clone(),
-        task_id: value.task_id.clone(),
-        instance_id: value.instance_id.clone(),
-        operation_id: value.operation_id.clone(),
-        package_digest: value.package_digest.clone(),
-        procedure_binding_digest: value.procedure_binding_digest.clone(),
-        reason_chain_id: value.reason_chain_id.clone(),
-        reasons: value.reasons.clone(),
-        catalog_hash: value.catalog_hash.clone(),
-        catalog_version: value.catalog_version,
-        input_ledger_position: value.input_ledger_position,
-        fact_snapshot_id: value.fact_snapshot_id.clone(),
-        approval_fact_ids: value.approval_fact_ids.clone(),
-        urgency_milli: value.urgency_milli,
-    })?;
+    if value.priority_locked && !matches!(payload, PolicyPayload::DispatchIntent(_)) {
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidPolicyPayload,
+            "priority_locked",
+        ));
+    }
+    validate_policy_dispatch_fields(
+        &PolicyDispatchEventData {
+            decision_id: value.decision_id.clone(),
+            task_id: value.task_id.clone(),
+            instance_id: value.instance_id.clone(),
+            operation_id: value.operation_id.clone(),
+            package_digest: value.package_digest.clone(),
+            procedure_binding_digest: value.procedure_binding_digest.clone(),
+            reason_chain_id: value.reason_chain_id.clone(),
+            reasons: value.reasons.clone(),
+            catalog_hash: value.catalog_hash.clone(),
+            catalog_version: value.catalog_version,
+            input_ledger_position: value.input_ledger_position,
+            fact_snapshot_id: value.fact_snapshot_id.clone(),
+            approval_fact_ids: value.approval_fact_ids.clone(),
+            urgency_milli: value.urgency_milli,
+        },
+        value.input_ledger_position != 0 || value.input_fact_revisions.is_some(),
+    )?;
     if let Some(admission) = &value.admission {
         validate_policy_admission(admission)?;
     }
@@ -7687,6 +7901,17 @@ fn validate_release_payload(payload: &ReleasePayload) -> Result<(), Sanitization
 }
 
 fn validate_agent_payload(payload: &AgentPayload) -> Result<(), SanitizationError> {
+    if let AgentPayload::SessionStarted(value)
+    | AgentPayload::SessionResumed(value)
+    | AgentPayload::SessionCompleted(value)
+    | AgentPayload::SessionEscalated(value) = payload
+        && value.report_artifact.is_some()
+    {
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidAgentSessionLifecycle,
+            "report_artifact",
+        ));
+    }
     match payload {
         AgentPayload::WakeRequested(value) if value.action == EventAction::AgentWake => {
             value.wake.validate()
@@ -7706,6 +7931,7 @@ fn validate_agent_payload(payload: &AgentPayload) -> Result<(), SanitizationErro
         {
             value.session.validate()
         }
+        AgentPayload::WakeObligationRecorded(value) => value.validate(),
         AgentPayload::ResponseRecorded(value)
             if value.action == EventAction::AgentSessionRespond
                 && value.session.status().state() == AgentAttentionState::Active
@@ -7809,6 +8035,8 @@ impl ObservationDraft {
         Ok(ObservationPayload {
             action: self.action,
             device_diagnostics: self.device_diagnostics,
+            channel: None,
+            via: None,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7901,6 +8129,8 @@ impl OutcomeDraft {
             effect_disposition: self.effect_disposition,
             runtime_state: self.runtime_state,
             touch_response_us: self.touch_response_us,
+            channel: None,
+            via: None,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -8006,6 +8236,8 @@ impl DiagnosticOutcomeDraft {
                 .transpose()?,
             cleanup_detail,
             lifecycle_failure,
+            channel: None,
+            via: None,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -10260,6 +10492,9 @@ pub enum PerformancePayload {
     MonitorDegraded(PerformanceMonitorStatePayload),
     MonitorRecovered(PerformanceMonitorStatePayload),
     BalanceChanged(PerformanceControlPayload),
+    PacingChanged(PerformancePacingPayload),
+    DispatchShareChanged(PerformancePacingPayload),
+    RunHold(PerformancePacingPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10313,6 +10548,9 @@ pub enum PolicyPayload {
     DispatchCompleted(PolicyDispatchPayload),
     ExecutionRecorded(PolicyExecutionPayload),
     PlanningSignalObserved(PolicyPlanningSignalPayload),
+    ControlStateRecorded(PolicyControlStatePayload),
+    ActivityStateRecorded(PolicyActivityStatePayload),
+    FactRefreshTransition(PolicyFactRefreshTransitionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10369,6 +10607,7 @@ pub enum AgentPayload {
     ResponseRecorded(AgentSessionPayload),
     SessionCompleted(AgentSessionPayload),
     SessionEscalated(AgentSessionPayload),
+    WakeObligationRecorded(AgentWakeObligationPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10527,6 +10766,9 @@ pub enum ClientPayload {
 pub enum LedgerPayload {
     Recovered(RecoveryPayload),
     Signature(LedgerSignaturePayload),
+    GapRecorded(LedgerGapPayload),
+    HealthObserved(LedgerHealthPayload),
+    DumpImported(LedgerDumpImportedPayload),
 }
 
 trait FamilyPayload {
@@ -10586,6 +10828,9 @@ impl FamilyPayload for PerformancePayload {
             Self::MonitorDegraded(_) => EventType::PerformanceMonitorDegraded,
             Self::MonitorRecovered(_) => EventType::PerformanceMonitorRecovered,
             Self::BalanceChanged(_) => EventType::PerformanceBalanceChanged,
+            Self::PacingChanged(_) => EventType::PerformancePacingChanged,
+            Self::DispatchShareChanged(_) => EventType::PerformanceDispatchShareChanged,
+            Self::RunHold(_) => EventType::PerformanceRunHold,
         }
     }
 
@@ -10596,6 +10841,9 @@ impl FamilyPayload for PerformancePayload {
             Self::Summary(detail) => detail.as_ref(),
             Self::MonitorDegraded(detail) | Self::MonitorRecovered(detail) => detail,
             Self::BalanceChanged(detail) => detail,
+            Self::PacingChanged(detail)
+            | Self::DispatchShareChanged(detail)
+            | Self::RunHold(detail) => detail,
         }
     }
 }
@@ -10619,6 +10867,9 @@ family_payload!(PolicyPayload, {
     DispatchCompleted => EventType::PolicyDispatchCompleted,
     ExecutionRecorded => EventType::PolicyExecutionRecorded,
     PlanningSignalObserved => EventType::PolicyPlanningSignalObserved,
+    ControlStateRecorded => EventType::PolicyControlStateRecorded,
+    ActivityStateRecorded => EventType::PolicyActivityStateRecorded,
+    FactRefreshTransition => EventType::PolicyFactRefreshTransition,
 });
 family_payload!(CatalogPayload, {
     TransitionIntent => EventType::CatalogTransitionIntent,
@@ -10643,6 +10894,7 @@ family_payload!(AgentPayload, {
     ResponseRecorded => EventType::AgentResponseRecorded,
     SessionCompleted => EventType::AgentSessionCompleted,
     SessionEscalated => EventType::AgentSessionEscalated,
+    WakeObligationRecorded => EventType::AgentWakeObligationRecorded,
 });
 family_payload!(LeasePayload, {
     Requested => EventType::LeaseRequested,
@@ -10744,12 +10996,18 @@ impl FamilyPayload for LedgerPayload {
         match self {
             Self::Recovered(_) => EventType::LedgerRecovered,
             Self::Signature(payload) => payload.record().event_type(),
+            Self::GapRecorded(_) => EventType::LedgerGapRecorded,
+            Self::HealthObserved(_) => EventType::LedgerHealthObserved,
+            Self::DumpImported(_) => EventType::LedgerDumpImported,
         }
     }
     fn detail(&self) -> &dyn PayloadDetail {
         match self {
             Self::Recovered(payload) => payload,
             Self::Signature(payload) => payload,
+            Self::GapRecorded(payload) => payload,
+            Self::HealthObserved(payload) => payload,
+            Self::DumpImported(payload) => payload,
         }
     }
 }
@@ -11446,6 +11704,23 @@ impl EventPayload {
         if let Self::Ledger(LedgerPayload::Signature(payload)) = self {
             payload.record().validate()?;
         }
+        match self {
+            Self::Ledger(LedgerPayload::GapRecorded(payload)) => payload.validate()?,
+            Self::Ledger(LedgerPayload::HealthObserved(payload)) => payload.validate()?,
+            Self::Ledger(LedgerPayload::DumpImported(payload)) => payload.validate()?,
+            _ => {}
+        }
+        // Workflow #389 (register U1): only a command record names its channel, and `via`
+        // only on the Lab channel.
+        let (channel, via) = detail.command_channel();
+        if ((channel.is_some() || via.is_some()) && self.family() != EventFamily::Command)
+            || (via.is_some() && channel != Some(crate::RuntimeChannel::Lab))
+        {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidSanitizedPayload,
+                "channel",
+            ));
+        }
         if let Self::Runtime(RuntimePayload::DeviceSelfCheck(payload)) = self {
             payload.validate()?;
         }
@@ -11549,6 +11824,9 @@ impl EventPayload {
                 recovery.validate()?;
             }
             validate_recovery_ladder_phase(&value.phase)?;
+            if let RuntimeLifecyclePhase::TaggedStateLoaded { stores } = &value.phase {
+                observer::validate_tagged_state_stores(stores)?;
+            }
             if let RuntimeLifecyclePhase::FactSnapshotSetSkipped {
                 parts_found, parts, ..
             } = value.phase
@@ -11917,7 +12195,9 @@ impl EventPayload {
             reason_chain_id: policy_dispatch
                 .map(|value| value.reason_chain_id.clone().into_boxed_str()),
             reason_count: policy_dispatch.map(|value| value.reasons.len() as u64),
-            input_ledger_position: policy_dispatch.map(|value| value.input_ledger_position),
+            input_ledger_position: policy_dispatch
+                .map(|value| value.input_ledger_position)
+                .filter(|position| *position != 0),
             fact_snapshot_id: policy_dispatch
                 .map(|value| value.fact_snapshot_id.clone().into_boxed_str()),
             approval_fact_count: policy_dispatch.map(|value| value.approval_fact_ids.len() as u64),

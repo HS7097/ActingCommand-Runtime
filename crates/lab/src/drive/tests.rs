@@ -301,6 +301,8 @@ impl SemanticInputExecutor for RecordingSemanticInput {
             } => format!(
                 "single_touch_drag_with_vertical_brake_v1:{x1}:{y1}:{x2}:{y2}:{x3}:{y3}:{horizontal_duration_ms}:{corner_hold_ms}:{brake_distance_px}:{brake_duration_ms}:{slope_in}:{slope_out}"
             ),
+            // Workflow #406: reserved before T-3; the recording fake names it only.
+            InputAction::SingleTouchPathDragV1 { .. } => "single_touch_path_drag_v1".to_string(),
             InputAction::Key { key } => format!("key:{key}"),
             InputAction::Text { text } => format!("text:{text}"),
             InputAction::Reset => "reset".to_string(),

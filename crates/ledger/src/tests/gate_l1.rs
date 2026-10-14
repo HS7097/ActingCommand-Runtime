@@ -156,6 +156,7 @@ fn selection_evaluated() -> TaskSemanticFact {
             },
             fact_snapshot_id: "snapshot-a".to_owned(),
             input_ledger_position: 1,
+            input_fact_revisions: None,
             now_unix_ms: AT_MS,
             input_sha256: format!("sha256:{}", "e".repeat(64)),
             selection_result: TaskSelectionOutcome::Empty,

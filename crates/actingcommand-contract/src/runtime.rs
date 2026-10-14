@@ -72,6 +72,8 @@ pub const SEGMENTED_SWIPE_BRAKE_DISTANCE_PX: i32 = 100;
 pub const SEGMENTED_SWIPE_BRAKE_DURATION_MS: u64 = 200;
 pub const SEGMENTED_SWIPE_SLOPE_IN: u8 = 2;
 pub const SEGMENTED_SWIPE_SLOPE_OUT: u8 = 0;
+/// The most points one single-touch path drag passes through (Workflow #406, register §1.18).
+pub const MAX_PATH_DRAG_POINTS: usize = 32;
 pub const MAX_LEASE_QUEUE_TIMEOUT_MS: u64 = 3_600_000;
 pub const MAX_READONLY_OBSERVATION_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
@@ -690,6 +692,20 @@ pub enum InputAction {
         slope_in: u8,
         slope_out: u8,
     },
+    /// Workflow #406 (register §1.18, reserved): one press that passes through `points` in order
+    /// and lifts at the last, inside the box `box_x`, `box_y`, `box_width`, `box_height`; segment
+    /// `i` (from point `i` to point `i + 1`) takes `segment_duration_ms[i]`, and the touch holds
+    /// `corner_hold_ms` at every inner point. Decodable since v0.12.0; #406 T-3 writes and
+    /// executes it, and until then every path that receives it refuses it.
+    SingleTouchPathDragV1 {
+        box_x: i32,
+        box_y: i32,
+        box_width: i32,
+        box_height: i32,
+        points: Vec<InputPathPoint>,
+        segment_duration_ms: Vec<u64>,
+        corner_hold_ms: u64,
+    },
     Key {
         key: String,
     },
@@ -697,6 +713,61 @@ pub enum InputAction {
         text: String,
     },
     Reset,
+}
+
+/// One point of a single-touch path drag (Workflow #406).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputPathPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// A single-touch path drag (Workflow #406, register §1.18): the box lies on the screen and is
+/// not empty; two to [`MAX_PATH_DRAG_POINTS`] points, each on the screen and inside the box;
+/// one duration per segment, each within the input duration bound, and a corner hold within the
+/// same bound.
+fn validate_path_drag(
+    (box_x, box_y, box_width, box_height): (i32, i32, i32, i32),
+    points: &[InputPathPoint],
+    segment_duration_ms: &[u64],
+    corner_hold_ms: u64,
+) -> RuntimeContractResult<()> {
+    let (Some(box_end_x), Some(box_end_y)) =
+        (box_x.checked_add(box_width), box_y.checked_add(box_height))
+    else {
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidSegmentedSwipeContract,
+        ));
+    };
+    if box_x < 0
+        || box_y < 0
+        || box_width <= 0
+        || box_height <= 0
+        || !(2..=MAX_PATH_DRAG_POINTS).contains(&points.len())
+        || segment_duration_ms.len() + 1 != points.len()
+    {
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidSegmentedSwipeContract,
+        ));
+    }
+    for point in points {
+        validate_point(point.x, point.y)?;
+        if !(box_x..box_end_x).contains(&point.x) || !(box_y..box_end_y).contains(&point.y) {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidInputCoordinate,
+            ));
+        }
+    }
+    for duration_ms in segment_duration_ms {
+        validate_duration(*duration_ms)?;
+    }
+    if corner_hold_ms > MAX_INPUT_DURATION_MS {
+        return Err(RuntimeContractError::new(
+            RuntimeContractCode::InvalidInputDuration,
+        ));
+    }
+    Ok(())
 }
 
 impl InputAction {
@@ -750,6 +821,20 @@ impl InputAction {
                 }
                 Ok(())
             }
+            Self::SingleTouchPathDragV1 {
+                box_x,
+                box_y,
+                box_width,
+                box_height,
+                points,
+                segment_duration_ms,
+                corner_hold_ms,
+            } => validate_path_drag(
+                (*box_x, *box_y, *box_width, *box_height),
+                points,
+                segment_duration_ms,
+                *corner_hold_ms,
+            ),
             Self::Key { key } => {
                 validate_bounded_text(key, MAX_INPUT_KEY_BYTES, RuntimeContractCode::InvalidKey)
             }
@@ -772,6 +857,7 @@ impl InputAction {
             Self::LongTap { .. } => crate::EventAction::InputLongTap,
             Self::Swipe { .. } => crate::EventAction::InputSwipe,
             Self::SingleTouchDragWithVerticalBrakeV1 { .. } => crate::EventAction::InputSwipe,
+            Self::SingleTouchPathDragV1 { .. } => crate::EventAction::InputSwipe,
             Self::Key { .. } => crate::EventAction::InputKey,
             Self::Text { .. } => crate::EventAction::InputText,
             Self::Reset => crate::EventAction::InputReset,
@@ -787,6 +873,9 @@ impl fmt::Debug for InputAction {
             Self::Swipe { .. } => "InputAction::Swipe(<redacted-coordinates>)",
             Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
                 "InputAction::SingleTouchDragWithVerticalBrakeV1(<redacted-coordinates>)"
+            }
+            Self::SingleTouchPathDragV1 { .. } => {
+                "InputAction::SingleTouchPathDragV1(<redacted-coordinates>)"
             }
             Self::Key { .. } => "InputAction::Key(<redacted-key>)",
             Self::Text { .. } => "InputAction::Text(<redacted-text>)",
@@ -4314,12 +4403,19 @@ pub enum ContainedTaskCancellationReason {
     /// An instance scheduling pause asked the run to stop after its drain timeout
     /// (`contained_task_paused`, Workflow #191 ps1).
     PausedByOperator,
+    /// Workflow #386 (register S2, runtime-client revision 2): a run the Runtime started itself
+    /// was still active when a blackout started (`blackout_run_stopped`). SR-4b writes it.
+    BlackoutStop,
+    /// Workflow #385 (register P7, runtime-client revision 2): performance pacing ended a policy
+    /// run to be rerun (`perf_run_yielded`, `perf_hold_expired`). P-k and P-h write it.
+    PerformanceYield,
 }
 
 impl ContainedTaskCancellationReason {
     /// The reason of a cancelled terminal from the code of its committed outcome (Workflow #338
-    /// R1, ledger revision 3): the three cancellation codes map to their reason, any other code
-    /// or none to `RecoveredAfterRestart`.
+    /// R1, ledger revision 3): the three cancellation codes map to their reason, the runtime
+    /// host's blackout stop to `BlackoutStop` and its two pacing endings to `PerformanceYield`
+    /// (Workflow #383 SH-1, register S2, P7), any other code or none to `RecoveredAfterRestart`.
     pub fn from_failure_code(failure_code: Option<&crate::outcome::CodeStr>) -> Self {
         match failure_code {
             Some(code) if *code == RuntimeErrorCode::ContainedTaskDeadlineExceeded.code() => {
@@ -4330,6 +4426,12 @@ impl ContainedTaskCancellationReason {
             }
             Some(code) if *code == RuntimeErrorCode::ContainedTaskPaused.code() => {
                 Self::PausedByOperator
+            }
+            // The runtime host's codes (its registry `SchedulingRuleHostCode`,
+            // `ShapeHostCode`): the contract names them by spelling.
+            Some(code) if code.as_str() == "blackout_run_stopped" => Self::BlackoutStop,
+            Some(code) if matches!(code.as_str(), "perf_run_yielded" | "perf_hold_expired") => {
+                Self::PerformanceYield
             }
             _ => Self::RecoveredAfterRestart,
         }

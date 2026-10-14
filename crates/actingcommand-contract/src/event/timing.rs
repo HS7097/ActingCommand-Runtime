@@ -439,6 +439,50 @@ pub struct TaskTimingObservations {
     pub task_failure: Option<TaskTimingFailureObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_observed_expiry: Option<Box<TaskTimingObservedExpiry>>,
+    /// Workflow #385 (register P5): the pacing state of each step, in step order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<TaskTimingStepPacing>,
+    /// Workflow #385 MEM-1 (register P8, reserved): the time and bytes the run's package took to
+    /// load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_load_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_load_bytes: Option<u64>,
+}
+
+/// The pacing state of one step in the task timing evidence (Workflow #385, register P5): the
+/// page settle time, keyed by the run's instance and package and this step index; the state the
+/// step started in (`pacing_band`, the band's lower bound in basis points, and
+/// `pressure_level`); the factor it ran with and the extra wait rounds it used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTimingStepPacing {
+    pub step_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_settle_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pacing_band: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_level: Option<crate::PerformancePressureLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pacing_factor_milli: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_wait_rounds: Option<u32>,
+}
+
+/// The steps of a run, in step order with each step once; a band lies within the
+/// responsiveness scale and a factor never shortens (PERF §5).
+fn valid_step_pacing(steps: &[TaskTimingStepPacing]) -> bool {
+    steps
+        .windows(2)
+        .all(|pair| pair[0].step_index < pair[1].step_index)
+        && steps.iter().all(|step| {
+            step.pacing_band
+                .is_none_or(|band| band <= crate::MAX_RESPONSIVENESS_BP)
+                && step
+                    .pacing_factor_milli
+                    .is_none_or(|factor| factor >= crate::MIN_PACING_FACTOR_MILLI)
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -507,6 +551,7 @@ impl TaskTimingObservations {
             .first_observed_expiry
             .as_ref()
             .is_some_and(|value| !value.is_valid())
+            || !valid_step_pacing(&self.steps)
         {
             return Err(SanitizationError::new(
                 SanitizationCode::InvalidTaskTimingObservations,

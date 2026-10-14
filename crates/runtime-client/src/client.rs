@@ -1876,8 +1876,12 @@ impl RuntimeClient {
                         ContainedTaskCancellationReason::DeadlineExceeded => {
                             ClientCode::RuntimeContainedTaskResponseTimeout
                         }
+                        // A blackout stop and a performance yield end only runs the Runtime
+                        // started itself (register S2, P7); a client run reads them as cancelled.
                         ContainedTaskCancellationReason::ClientRequested
-                        | ContainedTaskCancellationReason::RecoveredAfterRestart => {
+                        | ContainedTaskCancellationReason::RecoveredAfterRestart
+                        | ContainedTaskCancellationReason::BlackoutStop
+                        | ContainedTaskCancellationReason::PerformanceYield => {
                             ClientCode::RuntimeContainedTaskCancelled
                         }
                         ContainedTaskCancellationReason::PausedByOperator => {
@@ -6477,6 +6481,7 @@ mod run_summary_settlement_tests {
             runtime_ms: 0,
             sensitive: false,
             perf_context: Box::new(PerformanceContext::unavailable(4)),
+            condition: None,
         };
         let execution = PolicyExecutionEventData {
             decision_id: dispatch.decision_id.clone(),
@@ -6609,6 +6614,7 @@ mod run_summary_settlement_tests {
             runtime_ms: 0,
             sensitive: false,
             perf_context: Box::new(PerformanceContext::unavailable(1)),
+            condition: None,
         };
         assert!(!is_policy_settlement_interrupted(
             &PolicyExecutionOutcome::Failed { failure }

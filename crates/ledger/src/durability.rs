@@ -90,6 +90,19 @@ pub(crate) fn commit_sync(payload: &EventPayload) -> CommitSync {
         | EventType::MonitorRecoveryDeferred
         | EventType::PerformanceBalanceChanged
         | EventType::LedgerRecovered
+        // Durable (Workflow #383 SH-1): the ledger's gap, probe and dump-import records, the
+        // tagged value records (which commit on arrival with full sync, ledger observer §11.4),
+        // the fact-refresh transitions and the pacing transitions.
+        | EventType::LedgerGapRecorded
+        | EventType::LedgerHealthObserved
+        | EventType::LedgerDumpImported
+        | EventType::PolicyControlStateRecorded
+        | EventType::PolicyActivityStateRecorded
+        | EventType::PolicyFactRefreshTransition
+        | EventType::AgentWakeObligationRecorded
+        | EventType::PerformancePacingChanged
+        | EventType::PerformanceDispatchShareChanged
+        | EventType::PerformanceRunHold
         // Durable: facts, approvals, commands, scheduling, policy, catalog and release.
         | EventType::FactPublished
         | EventType::FactInvalidated
@@ -212,7 +225,9 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
         | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
         | RuntimeLifecyclePhase::FactSnapshotSetSkipped { .. }
         | RuntimeLifecyclePhase::ResourceFenceLifted { .. }
-        | RuntimeLifecyclePhase::StandardPackRead { .. } => CommitSync::Full,
+        | RuntimeLifecyclePhase::StandardPackRead { .. }
+        | RuntimeLifecyclePhase::TaggedStateLoaded { .. }
+        | RuntimeLifecyclePhase::TaggedStateEnabled => CommitSync::Full,
     }
 }
 

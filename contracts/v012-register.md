@@ -344,6 +344,18 @@ not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h)
 `contained_task_navigation_recovery_exhausted` registered pending by D1c (runtime-host, error,
 `pack_logic_mismatch`) for NAV-5 to emit.
 
+### 1.18 Touch module (#406, approved 2026-10-14)
+
+The touch module's 0.12.x slice T-3 adds a box-confined, multi-turn, single-touch drag. `InputAction`
+is a wire shape (`runtime.rs`) and a ledger-validated one (an input intent's `provenance`, a task
+effect's action), so by ORD §3.5 item 12 v0.12.0 already decodes it. Its other parts add no
+persisted shape: centre-hotspot sampling records the same sampled region and landing point as
+today, and the least-recently-used landing-point history lives in memory only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| H1 | `InputAction::SingleTouchPathDragV1 {box_x, box_y, box_width, box_height, points: [{x, y}], segment_duration_ms: [ms], corner_hold_ms}` | reserved enum value (wire and ledger) | SH-1 (decodable) | #406 T-3 (0.12.x) | the box lies on the screen and is not empty; 2 to 32 points (`MAX_PATH_DRAG_POINTS`), each on the screen and inside the box; exactly `points.len() - 1` segment durations, each 1..=60 000 ms (the input duration bound), and `corner_hold_ms` at most 60 000; event action `input.swipe`, as the existing drag's; `Debug` redacted; before T-3 nothing writes or executes it: the host refuses an input request that names it with `input_action_unsupported` (runtime-host, error, `none`, pending), and the kernel's and the Lab port's paths refuse it too |
+
 ### 1.19 SEL-L4a: the selector's record shapes (#308, selector model S0 v2.1 §1.9, §3.4)
 
 SEL-L4a writes the types, the readers, the validation and the round-trip tests of these shapes,
@@ -358,62 +370,6 @@ and SEL-L4b (select over a scan, and a single-frame select's `on_empty`).
 | SL2 | `TaskSelectionConfirmation` `identity_matched {candidate_id, frame_id, content_offset_px}`, `identity_unconfirmed {identity_state (absent, unknown, different), observed_identity?, identity_unknown?}`, `reposition_failed {outcome, stage (return, confirm)}` | new variants, v2 only | SEL-L4a | SEL-L4b | `reposition_failed` carries its failure as `outcome`, as `guard_failed` and `capture_failed` do (E3), where S0 wrote `code`; it is the record's outcome and codes only in the public projection (E9). `identity_matched` names the selected candidate; `observed_identity` is present exactly when the state is `different`; `matched` and `mismatched` stay v1 only |
 | SL3 | `task.selection_evaluated` `unknown_check` | new optional member | SEL-L4a | SEL-L4b | `{unknown_instances, blocking (none, unknown_instances, outranked_possible), upper_bound {kind: none_unknown \| none_eligible \| max {milli} \| unbounded}}`; present exactly when the step declares `scan` or `on_empty`, so every v2 record has it (`invalid_task_selection_record`, field `unknown_check`) |
 | SL4 | `task.selection_evaluated` validation | the seven path rules of S0 §1.9 (review-2 M3) | SEL-L4a | — | refused as `invalid_task_selection_record` with the field `path_rule_1` … `path_rule_6`, and `confirmation` for rule 7; rule 2 is the v2 projection's own (`invalid_candidate_projection`, `viewports`). A record with `unknown_check` chooses exactly one candidate (`selected`). A v1 record keeps rules 3–7 without the `unknown[]` and `verdicts` clauses, and without `unknown_check` only "attempted iff selected" |
-
-### 1.24 Wave 6 slice P-c (#385 PERF §10, §11)
-
-P-c brings the `performance` section of `crates/runtime-config` (one file per subsection,
-`src/performance/{monitor,responsiveness,pacing,calibration}.rs`) and writes it;
-[runtime-config.md](runtime-config.md), "The performance section", is the contract.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| PC1 | `config.parameters.performance` (97 rows) | new section of an existing fact family | P-c | P-c | every key of PERF §10 (§5 rows below), in row order monitor, responsiveness, pacing, calibration; lists and objects as canonical JSON text; settable: `performance.pacing.curve` and `performance.pacing.hold.*` only |
-| PC2 | `config.parameters.performance_monitor` gone (recorded empty once after an earlier start had it); `config.parameters.performance_control` keeps `escalation_samples`, `recovery_samples`, `transition_cooldown_ms` | rows of existing sections removed | P-c | P-c | `performance_monitor.sample_interval_ms` → `performance.monitor.sample_interval_ms`; `performance_monitor.pressure_start_samples` / `_end_samples` → `performance.pressure_start_samples` / `_end_samples` (file members unchanged); `performance_control.clock_jump_threshold_ms` → `performance.pacing.clock_jump_ms`; `performance_control.normal_heavy_dispatch_limit` / `pressured_heavy_dispatch_limit` → `performance.pacing.heavy_dispatch_limit.normal` / `.paused` |
-| PC3 | `perf_config_invalid` (error, ladder class `none`, `config_key`, `config_value_problem?`; domain `perf_`, owner `runtime-config`) | new code | P-c | P-c | a start and `check-config` refuse with it before the ledger opens (exit 1); through an instruction the same values are `config_value_invalid` |
-
-Configuration keys (§5): the `performance.*` rows of §5, every key of PERF §10, parsed, checked and
-defaulted in `distribution/windows/actingd.defaults.json`. §5's §10.4 count is corrected to 19
-(`bounds.*` are four keys). `performance.pacing.curve` holds at most 70 points (coordinator
-ruling 2026-10-14: the 8 KiB `ConfigureSettings` value limit). Deviations from §5's spellings: the pressure streaks keep their
-file members, so their keys are `performance.pressure_start_samples` / `_end_samples` rather than
-`performance.pressure.start_samples` / `.end_samples`; the stage boundaries are
-`performance.calibration.bounds.s1` to `.s4` (PERF writes `bounds.S1`; a configuration key is a
-lowercase token). `execution.defaults.*` is not in P-c (see the PR). Read in v0.12.0 by P-c: the
-streaks (as before), `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*` (the
-controller; before, code constants); every other key by its later slice.
-
-### 1.23 Wave 6 slice SR-1 (#386 SCHED §2.1, §2.2, §2.4, §9; #405 random delay)
-
-SR-1 brings its own shapes and writes them; [runtime-config.md](runtime-config.md), "The
-`scheduling` section", and [business-identity-consensus.md](business-identity-consensus.md),
-"Observe-only retries", are the contract. No new event type and no new member of a persisted
-record: the sampling codes carry their registered values (spec §10, values not structure).
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| SQ1 | `config.parameters.scheduling` (21 rows: §5's 17 keys, `recognition.sample_timeout_retries` and `random_delay.{enabled, min_ms, max_ms}`); `config.parameters.instance` + `instance.<id>.scheduling.random_delay.{enabled, min_ms, max_ms}` (3 rows per instance) | new section of an existing fact family; new rows | SR-1 | SR-1 | lists as canonical JSON text; every key settable; a per-instance random-delay key defaults to `section:scheduling.random_delay.<member>` |
-| SQ2 | the outcomes of `recognition_sample_deadline_exceeded` and `candidate_sample_deadline_exceeded` carry `attempts`, `timeout_ms`, `stage`; `recognition_sample_budget_insufficient` / `candidate_sample_budget_insufficient` carry `required_ms`, `remaining_ms`; `recognition_sample_budget_invalid` carries `required_ms`, `limit_ms`, `pack_operation_id?` | registered values on the `task.failed` terminal, the run's receipt and an admission refusal | SR-1 | SR-1 | `stage` is one of the kernel's new locations `observation_entry`, `observation_before_input`, `observation_after_input`, `observation_page_wait` |
-| SQ3 | `blackout_config_invalid` at start and in `check-config`, with `field` (a JSON pointer into the configuration) and `blackout_id?` | existing code (SR-0), first emitted | SR-1 | SR-1 | through an instruction the same entries are `config_value_invalid` (`section_check`) |
-| SQ4 | `recognition_sample_deadline_or_permission_lost` | code retired, `replaced_by` `recognition_sample_deadline_exceeded` | SR-1 | — | the kernel's checkpoint returns `Result<(), E>`; `sampling_supported()` says whether a runtime samples |
-
-Configuration keys (§5): the `scheduling.recognition.*` row and the five sections of the next
-row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's random delay
-(§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14). Deviation from §5's
-defaults: `scheduling.rerun.condition_codes` lists the six of SCHED §9's eight codes the catalog
-lists; `perf_run_yielded` and `perf_hold_expired` join it with the performance slices that
-register them (a code list entry must be a listed, active code).
-
-### 1.21 Wave 6 slice REC-7 (#396, REC-M v1.2.1 §9)
-
-REC-7 brings and reads both rows; neither is a ledger shape, and no ledger record or persisted
-member changes ([resource-declarations.md](resource-declarations.md), section Task schema `0.9`
-template masks, `verify_templates` color checks and the threshold floor). The new location
-`target_match_exact` (the stage of a masked search past its limit) is a catalog entry, not a row.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| RC1 | task schema `0.9` `anchors[]` and `verify_templates[]`: `mask` (`{"type": "range", "lower", "upper"}`) or `maskRange` (`[lower, upper]`); `verify_templates[].color_check`; recognition pack schema `0.7` template target `mask` (`type` `range` only) | new members (resource file format, not a ledger shape) | REC-7 | resource side | gray bounds 0..=255, `lower <= upper`; both source forms derive the same pack `mask` and pack schema `0.7`; pack schema `0.6` and task schemas before `0.9` refuse them (`UnconsumedField`); operations still refuse a mask |
-| RC2 | admission of a package with its bytes (Runtime, `actinglab package digest`, `package bundle`): a mask selects at least 16 template pixels, not all of one value under `ccoeff_normed`; a `ccorr_normed` threshold above 0 is at least the template's flat-field score in milli plus 50 | tightened rule (resource file format, not a ledger shape) | REC-7 | resource side | refusal `resource_declaration_invalid`, `InvalidValue` at the derived pack's `/targets/<i>/mask`, `/targets/<i>/threshold` or `/defaults/template_threshold`; packages admitted before may be refused, so the resource repositories are checked with `package bundle` before a build with REC-7 is deployed |
 
 ### 1.20 Wave 6 slice RD-1b (#398 model-398 v1.1 §3, §11, §12)
 
@@ -442,6 +398,62 @@ a handset may select `scrcpy`. A handset's alias is at most 248 bytes (coordinat
 (contract), the location `device_endpoint_unbound` (runtime-host), the keys
 `device_config_problem`, `device_binding_problem` and their vocabularies are catalog entries,
 not rows (§7). The `config.parameters` capacity (§5.1) gains one row per handset instance.
+
+### 1.21 Wave 6 slice REC-7 (#396, REC-M v1.2.1 §9)
+
+REC-7 brings and reads both rows; neither is a ledger shape, and no ledger record or persisted
+member changes ([resource-declarations.md](resource-declarations.md), section Task schema `0.9`
+template masks, `verify_templates` color checks and the threshold floor). The new location
+`target_match_exact` (the stage of a masked search past its limit) is a catalog entry, not a row.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RC1 | task schema `0.9` `anchors[]` and `verify_templates[]`: `mask` (`{"type": "range", "lower", "upper"}`) or `maskRange` (`[lower, upper]`); `verify_templates[].color_check`; recognition pack schema `0.7` template target `mask` (`type` `range` only) | new members (resource file format, not a ledger shape) | REC-7 | resource side | gray bounds 0..=255, `lower <= upper`; both source forms derive the same pack `mask` and pack schema `0.7`; pack schema `0.6` and task schemas before `0.9` refuse them (`UnconsumedField`); operations still refuse a mask |
+| RC2 | admission of a package with its bytes (Runtime, `actinglab package digest`, `package bundle`): a mask selects at least 16 template pixels, not all of one value under `ccoeff_normed`; a `ccorr_normed` threshold above 0 is at least the template's flat-field score in milli plus 50 | tightened rule (resource file format, not a ledger shape) | REC-7 | resource side | refusal `resource_declaration_invalid`, `InvalidValue` at the derived pack's `/targets/<i>/mask`, `/targets/<i>/threshold` or `/defaults/template_threshold`; packages admitted before may be refused, so the resource repositories are checked with `package bundle` before a build with REC-7 is deployed |
+
+### 1.23 Wave 6 slice SR-1 (#386 SCHED §2.1, §2.2, §2.4, §9; #405 random delay)
+
+SR-1 brings its own shapes and writes them; [runtime-config.md](runtime-config.md), "The
+`scheduling` section", and [business-identity-consensus.md](business-identity-consensus.md),
+"Observe-only retries", are the contract. No new event type and no new member of a persisted
+record: the sampling codes carry their registered values (spec §10, values not structure).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SQ1 | `config.parameters.scheduling` (21 rows: §5's 17 keys, `recognition.sample_timeout_retries` and `random_delay.{enabled, min_ms, max_ms}`); `config.parameters.instance` + `instance.<id>.scheduling.random_delay.{enabled, min_ms, max_ms}` (3 rows per instance) | new section of an existing fact family; new rows | SR-1 | SR-1 | lists as canonical JSON text; every key settable; a per-instance random-delay key defaults to `section:scheduling.random_delay.<member>` |
+| SQ2 | the outcomes of `recognition_sample_deadline_exceeded` and `candidate_sample_deadline_exceeded` carry `attempts`, `timeout_ms`, `stage`; `recognition_sample_budget_insufficient` / `candidate_sample_budget_insufficient` carry `required_ms`, `remaining_ms`; `recognition_sample_budget_invalid` carries `required_ms`, `limit_ms`, `pack_operation_id?` | registered values on the `task.failed` terminal, the run's receipt and an admission refusal | SR-1 | SR-1 | `stage` is one of the kernel's new locations `observation_entry`, `observation_before_input`, `observation_after_input`, `observation_page_wait` |
+| SQ3 | `blackout_config_invalid` at start and in `check-config`, with `field` (a JSON pointer into the configuration) and `blackout_id?` | existing code (SR-0), first emitted | SR-1 | SR-1 | through an instruction the same entries are `config_value_invalid` (`section_check`) |
+| SQ4 | `recognition_sample_deadline_or_permission_lost` | code retired, `replaced_by` `recognition_sample_deadline_exceeded` | SR-1 | — | the kernel's checkpoint returns `Result<(), E>`; `sampling_supported()` says whether a runtime samples |
+
+Configuration keys (§5): the `scheduling.recognition.*` row and the five sections of the next
+row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's random delay
+(§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14). Deviation from §5's
+defaults: `scheduling.rerun.condition_codes` lists the six of SCHED §9's eight codes the catalog
+lists; `perf_run_yielded` and `perf_hold_expired` join it with the performance slices that
+register them (a code list entry must be a listed, active code).
+
+### 1.24 Wave 6 slice P-c (#385 PERF §10, §11)
+
+P-c brings the `performance` section of `crates/runtime-config` (one file per subsection,
+`src/performance/{monitor,responsiveness,pacing,calibration}.rs`) and writes it;
+[runtime-config.md](runtime-config.md), "The performance section", is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PC1 | `config.parameters.performance` (97 rows) | new section of an existing fact family | P-c | P-c | every key of PERF §10 (§5 rows below), in row order monitor, responsiveness, pacing, calibration; lists and objects as canonical JSON text; settable: `performance.pacing.curve` and `performance.pacing.hold.*` only |
+| PC2 | `config.parameters.performance_monitor` gone (recorded empty once after an earlier start had it); `config.parameters.performance_control` keeps `escalation_samples`, `recovery_samples`, `transition_cooldown_ms` | rows of existing sections removed | P-c | P-c | `performance_monitor.sample_interval_ms` → `performance.monitor.sample_interval_ms`; `performance_monitor.pressure_start_samples` / `_end_samples` → `performance.pressure_start_samples` / `_end_samples` (file members unchanged); `performance_control.clock_jump_threshold_ms` → `performance.pacing.clock_jump_ms`; `performance_control.normal_heavy_dispatch_limit` / `pressured_heavy_dispatch_limit` → `performance.pacing.heavy_dispatch_limit.normal` / `.paused` |
+| PC3 | `perf_config_invalid` (error, ladder class `none`, `config_key`, `config_value_problem?`; domain `perf_`, owner `runtime-config`) | new code | P-c | P-c | a start and `check-config` refuse with it before the ledger opens (exit 1); through an instruction the same values are `config_value_invalid` |
+
+Configuration keys (§5): the `performance.*` rows of §5, every key of PERF §10, parsed, checked and
+defaulted in `distribution/windows/actingd.defaults.json`. §5's §10.4 count is corrected to 19
+(`bounds.*` are four keys). `performance.pacing.curve` holds at most 70 points (coordinator
+ruling 2026-10-14: the 8 KiB `ConfigureSettings` value limit). Deviations from §5's spellings: the pressure streaks keep their
+file members, so their keys are `performance.pressure_start_samples` / `_end_samples` rather than
+`performance.pressure.start_samples` / `.end_samples`; the stage boundaries are
+`performance.calibration.bounds.s1` to `.s4` (PERF writes `bounds.S1`; a configuration key is a
+lowercase token). `execution.defaults.*` is not in P-c (see the PR). Read in v0.12.0 by P-c: the
+streaks (as before), `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*` (the
+controller; before, code constants); every other key by its later slice.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

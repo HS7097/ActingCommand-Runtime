@@ -2238,3 +2238,26 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- Workflow #387 D1b (shared configuration mechanism): end ----
+
+// ---- Workflow #383 SH-1 (the v0.12.0 shape slice): begin ----
+actingcommand_contract::outcome_codes! {
+    /// Codes SH-1 registers with the shapes they belong to, ahead of the slices that emit them
+    /// (named on each entry): the two performance endings of a policy run that
+    /// `ContainedTaskCancellationReason::PerformanceYield` reads (register P7; Workflow #385 PERF
+    /// §11, M387 §3.2), and the refusal of the reserved single-touch path drag (register
+    /// §1.18; Workflow #406).
+    pub(crate) enum ShapeHostCode {
+        /// Info. A policy run hit its wall-clock ceiling after pacing lengthened it, or was
+        /// preempted while held; it ends and is owed a rerun (keys `instance_id`,
+        /// `yield_cause`, `held_ms`, optional `timeout_ms`; P-k, P-h).
+        PerfRunYielded => "perf_run_yielded": info / planned_stop,
+        /// Info. A policy run was held longer than the hold limit; it ends, is owed a rerun, and
+        /// the default ladder item starts once performance releases the instance (keys
+        /// `instance_id`, `held_ms`, `timeout_ms`; P-h).
+        PerfHoldExpired => "perf_hold_expired": info / planned_stop,
+        /// Error. An input request names an action this build decodes but does not perform: the
+        /// single-touch path drag is reserved until #406 T-3. Nothing reaches the device.
+        InputActionUnsupported => "input_action_unsupported": error / none,
+    }
+}
+// ---- Workflow #383 SH-1: end ----

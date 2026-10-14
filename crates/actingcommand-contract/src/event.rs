@@ -299,6 +299,15 @@ pub enum EventType {
     PerformanceMonitorRecovered,
     #[serde(rename = "perf.balance_changed")]
     PerformanceBalanceChanged,
+    /// Workflow #385 (register P1): a pacing stage transition (`perf_stage_changed`).
+    #[serde(rename = "perf.pacing_changed")]
+    PerformancePacingChanged,
+    /// Workflow #385 (register P2): dispatch paused or resumed by its share.
+    #[serde(rename = "perf.dispatch_share_changed")]
+    PerformanceDispatchShareChanged,
+    /// Workflow #385 (register P3): a policy run held or resumed at its pace checkpoint.
+    #[serde(rename = "perf.run_hold")]
+    PerformanceRunHold,
     #[serde(rename = "fact.published")]
     FactPublished,
     #[serde(rename = "fact.invalidated")]
@@ -331,6 +340,15 @@ pub enum EventType {
     PolicyExecutionRecorded,
     #[serde(rename = "policy.planning_signal_observed")]
     PolicyPlanningSignalObserved,
+    /// Workflow #383 (register L7): one dispatch pair's complete decision memory.
+    #[serde(rename = "policy.control_state_recorded")]
+    PolicyControlStateRecorded,
+    /// Workflow #383 (register L14): one (instance, activity profile)'s activity state.
+    #[serde(rename = "policy.activity_state_recorded")]
+    PolicyActivityStateRecorded,
+    /// Workflow #384 (register D1): one fact-refresh transition.
+    #[serde(rename = "policy.fact_refresh_transition")]
+    PolicyFactRefreshTransition,
     #[serde(rename = "catalog.transition_intent")]
     CatalogTransitionIntent,
     #[serde(rename = "catalog.activated")]
@@ -491,8 +509,20 @@ pub enum EventType {
     AgentSessionCompleted,
     #[serde(rename = "agent.session_escalated")]
     AgentSessionEscalated,
+    /// Workflow #383 (register L8): one wake obligation.
+    #[serde(rename = "agent.wake_obligation_recorded")]
+    AgentWakeObligationRecorded,
     #[serde(rename = "ledger.recovered")]
     LedgerRecovered,
+    /// Workflow #383 (register L1): records the ledger knows it does not hold.
+    #[serde(rename = "ledger.gap_recorded")]
+    LedgerGapRecorded,
+    /// Workflow #383 (register L2): a probe finding.
+    #[serde(rename = "ledger.health_observed")]
+    LedgerHealthObserved,
+    /// Workflow #383 (register L3): a ledger dump was imported.
+    #[serde(rename = "ledger.dump_imported")]
+    LedgerDumpImported,
     #[serde(rename = "signature.registered")]
     SignatureRegistered,
     #[serde(rename = "signature.matched")]
@@ -540,7 +570,10 @@ impl EventType {
             | Self::PerformanceSummary
             | Self::PerformanceMonitorDegraded
             | Self::PerformanceMonitorRecovered
-            | Self::PerformanceBalanceChanged => EventFamily::Performance,
+            | Self::PerformanceBalanceChanged
+            | Self::PerformancePacingChanged
+            | Self::PerformanceDispatchShareChanged
+            | Self::PerformanceRunHold => EventFamily::Performance,
             Self::FactPublished | Self::FactInvalidated => EventFamily::Fact,
             Self::ApprovalDecision => EventFamily::Approval,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
@@ -555,7 +588,10 @@ impl EventType {
             | Self::PolicyDispatchRejected
             | Self::PolicyDispatchCompleted
             | Self::PolicyExecutionRecorded
-            | Self::PolicyPlanningSignalObserved => EventFamily::Policy,
+            | Self::PolicyPlanningSignalObserved
+            | Self::PolicyControlStateRecorded
+            | Self::PolicyActivityStateRecorded
+            | Self::PolicyFactRefreshTransition => EventFamily::Policy,
             Self::CatalogTransitionIntent
             | Self::CatalogActivated
             | Self::CatalogRolledBack
@@ -634,8 +670,12 @@ impl EventType {
             | Self::AgentSessionResumed
             | Self::AgentResponseRecorded
             | Self::AgentSessionCompleted
-            | Self::AgentSessionEscalated => EventFamily::Agent,
+            | Self::AgentSessionEscalated
+            | Self::AgentWakeObligationRecorded => EventFamily::Agent,
             Self::LedgerRecovered
+            | Self::LedgerGapRecorded
+            | Self::LedgerHealthObserved
+            | Self::LedgerDumpImported
             | Self::SignatureRegistered
             | Self::SignatureMatched
             | Self::SignatureRetired => EventFamily::Ledger,

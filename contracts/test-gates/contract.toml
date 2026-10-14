@@ -400,3 +400,34 @@ tests = [
     "actingcommand-actinglab-architecture::workspace_guards::r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture",
 ]
 incident = []
+
+# The v0.12.0 shapes: readers, validation and round trips (v012-register SH-1 rows, §1.18)
+[[gate]]
+key = "K18"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::sh1::l1_gap_records_read_back_and_keep_each_gap_kinds_shape",
+    "actingcommand-contract::lib::event::tests::sh1::l2_l3_probe_findings_and_dump_imports_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::l4_a_record_capture_names_its_record_time",
+    "actingcommand-contract::lib::event::tests::sh1::l5_l6_tagged_state_phases_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::l7_l14_decision_memory_value_records_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::l8_a_wake_obligation_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::l9_dispatch_records_read_input_fact_revisions_or_a_non_zero_position",
+    "actingcommand-contract::lib::event::tests::sh1::l9_selection_records_read_input_fact_revisions_or_a_non_zero_position",
+    "actingcommand-contract::lib::event::tests::sh1::l13_the_view_lists_gain_the_new_record_types",
+    "actingcommand-contract::lib::event::tests::sh1::d1_a_fact_refresh_transition_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::s1_a_condition_settled_failure_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::s2_p7_w4_cancelled_terminals_name_blackout_stop_and_performance_yield",
+    "actingcommand-contract::lib::event::tests::sh1::s3_a_blackout_suppression_reads_back",
+    "actingcommand-contract::lib::event::tests::sh1::p1_p3_pacing_transitions_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::p4_perf_summary_pacing_members_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::p5_p8_task_timing_steps_and_package_load_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::p6_execution_records_carry_wall_and_budget_time",
+    "actingcommand-contract::lib::event::tests::sh1::u1_command_records_name_their_channel_and_via_on_lab_only",
+    "actingcommand-contract::lib::event::tests::sh1::u3_pack_registry_keys_read_back_their_entries",
+    "actingcommand-contract::lib::event::tests::sh1::a1_reserved_wake_kinds_read_back",
+    "actingcommand-contract::lib::event::tests::sh1::a2_a_response_record_may_name_its_report_artifact",
+    "actingcommand-contract::lib::event::tests::sh1::a4_only_a_dispatch_intent_carries_priority_locked",
+    "actingcommand-contract::lib::event::tests::sh1::h1_the_reserved_path_drag_decodes_validates_and_redacts",
+]
+incident = ["#383 SH-1"]

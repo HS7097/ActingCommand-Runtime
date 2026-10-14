@@ -510,17 +510,6 @@ tests = [
 ]
 incident = ["#385"]
 
-# Workflow #386 SR-1 and #405: every scheduling key has its model default and is settable; values that break a rule are refused at start (host blackout entries as blackout_config_invalid with their member) and through an instruction; an instance's random delay is checked as the pair in effect
-[[gate]]
-key = "57"
-coverage = "Y"
-tests = [
-    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c1_every_scheduling_key_has_its_model_default",
-    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c2_scheduling_values_that_break_a_rule_are_refused",
-    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect",
-]
-incident = ["#386", "#405"]
-
 # A handset is bound to its device only by the private binding file: its targets use the bound serial and never adb connect, its binding records the device by fingerprint and no host or port, a broken file refuses the start, a missing binding fails check-config and leaves only that handset unavailable, device fields that do not fit are refused, fingerprints group a handset's instances beside the port map, emulator control refuses a handset, an emulator-only configuration is unchanged, and nothing that exports, archives or diagnoses reads the private file (Workflow #398 RD-1b)
 [[gate]]
 key = "56"
@@ -540,3 +529,23 @@ tests = [
     "actingcommand-actinglab-architecture::workspace_guards::rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings",
 ]
 incident = ["#398"]
+
+# Workflow #386 SR-1 and #405: every scheduling key has its model default and is settable; values that break a rule are refused at start (host blackout entries as blackout_config_invalid with their member) and through an instruction; an instance's random delay is checked as the pair in effect
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c1_every_scheduling_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c2_scheduling_values_that_break_a_rule_are_refused",
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect",
+]
+incident = ["#386", "#405"]
+
+# The reserved single-touch path drag is refused before any effect (v012-register §1.18; Workflow #383 SH-1, numbered 54 on its branch, renumbered 58 by train 6)
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
+]
+incident = ["#383 SH-1"]

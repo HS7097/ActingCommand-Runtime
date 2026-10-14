@@ -139,6 +139,7 @@ impl LedgerEventRead for LedgerEventMetadata {
 impl StoredEventRecord {
     /// Validates record structure only; the caller must authenticate its ledger snapshot.
     pub(crate) fn into_metadata(self) -> Result<LedgerEventMetadata, FactValidationError> {
+        self.validate_capture()?;
         let event = LedgerEventMetadata {
             schema_version: self.schema_version,
             event_id: self.event_id,

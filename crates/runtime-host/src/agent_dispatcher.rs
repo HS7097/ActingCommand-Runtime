@@ -17,8 +17,10 @@ use actingcommand_contract::{
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerResult, PersistedEvent};
 use std::collections::BTreeMap;
 
-/// The event types an `EventPayload::Agent` record can have; the Ledger checks every record's
-/// type against its payload, so these types select exactly the Agent records.
+/// The event types of the Agent records the dispatcher replays; the Ledger checks every record's
+/// type against its payload, so these types select exactly those records. A wake obligation's
+/// value record (`agent.wake_obligation_recorded`, Workflow #383 register L8) is loaded from the
+/// tagged state (AO-6) and never replayed.
 const AGENT_EVENT_TYPES: [EventType; 6] = [
     EventType::AgentWakeRequested,
     EventType::AgentSessionStarted,
@@ -539,6 +541,13 @@ impl AgentDispatcherState {
             | AgentPayload::SessionCompleted(payload)
             | AgentPayload::SessionEscalated(payload) => {
                 self.apply_session_event(event, payload.session())?;
+            }
+            // Never replayed (see `AGENT_EVENT_TYPES`): AO-6 loads it from the tagged state.
+            AgentPayload::WakeObligationRecorded(_) => {
+                return Err(fatal(
+                    HostCode::AgentEventFamilyInvalid,
+                    HostLocation::ApplyAgentEvent,
+                ));
             }
         }
         Ok(())

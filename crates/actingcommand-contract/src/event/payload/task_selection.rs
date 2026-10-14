@@ -374,7 +374,17 @@ pub struct TaskSelectionRecord {
     pub projection: TaskSelectionProjection,
     pub policy: TaskSelectionPolicy,
     pub fact_snapshot_id: String,
+    /// Absent (read as 0) when the record carries `input_fact_revisions` instead (Workflow #383,
+    /// register L9); a present position is never 0.
+    #[serde(
+        default,
+        skip_serializing_if = "super::observer::input_ledger_position_absent",
+        deserialize_with = "super::observer::deserialize_input_ledger_position"
+    )]
     pub input_ledger_position: u64,
+    /// Workflow #383 (register L9): both stores' (lineage, revision) the selection read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_fact_revisions: Option<super::InputFactRevisions>,
     pub now_unix_ms: u64,
     /// The evaluator's canonical identity of candidates, facts and instant, `sha256:<hex>`.
     pub input_sha256: String,
@@ -403,7 +413,7 @@ impl TaskSelectionRecord {
         }
         self.policy.validate()?;
         validate_policy_token(&self.fact_snapshot_id, "fact_snapshot_id")?;
-        if self.input_ledger_position == 0 {
+        if self.input_ledger_position == 0 && self.input_fact_revisions.is_none() {
             return Err(invalid("input_ledger_position"));
         }
         if self.now_unix_ms == 0 {

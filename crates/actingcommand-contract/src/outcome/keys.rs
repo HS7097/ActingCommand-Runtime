@@ -414,4 +414,8 @@ outcome_keys! {
     resource_targets_rejection_reason: vocab(resource_targets_rejection_reason),
     media_type: name,
     // ---- Workflow #378 A5: end ----
+    // ---- Workflow #383 SH-1 (performance endings of a policy run, PERF §11): begin ----
+    yield_cause: vocab(yield_cause),
+    held_ms: duration_ms,
+    // ---- Workflow #383 SH-1: end ----
 }
