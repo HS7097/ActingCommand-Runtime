@@ -615,9 +615,12 @@ from D1b on, and each section fact holds at most 256 rows.
 ## 6 Interface revisions (declared once by A8, ORD §3.6)
 
 `ledger` [3, 3] (A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a, AO-1 dump import, AO-2 index
-table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15);
+table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15,
+SH-2 §1.25);
 `runtime-client` [2, 2] (§3 W1–W4, W8–W12: A4, U-1, D1b, D2-S5, P-m, RD-3; A2-P's wire
-spellings §1.15); `actingd-config` 5
+spellings §1.15); `runtime-client` 3 comes with its own later release, not with A8's
+declaration (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7,
+SR-6b's `not_running` in W13; re-check 10-14, §1.25); `actingd-config` 5
 (§5); `runtime-outcomes` [1, 1] (A5 §1.16); `package` (PKG-S1, PKG-S5, D2-S2/S3); `install-control` stays
 [0, 1] until U-4. AO-0 changes no declaration.
 
