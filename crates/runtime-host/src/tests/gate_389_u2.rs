@@ -276,6 +276,8 @@ fn u2_an_unbound_connection_is_bound_from_its_first_request_s_envelope_until_u6(
 
 // TU-6 (the Runtime's half): a Lab connection that MCP forwarded binds `lab` with `via = mcp`,
 // and its command records carry both; `via` on another channel is refused before any binding.
+// `via` off the Lab channel is a shape the contract refuses (UIM §3.2 rule 7; register §1.46
+// U2-3), so no client builds it: the peer's frame is written by hand, as a decoded wire request.
 #[test]
 fn u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records() {
     let root = TempDir::new().expect("tempdir");
@@ -283,9 +285,18 @@ fn u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records() {
     let mut client = TestClient::connect(&host);
     let mut reader = TestClient::connect(&host);
 
-    let off_lab = bind(&mut client, RuntimeChannel::Cli, Some(ChannelVia::Mcp));
+    let lab_via_mcp = client.request(RuntimeOperation::BindChannel {
+        channel: RuntimeChannel::Lab,
+        via: Some(ChannelVia::Mcp),
+    });
+    let mut wire = serde_json::to_value(&lab_via_mcp).expect("request JSON");
+    wire["operation"]["channel"] = json!("cli");
+    let off_lab: RuntimeRequest = serde_json::from_value(wire).expect("the frame decodes");
+    assert!(off_lab.validate().is_err());
+    let off_lab = client.send(&off_lab);
     assert_eq!(off_lab.state(), RuntimeReceiptState::Denied);
     assert_eq!(off_lab.outcome().code().as_str(), "invalid_bind_channel");
+    assert_eq!(off_lab.channel(), None);
 
     let bound = bind(&mut client, RuntimeChannel::Lab, Some(ChannelVia::Mcp));
     assert_eq!(
@@ -319,12 +330,13 @@ fn u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records() {
 // TU-7 (the door's half): with neither Lab option in the configuration, the Lab channel still
 // takes an option-two operation (a tap) and the door refuses no option-one request: its receipt
 // carries the channel, and a refusal is the handler's own, never a channel or Lab-option code.
+// A tap is not a C4-path write, so before AO-4 its channel is in its receipt only (UIM §5.2;
+// register §1.46 U2-1).
 #[test]
 fn u2_the_lab_channel_takes_option_requests_before_u6_without_any_lab_option() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, ALIAS, Arc::new(FakeState::default()));
     let mut client = TestClient::connect(&host);
-    let mut reader = TestClient::connect(&host);
     assert_eq!(
         bind(&mut client, RuntimeChannel::Lab, None).state(),
         RuntimeReceiptState::Completed
@@ -354,10 +366,7 @@ fn u2_the_lab_channel_takes_option_requests_before_u6_without_any_lab_option() {
     let tapped = client.send(&tap);
     assert_eq!(tapped.state(), RuntimeReceiptState::Completed);
     assert_eq!(tapped.channel(), Some(RuntimeChannel::Lab));
-    assert_eq!(
-        received_channel(&mut reader, &tap),
-        (Some(RuntimeChannel::Lab), None)
-    );
+    assert_eq!(tapped.via(), None);
 
     // Option one: writing resource targets is not refused by the door (no catalog is active
     // here, so the request's own checks refuse it).
@@ -377,7 +386,6 @@ fn u2_the_lab_channel_takes_option_requests_before_u6_without_any_lab_option() {
         "the door refused {code}"
     );
     drop(client);
-    drop(reader);
     host.close().expect("close host");
 }
 
