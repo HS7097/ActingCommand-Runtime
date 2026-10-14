@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! `actingd suspended --config <path>` (Workflow #336 L6, §12.8): the read-only list of the
-//! scheduled pairs a failure paused, those a package update lifted (and whether the running
-//! daemon has read that update yet), and those failing again and again without accumulating.
+//! scheduled pairs a failure paused, those a change of a package's content lifted (Workflow #336
+//! PKG-S3: the running daemon lifts them at its next check, without a restart), and those failing
+//! again and again without accumulating.
 //! Loads and assembles the configuration exactly as startup does, then reads the state root's
 //! ledger read-only; nothing is written and no lock is taken, so it runs beside the daemon.
 

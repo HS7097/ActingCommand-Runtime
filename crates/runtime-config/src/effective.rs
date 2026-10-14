@@ -404,6 +404,13 @@ impl EffectiveConfig {
         scheduling::recognition_join_timeout_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, in
+    /// milliseconds: the least time between two measurements of one package by the suspension
+    /// lift checks.
+    pub fn lift_check_min_interval_ms(&self) -> Result<u64, ConfigFailure> {
+        scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// The instruction value of `key`, when one is in effect.
     pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
         self.setting(key)

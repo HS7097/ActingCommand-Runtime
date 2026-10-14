@@ -418,12 +418,11 @@ observations, effective configuration, task/recovery facts and Lab results name 
 by its `package_id` (`package_label`), and `EvidencePackage` by its file name; none of them
 carries a package digest, and a stored record that still carries one is not read. `scheduled_execution`
 uses its existing `package_path` locator and the procedure binding's typed
-`package_digest`; the run's identity check compares the request's reference with the
-binding's until PKG-S3, and admission records it and compares it with nothing (Workflow
-#336 PKG-S1). Git source-tree
-and content-directory binding fingerprints hash the canonical tuple of binding version,
-procedure alias, complete reference, operation ID and ordered yield points. ZIP bindings
-keep the original tuple.
+`package_digest`, which since Workflow #336 PKG-S3 takes no part in the binding: the
+binding fingerprint hashes the tuple v3 (`actingcommand.procedure-binding.v3`, procedure
+alias, operation ID, ordered yield points) and names no package content, the run's identity
+check compares the request's path with the binding's `package_path`, and admission records
+the request's reference and compares it with nothing (PKG-S1; PKG-S4 removes it).
 The calendar driver transports the typed request/context through the existing calls.
 
 Forensics and resource restore consume the same reference and require the separately

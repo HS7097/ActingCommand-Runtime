@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Runtime-owned content bindings for external procedure packages.
+//! Runtime-owned bindings of procedure aliases (Workflow #336 PKG-S3, option 丙).
+//!
+//! A binding is `procedure_ref`, `operation_id` and `yield_points`; its digest is the tuple v3
+//! of these three and names no package content (M-PKG D13). The package is found by its path,
+//! the configured `scheduled_execution.package_path`, which the binding carries as a location
+//! outside the tuple: a scheduled run executes the request built from that path, and the
+//! suspension lift check measures the package there.
 
 use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
@@ -13,59 +19,55 @@ use std::collections::BTreeMap;
 
 const MAX_PROCEDURE_TOKEN_BYTES: usize = 256;
 const SHA256_PREFIX: &str = "sha256:";
+/// The domain of the binding tuple v3 (Workflow #336 PKG-S3): no package content.
+const BINDING_DOMAIN: &str = "actingcommand.procedure-binding.v3";
 
-/// Immutable binding between a procedure alias and approved package content.
+/// Immutable binding of a procedure alias to its operation and yield points, with the location
+/// of its package when the configuration schedules it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcedureBinding {
     procedure_ref: String,
-    package_digest: actingcommand_contract::PackageRef,
     operation_id: String,
     yield_points: Vec<String>,
     binding_digest: String,
+    /// The package's location (`scheduled_execution.package_path`, as the scheduled request
+    /// names it); not part of the binding tuple.
+    package_path: Option<String>,
 }
 
 impl ProcedureBinding {
     pub fn new(
         procedure_ref: impl Into<String>,
-        package_digest: impl Into<actingcommand_contract::PackageRef>,
         operation_id: impl Into<String>,
         yield_points: Vec<String>,
     ) -> RuntimeHostResult<Self> {
         let procedure_ref = procedure_ref.into();
-        let package_digest = package_digest.into();
         let operation_id = operation_id.into();
         validate_token(&procedure_ref)?;
         validate_token(&operation_id)?;
-        package_digest.validate().map_err(|_| {
-            manifest_fatal(
-                SharedCode::ProcedurePackageDigestInvalid,
-                HostLocation::BindProcedure,
-            )
-        })?;
         for yield_point in &yield_points {
             validate_token(yield_point)?;
         }
-        let binding_digest = binding_digest(
-            &procedure_ref,
-            &package_digest,
-            &operation_id,
-            &yield_points,
-        )?;
+        let binding_digest = binding_digest(&procedure_ref, &operation_id, &yield_points)?;
         Ok(Self {
             procedure_ref,
-            package_digest,
             operation_id,
             yield_points,
             binding_digest,
+            package_path: None,
         })
+    }
+
+    /// The binding with its package's location: the path the scheduled request of this
+    /// procedure names. It changes neither the binding digest nor any decision identity.
+    #[must_use]
+    pub fn with_package_path(mut self, package_path: impl Into<String>) -> Self {
+        self.package_path = Some(package_path.into());
+        self
     }
 
     pub fn procedure_ref(&self) -> &str {
         &self.procedure_ref
-    }
-
-    pub fn package_digest(&self) -> &actingcommand_contract::PackageRef {
-        &self.package_digest
     }
 
     pub fn operation_id(&self) -> &str {
@@ -78,6 +80,11 @@ impl ProcedureBinding {
 
     pub fn binding_digest(&self) -> &str {
         &self.binding_digest
+    }
+
+    /// The package's location, when the configuration schedules this procedure.
+    pub fn package_path(&self) -> Option<&str> {
+        self.package_path.as_deref()
     }
 }
 
@@ -119,7 +126,7 @@ impl ProcedureManifest {
         let mut bound = evaluation.clone();
         let mut identities = BTreeMap::new();
         for intent in &mut bound.dispatch_intents {
-            if intent.package_digest.is_some() || intent.procedure_binding_digest.is_some() {
+            if intent.procedure_binding_digest.is_some() {
                 return Err(manifest_fatal(
                     HostCode::ProcedureIntentAlreadyBound,
                     HostLocation::BindPolicyEvaluation,
@@ -142,7 +149,6 @@ impl ProcedureManifest {
             );
             intent.decision_id = decision_id.clone();
             intent.reason_chain_id = reason_chain_id.clone();
-            intent.package_digest = Some(binding.package_digest.clone());
             intent.procedure_binding_digest = Some(binding.binding_digest.clone());
             if identities
                 .insert(
@@ -195,12 +201,6 @@ impl ProcedureManifest {
         let operation: Location = operation.into();
         let binding = self.resolve(&intent.procedure_ref, operation)?;
         binding.validate_descriptor(intent, operation)?;
-        if intent.package_digest.as_ref() != Some(binding.package_digest()) {
-            return Err(manifest_request(
-                HostCode::ProcedurePackageDigestMismatch,
-                operation,
-            ));
-        }
         if intent.procedure_binding_digest.as_deref() != Some(binding.binding_digest()) {
             return Err(manifest_request(
                 HostCode::ProcedureBindingDigestMismatch,
@@ -245,34 +245,20 @@ impl ProcedureBinding {
     }
 }
 
+/// The binding tuple v3 (`procedure_ref`, `operation_id`, `yield_points`; M-PKG D13): a package
+/// changed in place, or found at another path, keeps its binding digest and its decisions.
 fn binding_digest(
     procedure_ref: &str,
-    package_digest: &actingcommand_contract::PackageRef,
     operation_id: &str,
     yield_points: &[String],
 ) -> RuntimeHostResult<String> {
-    let encoded = match package_digest {
-        actingcommand_contract::PackageRef::LegacyZipSha256(hash) => serde_json::to_vec(&(
-            procedure_ref,
-            format!("{SHA256_PREFIX}{hash}"),
-            operation_id,
-            yield_points,
-        )),
-        actingcommand_contract::PackageRef::GitSourceTree(_)
-        | actingcommand_contract::PackageRef::ContentDirectory(_) => serde_json::to_vec(&(
-            "actingcommand.procedure-binding.v2",
-            procedure_ref,
-            package_digest,
-            operation_id,
-            yield_points,
-        )),
-    };
-    let bytes = encoded.map_err(|_| {
-        manifest_fatal(
-            HostCode::ProcedureBindingEncodeFailed,
-            HostLocation::BindProcedure,
-        )
-    })?;
+    let bytes = serde_json::to_vec(&(BINDING_DOMAIN, procedure_ref, operation_id, yield_points))
+        .map_err(|_| {
+            manifest_fatal(
+                HostCode::ProcedureBindingEncodeFailed,
+                HostLocation::BindProcedure,
+            )
+        })?;
     Ok(format!("{SHA256_PREFIX}{:x}", Sha256::digest(bytes)))
 }
 

@@ -6417,7 +6417,6 @@ mod run_summary_settlement_tests {
             task_id: "task:settlement".to_owned(),
             instance_id: "instance:settlement".to_owned(),
             operation_id: "operation:settlement".to_owned(),
-            package_digest: format!("sha256:{}", "a".repeat(64)).into(),
             procedure_binding_digest: format!("sha256:{}", "b".repeat(64)),
             reason_chain_id: "reason:settlement".to_owned(),
             reasons: vec![PolicyReasonRecord(

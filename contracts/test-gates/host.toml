@@ -159,7 +159,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_policy_run_failure_records_terminal_outcome_and_completion",
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_recognition_and_guard_failures_settle_on_the_admitted_run",
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain",
-    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_identity_and_package_mismatches_fail_before_io",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_identity_and_package_path_mismatches_fail_before_io",
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_expired_lease_is_fenced_and_settled_on_the_original_run",
     "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_failure_chain_retries_five_times_and_stops_on_sixth",
     "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_guarded_retry_stops_after_third_attempt_success",
@@ -706,6 +706,23 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_378_shutfu::shutfu_a_runtime_holding_a_lease_refuses_the_install_commit_shutdown_at_once",
 ]
 incident = ["#378 SHUT-FU"]
+
+# Workflow #336 PKG-S3 (option 丙): a procedure binding names no package content and a dispatch records no package digest; a failure identity (format v2) names each package by its id hash and the content hash measured at settlement; a pause lifts once a package it names changes in place, measured at most once per scheduling.suspension.lift_check_min_interval_ms, without a restart; an unmeasurable package keeps the pause with lift_check_hash_unmeasured; a restart rebuilds the recorded hashes from the failure identity; the content hash is measured only at settlement and lift checks (M-PKG v1.1 §4.4 S3-T1 to S3-T6, S3-T8, S3-T9; S3-T7 stays with key 27's interrupted settlement row; key 74 is U-2's)
+[[gate]]
+key = "75"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t1_a_binding_names_no_package_and_a_dispatch_records_no_digest",
+    "actingcommand-runtime-host::lib::host::failure_settlement::tests::s3_t2_a_settled_identity_names_each_package_by_its_content_hash",
+    "actingcommand-runtime-host::lib::policy_control::tests::s3_t2_the_same_identity_twice_pauses_on_the_packages_it_names",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t4_only_a_package_the_pause_names_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes",
+    "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity",
+]
+incident = ["#336 PKG-S3"]
 
 # Workflow #390 OUT-2 (FCM O-01, O-02, S-01): a direct run of a designated effect set whose cap is an instance fact maps "collected" when its member completed (the cap reached, then the page's next operation; or the page changed before the cap) and "nothing" for a cap of 0, its terminal's scheduling disposition recording the member's count beside the cap the run held it to and reading back as written; a run whose cap fact is missing fails with contained_task_designated_effect_cap_unresolved before any input
 [[gate]]

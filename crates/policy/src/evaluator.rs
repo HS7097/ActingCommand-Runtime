@@ -359,12 +359,6 @@ pub struct DispatchIntent {
     pub instance_id: String,
     pub operation_id: String,
     pub procedure_ref: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "actingcommand_contract::package::optional_prefixed_reference"
-    )]
-    pub package_digest: Option<actingcommand_contract::PackageRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub procedure_binding_digest: Option<String>,
     pub catalog_hash: String,
@@ -1114,7 +1108,6 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
             instance_id: candidate.instance_id.clone(),
             operation_id: candidate.operation_id,
             procedure_ref: candidate.procedure_ref,
-            package_digest: None,
             procedure_binding_digest: None,
             catalog_hash: catalog.catalog_hash().to_owned(),
             catalog_version: catalog_bundle.tasks.catalog.catalog_version,

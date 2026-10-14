@@ -738,6 +738,25 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.47 Wave 12 slice PKG-S3 (#336 option 丙, M-PKG v1.1 §3.3, §3.4, §4.4)
+
+PKG-S3 removes the package digest from the scheduling binding and the dispatch, writes the
+failure identity in format v2 (§2) and lifts a pause by the content hashes that identity
+records. It adds no record type and no persisted member; one warning code and one
+configuration key. A stored dispatch intent that still carries `package_digest` does not
+decode (`corrupt_ledger_record`, location `decode_sqlite_record`) and the ledger does not open;
+a v1 failure identity string is not read. [policy-suspension.md](policy-suspension.md) is the
+contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P3-1 | `policy.dispatch_intent` (`PolicyDispatchEventData`) | removed persisted member `package_digest` | PKG-S3 | PKG-S3 | the ledger's replay equality of two intents (`same_dispatch_definition`) no longer compares it; `procedure_binding_digest` stays |
+| P3-2 | `DispatchIntent.package_digest` (policy evaluation) and `ProcedureBinding.package_digest` | removed members | PKG-S3 | PKG-S3 | `procedure_binding_digest` is SHA-256 over the tuple v3 (`actingcommand.procedure-binding.v3`, `procedure_ref`, `operation_id`, `yield_points`): a package changed in place or found at another path keeps its binding and decisions. The binding carries its package's location (`scheduled_execution.package_path`) outside the tuple; a scheduled run naming another path is `policy_run_identity_mismatch`. The codes `procedure_package_digest_mismatch`, `procedure_package_digest_missing`, `policy_run_package_digest_invalid` and `policy_run_package_digest_missing` are deleted (pending) |
+| P3-3 | `policy.execution_recorded` `failure.failure_identity` | changed value (format v2, §2), shape unchanged | PKG-S3 | PKG-S3 | at most 214 bytes; the main package and each layer as `<I><H>`; the pause's recorded hashes are rebuilt from it alone, never from the dispatch |
+| P3-4 | `actingd suspended` (`actingcommand.actingd.suspended.v2`) `package` `{paused_hash_prefix, current_hash_prefix, layers[{kind, package_id, paused_hash_prefix, current_hash_prefix, changed}]}`; `lifts_when` `content_hash_changes`; `lifted[].lifted_by` `main_hash \| layer:<n> \| restart`; `lifted[].effective` `next_evaluation \| active` | changed report members (not persisted) | PKG-S3 | PKG-S3 | replaces `paused`/`current` package references, `paused_digest_prefix`/`current_digest_prefix`, `main_digest_changes_or_any_layer_changes`, `main_digest` and `pending_restart`; the report measures each package it names once, read-only; warning `lift_check_hash_unmeasured:<task>/<instance>`. The `takeover` hint keeps `--package-ref` until PKG-S4 removes the flag |
+| P3-5 | `lift_check_hash_unmeasured` (warning; `path?`, `package_id?`, `caused_by` the read's refusal), location `check_suspension_lift` | new code | PKG-S3 | PKG-S3 | a note link of the `policy_task_paused` reason a lift check could not judge (M-PKG D18): the pause stays and the package is measured again at a later check |
+| P3-6 | `scheduling.suspension.lift_check_min_interval_ms` | new configuration key (§5) | PKG-S3 | PKG-S3 | duration, default 60 000 (`actingd.defaults.json`); read at each lift check |
+
 ### 1.48 Wave 12 slice OUT-2 (#390, forced compromises O-01, O-02, R-03, S-01)
 
 OUT-2 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
@@ -787,7 +806,7 @@ readers in one PR.
 | Slice | Removed or changed |
 |---|---|
 | PKG-S2 | `PackageAdmitted.package_sha256` (keep `package_label`, `task_label`); `EntryRecoveryPackageAdmitted/Completed/Failed.package_sha256` → `package_label`; effective configuration `EntryRecovery.package_sha256` → `package_label`; `TaskSelectionPolicy.package_sha256`; Lab declared refusal `declared_package`, `verified_package` → optional `package_label`; Lab evidence `expected_package_sha256` / `actual_package_sha256` → `package_label`; `EvidencePackage.sha256`; OCR comparison report `truth_set_sha256` and its runtime-client reader; run status `package_ref` / `recovery_packages` → `package_label` / `recovery_package_labels`; run summary digest checks; reading facts' `resource_bundle_hash` = SHA-256(`"package:" + package_id`) (shape unchanged). **Done (PKG-S2):** all of them, §1.31 P2-1 to P2-11; also the run summary's `package_digest` (now `package_label`), the in-package `sha256` keys made optional and ignored (D5), and request replay by `package_label` (a recorded label must be the request's package's, or a configured prerequisite package's or the recovery binding's `package_id`, each admitted again) |
-| PKG-S3 | `DispatchIntent.package_digest` (payload and storage equality); `ProcedureBinding.package_digest`; `binding_digest` tuple v3 = (`procedure_ref`, `operation_id`, `yield_points`); `PausedOn.package_digest` → content hashes parsed from the failure identity; suspension report members `paused_hash_prefix`, `current_hash_prefix`, `lifts_when: content_hash_changes`, `lifted_by: main_hash \| layer:<n> \| restart` |
+| PKG-S3 | `DispatchIntent.package_digest` (payload and storage equality); `ProcedureBinding.package_digest`; `binding_digest` tuple v3 = (`procedure_ref`, `operation_id`, `yield_points`); `PausedOn.package_digest` → content hashes parsed from the failure identity; suspension report members `paused_hash_prefix`, `current_hash_prefix`, `lifts_when: content_hash_changes`, `lifted_by: main_hash \| layer:<n> \| restart`. **Done (PKG-S3):** all of them, §1.47 P3-1 to P3-6; also the run identity check by path (the request's path against the binding's location) and `lifted[].effective` `next_evaluation` in place of `pending_restart` |
 | PKG-S4 | IPC `expected_sha256` of `PackageDebugRequest`, `ContainedTaskRecoveryBinding`, `ContainedTaskRequest`, the Lab operation, online observation and saved-artifact OCR requests; `PackageDebugSummary.verified_sha256`; configuration `startup_package.expected_sha256`, `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`, the resource declaration's `package_digest` |
 | PKG-S5 | bundle v4 `packs[] {package_id, server, entry_task_id, path = "packs/<package_id>", file_count, byte_count}` (the bundle-level maintenance declaration stays, coordinator 10-12); `RecordingArtifact.digest` / `.sha256` → `package_id`; `PackageRef`, `ContentDirectory` and the `sha256:` serializers |
 
@@ -871,7 +890,7 @@ when it takes effect.
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
-| `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 | PKG-S3; SR-3 |
+| `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

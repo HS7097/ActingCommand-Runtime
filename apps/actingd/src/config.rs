@@ -1921,13 +1921,11 @@ fn procedure_binding(
     if yield_points.len() > MAX_REFERENCES_PER_TASK {
         return Err(ActingdCode::ProcedureBindingSizeInvalid.code());
     }
-    let binding = ProcedureBinding::new(
-        procedure_ref.clone(),
-        package_digest.clone(),
-        operation_id,
-        yield_points,
-    )
-    .map_err(|_| ActingdCode::ProcedureBindingInvalid.code())?;
+    // Workflow #336 PKG-S3: the binding names no package content (tuple v3, M-PKG D13). The
+    // configuration's `package_digest` is still read into the scheduled request until PKG-S4
+    // removes the key; the binding carries the scheduled request's path as its location.
+    let binding = ProcedureBinding::new(procedure_ref.clone(), operation_id, yield_points)
+        .map_err(|_| ActingdCode::ProcedureBindingInvalid.code())?;
     let scheduled_task = match scheduled_execution {
         None => None,
         Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => Some((
@@ -1944,6 +1942,10 @@ fn procedure_binding(
                 mode: ScheduledExecutionMode::DeviceRegistry,
             },
         )),
+    };
+    let binding = match &scheduled_task {
+        Some((_, scheduled)) => binding.with_package_path(scheduled.request.package_path()),
+        None => binding,
     };
     Ok((binding, scheduled_task))
 }

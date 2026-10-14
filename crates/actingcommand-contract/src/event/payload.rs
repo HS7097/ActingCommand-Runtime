@@ -2807,7 +2807,6 @@ pub struct PolicyDispatchEventData {
     pub task_id: String,
     pub instance_id: String,
     pub operation_id: String,
-    pub package_digest: crate::PackageRef,
     pub procedure_binding_digest: String,
     pub reason_chain_id: String,
     pub reasons: Vec<PolicyReasonRecord>,
@@ -3397,8 +3396,6 @@ pub struct PolicyDispatchPayload {
     task_id: String,
     instance_id: String,
     operation_id: String,
-    #[serde(default, with = "crate::package::prefixed_reference")]
-    package_digest: crate::PackageRef,
     #[serde(default)]
     procedure_binding_digest: String,
     reason_chain_id: String,
@@ -3522,10 +3519,6 @@ impl PolicyDispatchPayload {
 
     pub fn operation_id(&self) -> &str {
         &self.operation_id
-    }
-
-    pub fn package_digest(&self) -> &crate::PackageRef {
-        &self.package_digest
     }
 
     pub fn procedure_binding_digest(&self) -> &str {
@@ -6951,7 +6944,6 @@ impl PolicyDispatchDraft {
             task_id: self.data.task_id,
             instance_id: self.data.instance_id,
             operation_id: self.data.operation_id,
-            package_digest: self.data.package_digest,
             procedure_binding_digest: self.data.procedure_binding_digest,
             reason_chain_id: self.data.reason_chain_id,
             reasons: self.data.reasons,
@@ -7384,9 +7376,6 @@ fn validate_policy_dispatch_fields(
     crate::validate_instance_alias(&data.instance_id)
         .map_err(|_| SanitizationError::new(SanitizationCode::InvalidPolicyToken, "instance_id"))?;
     validate_policy_token(&data.operation_id, "operation_id")?;
-    data.package_digest.validate().map_err(|_| {
-        SanitizationError::new(SanitizationCode::InvalidPolicyDigest, "package_digest")
-    })?;
     validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
@@ -7988,7 +7977,6 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
             task_id: value.task_id.clone(),
             instance_id: value.instance_id.clone(),
             operation_id: value.operation_id.clone(),
-            package_digest: value.package_digest.clone(),
             procedure_binding_digest: value.procedure_binding_digest.clone(),
             reason_chain_id: value.reason_chain_id.clone(),
             reasons: value.reasons.clone(),

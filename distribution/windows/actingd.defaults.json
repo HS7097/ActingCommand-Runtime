@@ -288,6 +288,9 @@
     },
     "fact_refresh": {
       "recognition_join_timeout_ms": 10000
+    },
+    "suspension": {
+      "lift_check_min_interval_ms": 60000
     }
   },
   "ledger_observer": {

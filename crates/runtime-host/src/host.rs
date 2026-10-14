@@ -1629,6 +1629,7 @@ impl RuntimeHost {
             return_home_packages: config.return_home_packages,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
+            lift_checks: crate::suspension_lift::LiftChecks::default(),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -4195,6 +4196,9 @@ struct HostShared {
     // Workflow #336 L6: what each scheduled run's preparation resolved, by decision id, until
     // its execution record is written (memory only).
     scheduled_resolutions: Mutex<BTreeMap<String, failure_settlement::ScheduledResolution>>,
+    // Workflow #336 PKG-S3: the suspension lift checks' measurements and baselines (memory
+    // only).
+    lift_checks: crate::suspension_lift::LiftChecks,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
