@@ -337,7 +337,7 @@ fn task(operation: TaskOperation, pack: RecognitionPack) -> PreparedContainedTas
 // One guarded click from `home` to `terminal`; with `consensus`, every observation samples.
 fn click_task(consensus: bool) -> PreparedContainedTask {
     let control = control();
-    let mut operation: TaskOperation = serde_json::from_value(json!({
+    let operation: TaskOperation = serde_json::from_value(json!({
         "id": "open_terminal",
         "from": "home",
         "to": "terminal",
