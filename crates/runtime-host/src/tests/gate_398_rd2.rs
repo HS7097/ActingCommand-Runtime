@@ -3,8 +3,8 @@
 // Workflow #398 RD-2 (model-398 v1.1 §4, §12 rows RD-2-T2, T3, T4, T6, T9 and T12): the wired
 // device link of a bound handset, through the host. The fake provider's watch reports nothing by
 // itself; each test hands the host the watch's lists as its reader does
-// (`device_link_event_for_test`) and runs the timers on a manual clock
-// (`device_link_tick_for_test`). Every expected value comes from the model: the state table of
+// (`device_link_event_for_test`); the lease sweep runs the timers on the host clock, and a test
+// runs them at once with `device_link_tick_for_test`. Every expected value comes from the model: the state table of
 // §4.2, the restore of §4.3, the in-flight rule of §4.4 and the records of §4.7. The serial is a
 // neutral fake, distinct from the other test modules', and no record names it.
 
@@ -35,7 +35,7 @@ struct HandsetHost {
     handset: InstanceId,
 }
 
-fn handset_host(clock: Option<Arc<ManualRuntimeClock>>) -> HandsetHost {
+fn handset_host() -> HandsetHost {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.observed_open.store(true, Ordering::Release);
@@ -43,16 +43,11 @@ fn handset_host(clock: Option<Arc<ManualRuntimeClock>>) -> HandsetHost {
     emulator_state.observed_open.store(true, Ordering::Release);
     let watches = Arc::new(FakeLinkWatches::default());
     let handset = instance_id();
-    let config = config(&root).with_policy_inputs(PolicyInputSnapshot::new(
-        pending_policy_facts(),
-        pending_policy_resources(),
-    ));
-    let config = match clock {
-        Some(clock) => config.with_runtime_clock(clock),
-        None => config,
-    };
     let host = RuntimeHost::start(
-        config,
+        config(&root).with_policy_inputs(PolicyInputSnapshot::new(
+            pending_policy_facts(),
+            pending_policy_resources(),
+        )),
         Arc::new(
             FakeProvider::from_entries([
                 (
@@ -178,7 +173,7 @@ fn rd2_t9_only_a_bound_handset_opens_the_watch() {
     emulators.close().expect("close host");
     assert_eq!(watches.opened(), 0);
 
-    let run = handset_host(None);
+    let run = handset_host();
     assert_eq!(run.watches.opened(), 1);
     run.host.close().expect("close host");
     assert_eq!(run.watches.stopped(), 1);
@@ -191,7 +186,7 @@ fn rd2_t9_only_a_bound_handset_opens_the_watch() {
 // fatal.
 #[test]
 fn rd2_t2_t6_an_idle_handset_that_leaves_device_waits_once_per_state_and_is_unavailable() {
-    let run = handset_host(None);
+    let run = handset_host();
     let host = &run.host;
     list(host, DeviceLinkState::Device);
     let linked = instance_facts(host, run.handset);
@@ -262,19 +257,18 @@ fn rd2_t2_t6_an_idle_handset_that_leaves_device_waits_once_per_state_and_is_unav
     run.host.close().expect("close host");
 }
 
-// T3 (§4.3): back at `device`, the preparation is queued only once `device_link.settle_ms`
-// (default 3000) passed on the host clock; it runs on a self-check claim and passes, so the
-// handset is available again with `device.connected = true` and one `device_link_restored`.
+// T3 (§4.3): back at `device`, the preparation is not queued at once but after
+// `device_link.settle_ms` (default 3000) on the host clock; it runs on a self-check claim and
+// passes, so the handset is available again with `device.connected = true` and one
+// `device_link_restored`. The settle wait's exact time point is the machine row T3's.
 #[test]
 fn rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restored() {
-    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
-    let run = handset_host(Some(Arc::clone(&clock)));
+    let run = handset_host();
     let host = &run.host;
     list(host, DeviceLinkState::Device);
     list(host, DeviceLinkState::Absent);
     list(host, DeviceLinkState::Device);
-    host.device_link_tick_for_test().expect("tick");
-    clock.advance(2_999);
+    // At once, well inside the settle wait, the timers queue nothing.
     host.device_link_tick_for_test().expect("tick");
     let events = all_events(host);
     assert!(records_of(&events, HostCode::DeviceLinkRestored).is_empty());
@@ -283,8 +277,7 @@ fn rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restore
         (false, "device_link:absent".to_owned())
     );
 
-    clock.advance(1);
-    host.device_link_tick_for_test().expect("tick");
+    // The lease sweep runs the timers: once the wait passed, the preparation is queued.
     wait_until(GATE_WAIT, || {
         !records_of(&all_events(host), HostCode::DeviceLinkRestored).is_empty()
     });
@@ -319,7 +312,7 @@ fn rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restore
 // transient, and still only the run ends: the receipt is not fatal and the Runtime runs.
 #[test]
 fn rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lost() {
-    let run = handset_host(None);
+    let run = handset_host();
     let host = &run.host;
     let package = super::gate_369s5::direct_run_package(&run._root, &run.state);
     list(host, DeviceLinkState::Device);
