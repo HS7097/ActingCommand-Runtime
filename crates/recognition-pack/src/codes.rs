@@ -88,6 +88,9 @@ actingcommand_contract::outcome_locations! {
         // Workflow #396 REC-6.
         /// Reading, parsing and comparing the sides of a value test.
         ValueTestEvaluate => "value_test_evaluate",
+        // Workflow #396 REC-8.
+        /// Reading a candidate layout's shared OCR request for the targets it serves.
+        TextReadShared => "text_read_shared",
     }
 }
 

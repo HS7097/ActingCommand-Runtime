@@ -568,6 +568,17 @@ v0.12.0, so nothing written by a 0.12 build becomes unreadable.
 | L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
 | L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
 
+### 1.35 Wave 9 slice REC-8 (#396, REC-M v1.2.1 §10)
+
+REC-8 brings and reads both rows; neither is a ledger shape. No ledger record type or task
+diagnostic member is added: a target the shared read serves keeps the OCR evaluation row it had,
+with the read's blocks. The new location `text_read_shared` is a catalog entry, not a row.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R8-1 | task schema `0.9` `candidate_layouts[].shared_ocr` and recognition pack schema `0.7` `candidate_layouts[].shared_ocr`: `{region, languages, timeout_ms, model_ref, model_sha256, blocks, line_merge?}` | new member of a `fixed_slots` layout (resource file format, not a ledger shape) | REC-8 | resource side | [selection-graph.md](selection-graph.md), section Shared OCR read; the region is a rectangle or `full_frame` (the source's `rect` / `full_frame` region form, derived into the pack's), `blocks` must be `detect` with a `line_merge`; a `repeated_anchor` layout refuses it (`UnknownField`), task schemas before `0.9` too (`UnconsumedField`); a shared read no slot or feature target uses is refused; one projection counts it as one provider evaluation per frame it serves, and the targets it serves none; the `package` interface revision for it is declared once by A8 |
+| R8-2 | the text read budget of a page recognition (`ocr-fields.md`, section Located text) | tightened rule (resource file format, not a ledger shape) | REC-8 | resource side | REC-6 left open how the field, reading and `0.7` collection targets a page gate names count: each such target a page names, directly or through a check, is one read of its own region (its observation is kept by target), at admission (`resource_declaration_invalid`, `InvalidValue` at `/pages/<i>` of the page that exceeds the budget) and at run time (`text_read_budget_exceeded` before the gate's provider call); a task whose gates name more than four of them, or more than one frame of their summed area with the page set's other reads, is refused where it was admitted since REC-6 |
+
 ### 1.36 Wave 9 slice S6a (#369 model v3.1 §7 row 6, H-5; ORD §3.5 item 17)
 
 S6a brings and writes the configuration key `start_emulator` and its report;

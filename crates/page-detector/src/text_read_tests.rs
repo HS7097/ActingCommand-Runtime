@@ -73,3 +73,72 @@ fn a_page_set_reads_at_most_four_distinct_text_requests() {
     );
     assert_eq!(issue.reason, ResourceDeclarationReason::InvalidValue);
 }
+
+// An ordinary OCR target reading the 80 by 40 region at `x`.
+fn field(id: &str, x: i32) -> Value {
+    json!({
+        "type": "ocr", "id": id, "region": {"x": x, "y": 0, "width": 80, "height": 40},
+        "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact", "expected": ["ALPHA"],
+        "case_sensitive": false, "minimum_confidence": 0.8, "model_ref": "PP-OCRv6_medium",
+        "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    })
+}
+
+// Workflow #396 REC-8: a field or reading target a page names is read by the page recognition
+// once per target, since its observation is kept by target; other ordinary OCR targets are no
+// reads.
+#[test]
+fn a_page_set_counts_each_kept_target_it_names_as_one_read() {
+    let pack = load_pack_from_json_str(
+        &json!({
+            "schema_version": "0.7",
+            "coordinate_space": {"width": 640, "height": 360},
+            "targets": [
+                field("text/a", 0),
+                field("text/a_twin", 0),
+                field("text/b", 100),
+                field("text/c", 200),
+                field("text/d", 300)
+            ]
+        })
+        .to_string(),
+    )
+    .expect("recognition pack");
+    let evaluator = RecognitionEvaluator::with_asset_resolver(
+        pack,
+        Arc::new(FsAssetResolver::new(PathBuf::new())),
+    )
+    .expect("recognition evaluator");
+    let kept = |ids: &[&str]| {
+        ids.iter()
+            .map(|id| (*id).to_owned())
+            .collect::<HashSet<_>>()
+    };
+    let pages = detector(json!([
+        {"id": "neutral/one", "required": ["text/a", "text/a_twin"]},
+        {"id": "neutral/two", "required": ["text/b", "text/c", "text/d"]}
+    ]));
+
+    pages
+        .validate(&evaluator)
+        .expect("ordinary OCR targets are no text reads");
+    pages
+        .validate_keeping(
+            &evaluator,
+            kept(&["text/a", "text/a_twin", "text/b", "text/c"]),
+        )
+        .expect("four kept targets fit one page recognition, the twin as its own read");
+
+    let error = pages
+        .validate_keeping(
+            &evaluator,
+            kept(&["text/a", "text/a_twin", "text/b", "text/c", "text/d"]),
+        )
+        .expect_err("a fifth kept target exceeds one page recognition");
+    let issue = error.declaration_issue().expect("the refused declaration");
+    assert_eq!(
+        issue.field_path, "/pages/1",
+        "the page that exceeds the budget"
+    );
+    assert_eq!(issue.reason, ResourceDeclarationReason::InvalidValue);
+}

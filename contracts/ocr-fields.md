@@ -142,6 +142,8 @@ that Scene. The text reads of locate targets (section Located text) and of value
 within that Scene. The observation a page gate makes of a field or reading target (or of a
 `0.7` collection target) is kept by target and taken once by that frame's collection or
 reading, with its execution evidence; its PP-OCR reports stay with the gate's evaluation.
+The gate's provider call for such a target counts in the page recognition's text read budget
+(section Located text, Workflow #396 REC-8).
 Other OCR output is not cached, and callers cannot import an old template result.
 The context is bounded by admitted target identities and is released with the frame.
 Best-match score, threshold and the existing color check govern the anchor. An anchor that
@@ -422,7 +424,11 @@ error on its recognition error row.
 
 Reads are counted per consumer: one page recognition (every page rule of the page set) or
 one guard evaluation. The reads are those of locate targets and (Workflow #396 REC-6) of value
-tests' sides, which read an ordinary OCR target as one request of its own region. A consumer
+tests' sides, which read an ordinary OCR target as one request of its own region. Workflow #396
+REC-8: a page recognition also reads each field, reading or `0.7` collection target of its task
+that a page names, directly or as a member of a check; since that observation is kept by
+target, each such target is one read of its own region, even when another read has the same
+request. Other ordinary OCR targets are not reads. A consumer
 reads with at most 4 provider calls and at most one frame
 of summed region area, each distinct request once; requests are the same when their
 resolved region, model, languages, timeout, `blocks` and `line_merge` are equal. Within one
