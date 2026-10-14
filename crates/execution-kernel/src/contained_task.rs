@@ -63,6 +63,9 @@ mod unique_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
+// Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
+#[cfg(test)]
+mod gate_387_d1cf;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -4180,10 +4183,10 @@ impl PreparedContainedTask {
         observation: &PageObservation,
     ) -> Result<Option<StabilityTerminalReason>, ContainedTaskRunError<R::Error>> {
         let terminal_reason = if let Some(declaration) = &self.control.stability_termination {
+            // Every observation a step completes on carries its sample while a declaration is
+            // in force; one without it is a Runtime-internal invariant (Workflow #387 D1c-F).
             let sample = observation.stability_sample.clone().ok_or_else(|| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-                )
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
             })?;
             let transition = stability_tracker.propose(sample, declaration, step_index)?;
             let (trace, terminal_reason) = match &transition {
@@ -5368,86 +5371,65 @@ struct StabilityFrameSample {
     pixels: Vec<u8>,
 }
 
+/// Workflow #387 D1c-F: the declared crop of `frame` for stability termination. Two causes are
+/// told apart. Frame data that does not add up (its pixel length against width x height x
+/// bytes per pixel, or a size that overflows) is the capture's failure:
+/// `contained_task_frame_invalid`. A region that is empty, overflows or does not lie inside the
+/// frame is the control declaration's: the frame passed the task resolution check before this
+/// call, and admission refuses the same region against that resolution with
+/// `contained_task_control_invalid`.
 fn stability_sample(
     frame: &Frame,
     declaration: &StabilityTerminationDeclaration,
 ) -> Result<StabilityFrameSample, ContainedTaskError> {
+    let frame_invalid =
+        || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code());
+    let region_invalid =
+        || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code());
     let bytes_per_pixel = match frame.pixel_format {
         PixelFormat::Rgb8 => 3usize,
         PixelFormat::Rgba8 => 4usize,
     };
-    let frame_width = usize::try_from(frame.width).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let frame_height = usize::try_from(frame.height).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
+    let frame_width = usize::try_from(frame.width).map_err(|_| frame_invalid())?;
+    let frame_height = usize::try_from(frame.height).map_err(|_| frame_invalid())?;
     let expected_frame_len = frame_width
         .checked_mul(frame_height)
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
-        .ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-            )
-        })?;
+        .ok_or_else(frame_invalid)?;
     if frame.pixels.len() != expected_frame_len {
-        return Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-        ));
+        return Err(frame_invalid());
     }
 
     let region = declaration.region;
-    let end_x = region.x.checked_add(region.width).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let end_y = region.y.checked_add(region.height).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
+    let end_x = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(region_invalid)?;
+    let end_y = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(region_invalid)?;
     if region.width == 0 || region.height == 0 || end_x > frame.width || end_y > frame.height {
-        return Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-        ));
+        return Err(region_invalid());
     }
 
-    let x = usize::try_from(region.x).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let y = usize::try_from(region.y).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let width = usize::try_from(region.width).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let height = usize::try_from(region.height).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let row_bytes = width.checked_mul(bytes_per_pixel).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let capacity = row_bytes.checked_mul(height).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
+    let x = usize::try_from(region.x).map_err(|_| region_invalid())?;
+    let y = usize::try_from(region.y).map_err(|_| region_invalid())?;
+    let width = usize::try_from(region.width).map_err(|_| region_invalid())?;
+    let height = usize::try_from(region.height).map_err(|_| region_invalid())?;
+    let row_bytes = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(region_invalid)?;
+    let capacity = row_bytes.checked_mul(height).ok_or_else(region_invalid)?;
     let mut pixels = Vec::with_capacity(capacity);
     for row in y..y + height {
         let start = row
             .checked_mul(frame_width)
             .and_then(|offset| offset.checked_add(x))
             .and_then(|offset| offset.checked_mul(bytes_per_pixel))
-            .ok_or_else(|| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-                )
-            })?;
-        let end = start.checked_add(row_bytes).ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-            )
-        })?;
-        pixels.extend_from_slice(frame.pixels.get(start..end).ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-            )
-        })?);
+            .ok_or_else(region_invalid)?;
+        let end = start.checked_add(row_bytes).ok_or_else(region_invalid)?;
+        pixels.extend_from_slice(frame.pixels.get(start..end).ok_or_else(region_invalid)?);
     }
 
     Ok(StabilityFrameSample {

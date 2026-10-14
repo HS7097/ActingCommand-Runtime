@@ -568,3 +568,13 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# Workflow #387 D1c-F: a direct input whose segmented swipe breaks its contract is denied with invalid_segmented_swipe_contract (class none) before any input; three failures of the re-coded causes on one instance within the window start no ladder, while the stability sample's frame-data half (class 5) still counts
+[[gate]]
+key = "69"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cf::d1cf_a_direct_input_swipe_that_breaks_its_contract_is_refused_before_any_input",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1cf_three_recoded_failures_on_one_instance_within_the_window_start_no_ladder",
+]
+incident = ["#387"]

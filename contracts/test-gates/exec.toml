@@ -665,3 +665,16 @@ tests = [
     "actingcommand-lab::lib::ocr::tests::rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable",
 ]
 incident = ["#396"]
+
+# Workflow #387 D1c-F: an invalid segmented swipe is refused by its producer under its own code before any input (a pack's at admission and when its action is built with contained_task_operation_invalid, class 3; Lab's port with validation_failed); a plan that still fails to prepare is input_plan_preparation_failed, class none, with no device severity, no resource disposition and no backend opened; a stability sample's frame data that does not add up is contained_task_frame_invalid (class 5) and a region that does not fit is contained_task_control_invalid (class 3)
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cf::d1cf_admission_refuses_a_pack_swipe_whose_corner_leaves_no_room_for_the_brake",
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cf::d1cf_a_pack_swipe_past_admission_is_refused_before_any_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cf::d1cf_a_stability_sample_tells_frame_data_from_a_region_that_does_not_fit",
+    "actingcommand-execution-kernel::lib::tests::gate_387_d1cf::d1cf_a_swipe_that_reaches_preparation_unvalidated_fails_as_a_runtime_internal_error",
+    "actingcommand-lab::lib::ports::d1cf_tests::d1cf_the_lab_port_refuses_a_segmented_swipe_before_any_port_opens",
+]
+incident = ["#387"]
