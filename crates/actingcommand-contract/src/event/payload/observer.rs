@@ -10,8 +10,8 @@ use crate::codes::SanitizationCode;
 use crate::outcome::{Category, CodeStr, Outcome};
 use crate::{
     AgentWakeData, DiagnosticCode, EffectDisposition, EventAction, EventId, OwnerEpoch,
-    PolicyAdmissionRecord, PolicyFailureClass, PolicyFailureDisposition, SanitizationError,
-    SanitizedAudit,
+    PolicyAdmissionRecord, PolicyFailureClass, PolicyFailureDisposition, RuntimeStateStoreRevision,
+    SanitizationError, SanitizedAudit,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
@@ -266,22 +266,15 @@ pub(super) fn validate_tagged_state_stores(
     Ok(())
 }
 
-/// One store's (lineage, revision) pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StoreRevision {
-    pub lineage: OwnerEpoch,
-    pub revision: u64,
-}
-
 /// `input_fact_revisions` of `policy.dispatch_intent` and `task.selection_evaluated`
-/// (register L9): both stores' (lineage, revision) the decision read. A reader accepts it or
+/// (register L9): both stores' (lineage, revision) the decision read, each the same pair a
+/// status read's source names (`RuntimeStateStoreRevision`, register W1). A reader accepts it or
 /// `input_ledger_position`, which stays non-zero when present (order-v012 §3.5 item 11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputFactRevisions {
-    pub instance_facts: StoreRevision,
-    pub runtime_facts: StoreRevision,
+    pub instance_facts: RuntimeStateStoreRevision,
+    pub runtime_facts: RuntimeStateStoreRevision,
 }
 
 /// `input_ledger_position` as a reader takes it (register L9): absent reads as 0, and a
