@@ -8,7 +8,8 @@ validates the selected program declarations. `--changed-path` is repeatable.
 `--changed-paths-file <relative-path>` accepts the NUL-terminated status/path pairs from
 native Git (git diff --name-status --no-renames -z), relative to the same repository root. An empty Git selection is
 reported with an empty `entries` array. Each supplied path has a result; unknown
-JSON/YAML declaration families fail rather than count as validated.
+JSON/YAML declaration families fail rather than count as validated, except inside a directory
+the repository declares in `declaration-exclusions.json` (below).
 
 `actinglab --json operation validate --repo <root> --operation-dir <relative-dir>`
 uses the same task and resource-table declaration parsers and retains the existing
@@ -31,6 +32,7 @@ and `operation explain` keep their existing behavior.
 | `applications.json` (repository root only) | The actinglab applications table check (`actingcommand.applications.v1`) |
 | `maintenance.json` (repository root only) | Shared `Vec<BundleMaintenance>` decoding and `validate_bundle_maintenance_declarations`; reported with family `maintenance` |
 | `pages.json` (repository root only) | The standard-pack page list (`actingcommand.pages.v1`, Workflow #373 NAV-6): the contract crate's `parse_standard_pack_pages`, the Runtime reader's own check; reported with family `standard_pack_pages` |
+| `declaration-exclusions.json` (repository root only) | Resource tooling's `DeclarationExclusions::parse` (`actingcommand.declaration-exclusions.v1`, Workflow #396 TOOL-2); reported with family `declaration_exclusions` |
 | `interrupts.json` (repository root only) | The shared interrupt pages (`actingcommand.interrupts.v1`, Workflow #373 NAV-6): `parse_standard_pack_interrupts` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_interrupts` |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
@@ -85,6 +87,29 @@ safety/migration notes, task annotations/catalog, Home-fact templates, recovery
 notes and recognition overrides. The formal resource reader consumes the
 materialized operation declarations and generated recognition/navigation files.
 Adding another program consumer requires mapping its declaration parser.
+
+A repository names the directories of its own non-declaration material, such as its
+regression case families, in the root file `declaration-exclusions.json` (Workflow #396
+TOOL-2):
+
+```json
+{"schema_version": "actingcommand.declaration-exclusions.v1", "directories": ["regression"]}
+```
+
+No other member is accepted. `directories` holds 1-64 distinct repository-relative
+directories, each written as `/`-separated normal segments (no empty, `.` or `..` segment, no
+leading or trailing `/`, no `\`, `:` or control character) of at most 1024 bytes. A selected
+path inside one of them, at any depth and compared segment by segment as Git spells it, to
+which no declaration parser is mapped (a path that would otherwise fail with "no mapped
+parser", or on removal with "no mapped current-reference check") has the `excluded` result
+with reason `repository_declared_exclusion`. A mapped family inside a declared directory (for
+example a `*.pack.json` or a `control.json`) is still validated, and an unmapped JSON/YAML
+file outside every declared directory still fails. The declaration is read from the selected
+tree once per run, when the first unmapped path needs it: a repository without it declares
+nothing, and a declaration that does not parse fails that path with
+`resource_declaration_invalid` and the declaration's own issue (`declaration_file`
+`declaration-exclusions.json`, its JSON pointer and reason). Its removal needs no other
+document.
 
 Only explicit Git D entries are removal requests; missing added/modified files
 fail. For removed operation declarations or JSON dependencies, the reader validates
