@@ -8,8 +8,8 @@
 
 use super::*;
 use actingcommand_contract::{
-    ArtifactProducer, ArtifactRedactionState, IdentifierIssuer, OriginModule, RetentionClass,
-    RuntimeFactScope,
+    ArtifactProducer, ArtifactRedactionState, IdentifierIssuer, OriginModule,
+    ProjectedArtifactReference, RetentionClass, RuntimeFactScope,
 };
 use actingcommand_ledger::KeptFrameFolder;
 use serde_json::json;
@@ -163,7 +163,8 @@ impl Fixture {
             at_unix_ms,
             date: date.to_owned(),
             leaf: format!("node-{sequence}-{code}"),
-            code: code.to_owned(),
+            // A received code, read back from its spelling.
+            code: serde_json::from_value(json!(code)).expect("code"),
         }
     }
 
@@ -308,20 +309,16 @@ fn frames_listing_reports_every_class_folder_and_both_cleared_records() {
         error_points: points,
     };
 
+    let switches = record(
+        &config_parameters_fact_key(CONFIG_TOP_LEVEL_SECTION),
+        FactValue::RecordList(vec![
+            row(RETENTION_ENABLED_KEY, FactScalar::Boolean(true)),
+            row(DEDUP_ERROR_KEY, FactScalar::Boolean(true)),
+            row(DEDUP_LAB_KEY, FactScalar::Boolean(false)),
+        ]),
+    );
     let mut facts = FrameFactsBuilder::default();
-    facts
-        .fact(
-            5,
-            &record(
-                &config_parameters_fact_key(CONFIG_TOP_LEVEL_SECTION),
-                FactValue::RecordList(vec![
-                    row(RETENTION_ENABLED_KEY, FactScalar::Boolean(true)),
-                    row(DEDUP_ERROR_KEY, FactScalar::Boolean(true)),
-                    row(DEDUP_LAB_KEY, FactScalar::Boolean(false)),
-                ]),
-            ),
-        )
-        .expect("switches");
+    facts.fact(5, &switches).expect("switches");
     facts
         .fact(
             70,
@@ -365,14 +362,29 @@ fn frames_listing_reports_every_class_folder_and_both_cleared_records() {
 
     // A frame found both in `artifacts\` and in `kept\` counts in_folder, never absent.
     assert_eq!(value["totals"]["error"]["in_folder"], count(2, 600));
-    // `running` carries counts only: the running frame has no path.
-    let printed = value["paths"]
-        .as_array()
-        .expect("paths")
-        .iter()
-        .map(|path| path["path"].as_str().expect("path").to_owned())
-        .collect::<Vec<_>>();
-    assert!(!printed.contains(&Fixture::object(&running)));
+
+    // `running` carries counts only: `--class running --paths` counts the running frame and
+    // prints no path for it.
+    let mut running_facts = FrameFactsBuilder::default();
+    running_facts.fact(5, &switches).expect("switches");
+    let running_only = FrameSelection {
+        class: FrameClassFilter::Running,
+        before_unix_ms: None,
+        instance: None,
+        run: None,
+        error_sequence: None,
+        paths: true,
+    };
+    let running_report = frames_report(
+        fixture.root.path(),
+        &view,
+        running_facts.finish().expect("facts"),
+        &running_only,
+    )
+    .expect("running listing");
+    let running_value = serde_json::to_value(&running_report).expect("running listing JSON");
+    assert_eq!(running_value["totals"]["running"], count(1, 800));
+    assert_eq!(running_value["paths"], json!([]));
 
     let zero = count(0, 0);
     let point_40 = json!({
@@ -409,7 +421,8 @@ fn frames_listing_reports_every_class_folder_and_both_cleared_records() {
             "resource": class_totals(1, 500, count(1, 500), zero.clone(), zero.clone(), zero.clone()),
             "duplicate": class_totals(1, 600, zero.clone(), zero.clone(), zero.clone(), count(1, 600)),
             "default": class_totals(1, 700, zero.clone(), zero.clone(), zero.clone(), zero.clone()),
-            "running": count(1, 800),
+            // `--class all` never includes `running`.
+            "running": zero.clone(),
         },
         "folders": [
             {

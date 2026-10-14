@@ -13,10 +13,11 @@ use super::{ForensicError, ForensicOutput, ForensicReport, ForensicResult, map_l
 use crate::codes::{ForensicsCode, ForensicsLocation};
 use actingcommand_artifact_store::{KEPT_DIRECTORY, list_kept_folders};
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, CONFIG_TOP_LEVEL_SECTION, EventPayload, EventType, FactScalar,
-    FactValue, InstanceId, ProjectedArtifactReference, RunId, RuntimeFactRecord, RuntimePayload,
-    TaskPayload, TaskSemanticFact, VerifiedArtifactReference, config_parameters_fact_key,
+    FactValue, InstanceId, RunId, RuntimeFactRecord, RuntimePayload, TaskPayload, TaskSemanticFact,
+    config_parameters_fact_key,
 };
 use actingcommand_ledger::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
@@ -203,7 +204,7 @@ pub struct FrameSwitchesReport {
 pub struct FrameErrorPointReport {
     pub sequence: u64,
     pub event_type: EventType,
-    pub code: String,
+    pub code: CodeStr,
     pub at_unix_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
@@ -378,12 +379,11 @@ pub fn list_frames(request: ForensicFramesRequest) -> ForensicResult<ForensicOut
             "state root is empty",
         ));
     }
+    // Read-only and without material: no artifact is opened or verified, so the listing
+    // holds no recovery authority.
     let config = GlobalLedgerEvidenceConfig::new(&request.state_root);
-    let snapshot = GlobalLedger::open_evidence(
-        config.sqlite_material_not_read(),
-        |_: &ProjectedArtifactReference| -> Option<VerifiedArtifactReference> { None },
-    )
-    .map_err(map_ledger_error)?;
+    let snapshot = GlobalLedger::open_evidence(config.sqlite_material_not_read(), |_| None)
+        .map_err(map_ledger_error)?;
     let facts = ledger_facts(snapshot.events())?;
     let now_unix_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
