@@ -164,6 +164,8 @@ outcome_keys! {
     // Workflow #384 D2-S2: a reading mark that gave no reading.
     reading_id: id,
     reading_problem: vocab(reading_problem),
+    // Workflow #384 D2-S3: why a confirmed resource adjustment wrote nothing.
+    adjustment_reason: vocab(adjustment_reason),
     // Workflow #373 NAV-3b: why a task's entry page set is refused.
     entry_problem: vocab(entry_problem),
     pause_reason: name,

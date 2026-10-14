@@ -461,6 +461,14 @@ actingcommand_contract::outcome_codes! {
         ExecutionCapabilityProfileMergeInvalid => "execution_capability_profile_merge_invalid": error / none,
         ExecutionConfigurationTimeoutOverflow => "execution_configuration_timeout_overflow": error / none,
         ExpiredQueueContextMissing => "expired_queue_context_missing": error / none,
+        /// Info (Workflow #384 D2-S3). A run's confirmed resource adjustment wrote nothing (keys
+        /// `instance_id`, `fact_key`, `adjustment_reason`, optional `task_id`); with
+        /// `after_read_missing` and `amount_unresolved` the key's record is dropped.
+        FactAdjustmentSkipped => "fact_adjustment_skipped": info / none,
+        /// Warning (Workflow #384 D2-S3). A run's confirmed resource adjustment would take its
+        /// key below zero; nothing is written and the key's record is dropped (keys
+        /// `instance_id`, `fact_key`, optional `task_id`).
+        FactAdjustmentUnderflow => "fact_adjustment_underflow": warning / none,
         FactCommitMissing => "fact_commit_missing": error / none,
         FactContextInvalid => "fact_context_invalid": error / none,
         FactGeneratedInvalidationMismatch => "fact_generated_invalidation_mismatch": error / none,
@@ -2278,3 +2286,22 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #383 SH-1: end ----
+
+// ---- Workflow #384 D2-S3: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a run's confirmed resource adjustment wrote nothing (the vocabulary
+    /// `adjustment_reason`, D2 model §3.6, §7.3).
+    pub enum AdjustmentReason: "adjustment_reason" {
+        /// The key had no current record to adjust.
+        BaseMissing => "base_missing",
+        /// The key's current record had expired.
+        BaseExpired => "base_expired",
+        /// An observation of the key at or after the confirmation already holds the change.
+        NewerObservation => "newer_observation",
+        /// The change the screen shows could not be read; the key's record is dropped.
+        AmountUnresolved => "amount_unresolved",
+        /// No reading of the key followed the confirmation; the key's record is dropped.
+        AfterReadMissing => "after_read_missing",
+    }
+}
+// ---- Workflow #384 D2-S3: end ----

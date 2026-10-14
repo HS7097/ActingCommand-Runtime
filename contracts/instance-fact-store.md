@@ -74,6 +74,21 @@ AO-3 implements the entry, the revisions and the gate order; AO-6 the start load
   `ledger_position` (AO-4; the `input_ledger_position` member of the dispatch intent follows
   [the v0.12.0 plan](v012-register.md)).
 
+## Adjustment invalidations (Workflow #384 D2-S3)
+
+A run's confirmed resource adjustment that reads no new value of its key drops the key's record
+(D2 model §3.6; [resource-readings.md](resource-readings.md), "Adjustments"). The drop is one
+`fact.invalidated` (no new event type or member) whose trigger is the confirmed step's
+`task.step_finished`, on the run's instance. It is the one invalidation a record need not list
+in `invalidate_on`: `fact.invalidated` of an instance-scoped `resource.*` or `inventory.*` key
+whose `invalidated_by_event_type` is `task.step_finished` (`is_adjustment_invalidation`). Every
+other rule holds: the record was published before the trigger, the trigger precedes the
+invalidation and its timestamp is `invalidated_at_unix_ms`, the trigger's instance is in the
+record's scope, and the tombstone projection is written in the same transaction. The live store
+(`HostShared::invalidate_adjusted_fact`, under `fact_write_gate`), its replay, the history at a
+ledger position and the state projection's verification apply the rule alike; no invalidation
+of this kind is derived from an event.
+
 ## Policy instance facts
 
 Three keys of the `session.` family describe one instance to the scheduling

@@ -6630,6 +6630,53 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "fact_adjustment_skipped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "adjustment_reason": "required",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a run confirmed an operation that declares a resource adjustment of fact_key, and the adjustment wrote nothing, for adjustment_reason. With after_read_missing (no reading of the key followed the confirmation) and amount_unresolved (the change the screen shows could not be read) the key's record is dropped, so the key is unknown until it is read again. task_id is the package's entry task. A task diagnostic row of the run, on its confirmation frame; the run itself succeeds.",
+      "common_causes": "No reading mark of the key on a page the run passes after the operation, a mark or an amount that could not be read, a key with no current record, or an observation of the key already newer than the confirmation.",
+      "handling": "Nothing to repair for base_missing, base_expired and newer_observation. For after_read_missing and amount_unresolved, check the package's marks and the amount's OCR target on the pages after the operation."
+    },
+    "fact_adjustment_underflow": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a run's confirmed resource adjustment would take fact_key below zero: the change read on the confirmation frame is larger than the key's current value. Nothing is written and the key's record is dropped, so the key is unknown until it is read again. task_id is the package's entry task. A task diagnostic row of the run, on its confirmation frame; the run itself succeeds.",
+      "common_causes": "The key's current record is stale or was misread, or the amount was misread.",
+      "handling": "Check the key's reading mark and the amount's OCR target; the next reading of the key replaces the dropped record."
+    },
     "fact_publication_sequence_missing": {
       "category": "error",
       "ladder_class": "none",

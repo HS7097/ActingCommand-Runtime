@@ -3853,6 +3853,10 @@ const INSTANCE_FACT_WRITE_SITES: &[(&str, &str)] = &[
         "event-driven invalidation during ledger replay; its callers hold the gate",
     ),
     (
+        "crates/runtime-host/src/host/facts.rs::HostShared::invalidate_adjusted_fact -> FactPayloadDraft::invalidated [fact_write_gate held]",
+        "Workflow #384 D2-S3: a run's confirmed adjustment that read no new value drops the key's record (D2 model §3.6)",
+    ),
+    (
         "crates/runtime-host/src/host/facts.rs::HostShared::synchronize_fact_store_under_gate -> acknowledge_generated_invalidation [no fact_write_gate]",
         "event-driven invalidation during ledger replay; its callers hold the gate",
     ),

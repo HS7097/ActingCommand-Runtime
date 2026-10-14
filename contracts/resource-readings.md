@@ -10,8 +10,9 @@ amount computed by the policy.
 
 This document covers the declaration, its admission and the kernel reading (slice S5a, with
 Workflow #384 D2-S2's marks on any page, hand-off and join), the host bridge that publishes the
-readings as instance facts (slice S5b, "Host" below) and the recognition maintenance package
-(D2-S2, "Recognition maintenance packages" below).
+readings as instance facts (slice S5b, "Host" below), the recognition maintenance package
+(D2-S2, "Recognition maintenance packages" below) and the resource adjustments of an operation
+(Workflow #384 D2-S3, "Adjustments" below).
 
 ## Declaration
 
@@ -84,8 +85,11 @@ sealed ZIP and a content directory both pass the same declaration gate, which re
 The whole page is a mark whose OCR target covers the whole frame; no field is added for it. A
 `linear_steps` package may carry marks (Workflow #384 D2-S2; it was refused before).
 
-Not provided: an amount derived from a settlement (a constant or predicted amount), an
-increment reading (`+N`) and a value read from a pixel target. The value type is a closed set.
+Not provided: an amount derived from a settlement (a constant or predicted amount) and a value
+read from a pixel target. The value type is a closed set. Workflow #384 D2-S3: an amount that an
+operation spends or gains comes only from live recognition after the operation is confirmed,
+either a mark read after it or the change the screen shows (`+N`) read on its confirmation
+frame ("Adjustments" below), never from the policy's `produces` or a constant in the package.
 
 ## Kernel reading
 
@@ -203,26 +207,36 @@ readings.
 The event has source `runtime`, actor `runtime`, origin module `fact-store` and system links.
 It carries no run link: the run and the frame are named in `source_snapshot_id`.
 
-**When.** Only a terminal whose outcome is `Success` and that carries readings goes through the
-four stages below. Every other terminal, including every run without readings, runs the original
-terminal flow once, unchanged.
+**When.** Only a terminal whose outcome is `Success` and that carries readings or an adjustment
+plan goes through the four stages below. Every other terminal, including every run without
+readings or confirmed adjustments, runs the original terminal flow once, unchanged.
 
 0. No lock is held. The active catalog is read under the `policy` lock, as the policy forward
    projection reads it, and the lock is released. If a pool with `value_source: ledger_fact`
-   observes a reading's `fact_key` in the run's instance scope, nothing is published and the
-   terminal becomes the failure `contained_task_resource_reading_live_pool_unsupported`. Only
-   pool bindings are read, never a score.
+   observes the `fact_key` of a reading or an adjustment write in the run's instance scope,
+   nothing is published and the terminal becomes the failure
+   `contained_task_resource_reading_live_pool_unsupported`. Only pool bindings are read, never
+   a score.
 1. Under `fact_write_gate`, the original checks run: the run's chain, an already committed
    terminal, the capture summary and the settlement projection. Then the gate is released. An
    already committed terminal is rejected as before; a refused projection is rewritten as before
    (`contained_task_outcome_*`). Neither publishes. A successful projection of this terminal is
    the confirmed settlement.
-2. No lock is held. Each reading, frame by frame in the order of the frames' capture times and
-   in mark order within a frame, is published through `publish_facts` (ordinary purpose) as its
-   own single-record observation; a key read on two frames is published twice, and the store
-   keeps the newer observation. A non-fatal refusal stops publishing: the readings already
-   written stay, and the terminal becomes the failure `contained_task_resource_reading_rejected`.
-   A fatal store failure poisons the Runtime, as for every publication.
+2. No lock is held. Every record must fit a fact record first (else
+   `contained_task_resource_reading_rejected`, `<id>:fact_observation_invalid`, before anything is
+   published). Workflow #384 D2-S3: each planned drop is then one `fact.invalidated`, under
+   `fact_write_gate`, of the record it names; a key whose record was replaced since the plan is
+   `fact_observation_version_conflict`. Then each reading, frame by frame in the order of the
+   frames' capture times and in mark order within a frame, and each adjustment write at its
+   confirmation frame's time (after the readings of the same millisecond), is published through
+   `publish_facts` as its own single-record observation; a key read on two frames is published
+   twice, and the store keeps the newer observation. A reading uses the ordinary purpose; an
+   adjustment write the `ResourceAdjustment` purpose, under which `publish_facts` checks, in the
+   same hold of `fact_write_gate` as the write, that the key's record is still the one it
+   adjusted (else `fact_observation_version_conflict`). A non-fatal refusal stops publishing: the
+   records already written stay, and the terminal becomes the failure
+   `contained_task_resource_reading_rejected`. A fatal store failure poisons the Runtime, as for
+   every publication.
 3. The gate is taken again and the original flow runs in full: the chain, an already committed
    terminal, the summary, the projection, the summary and terminal appends and the failed
    terminal note.
@@ -284,6 +298,108 @@ key, recover by publishing a newer observation of the key by hand, with
 `invalidate_on: ["input.committed", "input.failed"]`; it must pass the input boundary check
 (`docs/live-fact-pools.md`).
 
+## Adjustments
+
+Workflow #384 D2-S3 (`rd-1009/d2/model-d2-fact-refresh.md` §3.6). An operation that changes a
+resource declares it, and the Runtime keeps the instance fact up to date from what the screen
+shows after the operation; the amount is never written in the package.
+
+### Declaration
+
+`resource_adjustments` is an optional top-level family of an operation `task.json`, beside
+`resource_readings`:
+
+```json
+"resource_adjustments": [
+  {"id": "spent", "fact_key": "resource.credits", "operation_id": "buy"},
+  {"id": "gained", "fact_key": "resource.points", "operation_id": "buy",
+   "amount": {"target_id": "ocr/points_delta", "direction": "gain"}}
+]
+```
+
+| Field | Rule | Rejection @ pointer |
+| --- | --- | --- |
+| the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_adjustments`; no outcome: `MissingField` @ `/scheduling_outcome` |
+| `id` | the identifier rule of a mark's `id`, unique in the task | `InvalidValue` @ `/resource_adjustments/<i>/id` |
+| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key | `InvalidValue` @ `…/fact_key` |
+| `operation_id` | an operation of the task | `InvalidValue` @ `…/operation_id` |
+| `amount` | absent: the new value is read after the operation (a mark of the key); present: `{target_id, direction}` only | an amount source other than `target_id` (a constant, for example): `UnknownField` @ `…/amount/<member>` |
+| `amount.target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; the same target qualification as a mark's (`target_not_ocr`, `target_locates_text`, `target_personal`) | `InvalidValue` @ `…/amount/target_id`; cross-reference: `package_invalid` naming `…/amount/target_id` |
+| `amount.direction` | `consume` (subtracted) or `gain` (added) | `InvalidValue` @ `…/amount/direction` |
+
+The family is accepted in task schema `0.8` and `0.9` only (`UnconsumedField` @
+`/resource_adjustments` otherwise); a Runtime older than the family refuses it with
+`UnknownField`. The value rules are the shared `validate_resource_adjustments` in the contract
+crate (`resource_adjustment_*` and `resource_adjustments_count_invalid` reasons); the kernel
+refuses a program that breaks them with `contained_task_resource_reading_invalid`, the reason as
+detail. A startup or return-home package and a prerequisite package that declare adjustments are
+refused as for readings (`resource_adjustments`).
+
+An amount is the change the screen shows, read on the confirmation frame by the OCR target and
+the reading parser: the trimmed text, at most one sign of its direction (`+` for a gain, `-` for
+a consumption), then ASCII decimal digits in `0..=2^53-1`; its confidence must be present and
+at least the OCR target's `minimum_confidence`.
+
+### Kernel
+
+- **Confirmation.** When a step's operation succeeds (its `StepFinished` with the page it
+  reached: a page-graph postcondition, a linear arrival), and the operation declares
+  adjustments, the kernel records the in-memory trace
+  `ContainedTaskTrace::ResourceAdjustmentConfirmed { captured_at, operation_label }` for the
+  frame captured last, and hands that frame to recognition for each amount; the run does not
+  wait. An operation whose effect is not confirmed (a failed, retried or unconfirmed attempt)
+  confirms nothing.
+- **Join.** A successful run joins, after its readings and before `Finalizing`, within the same
+  join timeout, each confirmation in order: `ContainedTaskTrace::ResourceAdjustments
+  { captured_at, adjustments }`, each adjustment with its amount (value and confidence) or the
+  `reading_problem` it gave no amount for. An amount's evaluation is recorded on the
+  confirmation frame. A run that fails or is cancelled joins and writes nothing.
+
+### Host
+
+- **The plan.** When the last confirmation is joined, before `Finalizing`, the host reads each
+  adjusted key's current record (under `fact_write_gate`) and decides, confirmation by
+  confirmation in order:
+  - Without `amount`: a reading of the key that held on the confirmation frame or later is the
+    new value and the adjustment writes nothing. Without one, the key's record is dropped and
+    the adjustment is `fact_adjustment_skipped` (`after_read_missing`).
+  - With `amount`, in this order: an amount that gave no reading is
+    `contained_task_resource_reading_unresolved` (warning; `reading_id` is the adjustment's id)
+    and `fact_adjustment_skipped` (`amount_unresolved`), and the key's record is dropped; a
+    reading of the key on the confirmation frame or later, or a current record observed after
+    the confirmation or published after its step, is `newer_observation`; no current integer
+    record is `base_missing`; an expired one `base_expired`; a result below zero is
+    `fact_adjustment_underflow` (warning) and the key's record is dropped. Otherwise the
+    adjustment writes the key: the current record's value plus or minus the amount.
+  - The current record is the latest of the key's record before the run, the run's readings of
+    it before the confirmation and the run's earlier adjustment writes of it.
+  - A key whose record is dropped keeps none of the run's records of it.
+  Each adjustment's outcome is one task diagnostic row of kind `error`
+  (`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the amount's `target_id`) on
+  the confirmation frame, as a mark's miss is. `fact_adjustment_skipped` and
+  `fact_adjustment_underflow` carry `instance_id` (the run's instance alias), `fact_key`,
+  `adjustment_reason` (skipped only) and `task_id` (the package's entry task). The run succeeds
+  in every case.
+- **The write.** An adjustment write is one `fact.published` with one record, published in
+  stage 2 below:
+
+| Field | Value |
+| --- | --- |
+| `scope`, `key`, `schema_version`, `resource_bundle_hash`, `invalidate_on` | as a reading's |
+| `content` | inline `integer`, the current value plus or minus the amount |
+| `observed_at_unix_ms` | the confirmation frame's device capture time |
+| `expires_at_unix_ms` | the adjusted record's own (a change never extends a fact's freshness) |
+| `ttl_policy` | `{"minimum_ms": expires - observed, "maximum_ms": expires - observed, "source": "detector_contract"}`, none for a record without expiry |
+| `confidence_milli` | the lower of the adjusted record's and the amount's |
+| `source_detector` | `resource_adjustment:<entry task id>/<adjustment id>` |
+| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<adjustment id>/base:<event id>`: the run, the confirmation frame and the `fact.published` of the adjusted record |
+
+- **The drop.** A dropped record is one `fact.invalidated` of the key's record from before the
+  run, triggered by the confirmed step's `task.step_finished` (an adjustment invalidation, see
+  [instance-fact-store.md](instance-fact-store.md)); a key without such a record, or whose
+  record is newer than the confirmation, is left as it is.
+
+## Scheduling connection
 ## Scheduling connection
 
 The only connection to the scheduling catalog is `fact_key`: it equals the
@@ -340,4 +456,7 @@ facts (D2-S4). It is an ordinary task package that only navigates and reads.
 ## Never written
 
 `produces` amounts, effective weights, gaps and any other amount the policy computes are never
-written back. No event type, no persisted field and no diagnostic record kind is added.
+written back. Workflow #384 D2-S3: an adjustment's amount comes only from live recognition after
+its operation is confirmed (a mark read after it, or the change the screen shows), never from
+the policy or a constant in the package. No event type, no persisted field and no diagnostic
+record kind is added.

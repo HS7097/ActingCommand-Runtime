@@ -394,7 +394,7 @@ own prerequisite package; a page-graph package ends the chain. Layer by layer, i
 | at most three prerequisite packages besides the dependent package | `contained_task_prerequisite_depth_exceeded` |
 | the package is admitted against its content reference (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
 | the admitted package's `package_id` is the map key | `contained_task_prerequisite_mismatch` |
-| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings or designated scheduling operation; its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|designated_operation\|game\|server\|resolution>` |
+| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3) or designated scheduling operation; its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|designated_operation\|game\|server\|resolution>` |
 | the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
 
 Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>` (plus

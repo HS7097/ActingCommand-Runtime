@@ -592,3 +592,13 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# Workflow #384 D2-S3: a run's confirmed adjustments write the changed value (current record plus or minus the amount read on the confirmation frame, its expiry kept, the lower confidence) or, when the change or a reading after the operation is not read or the result is below zero, drop the key's record; a missing, expired or newer current record writes nothing; each outcome is a task diagnostic row and the run succeeds
+[[gate]]
+key = "67"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s3::d2s3_t15_t16_t17_t40_confirmed_adjustments_write_or_drop_their_keys",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s3::d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says",
+]
+incident = ["#384"]

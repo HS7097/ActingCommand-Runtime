@@ -17,12 +17,14 @@ use actingcommand_contract::{
     InputSamplingRegion, OCR_FIELDS_REPORT_SCHEMA, OcrFieldDictionary, OcrFieldReason,
     OcrFieldRecord, OcrFieldResult, OcrFieldType, OcrFieldValue, OcrFieldsDeclaration,
     OcrFieldsReport, PHASED_CONTROL_SCHEMA, RecognizedTarget, RecognizedTargetRole,
-    ResourceReadingDeclaration, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
-    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
-    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
-    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT,
-    TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure,
-    TaskTimingScope, TaskTimingStage, validate_resource_readings, validate_task_phases,
+    ResourceAdjustmentAmount, ResourceAdjustmentDeclaration, ResourceReadingDeclaration,
+    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT, SchedulingEffectCondition,
+    SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT, TaskOutcome, TaskPhase,
+    TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure, TaskTimingScope,
+    TaskTimingStage, validate_resource_adjustments, validate_resource_readings,
+    validate_task_phases,
 };
 use sample_retry::SampleRetries;
 // Workflow #373 NAV-3b: entry page sets.
@@ -70,9 +72,13 @@ mod value_test_tests;
 // Workflow #384 D2-S2.
 #[cfg(test)]
 mod gate_384_d2s2;
+// Workflow #384 D2-S3.
+#[cfg(test)]
+mod gate_384_d2s3;
 pub use linear::linear_main_interface;
 pub use readings::{
-    ReadingMarks, ResourceReadingMiss, ResourceReadingProblem, judge_resource_reading,
+    ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
+    ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -1829,6 +1835,21 @@ pub enum ContainedTaskTrace {
         readings: Vec<ResourceReadingValue>,
         unresolved: Vec<ResourceReadingMiss>,
     },
+    /// Workflow #384 D2-S3: the run confirmed the operation `operation_label`, which declares
+    /// resource adjustments, on the frame it captured last (`captured_at`, that frame's device
+    /// capture time), right after its `StepFinished`. An adjustment that reads its amount
+    /// handed that frame to recognition. In memory only.
+    ResourceAdjustmentConfirmed {
+        captured_at: SystemTime,
+        operation_label: String,
+    },
+    /// The adjustments of one confirmation, joined before `Finalizing` in confirmation order,
+    /// after every handed-off frame's readings (D2 model §3.6). In memory only; `captured_at` is
+    /// the confirmation frame's device capture time.
+    ResourceAdjustments {
+        captured_at: SystemTime,
+        adjustments: Vec<ResourceAdjustmentResult>,
+    },
     Finalizing {
         outcome: TaskOutcome,
     },
@@ -2103,6 +2124,20 @@ pub trait ContainedTaskRuntime {
     /// handed to recognition at `captured_at`. A runtime that keeps the run's frames records it
     /// against that frame.
     fn record_reading_evaluation(
+        &mut self,
+        _captured_at: SystemTime,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        self.record_ocr_evaluation(target_id, result)
+    }
+
+    /// Workflow #384 D2-S3: one adjustment amount's OCR evaluation, recorded at the join, on the
+    /// frame its operation was confirmed on at `captured_at`. A runtime that keeps the run's
+    /// frames records it against that frame.
+    fn record_adjustment_evaluation(
         &mut self,
         _captured_at: SystemTime,
         target_id: &str,
@@ -2466,6 +2501,12 @@ impl PreparedContainedTask {
         self.program.resource_readings.is_some()
     }
 
+    /// Workflow #384 D2-S3: whether the task declares `resource_adjustments`; offline simulation
+    /// confirms and reads none of them.
+    pub const fn has_resource_adjustments(&self) -> bool {
+        self.program.resource_adjustments.is_some()
+    }
+
     /// Workflow #384 D2-S2: the instance fact keys the task's reading marks write, in
     /// declaration order.
     pub fn reading_keys(&self) -> Vec<String> {
@@ -2504,7 +2545,12 @@ impl PreparedContainedTask {
 
     /// A host-scheduled startup package publishes no instance resource facts.
     pub fn startup_incompatibility(&self) -> Option<&'static str> {
-        self.has_resource_readings().then_some("resource_readings")
+        if self.has_resource_readings() {
+            Some("resource_readings")
+        } else {
+            self.has_resource_adjustments()
+                .then_some("resource_adjustments")
+        }
     }
 
     /// Whether the task has a select step (Workflow #308).
@@ -2625,6 +2671,8 @@ impl PreparedContainedTask {
             Some("post_admission_ocr")
         } else if self.program.resource_readings.is_some() {
             Some("resource_readings")
+        } else if self.program.resource_adjustments.is_some() {
+            Some("resource_adjustments")
         } else if self
             .scheduling_outcome
             .as_ref()
@@ -3270,11 +3318,22 @@ impl PreparedContainedTask {
             PostAdmissionOcrExecution::Enabled
         ) {
             ocr_collector.fields = self.post_admission_fields.as_ref();
+            // Workflow #384 D2-S3: the relay also confirms the task's adjustments.
             if options.entry == ContainedTaskEntry::Ordinary
-                && let Some(declarations) = self.program.resource_readings.as_deref()
+                && (self.program.resource_readings.is_some()
+                    || self.program.resource_adjustments.is_some())
             {
-                ocr_collector.reading_relay =
-                    Some(readings::ReadingRelay::new(declarations, reading_keys));
+                ocr_collector.reading_relay = Some(readings::ReadingRelay::new(
+                    self.program
+                        .resource_readings
+                        .as_deref()
+                        .unwrap_or_default(),
+                    self.program
+                        .resource_adjustments
+                        .as_deref()
+                        .unwrap_or_default(),
+                    reading_keys,
+                ));
             }
         }
         let result = self.run_with_collector(
@@ -3864,6 +3923,7 @@ impl PreparedContainedTask {
                             )?);
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
+                                ocr_collector,
                                 &mut machine,
                                 &mut stability_tracker,
                                 step_index,
@@ -3908,6 +3968,7 @@ impl PreparedContainedTask {
                                 observation = Some(reached);
                                 if let Some(reason) = self.complete_successful_step(
                                     runtime,
+                                    ocr_collector,
                                     &mut machine,
                                     &mut stability_tracker,
                                     step_index,
@@ -4009,6 +4070,7 @@ impl PreparedContainedTask {
                                         observation = Some(reached);
                                         if let Some(reason) = self.complete_successful_step(
                                             runtime,
+                                            ocr_collector,
                                             &mut machine,
                                             &mut stability_tracker,
                                             step_index,
@@ -4196,9 +4258,11 @@ impl PreparedContainedTask {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn complete_successful_step<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         machine: &mut RunStateMachine,
         stability_tracker: &mut StabilityTracker,
         step_index: u32,
@@ -4269,6 +4333,8 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
         }
+        // Workflow #384 D2-S3 (model §3.6): the step's operation is confirmed on this frame.
+        self.confirm_resource_adjustments(runtime, ocr_collector, operation_label, observation)?;
         Ok(terminal_reason)
     }
 
@@ -5785,6 +5851,9 @@ struct TaskProgram {
     post_admission_ocr: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     resource_readings: Option<Vec<ResourceReadingDeclaration>>,
+    /// Workflow #384 D2-S3.
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    resource_adjustments: Option<Vec<ResourceAdjustmentDeclaration>>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
     #[serde(default)]
@@ -5845,6 +5914,33 @@ impl TaskProgram {
                 return Err(invalid("scheduling_outcome_missing"));
             }
             validate_resource_readings(readings).map_err(|code| invalid(code.as_str()))?;
+        }
+        // Workflow #384 D2-S3: the adjustments follow the marks' declaration rules, each names
+        // one of the task's operations, and one read after its operation has a mark of its key.
+        if let Some(adjustments) = &self.resource_adjustments {
+            let invalid = |reason: &str| {
+                ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
+                    reason,
+                )
+            };
+            if !matches!(self.schema_version.as_str(), "0.8" | "0.9") {
+                return Err(invalid("schema_version_unsupported"));
+            }
+            if self.scheduling_outcome.is_none() {
+                return Err(invalid("scheduling_outcome_missing"));
+            }
+            let operation_ids = self
+                .operations
+                .iter()
+                .map(|operation| operation.id.as_str())
+                .collect::<Vec<_>>();
+            validate_resource_adjustments(
+                adjustments,
+                self.resource_readings.as_deref(),
+                &operation_ids,
+            )
+            .map_err(|code| invalid(code.as_str()))?;
         }
         if (self.schema_version == "0.9") != (control.schema_version == PHASED_CONTROL_SCHEMA)
             || self.phases != control.phases
@@ -6556,6 +6652,35 @@ impl TaskProgram {
                 if let Some(issue) = error.declaration_issue.as_mut() {
                     issue.field_path = format!("/resource_readings/{index}/page_id");
                 }
+                return Err(error);
+            }
+        }
+        // Workflow #384 D2-S3: an adjustment's amount is read from its own target as a mark is.
+        for (index, adjustment) in self.resource_adjustments.iter().flatten().enumerate() {
+            let Some(amount) = &adjustment.amount else {
+                continue;
+            };
+            let refusal = reading_target_refusal(evaluator, &amount.target_id).or_else(|| {
+                bundle
+                    .projection_metadata()
+                    .is_some_and(|metadata| {
+                        metadata.target_privacy(&amount.target_id)
+                            == Some(actingcommand_contract::page_projection::Privacy::Personal)
+                    })
+                    .then_some("target_personal")
+            });
+            if let Some(refusal) = refusal {
+                let mut error = ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
+                    format!("{}:{refusal}", adjustment.id),
+                );
+                error.declaration_issue =
+                    Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                        declaration_file: bundle.operation_path().to_owned(),
+                        field_path: format!("/resource_adjustments/{index}/amount/target_id"),
+                        schema_version: Some(self.schema_version.clone()),
+                        reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                    }));
                 return Err(error);
             }
         }
@@ -11406,6 +11531,7 @@ mod retry_wiring_tests {
             scheduling_outcome: None,
             post_admission_ocr: None,
             resource_readings: None,
+            resource_adjustments: None,
             stability_termination: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),

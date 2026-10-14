@@ -128,6 +128,8 @@ mod gate_383_ao4q;
 mod gate_383_sh1;
 // Workflow #384 D2-S2: reading marks, recognition package bindings and the reader warnings.
 mod gate_384_d2s2;
+// Workflow #384 D2-S3: resource adjustments.
+mod gate_384_d2s3;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).

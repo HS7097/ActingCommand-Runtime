@@ -85,6 +85,34 @@ pub fn parse_resource_reading_snapshot_id(value: &str) -> Option<(crate::RunId, 
     Some((run, frame))
 }
 
+/// Workflow #384 D2-S3: the `source_detector` prefix of a resource adjustment the Runtime wrote,
+/// `resource_adjustment:<entry task id>/<adjustment id>`.
+pub const RESOURCE_ADJUSTMENT_DETECTOR_PREFIX: &str = "resource_adjustment:";
+
+/// Workflow #384 D2-S3 (D2 model §3.6): the `source_snapshot_id` of a resource adjustment,
+/// `run:<run>/frame:<frame>/<adjustment id>/base:<event>`: the run, the frame its operation was
+/// confirmed on and the `fact.published` event of the record it adjusted, each as its
+/// identifier's canonical text. [`parse_resource_reading_snapshot_id`] reads the run and the
+/// frame back.
+pub fn resource_adjustment_snapshot_id(
+    run: &str,
+    frame: &str,
+    adjustment_id: &str,
+    base_event: &str,
+) -> String {
+    format!("run:{run}/frame:{frame}/{adjustment_id}/base:{base_event}")
+}
+
+/// Workflow #384 D2-S3 (D2 model §3.6): whether `data` drops a realistic instance fact
+/// (`resource.*`, `inventory.*`) because an operation that declares an adjustment of it was
+/// confirmed and no reading of the key followed. Its trigger is that step's `task.step_finished`;
+/// the record need not list the trigger's type in `invalidate_on`.
+pub fn is_adjustment_invalidation(data: &FactInvalidationEventData) -> bool {
+    data.invalidated_by_event_type == EventType::TaskStepFinished
+        && matches!(data.scope, FactScope::Instance { .. })
+        && (data.key.starts_with("resource.") || data.key.starts_with("inventory."))
+}
+
 impl FactRecord {
     /// A manually set priority offset without expiry: the inline integer `offset_milli` under
     /// `session.task.<task_id>.priority_offset`, full confidence, no invalidating events. The

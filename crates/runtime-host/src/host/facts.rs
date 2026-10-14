@@ -165,6 +165,11 @@ pub(super) enum FactPublicationPurpose {
     Ordinary,
     /// `ApplyResourceTargets`: exactly one instance-scoped `session.resource_targets` record.
     ResourceTargets,
+    /// Workflow #384 D2-S3 (D2 model §3.6, A-1): one record a run's resource adjustment wrote
+    /// from the key's active record, which the `fact.published` at ledger sequence
+    /// `base_sequence` carried. Under `fact_write_gate` the record is refused when another
+    /// record of the key has replaced that one since.
+    ResourceAdjustment { base_sequence: u64 },
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -324,7 +329,8 @@ impl HostShared {
             (|| {
                 // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
                 match purpose {
-                    FactPublicationPurpose::Ordinary => {
+                    FactPublicationPurpose::Ordinary
+                    | FactPublicationPurpose::ResourceAdjustment { .. } => {
                         if observation
                             .records
                             .iter()
@@ -384,6 +390,24 @@ impl HostShared {
                 };
                 let _gate = lock(&self.fact_write_gate, ContractLocation::PublishFact)?;
                 self.synchronize_fact_store_under_gate()?;
+                // Workflow #384 D2-S3: the adjustment's base is read and its record written in
+                // this one hold of the gate.
+                if let FactPublicationPurpose::ResourceAdjustment { base_sequence } = purpose {
+                    let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+                    let current = match observation.records.as_slice() {
+                        [record] => facts
+                            .active_revision(&record.scope, &record.key)
+                            .map(|(_, sequence, _)| sequence),
+                        _ => None,
+                    };
+                    if current != Some(base_sequence) {
+                        return Err(RuntimeHostError::request(
+                            HostCode::FactObservationVersionConflict,
+                            ContractLocation::PublishFacts,
+                            RuntimeErrorCode::InvalidRequest,
+                        ));
+                    }
+                }
                 let now = self.clock.sample()?.unix_ms;
                 // A resource target policy equal to the active, unexpired one is a replay: the
                 // active revision answers and nothing is appended.
@@ -486,6 +510,90 @@ impl HostShared {
                     replayed: false,
                 })
             })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Workflow #384 D2-S3 (D2 model §3.6): `key`'s active record in `scope`, with the ledger
+    /// sequence and the id of the `fact.published` that carried it, read under
+    /// `fact_write_gate`; `None` when the key has none.
+    pub(super) fn active_fact_revision(
+        &self,
+        scope: &FactScope,
+        key: &str,
+    ) -> RuntimeHostResult<Option<(FactRecord, u64, EventId)>> {
+        let result: RuntimeHostResult<Option<(FactRecord, u64, EventId)>> = (|| {
+            let _gate = lock(&self.fact_write_gate, HostLocation::PublishResourceReadings)?;
+            self.synchronize_fact_store_under_gate()?;
+            Ok(lock(&self.facts, HostLocation::PublishResourceReadings)?
+                .active_revision(scope, key)
+                .map(|(record, sequence, event_id)| (record.clone(), sequence, event_id)))
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    /// Workflow #384 D2-S3 (D2 model §3.6): drops `key`'s active record in `scope`, published at
+    /// ledger sequence `base_sequence`, because a run confirmed an operation that declares an
+    /// adjustment of the key and read no new value: one `fact.invalidated` under
+    /// `fact_write_gate`, whose trigger is that step's `task.step_finished`, the event at
+    /// `trigger_sequence`. A key without an active record is left as it is; another record than
+    /// that one is refused (`fact_observation_version_conflict`).
+    pub(super) fn invalidate_adjusted_fact(
+        &self,
+        scope: &FactScope,
+        key: &str,
+        base_sequence: u64,
+        trigger_sequence: u64,
+    ) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            let _gate = lock(&self.fact_write_gate, HostLocation::PublishResourceReadings)?;
+            self.synchronize_fact_store_under_gate()?;
+            let prepared = {
+                let facts = lock(&self.facts, HostLocation::PublishResourceReadings)?;
+                if facts.active_revision(scope, key).is_none() {
+                    return Ok(());
+                }
+                facts.prepare_adjustment_invalidation(
+                    &self.ledger,
+                    scope,
+                    key,
+                    base_sequence,
+                    trigger_sequence,
+                )?
+            };
+            let Some((data, work)) = prepared else {
+                return Err(RuntimeHostError::request(
+                    HostCode::FactObservationVersionConflict,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            };
+            let draft = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::FactStore,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                FactPayloadDraft::invalidated(data, AuditInput::new()),
+            )?;
+            let draft = self.events.sanitize(draft)?;
+            let persisted = self
+                .ledger
+                .append_transaction(draft, Box::new(work))
+                .map_err(crate::fact_store::fact_transaction_error)?;
+            // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
+            self.policy_wakes.raise(persisted.event_type());
+            self.synchronize_fact_store_under_gate()
+        })();
         if let Err(error) = &result
             && error.is_fatal()
         {

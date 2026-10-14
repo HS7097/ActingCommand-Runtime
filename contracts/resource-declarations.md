@@ -40,8 +40,12 @@ A task of schema `0.8` or `0.9` may declare the top-level family `resource_readi
 (`contracts/resource-readings.md`); in `0.3`–`0.7` it is `UnconsumedField` @
 `/resource_readings`. The declaration gate reports each entry's field pointer
 (`/resource_readings/<i>/<field>`); the parser's source validation adds the page and target
-cross-references, each naming the entry's field pointer. No task schema, content-directory,
-`control.json`, `resources.json` or derived pack/pages version changes.
+cross-references, each naming the entry's field pointer. Workflow #384 D2-S3: the family
+`resource_adjustments` follows the same gate (`UnconsumedField` @ `/resource_adjustments` before
+`0.8`; field pointers `/resource_adjustments/<i>/<field>`, an amount's unknown member
+`UnknownField` @ `/resource_adjustments/<i>/amount/<member>`), and the source validation adds the
+amount's target cross-reference. No task schema, content-directory, `control.json`,
+`resources.json` or derived pack/pages version changes.
 
 The applications table may carry an optional top-level `label`: the game's display name for people, free text (bilingual `中文 / English` recommended) of 1-128 bytes after trimming, without control characters; consumers fall back to `game` when it is absent.
 
