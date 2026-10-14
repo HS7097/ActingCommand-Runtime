@@ -25,9 +25,9 @@ use actingcommand_contract::{
     ArtifactRedactionState, ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput,
     CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
     EventOrigin, EventQuery, EventSeverity, EventSource, EventType, FRAME_RETENTION_POLICY_VERSION,
-    FailedRunRetentionPolicy, IdentifierIssuer, IssuedInstanceId, OriginModule, OwnerEpoch,
-    OwnerResourceDisposition, ProjectedArtifactReference, ResourceQuiescence, RetentionClass,
-    RuntimeLifecyclePhase, RuntimePayloadDraft, SanitizedEventDraft, TerminalEvent,
+    IdentifierIssuer, IssuedInstanceId, OriginModule, OwnerEpoch, OwnerResourceDisposition,
+    ProjectedArtifactReference, ResourceQuiescence, RetentionClass, RuntimeLifecyclePhase,
+    RuntimePayloadDraft, SanitizedEventDraft, TerminalEvent,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use actingcommand_runtime_host::{
@@ -334,10 +334,7 @@ fn admit(
     let guard = try_artifact_delete_guard(artifacts.root(), &capture.reference)
         .expect("delete guard")
         .expect("material guard is free");
-    match ledger
-        .admit_artifact_eviction(guard, FailedRunRetentionPolicy::default())
-        .expect("admission")
-    {
+    match ledger.admit_artifact_eviction(guard).expect("admission") {
         ArtifactEvictionAdmission::Committed(permit) => permit,
         ArtifactEvictionAdmission::Deferred => panic!("the closed capture is admitted"),
     }

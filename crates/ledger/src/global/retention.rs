@@ -12,11 +12,10 @@ use actingcommand_contract::{
     ArtifactKind, ArtifactPinReason, ArtifactRetentionFact, ArtifactRetentionIdentity,
     CapturePayload, CorrelationId, EffectDisposition, EventId, EventPayload, EventSeverity,
     EventSource, EventType, FRAME_RETENTION_BACKTRACE, FactContent, FactPayload,
-    FailedRunRetentionBasis, FailedRunRetentionEvidence, FailedRunRetentionPolicy, FrameId,
-    InstanceId, LeaseId, LeasePayload, OwnerEpoch, PolicyExecutionOutcome, PolicyPayload,
-    ProjectedArtifactReference, RETENTION_ROUND_OBJECTS, RequestId, RunId, RuntimeLifecyclePhase,
-    RuntimePayload, RuntimeStateFact, TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
-    VerifiedArtifactReference,
+    FailedRunRetentionBasis, FrameId, InstanceId, LeaseId, LeasePayload, OwnerEpoch,
+    PolicyExecutionOutcome, PolicyPayload, ProjectedArtifactReference, RETENTION_ROUND_OBJECTS,
+    RequestId, RunId, RuntimeLifecyclePhase, RuntimePayload, RuntimeStateFact, TaskOutcome,
+    TaskPayload, TaskSemanticFact, TerminalEvent, VerifiedArtifactReference,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod material;
@@ -43,7 +42,6 @@ pub(super) struct RetentionIndex {
     sealed_scopes: BTreeSet<RetentionScope>,
     scheduled_runs: BTreeSet<RunId>,
     run_terminals: BTreeMap<RunId, RunTerminal>,
-    successful_runs: BTreeMap<InstanceId, BTreeMap<u64, RunId>>,
     owner_epochs: BTreeMap<u64, OwnerEpoch>,
     owner_ends: BTreeMap<OwnerEpoch, u64>,
     reopened_owners: BTreeSet<OwnerEpoch>,
@@ -101,11 +99,10 @@ struct ClosureFacts {
     settlement: Option<TerminalEvent>,
 }
 
+/// Workflow #382 L-5: what admission still asks of a run's terminal (one, in a known scope).
+/// The K/T fields (outcome, time, ordered successes) left with the K/T admission.
 struct RunTerminal {
-    source: TerminalEvent,
     scope: Option<ClosureScope>,
-    outcome: TaskOutcome,
-    timestamp_unix_ms: u64,
     contradictory: bool,
 }
 
@@ -203,8 +200,6 @@ impl RetentionIndex {
         &self,
         after: Option<ArtifactId>,
         recovery_only: bool,
-        policy: FailedRunRetentionPolicy,
-        now: u64,
     ) -> ArtifactRetentionCandidates {
         use std::ops::Bound::{Excluded, Unbounded};
         let bounds = (after.map_or(Unbounded, Excluded), Unbounded);
@@ -241,10 +236,7 @@ impl RetentionIndex {
                             && self
                                 .closures
                                 .get(&ClosureScope::from_identity(identity))
-                                .is_some_and(|closure| {
-                                    closure.success.is_some()
-                                        || self.failed_run_evidence(identity, policy, now).is_some()
-                                })
+                                .is_some_and(|closure| closure.success.is_some())
                             && self.releasing_close(object, identity).is_some()
                     });
                     (self.unlinked_warning
@@ -275,7 +267,6 @@ impl RetentionIndex {
         reference: &ProjectedArtifactReference,
         events: &[E],
         indexes: &EventIndexes,
-        policy: FailedRunRetentionPolicy,
         now: u64,
     ) -> GlobalLedgerResult<Option<ArtifactEvictionIntentRecord>> {
         let Some(object) = self.objects.get(&reference.artifact_id) else {
@@ -306,21 +297,13 @@ impl RetentionIndex {
         let Some(close) = self.close_for(identity) else {
             return Ok(None);
         };
-        let failed_run = if closure.success.is_none() {
-            let Some(evidence) = self.failed_run_evidence(identity, policy, now) else {
-                return Ok(None);
-            };
-            Some(Box::new(evidence))
-        } else {
-            None
+        // Workflow #382 L-5: only a success sources an intent. The K/T branch, which let a failed
+        // or cancelled run's frame qualify after later successes or elapsed days, is retired.
+        let Some(success) = closure.success else {
+            return Ok(None);
         };
-        let terminal = closure
-            .success
-            .as_ref()
-            .or_else(|| failed_run.as_ref().map(|failed| &failed.terminal))
-            .expect("eligibility has a terminal source");
-        if verified.sequence > terminal.sequence
-            || terminal.sequence >= close.sequence
+        if verified.sequence > success.sequence
+            || success.sequence >= close.sequence
             || identity.run_id.is_some() && object.summary.is_none()
             || identity
                 .run_id
@@ -332,20 +315,15 @@ impl RetentionIndex {
         // A settlement that does not match the terminal branch (e.g. a success that overran its
         // runtime budget) keeps the object; it never reaches the fatal admission check.
         if let Some(settlement) = &closure.settlement
-            && !settlement_matches(
-                source(events, settlement)?,
-                failed_run
-                    .as_ref()
-                    .map_or(TaskOutcome::Success, |failed| failed.task_result),
-            )
+            && !settlement_matches(source(events, settlement)?, TaskOutcome::Success)
         {
             return Ok(None);
         }
         let intent = ArtifactEvictionIntentRecord {
             identity: identity.clone(),
             verified: *verified,
-            success: closure.success,
-            failed_run,
+            success: Some(success),
+            failed_run: None,
             close: *close,
             capture_summary: object.summary,
             settlement: closure.settlement,
@@ -364,99 +342,28 @@ impl RetentionIndex {
         })
     }
 
-    fn failed_run_evidence(
-        &self,
-        identity: &ArtifactRetentionIdentity,
-        policy: FailedRunRetentionPolicy,
-        now: u64,
-    ) -> Option<FailedRunRetentionEvidence> {
-        let run = identity.run_id?;
-        let failed = self.run_terminals.get(&run)?;
-        if failed.contradictory
-            || failed.scope != Some(ClosureScope::from_identity(identity))
-            || !matches!(
-                failed.outcome,
-                TaskOutcome::Failure | TaskOutcome::Cancelled
-            )
-            || failed.timestamp_unix_ms == 0
-            || now == 0
-        {
-            return None;
-        }
-        let terminals = self
-            .successful_runs
-            .get(&identity.instance_id)
-            .into_iter()
-            .flat_map(|runs| {
-                runs.range((
-                    std::ops::Bound::Excluded(failed.source.sequence),
-                    std::ops::Bound::Unbounded,
-                ))
-            })
-            .take(usize::from(policy.successor_successes))
-            .map(|(_, run)| self.run_terminals[run].source)
-            .collect::<Vec<_>>();
-        let basis = if terminals.len() == usize::from(policy.successor_successes) {
-            FailedRunRetentionBasis::SuccessorSuccesses { terminals }
-        } else if now
-            .checked_sub(failed.timestamp_unix_ms)
-            .is_some_and(|elapsed| elapsed >= policy.retention_ms())
-        {
-            FailedRunRetentionBasis::ElapsedTime
-        } else {
-            return None;
-        };
-        Some(FailedRunRetentionEvidence {
-            policy,
-            terminal: failed.source,
-            task_result: failed.outcome,
-            terminal_unix_ms: failed.timestamp_unix_ms,
-            evaluated_at_unix_ms: now,
-            basis,
-        })
-    }
-
     fn apply_run_terminal<E: LedgerEventRead>(&mut self, event: &E) {
         let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
             return;
         };
-        let TaskSemanticFact::TerminalCommitted {
-            task_result: outcome,
-            ..
-        } = payload.fact()
-        else {
+        if !matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { .. }) {
             return;
-        };
+        }
         let Some(run) = event.links().run_id() else {
             return;
         };
-        // A second terminal cannot count twice or turn an ambiguous run into permission.
+        // A second terminal cannot turn an ambiguous run into permission.
         if let Some(previous) = self.run_terminals.get_mut(run) {
             previous.contradictory = true;
-            if let Some(scope) = previous.scope
-                && let Some(successes) = self.successful_runs.get_mut(&scope.instance)
-            {
-                successes.remove(&previous.source.sequence);
-            }
             return;
         }
         let scope = self
             .owner_at(event.sequence())
             .and_then(|owner| ClosureScope::from_event(event, owner));
-        let valid = scope.is_some() && event.timestamp_unix_ms() > 0;
-        if *outcome == TaskOutcome::Success && valid {
-            self.successful_runs
-                .entry(scope.expect("known scope").instance)
-                .or_default()
-                .insert(event.sequence(), *run);
-        }
         self.run_terminals.insert(
             *run,
             RunTerminal {
-                source: terminal(event),
                 scope,
-                outcome: *outcome,
-                timestamp_unix_ms: event.timestamp_unix_ms(),
                 contradictory: false,
             },
         );
@@ -750,8 +657,10 @@ impl RetentionIndex {
     /// Workflow #332 H2f Q3: replay (`admission` false) checks only that the sealed intent is
     /// authentic and consistent with the index: its prefix, its object's identity and verified
     /// source, no earlier proof, its evaluation time, and that every source it names resolves
-    /// in the preceding prefix. Eligibility (protection, pins, Lab, close, success or K/T,
-    /// summary, settlement) is decided once, by the admitting writer; a reader never re-judges it.
+    /// in the preceding prefix. Eligibility (protection, pins, Lab, close, success, summary,
+    /// settlement) is decided once, by the admitting writer; a reader never re-judges it. Since
+    /// Workflow #382 L-5 the writer admits no failed-run (K/T) intent; replay of one already in a
+    /// ledger keeps the checks above.
     fn validate_intent<E: LedgerEventRead>(
         &self,
         object: &RetainedObject,
@@ -776,13 +685,10 @@ impl RetentionIndex {
         let terminal_ref = match (&intent.success, &intent.failed_run) {
             (Some(success), None) => success,
             (None, Some(failed)) => {
-                if failed.evaluated_at_unix_ms != now
-                    || admission
-                        && self
-                            .failed_run_evidence(&intent.identity, failed.policy, now)
-                            .as_ref()
-                            != Some(failed.as_ref())
-                {
+                if admission {
+                    return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
+                }
+                if failed.evaluated_at_unix_ms != now {
                     return Err(invalid(
                         LedgerCode::ArtifactEvictionFailedRunBasisConflict.code(),
                     ));
@@ -825,12 +731,8 @@ impl RetentionIndex {
         }
         match intent.identity.run_id {
             Some(_) => {
-                let expected = intent
-                    .failed_run
-                    .as_ref()
-                    .map_or(TaskOutcome::Success, |failed| failed.task_result);
                 if !matches!(success.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
-                    if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result, .. } if *task_result == expected))
+                    if matches!(payload.fact(), TaskSemanticFact::TerminalCommitted { task_result, .. } if *task_result == TaskOutcome::Success))
                 {
                     return Err(invalid(
                         LedgerCode::ArtifactEvictionTaskNotSuccessful.code(),
@@ -862,13 +764,7 @@ impl RetentionIndex {
                 if !same_scope(settlement, &intent.identity)
                     || settlement.sequence() <= success.sequence()
                     || self.owner_at(settlement.sequence()) != Some(intent.identity.owner_epoch)
-                    || !settlement_matches(
-                        settlement,
-                        intent
-                            .failed_run
-                            .as_ref()
-                            .map_or(TaskOutcome::Success, |failed| failed.task_result),
-                    )
+                    || !settlement_matches(settlement, TaskOutcome::Success)
                 {
                     return Err(invalid(
                         LedgerCode::ArtifactEvictionSettlementConflict.code(),
@@ -1562,18 +1458,14 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
     pub(super) fn retention_candidates(
         &self,
         after: Option<ArtifactId>,
-        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<ArtifactRetentionCandidates> {
-        Ok(self
-            .retention
-            .candidates(after, self.recovering_retention, policy, retention_now()?))
+        Ok(self.retention.candidates(after, self.recovering_retention))
     }
 
     /// The material guard arrived before this command; the writer performs no material I/O.
     pub(super) fn admit_artifact_eviction(
         &mut self,
         guard: ArtifactDeleteGuard,
-        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
         if guard.root() != self.backend.material_root() {
             return Err(invalid(LedgerCode::ArtifactEvictionRootConflict.code()));
@@ -1645,13 +1537,9 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                 false,
             )?);
         }
-        let Some(intent) = self.retention.intent(
-            &reference,
-            &self.events,
-            &self.indexes,
-            policy,
-            retention_now()?,
-        )?
+        let Some(intent) =
+            self.retention
+                .intent(&reference, &self.events, &self.indexes, retention_now()?)?
         else {
             return Ok((ArtifactEvictionAdmission::Deferred, appended));
         };
@@ -1723,16 +1611,7 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
         // the event type's (ledger revision 3, Workflow #378 A3).
         let severity = EventSeverity::Info;
         let ids = IdentifierIssuer::new().map_err(|error| invalid(error.code()))?;
-        let timestamp = match &fact {
-            ArtifactRetentionFact::EvictionIntent(intent) if intent.failed_run.is_some() => {
-                intent
-                    .failed_run
-                    .as_ref()
-                    .expect("failed-run intent")
-                    .evaluated_at_unix_ms
-            }
-            _ => retention_now()?,
-        };
+        let timestamp = retention_now()?;
         let draft = EventDraft::new(
             ids.mint_event_id().map_err(|error| invalid(error.code()))?,
             timestamp,
@@ -1816,14 +1695,7 @@ impl super::GlobalLedger {
     pub fn retention_candidates(
         &self,
         after: Option<ArtifactId>,
-        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<ArtifactRetentionCandidates> {
-        policy.validate().map_err(|_| {
-            GlobalLedgerError::request(
-                SharedCode::InvalidFailedRunRetentionPolicy.code(),
-                LedgerLocation::RetentionCandidates.location(),
-            )
-        })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1831,11 +1703,7 @@ impl super::GlobalLedger {
             .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
         super::send_command(
             sender,
-            super::WriterCommand::RetentionCandidates {
-                after,
-                policy,
-                response,
-            },
+            super::WriterCommand::RetentionCandidates { after, response },
             LedgerLocation::RetentionCandidates.location(),
         )?;
         super::receive_response(receiver, LedgerLocation::RetentionCandidates.location())?
@@ -1844,14 +1712,7 @@ impl super::GlobalLedger {
     pub fn admit_artifact_eviction(
         &self,
         guard: ArtifactDeleteGuard,
-        policy: FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<ArtifactEvictionAdmission> {
-        policy.validate().map_err(|_| {
-            GlobalLedgerError::request(
-                SharedCode::InvalidFailedRunRetentionPolicy.code(),
-                LedgerLocation::AdmitArtifactEviction.location(),
-            )
-        })?;
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1861,7 +1722,6 @@ impl super::GlobalLedger {
             sender,
             super::WriterCommand::AdmitArtifactEviction {
                 guard: Box::new(guard),
-                policy,
                 response,
             },
             LedgerLocation::AdmitArtifactEviction.location(),

@@ -45,7 +45,6 @@ pub(super) trait LedgerStore: Send + 'static {
     fn retention_candidates(
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
     fn frame_retention_view(
         &self,
@@ -55,7 +54,6 @@ pub(super) trait LedgerStore: Send + 'static {
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)>;
     fn finish_artifact_eviction(
         &mut self,
@@ -143,9 +141,8 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     fn retention_candidates(
         &self,
         after: Option<actingcommand_contract::ArtifactId>,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates> {
-        Self::retention_candidates(self, after, policy)
+        Self::retention_candidates(self, after)
     }
     fn frame_retention_view(
         &self,
@@ -157,9 +154,8 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
-        policy: actingcommand_contract::FailedRunRetentionPolicy,
     ) -> GlobalLedgerResult<(super::ArtifactEvictionAdmission, Vec<PersistedEvent>)> {
-        Self::admit_artifact_eviction(self, guard, policy)
+        Self::admit_artifact_eviction(self, guard)
     }
     fn finish_artifact_eviction(
         &mut self,
