@@ -1547,6 +1547,7 @@ impl RuntimeHost {
             governance_write_gate: Mutex::new(()),
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
+            connection_channels: Mutex::new(BTreeMap::new()),
             fact_write_gate: Mutex::new(()),
             backend_selfcheck_availability_gate: Mutex::new(()),
             signature_write_gate: Mutex::new(()),
@@ -2146,6 +2147,18 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<CatalogGeneration> {
         self.work_ref(HostLocation::ApplyPolicyCatalogTransition)?
             .apply_policy_catalog_transition(plan)
+    }
+
+    /// Records one approval the configuration holds, in process (Workflow #389 U-2, model
+    /// section 3.2): actingd's start-up transcription, after the catalog transition. The record
+    /// keeps the provenance (Governance, User, Ui) every approval record has; a refused
+    /// transition is returned, a failed write stops the Runtime as an approval request's does.
+    pub fn transcribe_configured_approval(
+        &self,
+        decision: &ApprovalDecisionRecord,
+    ) -> RuntimeHostResult<()> {
+        self.work_ref(HostLocation::RecordConfiguredApproval)?
+            .transcribe_configured_approval(decision)
     }
 
     /// The latest decision of each approval id from the complete ledger-verified approval
@@ -4045,6 +4058,10 @@ struct HostShared {
     governance_write_gate: Mutex<()>,
     governance_policy: GovernancePolicy,
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
+    // Workflow #389 U-2 (model section 3.2): the channel (and `via`) each open connection bound,
+    // in memory only; an entry leaves when its connection closes. It is not part of any status
+    // read. The identity card's set above stays until U-6 retires the card.
+    connection_channels: Mutex<BTreeMap<ConnectionId, actingcommand_contract::ChannelBinding>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     fact_write_gate: Mutex<()>,

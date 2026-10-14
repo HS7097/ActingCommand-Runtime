@@ -238,6 +238,8 @@ actingcommand_contract::outcome_locations! {
         BuildPredictiveMaintenanceRequest => "build_predictive_maintenance_request",
         BeginInteraction => "begin_interaction",
         RuntimeHealth => "runtime_health",
+        // Workflow #389 U-2: the handshake's BindChannel.
+        RuntimeBindChannel => "runtime_bind_channel",
         RuntimeStatus => "runtime_status",
         RuntimeFactSnapshot => "runtime_fact_snapshot",
         // Workflow #389 MCP-4: the instance fact read (register W2).

@@ -354,7 +354,13 @@ fn gate_documented_operations_wait_their_contract_receipt_budget() {
 
     // The frozen IPC read/write timeout is 5 000 ms.
     assert_eq!(
-        RuntimeClientConfig::new("C:\\state", EventActor::Cli, EventSource::Cli).io_timeout(),
+        RuntimeClientConfig::new(
+            "C:\\state",
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli
+        )
+        .io_timeout(),
         Duration::from_millis(5_000)
     );
 }

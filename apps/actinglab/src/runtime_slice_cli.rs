@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
-use actingcommand_contract::{EventActor, EventSource, RuntimeErrorCode};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_contract::RuntimeErrorCode;
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -28,12 +28,8 @@ pub(super) fn run(subcommand: &str, global: &GlobalOptions, args: &[String]) -> 
             serde_json::json!({"instance": instance}),
         )?;
     }
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(map_runtime_error)?;
+    let client =
+        RuntimeClient::connect(crate::lab_client_config(state_root)).map_err(map_runtime_error)?;
     let output = match subcommand {
         "reset" => client.safe_reset(&instance).map_err(map_runtime_error)?,
         "observe" => client

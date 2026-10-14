@@ -25,7 +25,9 @@ use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
 use actingcommand_resource_tooling::{canonical_game, canonical_server};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::{
+    ChannelVia, RuntimeChannel, RuntimeClient, RuntimeClientConfig,
+};
 use cli_information::{
     help_data, run_config, run_devices, run_doctor, run_list, run_paths, run_schema, run_status,
     version_data,
@@ -141,6 +143,7 @@ use std::path::PathBuf;
 #[cfg(any(test, unix))]
 use std::process::Command;
 use std::process::ExitCode;
+use std::sync::OnceLock;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -211,6 +214,11 @@ const ALLOW_PATH_ADB_FOR_MUMU_ENV: &str = "ACTINGCOMMAND_ALLOW_PATH_ADB_FOR_MUMU
 fn main() -> ExitCode {
     let json_default = !io::stdout().is_terminal();
     let invocation = parse_invocation(env::args().skip(1), json_default);
+    if let Ok(invocation) = &invocation
+        && let Some(via) = invocation.global.via
+    {
+        let _ = CHANNEL_VIA.set(via);
+    }
     // Parsed admission refuses retired production before installation selection takes a slot.
     if invocation.is_ok()
         && let Err(error) = actingcommand_contract::process_installation()
@@ -230,6 +238,33 @@ fn main() -> ExitCode {
 
 type CliOutcome<T> = Result<T, CliError>;
 
+/// `--via` of this process, set once from the command line (Workflow #389 U-2).
+static CHANNEL_VIA: OnceLock<ChannelVia> = OnceLock::new();
+
+/// The configuration of every Runtime connection actinglab opens (Workflow #389 U-2, model
+/// section 3.2 rules 6 and 7): the Lab channel, with the `--via` of this process when a counter
+/// forwarded the work, and the envelope (Lab, Lab).
+fn lab_client_config(state_root: impl Into<PathBuf>) -> RuntimeClientConfig {
+    lab_client_config_via(state_root, CHANNEL_VIA.get().copied())
+}
+
+/// [`lab_client_config`] with a given `via`.
+fn lab_client_config_via(
+    state_root: impl Into<PathBuf>,
+    via: Option<ChannelVia>,
+) -> RuntimeClientConfig {
+    let config = RuntimeClientConfig::new(
+        state_root,
+        RuntimeChannel::Lab,
+        actingcommand_contract::EventActor::Lab,
+        actingcommand_contract::EventSource::Lab,
+    );
+    match via {
+        Some(via) => config.with_via(via),
+        None => config,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct GlobalOptions {
     json: bool,
@@ -246,6 +281,9 @@ struct GlobalOptions {
     runtime_endpoint: Option<String>,
     capture_backend: Option<CaptureBackendChoice>,
     touch_backend: Option<TouchBackendChoice>,
+    /// Workflow #389 U-2 (model section 3.2 rule 7): `--via`, the counter that forwarded this
+    /// run's work to the Lab (`mcp` for the MCP option tools); absent when run from a shell.
+    via: Option<ChannelVia>,
     version: bool,
 }
 

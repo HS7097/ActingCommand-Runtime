@@ -358,3 +358,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
 ]
 incident = ["#389 MCP-14"]
+
+# Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-5, TU-6, TU-7): actinglab's Runtime connections bind the Lab channel with the envelope (Lab, Lab) and record the --via it was given; --via takes mcp or ui only; an MCP option tool starts actinglab with --via mcp; actingd reads the two Lab options once and reports them in config.parameters.top_level, false when absent, never settable
+[[gate]]
+key = "50"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_389_u2::u2_via_names_the_counter_that_forwarded_the_work",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_389_u2::u2_an_actinglab_connection_binds_the_lab_channel_with_a_lab_envelope_and_its_via",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_389_u2::u2_an_option_tool_starts_actinglab_naming_mcp_as_its_forwarding_counter",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::u2_the_two_lab_options_are_read_and_reported_and_never_settable",
+]
+incident = ["#389 U-2"]

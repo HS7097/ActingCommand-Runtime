@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 pub(super) fn run_recognize_artifact(args: &[String]) -> CliOutcome<Value> {
-    use actingcommand_contract::{EventActor, EventSource, SavedArtifactOcrRequest};
-    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+    use actingcommand_contract::SavedArtifactOcrRequest;
+    use actingcommand_runtime_client::RuntimeClient;
     use std::io::Read;
     let flags = FlagArgs::parse(args)?;
     let path = flags.required_path("--request")?;
@@ -34,12 +34,8 @@ pub(super) fn run_recognize_artifact(args: &[String]) -> CliOutcome<Value> {
     request
         .validate()
         .map_err(|error| CliError::usage(error.to_string()))?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        super::runtime_state_root()?,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(|error| CliError::device(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(super::runtime_state_root()?))
+        .map_err(|error| CliError::device(error.to_string()))?;
     serialize_response(
         client
             .recognize_artifact(request)

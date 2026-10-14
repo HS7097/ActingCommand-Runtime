@@ -439,9 +439,14 @@ fn hard_kill_with_unconfirmed_owner_restarts_automatically() {
 
 fn client(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(
-        RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(500))
-            .with_backend_open_timeout(Duration::from_secs(2)),
+        RuntimeClientConfig::new(
+            state_root,
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(500))
+        .with_backend_open_timeout(Duration::from_secs(2)),
     )
     .expect("connect Runtime client")
 }

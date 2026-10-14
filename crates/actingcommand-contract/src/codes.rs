@@ -178,6 +178,8 @@ crate::outcome_codes! {
         ConfigureSettingsCompleted => "request_configure_settings_completed": success / none,
         // Workflow #389 MCP-4 (register W2).
         InstanceFactSnapshotCompleted => "request_instance_fact_snapshot_completed": success / none,
+        // Workflow #389 U-2 (register W11: the success code comes with the behaviour).
+        BindChannelCompleted => "request_bind_channel_completed": success / none,
     }
 }
 
@@ -677,6 +679,8 @@ crate::outcome_codes! {
         InstallSlotLockFailed => "install_slot_lock_failed": error / none,
         // Workflow #387 D1b: a `ConfigureSettings` request or receipt of the wrong shape.
         InvalidConfigureSettings => "invalid_configure_settings": error / none,
+        // Workflow #389 U-2: a `BindChannel` whose `via` is not on the Lab channel.
+        InvalidBindChannel => "invalid_bind_channel": error / none,
     }
 }
 

@@ -3847,10 +3847,26 @@ impl RuntimeOperation {
                 validate_instance_alias(instance_alias)?;
                 request.validate()
             }
-            // Workflow #389 U-1. No channel judgement here (section 3.1): the binding rules (one
-            // binding per connection, `via` on the Lab channel only) are U-2's, and the
-            // package entries' checks come with U-3's `pack_registry_` codes.
-            Self::BindChannel { .. } | Self::LoadPack { .. } | Self::UnloadPack { .. } => Ok(()),
+            // Workflow #389 U-2: `via` exists only on the Lab channel (section 3.2 rule 7), a
+            // shape check. No channel judgement here (section 3.1): one binding per connection
+            // is the host's (`channel_binding_exists`).
+            Self::BindChannel { channel, via } => {
+                if (ChannelBinding {
+                    channel: *channel,
+                    via: *via,
+                })
+                .is_valid()
+                {
+                    Ok(())
+                } else {
+                    Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidBindChannel,
+                    ))
+                }
+            }
+            // Workflow #389 U-1: the package entries' checks come with U-3's `pack_registry_`
+            // codes.
+            Self::LoadPack { .. } | Self::UnloadPack { .. } => Ok(()),
             Self::UpgradeState { target, action } => {
                 target.validate()?;
                 action.validate()
@@ -4263,7 +4279,10 @@ impl RuntimeRequest {
             ));
         }
         self.operation.validate()?;
-        Ok(ValidatedRuntimeRequest { request: self })
+        Ok(ValidatedRuntimeRequest {
+            request: self,
+            channel: None,
+        })
     }
 
     pub const fn request_id(&self) -> RequestId {
@@ -4310,11 +4329,27 @@ impl fmt::Debug for RuntimeRequest {
 #[derive(Debug)]
 pub struct ValidatedRuntimeRequest<'a> {
     request: &'a RuntimeRequest,
+    /// Workflow #389 U-2: the channel the door tagged the request with (section 3.1 duty 3);
+    /// `None` for a request that never passed the door (the host's own requests) and for the
+    /// handshake of a connection not bound yet.
+    channel: Option<ChannelBinding>,
 }
 
 impl ValidatedRuntimeRequest<'_> {
     pub const fn request_id(&self) -> RequestId {
         self.request.request_id
+    }
+
+    /// The request tagged with the channel of the connection it came on (Workflow #389 U-2).
+    #[must_use]
+    pub fn with_channel(mut self, channel: Option<ChannelBinding>) -> Self {
+        self.channel = channel;
+        self
+    }
+
+    /// The channel the door tagged the request with (Workflow #389 U-2).
+    pub const fn channel(&self) -> Option<ChannelBinding> {
+        self.channel
     }
 
     pub fn event_links(
@@ -5037,6 +5072,13 @@ pub struct RuntimeReceipt {
     /// terminal, nothing recorded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_targets_rejection: Option<Box<crate::ResourceTargetsRejection>>,
+    /// Workflow #389 U-2 (model section 5.1): the channel of the connection the request came
+    /// on, as the door tagged it; absent on the handshake of a connection not bound yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel: Option<RuntimeChannel>,
+    /// Workflow #389 U-2: the counter that handed the request over to the Lab channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<ChannelVia>,
 }
 
 /// The outcome of a receipt whose request did not fail (Workflow #378 A4): the info code of its
@@ -5131,6 +5173,8 @@ impl RuntimeReceipt {
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
+            channel: None,
+            via: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -5168,6 +5212,8 @@ impl RuntimeReceipt {
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
+            channel: None,
+            via: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -5193,6 +5239,8 @@ impl RuntimeReceipt {
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
+            channel: None,
+            via: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -5229,6 +5277,8 @@ impl RuntimeReceipt {
             resource_declaration: None,
             resource_declaration_event: None,
             resource_targets_rejection: None,
+            channel: None,
+            via: None,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -5243,6 +5293,25 @@ impl RuntimeReceipt {
             self.outcome = receipt_envelope(self.outcome.outcome(), detail);
         }
         self
+    }
+
+    /// This receipt tagged with the channel of its connection (Workflow #389 U-2): the door
+    /// marks, it never refuses.
+    #[must_use]
+    pub fn with_channel(mut self, channel: Option<ChannelBinding>) -> Self {
+        self.channel = channel.map(|binding| binding.channel);
+        self.via = channel.and_then(|binding| binding.via);
+        self
+    }
+
+    /// The channel of the connection the request came on (Workflow #389 U-2).
+    pub const fn channel(&self) -> Option<RuntimeChannel> {
+        self.channel
+    }
+
+    /// The counter that handed the request over to the Lab channel (Workflow #389 U-2).
+    pub const fn via(&self) -> Option<ChannelVia> {
+        self.via
     }
 
     pub fn with_resource_declaration(

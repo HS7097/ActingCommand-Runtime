@@ -738,6 +738,7 @@ fn start_runtime() -> (TempDir, RuntimeChild, RuntimeInfo) {
 fn fill_ledger(root: &Path, pairs: usize) {
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -764,6 +765,7 @@ fn fill_ledger(root: &Path, pairs: usize) {
 fn ledger_sequences(root: &Path) -> Vec<u64> {
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

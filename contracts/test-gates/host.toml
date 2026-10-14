@@ -696,3 +696,20 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_without_fields",
 ]
 incident = ["#390 O-03", "#390 O-04", "#390 O-05"]
+
+# Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-2, TU-3, TU-4, TU-6, TU-7, TU-8, TU-9): the door binds each connection to one channel and marks every request, its receipt and its command.received with it whatever the envelope; a second BindChannel is refused channel_binding_exists naming the channel kept; the handshake and a status read append nothing; until U-6 an unbound connection is bound from its first request's envelope source; via is recorded on the Lab channel only; the Lab channel takes option requests with no Lab option configured; a reconnect (the send_or_dropped fallback, the timeout recovery) binds the same channel; an actingd before U-2 leaves the client unbound and usable with no BindChannel on later reconnects; actingd's configured approvals are written in process with the provenance (Governance, User, Ui)
+[[gate]]
+key = "74"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_a_bound_connection_marks_its_requests_with_its_channel_whatever_their_envelope",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_the_handshake_and_a_status_read_append_nothing_and_a_write_names_its_channel",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_an_unbound_connection_is_bound_from_its_first_request_s_envelope_until_u6",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_the_lab_channel_takes_option_requests_before_u6_without_any_lab_option",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_a_configured_approval_is_written_in_process_with_the_approval_provenance",
+    "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_a_reconnect_after_a_dropped_request_binds_the_same_channel",
+    "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_the_contained_task_timeout_recovery_binds_the_same_channel",
+    "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable",
+]
+incident = ["#389 U-2"]

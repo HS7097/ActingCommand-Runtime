@@ -243,7 +243,12 @@ fn install_transition_run(action: &InstallTransitionAction) -> InstallTransition
 /// budget as the exchange timeout and as one deadline counted from `started`.
 fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
     let (actor, source) = command.origin();
-    let config = RuntimeClientConfig::new(state_root, actor, source);
+    let config = RuntimeClientConfig::new(
+        state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
+        actor,
+        source,
+    );
     let Command::InstallTransition { action } = command else {
         return config;
     };
@@ -1884,6 +1889,7 @@ mod tests {
 
         let Err(client_error) = RuntimeClient::connect(RuntimeClientConfig::new(
             "",
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         )) else {

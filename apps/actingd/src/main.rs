@@ -38,13 +38,11 @@ use actingcommand_contract::outcome::{
     Category, CauseRelation, Code, Detail, IoOp, Location, Outcome,
 };
 use actingcommand_contract::{
-    EventActor, EventSource, GovernanceIdentityCard, PolicyExecutionEventData, RunId,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt, SchedulingOutcomeProjection,
+    PolicyExecutionEventData, RunId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt,
+    SchedulingOutcomeProjection,
 };
 use actingcommand_policy::MAX_TASKS;
-use actingcommand_runtime_client::{
-    ClientCode, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
-};
+use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_host::{
     LedgerFailureSink, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
     PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, PolicyWakes, RuntimeHost,
@@ -612,23 +610,6 @@ fn initialize_policy(
             }
         })?;
     let generation = plan.generation();
-    // Workflow #378 A4: the driver reads its refusals' data values (whether the host halted),
-    // so it asks for the full outcome that a (User, Ui) request would otherwise not get.
-    let governance = RuntimeClient::connect(
-        RuntimeClientConfig::new(&policy.state_root, EventActor::User, EventSource::Ui)
-            .with_io_timeout(Duration::from_secs(5))
-            .with_detail(Detail::Full),
-    )
-    .map_err(ActingdError::client)?;
-    // Workflow #318 cfg4: the driver transcribes the person's configured approvals, so it
-    // stays (User, Ui); its card names the daemon, so the ledger shows who recorded them.
-    governance
-        .declare_governance_identity(&GovernanceIdentityCard {
-            client: config::GOVERNANCE_POLICY_DRIVER_CLIENT.to_owned(),
-            client_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-            instance: None,
-        })
-        .map_err(ActingdError::client)?;
     // The first catalog write: the planned transition, under the plan's compare-and-swap.
     let activated = host
         .apply_policy_catalog_transition(&plan)
@@ -636,9 +617,12 @@ fn initialize_policy(
     if activated != *generation {
         return Err(ActingdError::process(ActingdCode::PolicyCatalogPlanChanged));
     }
-    // Superseded approvals can no longer authorize a dispatch: they are revoked on the same
-    // (User, Ui) connection first, freeing their places in the bounded active projection;
-    // then the undecided configured approvals and the re-approvals of a restored generation.
+    // Workflow #389 U-2 (model section 3.2): the person's configured approvals are transcribed
+    // in process, after the catalog transition, with the provenance (Governance, User, Ui) every
+    // approval record keeps; actingd no longer connects to itself. Superseded approvals can no
+    // longer authorize a dispatch: they are revoked first, freeing their places in the bounded
+    // active projection; then the undecided configured approvals and the re-approvals of a
+    // restored generation.
     let approvals = plan.approvals();
     for decision in approvals
         .revoke()
@@ -646,11 +630,9 @@ fn initialize_policy(
         .chain(approvals.record())
         .chain(approvals.reapprove())
     {
-        governance
-            .record_approval_decision(decision.clone())
-            .map_err(ActingdError::client)?;
+        host.transcribe_configured_approval(decision)
+            .map_err(ActingdError::runtime)?;
     }
-    drop(governance);
     execute_policy_cycle(host, policy, PolicyTrigger::Recovery)
 }
 
@@ -1911,7 +1893,6 @@ struct ActingdError {
     secondary: [Option<Box<ActingdError>>; 3],
     recording_failure: Option<Box<ActingdError>>,
     runtime: Option<Box<RuntimeHostError>>,
-    client: Option<Box<RuntimeClientError>>,
     maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
     /// What the error carries beside its code for its reader, in one box so that the error stays
     /// small.
@@ -1981,17 +1962,8 @@ impl ActingdError {
         if self.recorded.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
-        let client_message = self.to_string();
         let failure = if let Some(error) = &self.runtime {
             RuntimeLifecycleFailure::Host(error)
-        } else if let Some(error) = &self.client {
-            RuntimeLifecycleFailure::Client {
-                code: error.code(),
-                operation: error.operation(),
-                fatal: error.is_fatal(),
-                runtime_code: error.projection().map(|projection| projection.code),
-                message: &client_message,
-            }
         } else {
             RuntimeLifecycleFailure::Process {
                 code: self.code.as_str(),
@@ -2012,7 +1984,6 @@ impl ActingdError {
             secondary: [None, None, None],
             recording_failure: None,
             runtime: None,
-            client: None,
             maintenance: None,
             extras: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
@@ -2042,12 +2013,6 @@ impl ActingdError {
         result
     }
 
-    fn client(error: RuntimeClientError) -> Self {
-        let mut result = Self::coded(ErrorCode::Registered(error.code()));
-        result.client = Some(Box::new(error));
-        result
-    }
-
     /// Workflow #378 A6a (model sections 7.4, 7.5): the error as an outcome: the terminal
     /// outcome of a daemon it stops, a start refusal, or a subcommand's failure. It is the
     /// wrapped failure's own outcome (the Runtime host's, the client's, ledger maintenance's, or
@@ -2058,8 +2023,6 @@ impl ActingdError {
     fn outcome(&self) -> Outcome {
         let own = if let Some(error) = &self.runtime {
             error.daemon_outcome()
-        } else if let Some(error) = &self.client {
-            error.outcome()
         } else if let Some(error) = &self.maintenance {
             error.outcome().clone()
         } else if let Some(refusal) = self
@@ -2100,8 +2063,6 @@ impl fmt::Display for ActingdError {
             error.fmt(formatter)?;
         } else if let Some(error) = &self.runtime {
             formatter.write_str(&error.complete_message())?;
-        } else if let Some(error) = &self.client {
-            error.fmt(formatter)?;
         } else if let Some(refusal) = self
             .extras
             .as_ref()
@@ -2135,15 +2096,16 @@ mod tests {
     use super::*;
     use crate::config::ScheduledProcedureTask;
     use actingcommand_contract::{
-        ApplicationLifecycleAction, ContainedTaskRequest, EventFamily, EventPayload, EventQuery,
-        EventType, IdentifierIssuer, PolicyPayload, ProjectionPayload, ProjectionProfile,
-        RuntimeEventQueryPageRequest,
+        ApplicationLifecycleAction, ContainedTaskRequest, EventActor, EventFamily, EventPayload,
+        EventQuery, EventSource, EventType, IdentifierIssuer, PolicyPayload, ProjectionPayload,
+        ProjectionProfile, RuntimeEventQueryPageRequest,
     };
     use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend};
     use actingcommand_policy::{
         CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources,
         HostResourceSnapshot, InstanceSnapshot, PoolValueSnapshot,
     };
+    use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
     use actingcommand_runtime_host::{
         ExecutionBackendProvider, PolicyInputSnapshot, ProcedureBinding, ProcedureManifest,
         ResolvedExecutionInstance, RuntimeHostConfig,
@@ -2511,8 +2473,13 @@ mod tests {
         assert_eq!(execution.cycle.pending_dispatch_intents.len(), 1);
         let [wake] = execution.recompute_wakes.as_slice() else {
             let forensic_context = match RuntimeClient::connect(
-                RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
-                    .with_io_timeout(Duration::from_secs(1)),
+                RuntimeClientConfig::new(
+                    root.path(),
+                    actingcommand_runtime_client::RuntimeChannel::Cli,
+                    EventActor::Agent,
+                    EventSource::Adapter,
+                )
+                .with_io_timeout(Duration::from_secs(1)),
             ) {
                 Ok(client) => {
                     let snapshot = match RuntimeEventQueryPageRequest::new(1, None) {
@@ -2616,8 +2583,13 @@ mod tests {
         );
         drop(signal);
         let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
-                .with_io_timeout(Duration::from_secs(1)),
+            RuntimeClientConfig::new(
+                root.path(),
+                actingcommand_runtime_client::RuntimeChannel::Cli,
+                EventActor::Agent,
+                EventSource::Adapter,
+            )
+            .with_io_timeout(Duration::from_secs(1)),
         )
         .expect("connect formal-provider runtime");
         let defer_now = 10_000;

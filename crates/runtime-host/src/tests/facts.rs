@@ -253,6 +253,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
     let adapter = actingcommand_runtime_client::RuntimeClient::connect(
         actingcommand_runtime_client::RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Agent,
             EventSource::Adapter,
         ),

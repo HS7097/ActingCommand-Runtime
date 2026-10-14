@@ -3,6 +3,7 @@ use crate::{
     CaptureBackendChoice, CliError, ErrorKind, GlobalOptions, Invocation, TouchBackendChoice,
     package_cli,
 };
+use actingcommand_runtime_client::ChannelVia;
 use std::path::PathBuf;
 
 pub(super) fn parse_invocation<I>(
@@ -44,6 +45,22 @@ where
                 index += 1;
                 global.resource_root =
                     Some(PathBuf::from(require_raw(&raw, index, "--resource-root")?));
+            }
+            // Workflow #389 U-2: the counter that forwarded the work (model section 3.2 rule 7).
+            "--via" => {
+                index += 1;
+                let value = require_raw(&raw, index, "--via")?;
+                global.via = Some(match value.as_str() {
+                    "mcp" => ChannelVia::Mcp,
+                    "ui" => ChannelVia::Ui,
+                    _ => {
+                        return Err((
+                            "help".to_string(),
+                            global.json,
+                            CliError::usage(format!("--via must be mcp or ui, got {value}")),
+                        ));
+                    }
+                });
             }
             "--dry-run" => global.dry_run = true,
             "--verbose" => global.verbose = true,

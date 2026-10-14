@@ -65,6 +65,7 @@ fn gate_mcp_pause_and_resume_record_the_client_action_of_an_upper_case_alias() {
 
     let ledger = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

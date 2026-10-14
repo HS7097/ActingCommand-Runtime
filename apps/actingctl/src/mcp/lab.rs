@@ -54,6 +54,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub(super) const HANDLE_PREFIX: &str = "lab_job_";
 /// actinglab finds the Runtime it talks to here (`state_roots.rs:11-24`).
 const STATE_ROOT_ENV: &str = "ACTINGCOMMAND_RUNTIME_STATE_ROOT";
+/// Workflow #389 U-2: actinglab's global option naming MCP as the counter that forwarded the
+/// work (model section 3.2 rule 7).
+pub(super) const LAB_VIA_MCP: [&str; 2] = ["--via", "mcp"];
 /// The tail of a failed child's stderr kept as `raw_text`.
 const MAX_STDERR_TAIL: usize = 2048;
 /// A string argument may not look like a flag: actinglab's flag parser takes a value that
@@ -604,11 +607,13 @@ impl Program {
         })
     }
 
-    /// `actinglab --json <arguments>`, talking to this server's Runtime when it is known.
+    /// `actinglab --json --via mcp <arguments>`, talking to this server's Runtime when it is
+    /// known. Workflow #389 U-2 (model section 3.2 rule 7): MCP forwards the work, so the child's
+    /// connections bind the Lab channel with `via = mcp`.
     fn command(&self, arguments: &[String]) -> Command {
         let mut command = Command::new(&self.actinglab);
         super::runtime::pin_child(&mut command, self.installation.as_ref());
-        command.arg("--json").args(arguments);
+        command.arg("--json").args(LAB_VIA_MCP).args(arguments);
         if let Ok(state_root) = &self.state_root {
             command.env(STATE_ROOT_ENV, state_root);
         }
@@ -1476,5 +1481,7 @@ pub(super) fn record_status_input() -> Value {
 // A5, how an actinglab exit becomes an answer.
 #[cfg(test)]
 mod tests {
+    // Workflow #389 U-2: option tools start actinglab with `--via mcp`.
+    mod gate_389_u2;
     mod gate_mcpt1;
 }

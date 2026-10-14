@@ -150,6 +150,8 @@ impl HostShared {
                 &original.request_id(),
                 ConfigHostLocation::ConfigureSettings,
             )?,
+            // Workflow #389 U-2: `host.config_overrides` names the channel from U-2 on.
+            channel: validated.channel().map(|binding| binding.channel),
         };
         let applied = match current.apply(changes, &stamp, &context) {
             Ok(applied) => applied,

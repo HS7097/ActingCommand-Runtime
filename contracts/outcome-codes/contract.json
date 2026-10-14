@@ -17338,6 +17338,40 @@
       "description": "Runtime contract validation refused a value: a ConfigureSettings request without changes, with more than 64, with an empty, overlong or repeated key or an oversized value, or a receipt of the wrong shape.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "request_bind_channel_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a BindChannel request: the connection is bound to the channel (and via) the request named. Workflow #378 A4: one success code per request kind (Workflow #389 U-2 adds the behaviour of the kind U-1 shaped).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "invalid_bind_channel": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a BindChannel whose via names a forwarding counter on a channel other than lab (Workflow #389 U-2; via exists only on the Lab channel).",
+      "common_causes": "A client defect: a counter program named via for its own connection.",
+      "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work."
     }
   },
   "locations": {

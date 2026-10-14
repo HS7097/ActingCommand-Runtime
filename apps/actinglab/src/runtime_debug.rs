@@ -5,11 +5,10 @@ use super::contained_resources::{PackageInput, finish_package_use};
 use super::{CliError, CliOutcome, FlagArgs, runtime_state_root};
 use actingcommand_artifact_store::verify_evidence_archive;
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, PackageDebugRequest, ProjectionProfile,
-    RuntimeEvidenceExportRequest, RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor,
-    TaskOutcome,
+    EventQuery, PackageDebugRequest, ProjectionProfile, RuntimeEvidenceExportRequest,
+    RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor, TaskOutcome,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 
 const WATCH_QUERY_FLAGS: [(&str, &str); 18] = [
@@ -98,12 +97,8 @@ fn run_unpin(args: &[String]) -> CliOutcome<Value> {
     target
         .validate()
         .map_err(|_| CliError::usage("invalid lab pin reference"))?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(|error| CliError::device(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(|error| CliError::device(error.to_string()))?;
     let session = client
         .begin_debug_session()
         .map_err(|error| CliError::device(error.to_string()))?;
@@ -165,12 +160,8 @@ fn package_debug_request(flags: &FlagArgs, _command: &str) -> CliOutcome<Prepare
 }
 
 pub(super) fn runtime_lab_client() -> CliOutcome<RuntimeClient> {
-    RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(|error| CliError::device(error.to_string()))
+    RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(|error| CliError::device(error.to_string()))
 }
 
 fn run_export_evidence(args: &[String]) -> CliOutcome<Value> {
@@ -275,12 +266,8 @@ pub(super) fn run_watch(args: &[String]) -> CliOutcome<Value> {
         max_events,
     )
     .map_err(|error| CliError::usage(error.to_string()))?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(|error| CliError::device(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(|error| CliError::device(error.to_string()))?;
     let batch = client
         .subscribe_events(request)
         .map_err(|error| CliError::device(error.to_string()))?;
