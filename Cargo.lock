@@ -212,6 +212,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-ledger",
+ "actingcommand-runtime-database",
  "serde",
  "serde_json",
  "tempfile",

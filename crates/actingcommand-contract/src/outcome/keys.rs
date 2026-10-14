@@ -381,6 +381,10 @@ outcome_keys! {
     config_value_problem: vocab(config_value_problem),
     // Workflow #398 RD-5a: the device-state read of a handset that failed.
     device_state_probe: vocab(device_state_probe),
+    // Workflow #398 RD-1b: what is wrong with an instance's device declaration or with the
+    // private device-binding file.
+    device_config_problem: vocab(device_config_problem),
+    device_binding_problem: vocab(device_binding_problem),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
     // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin ----

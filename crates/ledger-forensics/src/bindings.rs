@@ -163,9 +163,12 @@ mod tests {
         SecretFingerprinter,
     };
     use actingcommand_ledger::{
-        GlobalLedger, GlobalLedgerConfig, GlobalLedgerEvidenceConfig, Sha256SecretFingerprinter,
+        GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, LedgerMaintenance,
+        Sha256SecretFingerprinter,
     };
+    use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
     use std::path::Path;
+    use std::sync::Arc;
 
     const SALT: &[u8] = b"neutral-forensics-salt";
     const EMULATOR_PORT: u16 = 16384;
@@ -180,11 +183,27 @@ mod tests {
     fn write_bindings(root: &Path, bindings: &[(InstanceId, &str, Bound<'_>)]) {
         let ids = IdentifierIssuer::new().expect("identifier issuer");
         let fingerprinter = Sha256SecretFingerprinter::new(SALT).expect("fingerprinter");
-        let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
-            root.join("ledger"),
-            "neutral-device-bindings",
-        ))
-        .expect("ledger");
+        // A formal root, as acsetup leaves it: the Runtime database, the formal ledger marker
+        // and the writer.
+        let database = Arc::new(
+            RuntimeDatabase::open_with_initializer::<GlobalLedgerError>(
+                root,
+                b"neutral-forensics-seed",
+                |_| Ok(()),
+                |_| Ok(()),
+            )
+            .expect("runtime database"),
+        );
+        let limits = MaintenanceLimits::default();
+        let maintenance =
+            LedgerMaintenance::acquire(root, true, limits, limits.deadline().expect("deadline"))
+                .expect("maintenance owner");
+        maintenance
+            .initialize_empty(&database)
+            .expect("formal ledger");
+        let ledger = maintenance
+            .open_writer(database, "neutral-device-bindings".into())
+            .expect("formal writer");
         for (instance_id, alias, bound) in bindings {
             let (host, port, serial) = match bound {
                 Bound::Emulator(port) => (Some("127.0.0.1".to_owned()), Some(*port), None),

@@ -17,4 +17,5 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 actingcommand-artifact-store = { path = "../artifact-store", features = ["capture"] }
+actingcommand-runtime-database = { workspace = true }
 tempfile = "3"
