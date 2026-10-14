@@ -484,3 +484,17 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic",
 ]
 incident = ["#387"]
+
+# The performance configuration surface: every key of PERF §10 in the defaults file and in config.parameters with its source, the curve's and the calibration's rules refusing check-config and the start with perf_config_invalid naming the key and exit code 1, mode observe when the file names none, and the controller taking the section's clock jump and dispatch limits (Workflow #385 P-c, Tc-1, Tc-2, Tc-4, Tc-5)
+[[gate]]
+key = "55"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::perf_tests::tc_1_every_performance_key_is_in_the_defaults_file_and_config_parameters_with_its_source",
+    "actingcommand-runtime-config::lib::perf_tests::tc_2_a_curve_that_breaks_a_rule_is_refused_naming_the_curve",
+    "actingcommand-runtime-config::lib::perf_tests::tc_4_a_configuration_without_mode_takes_the_release_default_observe",
+    "actingcommand-runtime-config::lib::perf_tests::tc_5_calibration_values_that_break_a_rule_are_refused_naming_the_key",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::tc_1_the_controller_takes_the_performance_section_s_clock_jump_and_dispatch_limits",
+    "actingcommand-actingd::process::tc_2_tc_5_a_broken_performance_rule_refuses_check_config_and_the_start_with_exit_one",
+]
+incident = ["#385"]

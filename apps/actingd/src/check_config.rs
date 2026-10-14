@@ -467,12 +467,17 @@ fn summarize(
     }
     let bind_address = checked.host.bind_address();
     // The new tunables (Workflow #318, cfg2) echoed from the manifest, so this report and
-    // `actingctl status --config` cannot disagree.
+    // `actingctl status --config` cannot disagree; since Workflow #385 P-c rows of the
+    // `performance` section.
     let performance = json!({
-        "pressure_start_samples":
-            manifest_integer(&checked.manifest, "performance_monitor.pressure_start_samples")?,
-        "pressure_end_samples":
-            manifest_integer(&checked.manifest, "performance_monitor.pressure_end_samples")?,
+        "pressure_start_samples": manifest_integer(
+            &checked.manifest,
+            actingcommand_runtime_config::performance::monitor::PRESSURE_START_SAMPLES,
+        )?,
+        "pressure_end_samples": manifest_integer(
+            &checked.manifest,
+            actingcommand_runtime_config::performance::monitor::PRESSURE_END_SAMPLES,
+        )?,
     });
     let mut device_paths = serde_json::Map::new();
     for name in DEVICE_PATH_NAMES {

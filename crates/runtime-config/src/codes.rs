@@ -38,6 +38,10 @@ actingcommand_contract::outcome_codes! {
         /// `blackout_id` when the entry has one; registered by SR-0, parsed in this crate by
         /// SR-4a, which emits it).
         BlackoutConfigInvalid => "blackout_config_invalid": error / none,
+        /// Error. The `performance` section breaks a rule at start or in `check-config` (keys
+        /// `config_key`, and `config_value_problem` saying which rule; Workflow #385 P-c, PERF
+        /// §11). The same values sent by an instruction are refused as `config_value_invalid`.
+        PerfConfigInvalid => "perf_config_invalid": error / none,
     }
 }
 

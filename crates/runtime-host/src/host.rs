@@ -478,6 +478,9 @@ pub struct RuntimeHostConfig {
     /// near-duplicates (`frame_retention_dedup_error`, `frame_retention_dedup_lab`).
     frame_retention_dedup_error: bool,
     frame_retention_dedup_lab: bool,
+    /// Workflow #385 P-c: the controller's clock jump and heavy-dispatch limits; actingd sets
+    /// them from `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*`, a host
+    /// started without actingd keeps the controller's own values.
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -626,6 +629,8 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Workflow #385 P-c: the performance controller's configuration in effect, from the
+    /// `performance` section.
     pub fn with_performance_control(
         mut self,
         performance_control: PerformanceControlConfig,

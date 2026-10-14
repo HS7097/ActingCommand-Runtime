@@ -12,7 +12,9 @@
         "blackout_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -31,7 +33,9 @@
         "config_key": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -50,7 +54,9 @@
         "config_key": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -69,7 +75,9 @@
         "config_key": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -88,7 +96,9 @@
         "config_key": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -107,7 +117,9 @@
         "config_key": "required",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -129,7 +141,9 @@
         "range_max": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -137,6 +151,28 @@
       "description": "A ConfigureSettings change carries a value of the wrong type or outside the key's range, names the same key twice, or leaves its section failing the section's whole-section check (config_value_problem says which); the whole request is refused and nothing changes.",
       "common_causes": "A value of another JSON type, a number outside range_min..range_max, or a combination the section does not allow.",
       "handling": "Send the change again with a value of the key's type and range."
+    },
+    "perf_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required",
+        "config_value_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The performance section breaks a rule at start or in check-config (Workflow #385 P-c, PERF section 11): a curve that does not fall from 10000 to 0, a factor or share outside its range or moving the wrong way, a stage stepping back, a full share dropping straight to none, calibration tolerances not rising, a stage boundary inverted, a pressure-only stage beyond S2, or another rule of the section; config_key names the key and config_value_problem the rule. The start is refused before the ledger opens.",
+      "common_causes": "A hand-edited performance key whose value breaks the section's rules.",
+      "handling": "Fix the key named by config_key, commit the configuration again and restart."
     },
     "recovery_ladder_code_unclassified": {
       "category": "warning",
@@ -148,7 +184,9 @@
         "raw_code": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -168,7 +206,9 @@
         "config_value_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
-        "host_halted": "optional"
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
       },
       "review": "pending",
       "status": "active",

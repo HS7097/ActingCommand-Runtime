@@ -37,8 +37,6 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) dedup_error_explicit: bool,
     pub(super) dedup_lab_explicit: bool,
     pub(super) capacity_thresholds_explicit: bool,
-    pub(super) pressure_start_samples_explicit: bool,
-    pub(super) pressure_end_samples_explicit: bool,
     pub(super) secret_fingerprint_salt_bytes: usize,
     pub(super) mumu_root: Option<&'a Path>,
     /// The daemon-level `device_paths` by manifest name; `None` is not configured.
@@ -61,7 +59,8 @@ pub(super) struct ManifestInputs<'a> {
     pub(super) instances_deferred_count: usize,
     pub(super) instances_startup_package_count: usize,
     /// Workflow #387 D1b: the rows the configuration mechanism resolved (the per-instance
-    /// section, every configured instance in declaration order).
+    /// section, every configured instance in declaration order; D1c and Workflow #385 P-c: the
+    /// sections before it, the `performance` section among them).
     pub(super) mechanism_parameters: Vec<ConfigParameter>,
 }
 
@@ -86,11 +85,6 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
     let scheduler = host.scheduler();
     let policy_cadence = host.policy_cadence();
     let performance_control = host.performance_control();
-    // A host without a performance monitor configuration cannot report one: that is a
-    // build error, never a default written in its place.
-    let performance_monitor = host
-        .performance_monitor()
-        .ok_or(ActingdCode::ConfigManifestIncomplete.code())?;
     let discovery_bound = inputs.instances_deferred_count > 0;
     // Workflow #318 cfg4: the effective allow-list read back from the host; `any` when the
     // host accepts every well-formed card.
@@ -353,36 +347,9 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             "performance_control.transition_cooldown_ms",
             duration_ms(performance_control.transition_cooldown())?,
         ),
-        default(
-            "performance_control.clock_jump_threshold_ms",
-            duration_ms(performance_control.clock_jump_threshold())?,
-        ),
-        default(
-            "performance_control.normal_heavy_dispatch_limit",
-            FactScalar::Integer(i64::from(performance_control.normal_heavy_dispatch_limit())),
-        ),
-        default(
-            "performance_control.pressured_heavy_dispatch_limit",
-            FactScalar::Integer(i64::from(
-                performance_control.pressured_heavy_dispatch_limit(),
-            )),
-        ),
-        default(
-            "performance_monitor.sample_interval_ms",
-            duration_ms(performance_monitor.sample_interval())?,
-        ),
-        ConfigParameter {
-            key: "performance_monitor.pressure_start_samples".to_owned(),
-            value: FactScalar::Integer(i64::from(performance_monitor.pressure_start_samples())),
-            source: explicit_or_default(inputs.pressure_start_samples_explicit),
-            settable: false,
-        },
-        ConfigParameter {
-            key: "performance_monitor.pressure_end_samples".to_owned(),
-            value: FactScalar::Integer(i64::from(performance_monitor.pressure_end_samples())),
-            source: explicit_or_default(inputs.pressure_end_samples_explicit),
-            settable: false,
-        },
+        // Workflow #385 P-c: the controller's clock jump and heavy-dispatch limits and the
+        // monitor's sampling period and pressure streaks are rows of the `performance` section
+        // the configuration mechanism resolved.
         ConfigParameter {
             key: "capacity_thresholds.hard_bytes".to_owned(),
             value: integer(capacity_thresholds.hard_bytes)?,
