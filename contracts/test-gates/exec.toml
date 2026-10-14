@@ -883,3 +883,14 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_an_outcome_other_than_selected_aborts_without_a_confirmation_or_a_retry",
 ]
 incident = ["#382 E-5"]
+
+# Test plan v2.2 E-5 G6: record stop over a synthetic recording (EXEC-I5) generates the same bytes from the same recording, refuses a page that does not match its own frame with record_step_self_mismatch and leaves the recording active, and only warns when it clamps the step timeout
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_e5_record_stop::gate_record_stop_the_same_recording_generates_the_same_bytes",
+    "actingcommand-lab::lib::gate_e5_record_stop::gate_record_stop_refuses_a_page_that_does_not_match_its_own_frame",
+    "actingcommand-lab::lib::gate_e5_record_stop::gate_record_stop_a_clamped_step_timeout_is_a_warning_and_never_refuses",
+]
+incident = ["#382 E-5"]
