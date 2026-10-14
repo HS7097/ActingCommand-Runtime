@@ -8,11 +8,19 @@
 // ledger-maintenance and `--install-held` rows is `gate_a2a`. `--install-held <json>` is taken
 // only right after `--config <path>` (distribution/windows/INSTALL.md, "Host installation
 // control"), and its deadline is bounded at 600 s (`MAX_INSTALL_TIMEOUT_MS`).
+//
+// G15 (inventory-apps key 39): `check-config` refuses each vision root of
+// tests/support/vision_folders.rs at its vision stage with the code vision-provider-check's model
+// folder report gives the same root (that program's `gate_382_a1`), and passes the valid one.
 
 use super::*;
 use actingcommand_contract::codes::RuntimeContractCode;
 use actingcommand_contract::{IdentifierIssuer, InstallHeldStartup, MAX_INSTALL_TIMEOUT_MS};
+use actingcommand_vision_ffi::VisionListingCode;
 use std::ffi::OsString;
+
+#[path = "../../../tests/support/vision_folders.rs"]
+mod vision_folders;
 
 type Subcommand = fn(Vec<OsString>) -> Result<Reported, ActingdError>;
 
@@ -266,5 +274,55 @@ fn gate_install_held_is_taken_only_after_config_and_bounded_at_600_s() {
             "{values:?}: {refused}"
         );
         assert_eq!(refused.category().exit_code(), 1, "{values:?}: {refused}");
+    }
+}
+
+#[test]
+fn gate_check_config_refuses_each_vision_root_with_the_model_folder_reports_code() {
+    let base = tempfile::TempDir::new().expect("tempdir");
+    let instance_id = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    for (case, expected) in vision_folders::CASES {
+        let root = vision_folders::vision_root(base.path(), case);
+        let path = base.path().join(format!("{case}.json"));
+        let config = serde_json::json!({
+            "schema_version": "actingcommand.actingd.config.v1",
+            "state_root": base.path().join(format!("state-{case}")),
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "vision": {"execution_provider": "cpu", "root": root},
+            "instances": [{
+                "alias": "neutral.fixture",
+                "instance_id": instance_id.transport(),
+                "fixture_backend": {
+                    "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}],
+                    "max_inputs": 0
+                }
+            }]
+        });
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&config).expect("configuration JSON"),
+        )
+        .expect("write the configuration");
+        let refused = match check_config::run(arguments(&[
+            "check-config",
+            "--config",
+            path.to_str().expect("configuration path"),
+        ])) {
+            Ok(_) => None,
+            Err(error) => {
+                let outcome = error.outcome();
+                assert_eq!(
+                    outcome.value("stage").and_then(serde_json::Value::as_str),
+                    Some(ActingdLocation::ConfigVision.location().as_str()),
+                    "{case}: {outcome}"
+                );
+                Some(outcome.code())
+            }
+        };
+        assert_eq!(refused, expected.map(VisionListingCode::code), "{case}");
     }
 }

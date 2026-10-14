@@ -409,3 +409,13 @@ tests = [
     "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_fixed_entry_that_cannot_run_is_logged_with_its_code_and_exits_1",
 ]
 incident = ["#382 A-1 G13"]
+
+# vision-provider-check gives each vision root the code actingd check-config refuses it with: a missing root vision_root_unavailable, an empty models folder vision_models_empty, a folder that breaks the rule vision_model_folder_invalid, and a valid OCR folder passes both (Workflow #382 A-1 G15; the roots and codes are tests/support/vision_folders.rs)
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-vision-provider-check::bin:actingcommand-vision-provider-check::gate_382_a1::gate_the_model_folder_report_gives_each_vision_root_its_code",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_check_config_refuses_each_vision_root_with_the_model_folder_reports_code",
+]
+incident = ["#382 A-1 G15"]
