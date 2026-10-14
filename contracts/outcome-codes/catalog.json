@@ -5972,6 +5972,7 @@
       "contract",
       "device",
       "execution-kernel",
+      "ledger-forensics",
       "runtime-host"
     ],
     "freeze_": [
@@ -6240,8 +6241,12 @@
       "execution-kernel",
       "runtime-host"
     ],
+    "kept_folder_": [
+      "ledger-forensics"
+    ],
     "list_": [
       "ledger",
+      "ledger-forensics",
       "runtime-database",
       "runtime-host"
     ],

@@ -113,6 +113,34 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "frame_stat_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The frame listing (actingledger frames, Workflow #375 R5e) could not stat a frame's file at its object key for a reason other than its absence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "frame_switches_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The frame listing found no config.parameters.top_level runtime fact naming the three frame retention switches, so it cannot class frames as actingd does.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "instance_binding_malformed": {
       "category": "error",
       "ladder_class": "none",
@@ -278,6 +306,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Ledger forensics reports invalid view options.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "kept_folder_cleared_record_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A host.kept_folder_cleared runtime fact is not one row with a folder and a cleared_at_unix_ms.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -896,6 +938,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Phase 3 of an offline runtime fact read (Workflow #395): apply the runtime fact events after that set through the position. A failure whose deadline ran out in this phase names it."
+    },
+    "list_frames": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #375 R5e: actingledger frames, the read-only frame listing (open, view, stat, kept walk)."
     }
   }
 }

@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 
 mod bindings;
 mod codes;
+mod frames;
 mod material;
 mod runtime_facts;
 mod signatures;
@@ -36,6 +37,12 @@ mod task_records;
 mod views;
 pub use bindings::{InstanceBinding, InstanceBindings, instance_bindings};
 pub use codes::{ForensicsCode, ForensicsLocation};
+pub use frames::{
+    ClearedFolderReport, ErrorPointFramesReport, ForensicFramesRequest, FrameClassFilter,
+    FrameClassTotals, FrameCount, FrameErrorPointReport, FramePathReport, FrameSwitchesReport,
+    FrameTotals, FramesReport, KEPT_FOLDER_CLEARED_FACT_KEY, KeptFolderReport, LocalDate,
+    NonFrameTotals, list_frames,
+};
 pub use material::{
     ForensicMaterialCompleteResult, ForensicMaterialPhase, ForensicMaterialRequest,
     read_material_complete, read_material_to, read_material_to_per_phase,
@@ -281,6 +288,7 @@ pub enum ForensicReport {
     Tail(TailReport),
     Repairs(RepairsReport),
     Replay(Box<ReplayReport>),
+    Frames(Box<FramesReport>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
