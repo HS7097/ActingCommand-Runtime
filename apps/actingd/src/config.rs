@@ -54,6 +54,9 @@ mod manifest;
 pub(crate) use manifest::env_overrides_subsystem;
 mod provider_startup;
 pub(crate) use provider_startup::device_failure_outcome;
+// Test-only: Workflow #382 A-6 (test plan v2.2 §4 #13), the start's configuration refusals.
+#[cfg(test)]
+mod gate_382_a6;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;

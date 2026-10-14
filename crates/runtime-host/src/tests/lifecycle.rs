@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// Test plan v2.2 §4 #22: a safe reset's own records in order: its lease (requested, then
+/// granted), its input (intent before outcome) and its release.
+const SAFE_RESET_EVENTS: &[EventType] = &[
+    EventType::LeaseRequested,
+    EventType::LeaseGranted,
+    EventType::InputIntent,
+    EventType::InputCommitted,
+    EventType::LeaseReleased,
+];
+
 #[test]
 fn shutdown_records_lifecycle_failures_before_writer_close() {
     let root = TempDir::new().expect("tempdir");
@@ -492,24 +502,12 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     assert_eq!(state.close_count.load(Ordering::Acquire), 0);
-    assert_eq!(
-        event_types_for_correlation(&mut client, correlation_id),
-        vec![
-            EventType::CliCommand,
-            EventType::CommandReceived,
-            EventType::CommandValidated,
-            EventType::LeaseRequested,
-            EventType::SchedulerAdmitted,
-            EventType::LeaseTransitionIntent,
-            EventType::LeaseGranted,
-            EventType::SchedulerAdmitted,
-            EventType::InputIntent,
-            EventType::RuntimeLifecycleObserved,
-            EventType::InputCommitted,
-            EventType::SchedulerAdmitted,
-            EventType::LeaseTransitionIntent,
-            EventType::LeaseReleased,
-        ]
+    // Test plan v2.2 §4 #22: the lease, the input and the release in order under the one
+    // correlation, ending in one release.
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_correlation(&mut client, correlation_id),
+        SAFE_RESET_EVENTS,
+        &[EventType::LeaseReleased],
     );
     drop(client);
     host.close().expect("close host");
@@ -560,24 +558,18 @@ fn application_lifecycle_owns_lease_effect_and_release_under_one_correlation() {
         state.unfenced_capture_close_count.load(Ordering::Acquire),
         0
     );
-    assert_eq!(
-        event_types_for_correlation(&mut client, correlation_id),
-        vec![
-            EventType::CliCommand,
-            EventType::CommandReceived,
-            EventType::CommandValidated,
+    // Test plan v2.2 §4 #22: the lease, the application effect and the release in order under
+    // the one correlation, ending in one release.
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_correlation(&mut client, correlation_id),
+        &[
             EventType::LeaseRequested,
-            EventType::SchedulerAdmitted,
-            EventType::LeaseTransitionIntent,
             EventType::LeaseGranted,
-            EventType::SchedulerAdmitted,
             EventType::ApplicationIntent,
-            EventType::RuntimeLifecycleObserved,
             EventType::ApplicationCompleted,
-            EventType::SchedulerAdmitted,
-            EventType::LeaseTransitionIntent,
             EventType::LeaseReleased,
-        ]
+        ],
+        &[EventType::LeaseReleased],
     );
     drop(client);
     host.close().expect("close host");
@@ -625,6 +617,13 @@ fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     let first = host
         .process_request_for_test(&request, connection)
         .expect("first safe reset");
+    // Read on another connection, so the replay below still meets no cached receipt.
+    let recorded = event_types_for_request(
+        &host,
+        &ids,
+        ConnectionId::new(78).expect("query connection"),
+        request.request_id(),
+    );
     let replayed = host
         .process_request_for_test(&request, connection)
         .expect("replayed safe reset");
@@ -633,9 +632,16 @@ fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     assert_eq!(state.open_count.load(Ordering::Acquire), 1);
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     assert_eq!(state.close_count.load(Ordering::Acquire), 0);
+    // Test plan v2.2 §4 #22: the first run's records in order with one release, and the replay
+    // writes nothing more (in place of a fixed record count).
+    assert_events_in_order_with_one_terminal(
+        &recorded,
+        SAFE_RESET_EVENTS,
+        &[EventType::LeaseReleased],
+    );
     assert_eq!(
-        event_types_for_request(&host, &ids, connection, request.request_id()).len(),
-        14
+        event_types_for_request(&host, &ids, connection, request.request_id()),
+        recorded
     );
     host.close().expect("close host");
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);

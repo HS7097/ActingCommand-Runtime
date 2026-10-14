@@ -15,6 +15,10 @@ mod events;
 mod facts;
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #382 A-1 (test plan v2.2 §3.7), the CLI grammar (G10) and
+// `request-shutdown --wait` (G11), in-process.
+#[cfg(test)]
+mod gate_382_a1;
 // Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
 // once for the whole binary (watchdog::gate_381a, mcp::tests::gate_387_d1b).
 #[cfg(test)]

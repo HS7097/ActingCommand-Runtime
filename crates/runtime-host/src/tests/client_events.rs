@@ -401,9 +401,12 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
         collision.error_projection().expect("collision error").code,
         RuntimeErrorCode::InvalidRequest
     );
-    assert_eq!(
-        event_types_for_request(&host, &ids, connection, action.request_id()),
-        vec![EventType::ClientAction]
+    // Test plan v2.2 §4 #22: the action's client fact is its request id's one terminal; the
+    // refused collisions add no second terminal (no rejection) under that id.
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_request(&host, &ids, connection, action.request_id()),
+        &[EventType::ClientAction],
+        &[EventType::ClientAction, EventType::CommandRejected],
     );
     host.close().expect("close host");
 }

@@ -323,6 +323,38 @@ fn event_types_for_correlation(
     .collect()
 }
 
+/// Test plan v2.2 §4 #22 (HOST-R4): `required` occur among `events` in this order; other events
+/// may sit between them, so an added incidental record does not fail the test.
+fn assert_events_in_order(events: &[EventType], required: &[EventType]) {
+    let mut remaining = events.iter();
+    for wanted in required {
+        assert!(
+            remaining.any(|event| event == wanted),
+            "{wanted:?} is missing or out of order: required {required:?} in {events:?}"
+        );
+    }
+}
+
+/// Test plan v2.2 §4 #22 (HOST-R4): `required` occur in this order, and the request has exactly
+/// one terminal: exactly one of its events is one of `terminals`, the types that can end it
+/// (rootcause-B F4, "each request still gets exactly one terminal"; C0 freeze §6.1, a receipt is
+/// the projection of one durable terminal).
+fn assert_events_in_order_with_one_terminal(
+    events: &[EventType],
+    required: &[EventType],
+    terminals: &[EventType],
+) {
+    assert_events_in_order(events, required);
+    let found = events
+        .iter()
+        .filter(|event| terminals.contains(event))
+        .count();
+    assert_eq!(
+        found, 1,
+        "exactly one terminal of {terminals:?} is required in {events:?}"
+    );
+}
+
 fn projected_events(
     client: &mut TestClient,
     query: EventQuery,
