@@ -478,7 +478,10 @@ fn gate_select_a_guard_that_fails_on_the_confirmation_frame_taps_nothing() {
 // selection-graph.md "Execution": "Any outcome other than `selected` ... is the v1 fallback, an
 // abort: the step fails with `selection_not_selected` and detail `<kind>:<outcome_key>`", recorded
 // `not_attempted`; only a `selected` outcome captures a confirmation frame, and the declared
-// retry is not taken.
+// retry is not taken. With no slot ready the gate rejects both candidates, so no candidate
+// survives; selection-policy.md "Selection modes": `exactly_one` is `top_k` with a required
+// count of one, and "Fewer is `insufficient`" (`empty` belongs to `none_allowed`), so the
+// outcome is `insufficient` with no survivor of the one required.
 #[test]
 fn gate_select_an_outcome_other_than_selected_aborts_without_a_confirmation_or_a_retry() {
     let mut device = Device::new(home([false, false]), home([false, false]));
@@ -486,10 +489,16 @@ fn gate_select_an_outcome_other_than_selected_aborts_without_a_confirmation_or_a
     let error = failed(select_task().run(&mut device));
 
     assert_eq!(error.code().as_str(), "selection_not_selected", "{error}");
-    assert_eq!(error.detail(), Some("empty:ready_empty"));
+    assert_eq!(error.detail(), Some("insufficient:ready_insufficient"));
     assert_aborted_before_the_input(&device);
     let record = device.records()[0];
-    assert_eq!(record.selection_result, TaskSelectionOutcome::Empty);
+    assert_eq!(
+        record.selection_result,
+        TaskSelectionOutcome::Insufficient {
+            surviving: 0,
+            required: 1
+        }
+    );
     assert_eq!(record.confirmation, TaskSelectionConfirmation::NotAttempted);
     // The decision directly follows the snapshot read: no confirmation frame was captured.
     assert_eq!(
