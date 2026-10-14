@@ -1668,6 +1668,10 @@
     "held_ms": {
       "type": "duration_ms",
       "description": "How long a policy run was held at its pace checkpoint, in milliseconds."
+    },
+    "code_name": {
+      "type": "name",
+      "description": "An outcome code's name as a lookup was given it; it may name no registered code."
     }
   },
   "vocabularies": {
@@ -6686,6 +6690,7 @@
       "contract"
     ],
     "outcome_": [
+      "actingctl",
       "actingd",
       "contract",
       "ledger",
@@ -17205,7 +17210,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry frame extent invalid.",
+      "description": "A contained task frame whose task geometry is retained has no extent (a zero width or height). Only that run ends, with this code; the Runtime and the other instances go on (Workflow #387 D1c-G).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17729,6 +17734,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_input_stability_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A page-graph click declared input_recheck stable_frames, and its fresh frames did not show the step's page with its guard passing on that many consecutive frames before the wait (the control step timeout, timeout_ms) ended; pack_operation_id names the operation. No input was made.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_interrupt_ambiguous": {
       "category": "warning",
       "ladder_class": "none",
@@ -18019,6 +18046,28 @@
       "description": "A run's navigation recovery chain ran out without reaching its entry page (count is the number of steps run; caused by the last locate's code; Workflow #373 M-373 sections 5 and 9). Registered with Workflow #387 D1c for its default trigger item navigation_exhausted; NAV-5 emits it.",
       "common_causes": "The game shows a page the standard pack's navigation data cannot leave, or its recovery chain is too short.",
       "handling": "The recovery ladder's trigger item navigation_exhausted starts at the emulator restart rung by default; check the standard pack's navigation data if it recurs."
+    },
+    "contained_task_observation_stability_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A page-graph operation declared a stable observation window, and no destination of the operation passed on that many consecutive frames before the window (timeout_ms) ended; pack_operation_id names the operation. The input had been made; no further input was made.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     },
     "contained_task_ocr_fields_unresolved": {
       "category": "error",
@@ -20663,7 +20712,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision provider failed or answered invalidly while a contained task package was admitted.",
+      "description": "The vision provider failed or answered invalidly while a contained task package was admitted, or while a run evaluated its pages (home preflight, page evaluation, a shared interrupt check); a page evaluation that fails for any other cause stays contained_task_recognition_failed (Workflow #387 D1c-G).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -44882,6 +44931,50 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An offline simulation planned more than one effect.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "outcome_catalog_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl codes or ac_outcome_code could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "outcome_code_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "code_name": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl codes or ac_outcome_code was asked for a code (code_name, unless it is no word a name may hold) that the outcome catalog this build embeds does not list.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "outcome_codes_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl codes: the catalog entry of one outcome code, or one page of the code list, was printed from the outcome catalog this build embeds, as ac_outcome_code answers it (Workflow #389 MCP-14).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
