@@ -206,6 +206,108 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
     );
 }
 
+/// BOOT-SMOKE's required state (train 11, run 38560460358 was refused `runtime_busy`): an idle
+/// Runtime, with no instance and no policy, accepts the first shutdown request sent right after
+/// `runtime_ready`, here after one status read on its own connection as the smoke makes. actingd
+/// then closes and exits 0, with one `runtime_ready` and `runtime_stopped` as its terminal
+/// outcome (Workflow #378 A6a).
+#[test]
+fn an_idle_runtime_accepts_the_first_shutdown_request_right_after_ready() {
+    use std::io::BufRead;
+
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "actingcommand.actingd.config.v1",
+            "state_root": root.path(),
+            "bind_host": "127.0.0.1",
+            "bind_port": 0,
+            "secret_fingerprint_salt": PROCESS_TEST_SALT,
+            "instances": []
+        }))
+        .expect("config json"),
+    )
+    .expect("write config");
+    let mut child = ChildGuard(start_actingd(&config_path));
+    let stderr = child.0.stderr.take().expect("actingd stderr");
+    let (lines, received) = std::sync::mpsc::channel::<String>();
+    let reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut stderr_lines = Vec::new();
+    let started = Instant::now();
+    while !stderr_lines
+        .iter()
+        .any(|line: &String| daemon_outcome_code(line).as_deref() == Some("runtime_ready"))
+    {
+        match received.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => stderr_lines.push(line),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("actingd stderr closed before ready: {stderr_lines:?}")
+            }
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            panic!("actingd exited before ready with {status}: {stderr_lines:?}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "actingd ready timed out: {stderr_lines:?}"
+        );
+    }
+
+    let status = connect(root.path());
+    status.status().expect("status of the idle Runtime");
+    drop(status);
+    let accepted = connect(root.path())
+        .request_shutdown()
+        .expect("the idle Runtime accepts the first shutdown request");
+    assert_eq!(accepted.state(), RuntimeReceiptState::Admitted);
+
+    let closing = Instant::now();
+    let exit = loop {
+        if let Some(exit) = child.0.try_wait().expect("close exit") {
+            break exit;
+        }
+        assert!(
+            closing.elapsed() < Duration::from_secs(30),
+            "the requested close did not finish"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    reader.join().expect("stderr reader");
+    stderr_lines.extend(received.try_iter());
+    let stderr = stderr_lines.join("\n");
+    assert!(
+        exit.success(),
+        "a requested close exits 0: {exit}: {stderr}"
+    );
+    let outcomes = stderr_lines
+        .iter()
+        .filter_map(|line| daemon_outcome_code(line))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|code| code.as_str() == "runtime_ready")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(
+        outcomes.last().map(String::as_str),
+        Some("runtime_stopped"),
+        "{stderr}"
+    );
+}
+
 /// Workflow #317 sc3: the legacy physical policy instance's startup preparation cannot connect
 /// (its ADB tool does not exist), so its self-check fails and the policy never dispatches to it:
 /// the intent / admission / lease path of a physical instance needs a passing self-check first.

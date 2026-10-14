@@ -1530,6 +1530,7 @@ impl RuntimeHost {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
             lifecycle_admission: Mutex::new(lifecycle_admission),
+            lifecycle_settled: Condvar::new(),
             scheduler: Arc::new(Mutex::new(scheduler)),
             policy: OnceLock::new(),
             performance: Mutex::new(performance),
@@ -4028,6 +4029,9 @@ struct HostShared {
     shutdown_target: actingcommand_contract::RuntimeShutdownTarget,
     // One owner serializes root admission, drain, held startup and exact-owner shutdown.
     lifecycle_admission: Mutex<installation::LifecycleAdmission>,
+    // Paired with `lifecycle_admission`: signalled when the last lifecycle work in flight ends,
+    // for a shutdown request that lets it end before it is decided (`settle_for_shutdown`).
+    lifecycle_settled: Condvar,
     scheduler: Arc<Mutex<SeedScheduler>>,
     // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     // A policy admission takes `policy` after `policy_outcome_gate` and holds it without a
