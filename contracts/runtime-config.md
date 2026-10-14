@@ -67,7 +67,11 @@ read once at assembly). P-c's rows: the `performance` section below. Workflow #3
 the `scheduling` section below. Workflow #398 RD-1b's row: the per-instance `device_kind` (string
 `emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
 at assembly; [device-binding.md](device-binding.md)), present only for an instance that names
-`device`. A manifest key the table does not have fails the start (`config_key_unknown`). The
+`device`. Workflow #369 S6a's row: the per-instance `start_emulator` (boolean, from the entry's
+`start_emulator`, default `none`, so a file that does not name it leaves it off and reports no
+row; not settable, read once at assembly; allowed only on a discovery-bound instance,
+`start_emulator_requires_discovery_binding`, [actingd-check-config.md](actingd-check-config.md));
+the daemon acts on it from S6c on. A manifest key the table does not have fails the start (`config_key_unknown`). The
 manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
 `performance`, `scheduling`), then each instance's per-instance keys together.
 

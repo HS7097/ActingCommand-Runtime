@@ -12,4 +12,5 @@ publish = false
 actingcommand-contract = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+# Workflow #369 S6a (from #361 P3): the operating system's connectivity hint, resolved at run time.
+windows-sys = { workspace = true, features = ["Win32_Networking_WinSock", "Win32_System_LibraryLoader"] }

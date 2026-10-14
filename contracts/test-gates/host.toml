@@ -568,3 +568,14 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# Workflow #369 S6a: start_emulator is off unless an instance names it and is allowed only on a discovery-bound instance; check-config shows it on each discovery-bound entry and in the manifest (explicit, not settable); the operating system's connectivity level maps to internet, no internet or unknown
+[[gate]]
+key = "63"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::start_emulator_requires_a_discovery_binding",
+    "actingcommand-actingd::process::s6a_check_config_shows_start_emulator",
+    "actingcommand-host-metrics::lib::windows::tests::s6a_each_connectivity_level_maps_to_its_state",
+]
+incident = ["#369"]
