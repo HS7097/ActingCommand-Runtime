@@ -489,13 +489,14 @@ fn tc_5_calibration_values_that_break_a_rule_are_refused_naming_the_key() {
     }
 }
 
-/// Coordinator ruling (2026-10-14) on the curve's length: at most 8 points, the largest count
-/// whose `config.parameters` text stays within 1 024 bytes for every curve the other rules allow.
-/// The longest curve of 8 points is accepted with its text within 1 024 bytes (the longest of 9
-/// would pass it); 9 points are refused, at start as `perf_config_invalid` and through an
-/// instruction as `config_value_invalid`, both `out_of_range` and naming the curve.
+/// Coordinator ruling (2026-10-14) on the curve's length: at most 70 points, the largest count
+/// whose serialized JSON fits the 8 KiB `ConfigureSettings` value limit for every curve the other
+/// rules allow. The longest curve of 70 points is accepted by file and by instruction, its text
+/// within 8 KiB (the longest of 71 is not); 71 points are refused, at start as
+/// `perf_config_invalid` and through an instruction as `config_value_invalid`, both
+/// `out_of_range` and naming the curve.
 #[test]
-fn a_curve_of_eight_points_is_accepted_and_nine_are_refused_by_file_and_by_instruction() {
+fn a_curve_of_seventy_points_is_accepted_and_seventy_one_are_refused_by_file_and_by_instruction() {
     const CURVE: &str = "performance.pacing.curve";
     const LONGEST: i64 = i64::MAX;
     // The longest text the other rules allow: `r_bp` 10 000 first, four digits in between and 0
@@ -515,7 +516,8 @@ fn a_curve_of_eight_points_is_accepted_and_nine_are_refused_by_file_and_by_instr
                 .collect(),
         )
     };
-    assert!(canonical_json(&curve(9)).len() > 1_024);
+    let limit = actingcommand_contract::MAX_CONFIG_SETTING_VALUE_BYTES;
+    assert!(canonical_json(&curve(71)).len() > limit);
     let change = |curve: Value| ConfigSettingChange {
         key: CURVE.to_owned(),
         value: Some(curve),
@@ -527,17 +529,24 @@ fn a_curve_of_eight_points_is_accepted_and_nine_are_refused_by_file_and_by_instr
     };
 
     // By file.
-    let accepted = from_file(json!({"pacing": {"max_factor_milli": LONGEST, "curve": curve(8)}}));
+    let accepted = from_file(json!({"pacing": {"max_factor_milli": LONGEST, "curve": curve(70)}}));
     accepted
         .check(&context())
-        .expect("eight points are accepted");
+        .expect("seventy points are accepted");
     let Some(FactScalar::String(text)) = accepted.value(CURVE) else {
         panic!("the curve is reported as text");
     };
-    assert!(text.len() <= 1_024, "{} bytes", text.len());
-    let refused = from_file(json!({"pacing": {"max_factor_milli": LONGEST, "curve": curve(9)}}))
+    assert!(text.len() <= limit, "{} bytes", text.len());
+    assert!(
+        serde_json::to_vec(&curve(70))
+            .expect("the curve serializes")
+            .len()
+            <= limit,
+        "the instruction's value fits"
+    );
+    let refused = from_file(json!({"pacing": {"max_factor_milli": LONGEST, "curve": curve(71)}}))
         .check(&context())
-        .expect_err("nine points are refused");
+        .expect_err("seventy-one points are refused");
     assert_eq!(
         (
             refused.failure_code(),
@@ -554,12 +563,12 @@ fn a_curve_of_eight_points_is_accepted_and_nine_are_refused_by_file_and_by_instr
     // By instruction: the curve is settable.
     let running = from_file(json!({"pacing": {"max_factor_milli": LONGEST}}));
     let applied = running
-        .apply(&[change(curve(8))], &stamp, &context())
-        .expect("eight points by instruction");
+        .apply(&[change(curve(70))], &stamp, &context())
+        .expect("seventy points by instruction");
     assert_eq!(applied.config.value(CURVE), accepted.value(CURVE));
     let refused = running
-        .apply(&[change(curve(9))], &stamp, &context())
-        .expect_err("nine points by instruction are refused");
+        .apply(&[change(curve(71))], &stamp, &context())
+        .expect_err("seventy-one points by instruction are refused");
     assert_eq!(
         (
             refused.failure_code(),

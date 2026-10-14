@@ -51,12 +51,13 @@ const PRESSURE_KINDS: &[&str] = &[
 ];
 
 /// The most points a curve may have (coordinator ruling, 2026-10-14): the largest count whose
-/// `config.parameters` text, the curve's canonical JSON, stays within 1 024 bytes for every curve
-/// the other rules allow. The longest such text puts `extra_retries` and `factor_milli` at
-/// `i64::MAX` (19 digits, with `max_factor_milli` there too), every share at 1 000, `r_bp` at
-/// 10 000 first, four digits in between and 0 last: 117 × points − 1 bytes, so 8 points take 935
-/// bytes and 9 take 1 052.
-pub const MAX_CURVE_POINTS: usize = 8;
+/// serialized JSON fits the `ConfigureSettings` value limit (8 KiB,
+/// `actingcommand_contract::MAX_CONFIG_SETTING_VALUE_BYTES`) for every curve the other rules
+/// allow, so any curve a configuration file may hold can also be sent by an instruction. The
+/// longest such text puts `extra_retries` and `factor_milli` at `i64::MAX` (19 digits, with
+/// `max_factor_milli` there too), every share at 1 000, `r_bp` at 10 000 first, four digits in
+/// between and 0 last: 117 × points − 1 bytes, so 70 points take 8 189 bytes and 71 take 8 306.
+pub const MAX_CURVE_POINTS: usize = 70;
 
 /// The first and last `r_bp` of a curve.
 const CURVE_TOP_BP: i64 = 10_000;

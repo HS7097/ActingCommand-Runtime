@@ -358,8 +358,8 @@ P-c brings the `performance` section of `crates/runtime-config` (one file per su
 
 Configuration keys (§5): the `performance.*` rows of §5, every key of PERF §10, parsed, checked and
 defaulted in `distribution/windows/actingd.defaults.json`. §5's §10.4 count is corrected to 19
-(`bounds.*` are four keys). `performance.pacing.curve` holds at most 8 points (coordinator
-ruling 2026-10-14). Deviations from §5's spellings: the pressure streaks keep their
+(`bounds.*` are four keys). `performance.pacing.curve` holds at most 70 points (coordinator
+ruling 2026-10-14: the 8 KiB `ConfigureSettings` value limit). Deviations from §5's spellings: the pressure streaks keep their
 file members, so their keys are `performance.pressure_start_samples` / `_end_samples` rather than
 `performance.pressure.start_samples` / `.end_samples`; the stage boundaries are
 `performance.calibration.bounds.s1` to `.s4` (PERF writes `bounds.S1`; a configuration key is a

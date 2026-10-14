@@ -156,7 +156,7 @@ configuration nor any installer writes a performance key.
 |---|---|---|
 | `performance.monitor.*`, `performance.load.*`, `performance.pressure.*`, `performance.pressure_start_samples`, `performance.pressure_end_samples` (`src/performance/monitor.rs`) | PERF §10.1, 15 keys: sampling period (1 000..=5 000 ms), context window, summary interval, sample bounds, process coverage, failures, control freshness, stutter gap, heavy load threshold, the two pressure streaks (1..=30), `pressure.thresholds` and `pressure.severity` (objects), `pressure.gpu_aggregate` (`max_engine_type` \| `sum`) | the streaks: the start-up assembly, as before (their file members are unchanged); the rest: P-m |
 | `performance.responsiveness.*` (`src/performance/responsiveness.rs`) | PERF §10.2, 37 keys: window, smoothing, staleness, the timer and message probes, the capture, touch, recognition and page-settle signals (per-backend initial baselines are objects with a `default` member), the baseline | P-m |
-| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 8 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*` | `heavy_dispatch_limit.*` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants); the rest: P-m, P-k, P-s, P-h |
+| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*` | `heavy_dispatch_limit.*` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants); the rest: P-m, P-k, P-s, P-h |
 | `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | P-a |
 
 - **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5); every other
@@ -164,9 +164,10 @@ configuration nor any installer writes a performance key.
   particular is a person's configuration, never an instruction (PERF §4.6).
 - **Whole-section check** (`perf_config_invalid`, `config_key` and `config_value_problem`; through
   an instruction `config_value_invalid` with the same key and problem): the curve has at most
-  **8 points** (`out_of_range` beyond; coordinator ruling 2026-10-14: 8 is the largest count
-  whose `config.parameters` text stays within 1 024 bytes for every curve these rules allow, the
-  longest being 117 × points − 1 bytes, 935 for 8) and runs from
+  **70 points** (`out_of_range` beyond; coordinator ruling 2026-10-14: 70 is the largest count
+  whose serialized JSON fits the 8 KiB `ConfigureSettings` value limit for every curve these
+  rules allow, the longest being 117 × points − 1 bytes, 8 189 for 70 and 8 306 for 71, so any
+  curve a file may hold can also be sent by an instruction) and runs from
   `r_bp` 10 000 down to 0, strictly falling; each point is `{r_bp, stage, factor_milli,
   extra_retries, share_milli}`, its factor within 1 000 and `max_factor_milli`, its share within
   0 and 1 000, its stage S0 to S3; as R falls the factor never falls, the share never rises and
