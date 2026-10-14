@@ -1306,6 +1306,35 @@ impl InstanceFactStore {
             .max_by_key(|record| scope_specificity(&record.scope))
     }
 
+    /// The active records that apply to one instance (Workflow #389 MCP-4): its own, and those
+    /// of its server and game when `shared` names them (server, game); ordered as `snapshot`
+    /// orders them, by key, then by scope.
+    pub(crate) fn instance_records(
+        &self,
+        instance_alias: &str,
+        shared: Option<(&str, &str)>,
+    ) -> Vec<FactRecord> {
+        let mut records = self
+            .active
+            .values()
+            .map(|stored| &stored.record)
+            .filter(|record| match &record.scope {
+                FactScope::Instance { instance_id } => instance_id == instance_alias,
+                FactScope::Server { server_id } => {
+                    shared.is_some_and(|(server, _)| server == server_id)
+                }
+                FactScope::Game { game_id } => shared.is_some_and(|(_, game)| game == game_id),
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then_with(|| left.scope.cmp(&right.scope))
+        });
+        records
+    }
+
     pub(crate) fn snapshot(
         &self,
         context: InstanceFactContext,

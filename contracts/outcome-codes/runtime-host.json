@@ -16494,6 +16494,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_fact_snapshot_too_large_for_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An InstanceFactSnapshot read (Workflow #389 MCP-4) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "runtime_fact_stale": {
       "category": "error",
       "ladder_class": "none",

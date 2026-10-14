@@ -333,14 +333,16 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
         "the instance is pending: {status}"
     );
     assert!(facts.status.success(), "{}", describe(&facts));
-    // The line is the snapshot's members beside `outcome` (Workflow #378 A5).
+    // The line is the `ac_facts` answer beside `outcome` (Workflow #378 A5); the store is its
+    // `snapshot` member (Workflow #389 MCP-4, command table §4.4).
     let mut facts: Value = serde_json::from_slice(&facts.stdout).expect("facts JSON");
     let outcome = facts
         .as_object_mut()
         .and_then(|members| members.remove("outcome"))
         .expect("the facts line's outcome");
     assert_eq!(outcome["code"], "runtime_facts_reported", "{outcome}");
-    let facts: RuntimeFactSnapshot = serde_json::from_value(facts).expect("facts snapshot");
+    let facts: RuntimeFactSnapshot =
+        serde_json::from_value(facts["snapshot"].clone()).expect("facts snapshot");
     assert!(
         !facts.records.iter().any(|record| {
             record.key == "device.connected" && record.value == FactValue::Boolean(true)

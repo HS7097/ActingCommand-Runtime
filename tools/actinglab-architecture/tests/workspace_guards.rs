@@ -3612,6 +3612,8 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "ConfigureSettings",
     "Health",
     "Input",
+    // Workflow #389 MCP-4 (register W2): a general read from memory, like Status.
+    "InstanceFactSnapshot",
     "LoadPack",
     "MonitorStatus",
     "ObserveContainedPage",

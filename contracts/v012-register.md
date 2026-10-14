@@ -490,6 +490,16 @@ RD-5b and RD-4.
 The register-only rows of the re-check are in §3 (W7, W13) and §4 (X10's keys,
 `host.kept_folder_cleared`).
 
+### 1.27 Wave 8 slice MCP-4 (#389, MCP-0 command table v1.1 §4.4)
+
+MCP-4 brings the read kind of §3 W2 and the one read output below; neither is a ledger shape, and
+no persisted record changes ([runtime-interface.md](runtime-interface.md), the actingctl and MCP
+tables; [instance-fact-store.md](instance-fact-store.md), "Reading the seeds").
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| M41 | `actingctl facts --program`, `facts --instance <selector>` and `status --config` ↔ `ac_facts` (`scope` program, instance or config; `instance`; `key_prefix`): `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}` | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | MCP-4 | MCP-4 | `snapshot` is the `RuntimeFactSnapshot` (program) or the instance's `InstanceFactView` (W2); `records` the `config.*` records (config); `read_at_unix_ms` is the Runtime's clock at the read (the snapshot's `taken_at_unix_ms`, the instance read's `sampled_completed_at_unix_ms`); `records_total` counts the records read, `records_kept` those answered after `key_prefix` (program and instance only); the selector is the alias, instance_id or ADB port, resolved with one status read; MCP exports an answer past its output budget (`answer_exported`); CLI success codes `runtime_facts_reported`, `instance_facts_reported` (new) and `runtime_config_reported` |
+
 ### 1.30 Wave 8 slice L-5b (#382: the K/T remnants L-5 left)
 
 L-5b removes what is left of the retired K/T policy (Workflow #382 L-5, after #375 R5d) and
@@ -532,7 +542,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | # | Shape | Revision | Slice | Notes |
 |---|---|---|---|---|
 | W1 | `RuntimeStateSource` = `{instance_facts? {lineage, revision}, runtime_facts? {lineage, revision}, ledger_committed_head, sampled_started_at_unix_ms, sampled_completed_at_unix_ms}` | runtime-client 2 | AO-4q | replaces `{event_id, sequence}`; store fields absent before AO-3 and readers accept that; status queries stop appending records; **done (AO-4q):** each store field is a `RuntimeStateStoreRevision {lineage (owner epoch), revision}`; `Status`, `MonitorStatus`, `ProjectInterface` and `DiscoverInstances` append nothing on success and read the committed head inside the sampling interval ([runtime-state-observation.md](runtime-state-observation.md)); a discovery refusal still records its refusal |
-| W2 | `RuntimeOperation::InstanceFactSnapshot { instance }` → `RuntimeResult::InstanceFactSnapshot { snapshot, source }` | runtime-client 2 | MCP-4 | general read, one instance's facts with observation and expiry times and the resolved scope; a new kind, not a parameter of `RuntimeFactSnapshot` (that kind stays field-less); U-1's classification table gains the row |
+| W2 | `RuntimeOperation::InstanceFactSnapshot { instance }` → `RuntimeResult::InstanceFactSnapshot { snapshot, source }` | runtime-client 2 | MCP-4 | general read, one instance's facts with observation and expiry times and the resolved scope; a new kind, not a parameter of `RuntimeFactSnapshot` (that kind stays field-less); U-1's classification table gains the row; **done (MCP-4):** `instance` is the registered instance alias; `snapshot` is an `InstanceFactView {instance_alias, server_id?, game_id?, records}`: the active records of the instance's own scope and of the server and game its configuration binds it to (`server_id` and `game_id` both absent when it binds none, and then only the instance's own records), ordered by key, then scope; the host projection's `ledger_position` and `snapshot_id` never go on the wire (the view is built from the store's records; `contracts/ledger-observer.md` §13); `source` is W1's `RuntimeStateSource` sampled around the read; nothing is appended (U-1 row: general read, no record); a reply past one IPC frame is refused `instance_fact_snapshot_too_large_for_frame`; a completed receipt carries `request_instance_fact_snapshot_completed` |
 | W3 | `ConfigureSettings { changes: [{key, value?}] }` and its receipt `{key, value, source}` | runtime-client 2 | D1b | M387 §5.6 |
 | W4 | `PerformanceYield`, `BlackoutStop` | runtime-client 2 | SH-1 | P7, S2 |
 | W5 | read request `ScheduleExplanation { instance }` | runtime-client 3 | MCP-19 | reserved; per task: trigger, last dispatch, next due, not-run reason, produces, consumes, pools |

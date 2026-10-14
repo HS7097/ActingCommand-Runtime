@@ -168,6 +168,7 @@ runtime_operation_kinds! {
     ProjectPolicyInputIdentity,
     MonitorStatus,
     RuntimeFactSnapshot,
+    InstanceFactSnapshot,
     ConfigureMonitor,
     ClearMonitor,
     AcquireLease,
@@ -239,6 +240,7 @@ impl RuntimeOperationKind {
             Self::Status
             | Self::MonitorStatus
             | Self::RuntimeFactSnapshot
+            | Self::InstanceFactSnapshot
             | Self::ProjectInterface
             | Self::QueryEvents
             | Self::SubscribeEvents
@@ -325,6 +327,7 @@ impl RuntimeOperationKind {
             }
             Self::MonitorStatus => Some(ReceiptCode::MonitorStatusCompleted.code()),
             Self::RuntimeFactSnapshot => Some(ReceiptCode::RuntimeFactSnapshotCompleted.code()),
+            Self::InstanceFactSnapshot => Some(ReceiptCode::InstanceFactSnapshotCompleted.code()),
             Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
             Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
             Self::CancelContainedTask => Some(ReceiptCode::CancelContainedTaskCompleted.code()),
@@ -427,6 +430,7 @@ impl RuntimeOperation {
             Self::ProjectPolicyInputIdentity { .. } => Kind::ProjectPolicyInputIdentity,
             Self::MonitorStatus => Kind::MonitorStatus,
             Self::RuntimeFactSnapshot => Kind::RuntimeFactSnapshot,
+            Self::InstanceFactSnapshot { .. } => Kind::InstanceFactSnapshot,
             Self::ConfigureMonitor { .. } => Kind::ConfigureMonitor,
             Self::ClearMonitor { .. } => Kind::ClearMonitor,
             Self::AcquireLease { .. } => Kind::AcquireLease,
@@ -537,6 +541,9 @@ mod tests {
             K::Status => (General, Some(Read), false),
             K::MonitorStatus => (General, Some(Read), false),
             K::RuntimeFactSnapshot => (General, Some(Read), false),
+            // Workflow #389 MCP-4 (register W2): one instance's facts, a general read that
+            // records nothing.
+            K::InstanceFactSnapshot => (General, Some(Read), false),
             K::ProjectInterface => (General, Some(Read), false),
             K::QueryEvents => (General, Some(Read), false),
             K::SubscribeEvents => (General, Some(Read), false),

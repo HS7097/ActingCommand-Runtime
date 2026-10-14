@@ -9,6 +9,8 @@ mod cli_line;
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
 mod events;
+// Workflow #389 MCP-4: `facts --program | --instance` and `status --config` (MCP `ac_facts`).
+mod facts;
 #[cfg(test)]
 mod gate_381a;
 // Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
@@ -48,7 +50,6 @@ mod diagnose;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    CONFIG_PARAMETERS_FACT_PREFIX, CONFIG_SELECTION_FACT_KEY, CONFIG_SUBSYSTEMS_FACT_KEY,
     CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
     EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord, FactScope,
     InstallTransitionAction, InstallTransitionPhase, MAX_CONFIG_SETTING_CHANGES,
@@ -69,10 +70,10 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
-/// The member a result that is not a JSON object goes under (`status --config` names its own).
+/// The member a result that is not a JSON object goes under.
 const RESULT_MEMBER: &str = "result";
 /// Upper bound for `request-shutdown --wait <seconds>`.
 const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
@@ -440,37 +441,21 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             success,
         ),
         Command::Status => reported(&client.status().map_err(ActingctlError::Runtime)?, success),
-        // The same program-fact read as `facts --program`, reduced to the `config.*` records:
-        // `config.subsystems`, `config.selection` when recorded, and every
-        // `config.parameters.<section>` in key order (Workflow #387 D1b); no new operation.
-        Command::StatusConfig => {
-            let snapshot = client
-                .runtime_fact_snapshot()
-                .map_err(ActingctlError::Runtime)?;
-            let record = |key: &str| snapshot.records.iter().find(|record| record.key == key);
-            let mut sections = snapshot
-                .records
-                .iter()
-                .filter(|record| record.key.starts_with(CONFIG_PARAMETERS_FACT_PREFIX))
-                .collect::<Vec<_>>();
-            if sections.is_empty() {
-                return Err(ActingctlError::ConfigFactsMissing);
-            }
-            sections.sort_by(|left, right| left.key.cmp(&right.key));
-            let mut records =
-                vec![record(CONFIG_SUBSYSTEMS_FACT_KEY).ok_or(ActingctlError::ConfigFactsMissing)?];
-            records.extend(record(CONFIG_SELECTION_FACT_KEY));
-            records.extend(sections);
-            // The records are a list: they go under `records`.
-            Ok(Done::new(
-                result_members(&records, "records")?,
-                Outcome::new(success),
-            ))
-        }
-        Command::ProgramFacts => reported(
-            &client
-                .runtime_fact_snapshot()
-                .map_err(ActingctlError::Runtime)?,
+        // Workflow #389 MCP-4 (command table §4.4): the `ac_facts` answer of each form. `status
+        // --config` is the program-fact read reduced to the `config.*` records (Workflow #387
+        // D1b); `facts --instance` resolves its selector with one status read.
+        Command::StatusConfig => facts_line(&client, &facts::FactsRequest::Config, success),
+        Command::ProgramFacts { key_prefix } => facts_line(
+            &client,
+            &facts::FactsRequest::Program { key_prefix },
+            success,
+        ),
+        Command::InstanceFacts { key_prefix } => facts_line(
+            &client,
+            &facts::FactsRequest::Instance {
+                selector: instance()?.to_owned(),
+                key_prefix,
+            },
             success,
         ),
         Command::MonitorStatus => reported(
@@ -606,6 +591,32 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
 fn reported(result: &impl Serialize, success: ActingctlCode) -> Result<Done, ActingctlError> {
     Ok(Done::new(
         result_members(result, RESULT_MEMBER)?,
+        Outcome::new(success),
+    ))
+}
+
+/// Workflow #389 MCP-4: the line of `facts` and `status --config`, the `ac_facts` result of the
+/// same read beside the outcome `success`.
+fn facts_line(
+    client: &RuntimeClient,
+    request: &facts::FactsRequest,
+    success: ActingctlCode,
+) -> Result<Done, ActingctlError> {
+    let answer = facts::read(client, request).map_err(|failure| match failure {
+        facts::Failure::Selector {
+            miss: SelectorMiss::Unknown,
+            selector,
+        } => ActingctlError::InstanceUnknown(selector),
+        facts::Failure::Selector {
+            miss: SelectorMiss::Ambiguous,
+            selector,
+        } => ActingctlError::InstanceAmbiguous(selector),
+        facts::Failure::ConfigFactsMissing => ActingctlError::ConfigFactsMissing,
+        facts::Failure::Runtime(error) => ActingctlError::Runtime(error),
+        facts::Failure::Output(error) => ActingctlError::Output(error),
+    })?;
+    Ok(Done::new(
+        result_members(&answer, RESULT_MEMBER)?,
         Outcome::new(success),
     ))
 }
@@ -843,7 +854,14 @@ enum Command {
     ConfigureSettings {
         changes: Vec<ConfigSettingChange>,
     },
-    ProgramFacts,
+    /// `facts --program [--key-prefix <prefix>]`.
+    ProgramFacts {
+        key_prefix: Option<String>,
+    },
+    /// `facts --instance <selector> [--key-prefix <prefix>]` (Workflow #389 MCP-4).
+    InstanceFacts {
+        key_prefix: Option<String>,
+    },
     MonitorStatus,
     MonitorSet {
         policy: RuntimeMonitorPolicy,
@@ -920,6 +938,7 @@ impl Invocation {
         let mut recovery_enabled = false;
         let mut program = false;
         let mut config = false;
+        let mut key_prefix = None;
         let mut record_file = None;
         let mut policy_file = None;
         let mut shutdown_wait = None;
@@ -1055,6 +1074,16 @@ impl Invocation {
                 "--recover" => recovery_enabled = true,
                 "--program" => program = true,
                 "--config" => config = true,
+                "--key-prefix" => {
+                    let prefix = require_text(&arguments, &mut index)?;
+                    if prefix.is_empty() {
+                        return Err(ActingctlError::argument(
+                            flag,
+                            ArgumentProblem::ValueMissing,
+                        ));
+                    }
+                    key_prefix = Some(prefix);
+                }
                 // Every flag of the table has its arm.
                 _ => return Err(ActingctlError::Usage),
             }
@@ -1099,13 +1128,18 @@ impl Invocation {
                 }
             }
             "status" => Command::Status,
-            "facts" => {
-                // The per-instance read is not built; only the program store is readable.
-                if !program {
-                    return Err(ActingctlError::Usage);
+            // Workflow #389 MCP-4: the program store or one instance, never both.
+            "facts" => match (program, instance.is_some()) {
+                (true, false) => Command::ProgramFacts { key_prefix },
+                (false, true) => Command::InstanceFacts { key_prefix },
+                (true, true) => {
+                    return Err(ActingctlError::argument(
+                        "--instance",
+                        ArgumentProblem::Conflicting,
+                    ));
                 }
-                Command::ProgramFacts
-            }
+                (false, false) => return Err(ActingctlError::Usage),
+            },
             "monitor-status" => Command::MonitorStatus,
             "monitor-set" => Command::MonitorSet {
                 policy: RuntimeMonitorPolicy::new(
@@ -1198,7 +1232,8 @@ impl Command {
             Self::Status => ActingctlCode::RuntimeStatusReported,
             Self::StatusConfig => ActingctlCode::RuntimeConfigReported,
             Self::ConfigureSettings { .. } => ActingctlCode::ConfigSettingsChanged,
-            Self::ProgramFacts => ActingctlCode::RuntimeFactsReported,
+            Self::ProgramFacts { .. } => ActingctlCode::RuntimeFactsReported,
+            Self::InstanceFacts { .. } => ActingctlCode::InstanceFactsReported,
             Self::MonitorStatus => ActingctlCode::MonitorStatusReported,
             Self::MonitorSet { .. } => ActingctlCode::MonitorPolicySet,
             Self::MonitorClear => ActingctlCode::MonitorPolicyCleared,
@@ -1230,7 +1265,7 @@ impl Command {
             Self::Status
                 | Self::StatusConfig
                 | Self::ConfigureSettings { .. }
-                | Self::ProgramFacts
+                | Self::ProgramFacts { .. }
                 | Self::MonitorStatus
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
@@ -1258,7 +1293,7 @@ fn flags_of(command: &str, emulator_action: Option<&str>) -> Option<&'static [&'
         "request-shutdown" => &["--state-root", "--wait"],
         "install-transition" => &["--state-root", "--action-json", "--wait"],
         "status" => &["--state-root", "--config"],
-        "facts" => &["--state-root", "--program"],
+        "facts" => &["--state-root", "--program", "--instance", "--key-prefix"],
         "monitor-set" => &[
             "--state-root",
             "--instance",
@@ -1385,6 +1420,8 @@ enum ActingctlError {
     },
     /// The runtime status lists no instance with this alias.
     InstanceUnknown(String),
+    /// Workflow #389 MCP-4: more than one instance of the runtime status matches this selector.
+    InstanceAmbiguous(String),
     /// `task-offset` without `--instance`: the registered instances do not name exactly one
     /// configured game.
     TaskOffsetScopeAmbiguous,
@@ -1432,6 +1469,7 @@ impl ActingctlError {
                 problem.attach(Outcome::new(ActingctlCode::ResourceTargetsFileInvalid).path(path))
             }
             Self::InstanceUnknown(alias) => SelectorMiss::Unknown.outcome(alias),
+            Self::InstanceAmbiguous(selector) => SelectorMiss::Ambiguous.outcome(selector),
             Self::TaskOffsetScopeAmbiguous => Outcome::new(ActingctlCode::TaskOffsetScopeAmbiguous),
             Self::PriorityOffsetInvalid(error) => Outcome::new(SharedCode::PriorityOffsetInvalid)
                 .caused_by(Outcome::new(error.code())),
@@ -1462,6 +1500,8 @@ impl fmt::Display for ActingctlError {
             Self::InstanceUnknown(_) => {
                 formatter.write_str("the runtime status lists no instance with that alias")
             }
+            Self::InstanceAmbiguous(_) => formatter
+                .write_str("more than one instance of the runtime status matches that selector"),
             Self::TaskOffsetScopeAmbiguous => formatter.write_str(
                 "the registered instances do not name exactly one configured game; pass --instance <alias>",
             ),
@@ -1712,7 +1752,7 @@ mod tests {
     #[test]
     fn every_command_has_its_success_code_and_every_failure_its_code() {
         let package_ref = "0".repeat(64);
-        let commands: [(&[&str], &str); 23] = [
+        let commands: [(&[&str], &str); 24] = [
             (
                 &["agent-publish-facts", "--record-file", "observation.json"],
                 "agent_facts_published",
@@ -1757,6 +1797,10 @@ mod tests {
                 "config_settings_changed",
             ),
             (&["facts", "--program"], "runtime_facts_reported"),
+            (
+                &["facts", "--instance", "neutral.instance"],
+                "instance_facts_reported",
+            ),
             (&["monitor-status"], "monitor_status_reported"),
             (
                 &["monitor-set", "--instance", "neutral.instance"],
@@ -1863,6 +1907,11 @@ mod tests {
             (
                 ActingctlError::InstanceUnknown("neutral.instance".to_owned()),
                 "instance_unknown",
+                None,
+            ),
+            (
+                ActingctlError::InstanceAmbiguous("neutral.instance".to_owned()),
+                "instance_ambiguous",
                 None,
             ),
             (

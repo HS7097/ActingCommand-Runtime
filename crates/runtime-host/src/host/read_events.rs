@@ -363,17 +363,12 @@ impl HostShared {
     /// Samples a status read from memory (Workflow #383 AO-4q). It appends no ledger record:
     /// the source names the ledger's committed head, read inside the sampling interval, and the
     /// interval itself (register W1). The two stores' (lineage, revision) stay absent until
-    /// AO-3 gives the stores their revisions.
-    pub(super) fn observe_runtime_state(
+    /// AO-3 gives the stores their revisions. Workflow #389 MCP-4: the instance fact read samples
+    /// its answer the same way.
+    pub(super) fn observe_runtime_state<T>(
         &self,
-        sample: impl FnOnce() -> Result<actingcommand_contract::RuntimeObservedState, RequestFailure>,
-    ) -> Result<
-        (
-            actingcommand_contract::RuntimeObservedState,
-            actingcommand_contract::RuntimeStateSource,
-        ),
-        RequestFailure,
-    > {
+        sample: impl FnOnce() -> Result<T, RequestFailure>,
+    ) -> Result<(T, actingcommand_contract::RuntimeStateSource), RequestFailure> {
         let sampled_started_at_unix_ms = self
             .clock
             .sample()

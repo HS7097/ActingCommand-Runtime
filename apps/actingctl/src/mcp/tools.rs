@@ -526,6 +526,22 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::packs::run,
     },
     // ---- Workflow #389 MCP-11 (end) ----
+    // ---- Workflow #389 MCP-4 (begin): `ac_facts` ↔ `actingctl facts --program | --instance`
+    // and `status --config`; observer before U-3, a general read after it (command table
+    // §4.4). ----
+    ToolDef {
+        name: "ac_facts",
+        title: "Runtime and instance facts",
+        tier: Tier::Observer,
+        description: super::facts::DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::facts::input,
+        result_schema: super::facts::result,
+        run: super::facts::run,
+    },
+    // ---- Workflow #389 MCP-4 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",

@@ -3469,6 +3469,14 @@
       "since": "0.12.0",
       "description": "A runtime client operation: runtime fact snapshot."
     },
+    "runtime_instance_fact_snapshot": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: one instance's facts (InstanceFactSnapshot, Workflow #389 MCP-4)."
+    },
     "runtime_project_interface": {
       "owner": "runtime-client",
       "layer": "client",

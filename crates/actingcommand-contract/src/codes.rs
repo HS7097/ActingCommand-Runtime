@@ -169,6 +169,8 @@ crate::outcome_codes! {
         ApplyResourceTargetsCompleted => "request_apply_resource_targets_completed": success / none,
         ResourceTargetViewCompleted => "request_resource_target_view_completed": success / none,
         ConfigureSettingsCompleted => "request_configure_settings_completed": success / none,
+        // Workflow #389 MCP-4 (register W2).
+        InstanceFactSnapshotCompleted => "request_instance_fact_snapshot_completed": success / none,
     }
 }
 

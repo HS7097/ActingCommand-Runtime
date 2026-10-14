@@ -452,10 +452,30 @@ a fatal refusal marks the Runtime fatal as every `publish_facts` does.
 
 ## Reading the seeds
 
-The per-instance read (`actingctl facts` without `--program`) is not built.
 The seeds are visible as `fact.published` events of origin module `fact-store`
-and source `runtime` in the ledger, and through `RuntimeHost::instance_fact_snapshot`
-for one instance context.
+and source `runtime` in the ledger, through `RuntimeHost::instance_fact_snapshot`
+for one instance context, and through the general read below.
+
+**The instance fact read** (Workflow #389 MCP-4, [v0.12.0 register](v012-register.md) W2).
+`RuntimeOperation::InstanceFactSnapshot { instance }` names a registered instance alias
+(another is refused `instance_unknown`) and answers `RuntimeResult::InstanceFactSnapshot
+{ snapshot, source }`. `snapshot` is an `InstanceFactView {instance_alias, server_id?,
+game_id?, records}`: every active record of the instance's own scope and of the server and
+game its policy identity binds it to (`policy.facts.instances`), read under the
+`fact_write_gate` after the store caught up with the ledger, ordered by key, then scope. A
+Runtime without a policy section binds no server and no game: both are absent and only the
+instance's own records apply. The view carries no ledger position and no snapshot id
+([ledger-observer.md](ledger-observer.md) §13); `source` is the read's
+`RuntimeStateSource` (register W1, [runtime-state-observation.md](runtime-state-observation.md)).
+The read appends nothing; a reply larger than the host's `maximum_frame_bytes` is refused
+`instance_fact_snapshot_too_large_for_frame` (receipt state `denied`, not fatal).
+
+`actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root>
+[--key-prefix <prefix>]` and MCP `ac_facts` with `scope` `instance` resolve the selector with
+one status read and print `{scope, read_at_unix_ms, snapshot, records_total, records_kept}`:
+`read_at_unix_ms` is the source's `sampled_completed_at_unix_ms`, against which each record's
+`observed_at_unix_ms` and `expires_at_unix_ms` tell its freshness; `--key-prefix` keeps only
+the records whose key starts with it.
 
 ## Capacity ledger (Workflow #383 AO-0)
 

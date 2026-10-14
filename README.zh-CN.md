@@ -250,6 +250,7 @@ actingcommand-actingd --config runtime.json
 actingctl status --state-root <state-root>
 actingctl status --config --state-root <state-root>     # 只取 config.* 程序事实：subsystems、selection、parameters.<section>
 actingctl facts --program --state-root <state-root>
+actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root> [--key-prefix <prefix>]   # 一个实例的事实
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>
 actingctl reset --state-root <state-root> --instance <alias>
