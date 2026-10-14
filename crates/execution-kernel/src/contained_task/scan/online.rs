@@ -20,7 +20,6 @@ use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
     PageObservation, PreparedContainedTask, TaskOperation, sample_geometry_matches, sampled_swipe,
-    selection,
 };
 use crate::{InputFrameContext, ObservedFrame};
 use actingcommand_contract::codes::SharedCode;
@@ -59,6 +58,8 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     step_index: u32,
     timing: ContainedTaskTimingContext,
     started: Instant,
+    /// The scan's deadline on the observation clock: candidate sampling stops at it.
+    deadline: Instant,
     /// The step's dispatched frame F1.
     first: &'s PageObservation,
     latest: Option<PageObservation>,
@@ -77,7 +78,12 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
         scan: &'s ScanDeclaration,
         layout: &'s CandidateLayout,
         first: &'s PageObservation,
-        (step_index, timing, action_seed): (u32, ContainedTaskTimingContext, Option<u64>),
+        (step_index, timing, deadline, action_seed): (
+            u32,
+            ContainedTaskTimingContext,
+            Instant,
+            Option<u64>,
+        ),
         replay: bool,
     ) -> Self {
         let started = runtime.observation_now();
@@ -90,6 +96,7 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
             step_index,
             timing,
             started,
+            deadline,
             first,
             latest: None,
             guard: None,
@@ -219,7 +226,11 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             let boundary = TaskTimingBoundary::PageRecognitionWait;
             let identity = self.runtime.task_boundary_identity(boundary);
             let started = Instant::now();
-            std::thread::sleep(interval);
+            // The wait never runs past the scan's deadline; the session fails at it.
+            let left = self
+                .deadline
+                .saturating_duration_since(self.runtime.observation_now());
+            std::thread::sleep(interval.min(left));
             let ended = Instant::now();
             self.runtime
                 .observe_task_boundary(ContainedTaskBoundaryTiming {
@@ -284,8 +295,14 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             &mut *self.runtime,
             Some(self.timing),
         )?;
-        let projection =
-            selection::project(&self.task.evaluator, &observation.scene, &self.layout.id)?;
+        let (projection, _) = self.task.project_transaction(
+            &mut *self.runtime,
+            self.operation,
+            observation,
+            self.layout,
+            self.timing,
+            self.deadline,
+        )?;
         let start_check = self.check(&observation.scene, &self.scan.start.check)?;
         let end_check = self.check(&observation.scene, &self.scan.end.check)?;
         let instances = projection
@@ -456,8 +473,8 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
         .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID.code()))?;
     let started = runtime.observation_now();
     let budget = Duration::from_millis(scan.bounds.max_ms);
-    let timing =
-        ContainedTaskTimingContext::new(started, started + budget, TaskTimingBudgetOrigin::Task);
+    let deadline = started + budget;
+    let timing = ContainedTaskTimingContext::new(started, deadline, TaskTimingBudgetOrigin::Task);
     let first = match task.capture_frame(&mut *runtime, None, None, timing, None, None)? {
         Some(first)
             if crate::page_anchor_matches(
@@ -498,7 +515,7 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
         scan,
         layout,
         &first,
-        (0, timing, None),
+        (0, timing, deadline, None),
         replay,
     );
     let end = session.run(&mut source)?;

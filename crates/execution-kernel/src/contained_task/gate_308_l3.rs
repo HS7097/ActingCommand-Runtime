@@ -1235,7 +1235,7 @@ mod kernel_path {
             y2: 25,
             duration_ms: 300,
         };
-        assert_eq!(runtime.inputs, [swipe.clone()]);
+        assert_eq!(runtime.inputs, std::slice::from_ref(&swipe));
         let intents = runtime
             .traces
             .iter()

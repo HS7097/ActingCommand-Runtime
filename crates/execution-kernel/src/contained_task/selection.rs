@@ -417,9 +417,8 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
     Ok(())
 }
 
-/// The layout's candidate projection on one scene; a projection failure keeps its code. A scan
-/// session (Workflow #308 SEL-L3) projects each viewport frame with it.
-pub(super) fn project(
+/// The layout's candidate projection on one scene; a projection failure keeps its code.
+fn project(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     layout_id: &str,
@@ -638,7 +637,10 @@ type Confirmation<E> = (
 );
 
 impl PreparedContainedTask {
-    fn project_transaction<R: ContainedTaskRuntime>(
+    /// The layout's projection on `first` as a select step takes it: candidate sampling and
+    /// its budget against `deadline`, every candidate evaluation recorded. A scan session
+    /// (Workflow #308 SEL-L3) projects each viewport frame with it.
+    pub(super) fn project_transaction<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         operation: &TaskOperation,

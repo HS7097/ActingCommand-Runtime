@@ -738,24 +738,33 @@ fn early_stop_inputs(
     policy: &SelectionPolicy,
     facts: &SelectionFactSnapshot,
     now_unix_ms: u64,
-) -> Result<EarlyStop, String> {
+) -> Result<EarlyStop, ContainedTaskError> {
+    let invalid = |detail: String| {
+        ContainedTaskError::with_detail(
+            SELECT_INVALID.code(),
+            format!("layout={} {detail}", layout.id),
+        )
+    };
     let mut field_domains = BTreeMap::new();
     for field in &policy.fields {
         let feature = layout
             .features
             .iter()
             .find(|feature| feature.name == field.name)
-            .ok_or_else(|| format!("scan early_stop field={} undeclared", field.name))?;
+            .ok_or_else(|| invalid(format!("scan early_stop field={} undeclared", field.name)))?;
         let domain = match feature.value {
             CandidateFeatureValue::Passed => FieldDomain::Boolean,
             CandidateFeatureValue::MeasureMilli => FieldDomain::Integer { min: 0, max: 1000 },
             CandidateFeatureValue::OcrInteger => {
-                let integer = feature
-                    .integer
-                    .ok_or_else(|| format!("scan early_stop field={} range=absent", field.name))?;
+                let integer = feature.integer.ok_or_else(|| {
+                    invalid(format!("scan early_stop field={} range=absent", field.name))
+                })?;
                 let bound = |value: u64| {
                     i64::try_from(value).map_err(|_| {
-                        format!("scan early_stop field={} range=oversized", field.name)
+                        invalid(format!(
+                            "scan early_stop field={} range=oversized",
+                            field.name
+                        ))
                     })
                 };
                 FieldDomain::Integer {
@@ -767,10 +776,10 @@ fn early_stop_inputs(
                 FieldDomain::Identity
             }
             CandidateFeatureValue::Identity => {
-                return Err(format!(
+                return Err(invalid(format!(
                     "scan early_stop field={} identity=not_the_scan_identity",
                     field.name
-                ));
+                )));
             }
         };
         field_domains.insert(field.name.clone(), domain);
@@ -789,9 +798,9 @@ fn early_stop_inputs(
                 .into_iter()
                 .collect::<Vec<_>>()
         })
-        .ok_or_else(|| "scan identity_feature=undeclared".to_owned())?;
+        .ok_or_else(|| invalid("scan identity_feature=undeclared".to_owned()))?;
     let unseen = upper_bound(policy, facts, now_unix_ms, &identities, &field_domains)
-        .map_err(|error| format!("scan early_stop bound={error}"))?;
+        .map_err(|error| invalid(format!("scan early_stop bound={error}")))?;
     Ok(EarlyStop {
         field_domains,
         identities,
@@ -871,10 +880,9 @@ impl<'a> ScanSession<'a> {
             return Err(invalid("scan identity_feature=undeclared"));
         }
         let early_stop = match scan.early_stop {
-            Some(DeclaredEarlyStop::UpperBound) => Some(
-                early_stop_inputs(scan, layout, policy, facts, now_unix_ms)
-                    .map_err(|detail| invalid(&detail))?,
-            ),
+            Some(DeclaredEarlyStop::UpperBound) => {
+                Some(early_stop_inputs(scan, layout, policy, facts, now_unix_ms)?)
+            }
             None => None,
         };
         Ok(Self {
@@ -1580,7 +1588,9 @@ impl<'a> ScanSession<'a> {
         Ok(())
     }
 
-    /// The evaluator's candidate ID of a position: the layout ID and its first-seen index.
+    /// The evaluator's candidate ID of a position within one viewport's evaluation: the layout
+    /// ID and its first-seen index. It only pairs verdicts with positions; SEL-L4b numbers the
+    /// members `{layout}#NN` at `Decide` (S0 §2.6).
     fn candidate_id(&self, position: &Position) -> String {
         format!("{}#{:03}", self.layout_id, position.index)
     }
