@@ -13,7 +13,7 @@ use crate::device_link::{
     WATCH_RESTART_WINDOW_MS,
 };
 use actingcommand_contract::{
-    ConfigParameter, ConfigParameterSource, FactScalar, RuntimeConfigManifest,
+    ConfigParameter, ConfigParameterSource, FactScalar, RecoveryTriggerStage, RuntimeConfigManifest,
 };
 use serde_json::{Value, json};
 
@@ -127,6 +127,14 @@ fn rd2_keys_every_device_link_key_has_its_model_default() {
     assert!(
         excluded.contains(&json!("device_link_lost")),
         "{excluded:?}"
+    );
+    // So under the defaults a run that ends with it starts no ladder (§12 RD-2-T4).
+    let ladder = config
+        .recovery_ladder(&context())
+        .expect("the default ladder");
+    assert_eq!(
+        ladder.classify(RecoveryTriggerStage::Task, "device_link_lost"),
+        TriggerVerdict::Excluded
     );
 
     // `kick_once` is the other offline action.
