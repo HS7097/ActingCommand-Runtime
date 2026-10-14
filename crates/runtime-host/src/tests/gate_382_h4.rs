@@ -37,11 +37,50 @@ const GATE_WAIT: Duration = Duration::from_secs(120);
 const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
 /// The policy driver's re-evaluation after the failed run (§6 step 2, W-1 review M-6): its
 /// `FactsChanged`, one default policy cadence cooldown (1 s) after the evaluation that
-/// dispatched the run.
-const RE_EVALUATION_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 1_000;
+/// dispatched the run and after every record the run wrote.
+const RE_EVALUATION_AFTER_MS: u64 = 1_000;
 /// The next dispatch (§6 step 5): past the fixture catalog's longest activity interval (300 s)
 /// and the task's retry backoff (30 s) after the failed run, inside the same activity window.
-const NEXT_DISPATCH_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 360_000;
+const NEXT_DISPATCH_AFTER_MS: u64 = 360_000;
+
+/// A Runtime clock that moves 1 ms forward at every reading, from the fixture's instant. The
+/// run's records get strictly increasing times, as on a real clock (a fact observed at the same
+/// instant as the one before it, from another source, is refused `fact_observation_not_newer`),
+/// and the test places each evaluation after every record it reads. It never reads the wall
+/// clock.
+struct SteppingClock {
+    unix_ms: AtomicU64,
+    monotonic_ms: AtomicU64,
+}
+
+impl SteppingClock {
+    fn new(unix_ms: u64) -> Self {
+        Self {
+            unix_ms: AtomicU64::new(unix_ms),
+            monotonic_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// The time of the latest reading.
+    fn latest_unix_ms(&self) -> u64 {
+        self.unix_ms.load(Ordering::SeqCst)
+    }
+
+    /// Moves the clock forward by `duration_ms`.
+    fn advance(&self, duration_ms: u64) {
+        self.unix_ms.fetch_add(duration_ms, Ordering::SeqCst);
+        self.monotonic_ms.fetch_add(duration_ms, Ordering::SeqCst);
+    }
+}
+
+impl RuntimeClock for SteppingClock {
+    fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        Ok(RuntimeClockSample {
+            unix_ms: self.unix_ms.fetch_add(1, Ordering::SeqCst) + 1,
+            monotonic_ms: self.monotonic_ms.fetch_add(1, Ordering::SeqCst) + 1,
+        })
+    }
+}
 
 /// Returns once the scripted emulator sees `expected`; the calls before it are passed over.
 fn await_call(calls: &mpsc::Receiver<EmulatorCall>, expected: EmulatorCall) {
@@ -197,13 +236,14 @@ fn assert_wait_interrupted(events: &[PersistedEvent], run_lease: LeaseId, reason
 /// holder, and writes no intent. Status reads `lease_active` with at most the ladder's
 /// continuation queued, and none while rung 3 waits for readiness. Until the ladder's own
 /// release nothing is dispatched, rejected or granted on the instance; after it the next
-/// dispatch is admitted and granted. The Runtime clock is frozen at the fixture's instant (then
-/// moved to the next dispatch) so the evaluations never precede the records they read.
+/// dispatch is admitted and granted. The Runtime clock steps 1 ms a reading from the fixture's
+/// instant (and jumps to the next dispatch), so the evaluations never precede the records they
+/// read.
 #[test]
 fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_its_release() {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
-    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let clock = Arc::new(SteppingClock::new(POLICY_NOW_UNIX_MS));
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     // Rung 3 restarts the emulator and then waits for an Android that has not booted, so the
@@ -230,13 +270,14 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
 
     // §6 step 2 (W-1): the re-evaluation defers the held instance's candidate with
     // `dispatch_instance_held`, the ladder as its holder (H-1), and writes no intent.
+    let re_evaluation_unix_ms = clock.latest_unix_ms() + RE_EVALUATION_AFTER_MS;
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
             &policy_facts(),
             &policy_resources(),
             EvaluationTime {
-                unix_ms: RE_EVALUATION_UNIX_MS,
-                monotonic_ms: RE_EVALUATION_UNIX_MS,
+                unix_ms: re_evaluation_unix_ms,
+                monotonic_ms: re_evaluation_unix_ms,
             },
             7,
             PolicyTrigger::FactsChanged,
@@ -299,8 +340,8 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
 
     // §6 step 5: after the ladder's release the next dispatch on the instance is admitted.
-    clock.advance(NEXT_DISPATCH_UNIX_MS - POLICY_NOW_UNIX_MS);
-    admit_ladder_run_at(&host, &request, NEXT_DISPATCH_UNIX_MS);
+    clock.advance(NEXT_DISPATCH_AFTER_MS);
+    admit_ladder_run_at(&host, &request, clock.latest_unix_ms());
 
     let events = all_events(&host);
     let run_id = context.run_id();
