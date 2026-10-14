@@ -665,3 +665,19 @@ tests = [
     "actingcommand-lab::lib::ocr::tests::rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable",
 ]
 incident = ["#396"]
+
+# Workflow #396 REC-8: a fixed_slots layout's shared OCR read gives every slot target inside it the blocks of its region with one provider call; a slot without blocks is Unknown; the projection counts the read as one provider evaluation; a truncated read fails with text_read_blocks_truncated; a slot target outside the read reads on its own; a shared read no target uses is refused; the field and reading targets a page gate names count one read each in the page recognition's text read budget, at admission and at run time
+[[gate]]
+key = "52"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::sixteen_slots_take_their_names_from_one_shared_read",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_slot_without_blocks_in_its_region_is_unknown",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_projection_served_by_the_shared_read_counts_one_provider_evaluation",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_truncated_shared_read_fails_with_text_read_blocks_truncated",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_slot_target_outside_the_shared_read_reads_on_its_own",
+    "actingcommand-recognition-pack::lib::candidate_layout::shared_read_tests::a_shared_read_no_slot_target_uses_is_refused",
+    "actingcommand-page-detector::lib::text_read_tests::a_page_set_counts_each_kept_target_it_names_as_one_read",
+    "actingcommand-recognition-pack::lib::text_locate::tests::a_fifth_kept_target_a_page_gate_reads_is_refused_before_the_provider_is_called",
+]
+incident = ["#396"]

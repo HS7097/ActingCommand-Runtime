@@ -106,7 +106,7 @@ is truncated.
 | Features per layout | 8 | `CANDIDATE_PROJECTION_MAX_FEATURES` | same (`features`) |
 | Layouts per page | 4 | `CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PAGE` | same |
 | Layouts per package | 64 | `CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PACKAGE` | same |
-| OCR and NN feature evaluations per projection; for a `repeated_anchor` layout, one instance's evaluations times its actionable instances | 16 | `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS` | same (`provider_evaluations`) |
+| OCR and NN feature evaluations per projection; for a `repeated_anchor` layout, one instance's evaluations times its actionable instances. Workflow #396 REC-8: a layout's shared OCR read is one evaluation for each frame it serves, and the targets it serves count none ([selection-graph.md](selection-graph.md), section Shared OCR read) | 16 | `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS` | same (`provider_evaluations`) |
 | Compact JSON of one core projection | 32 KiB | `CANDIDATE_PROJECTION_MAX_BYTES` | same (`projection_bytes`) |
 | Compact JSON of every public candidate set of one observation | 32 KiB | `CANDIDATE_SETS_MAX_BYTES` | `candidate_sets_budget_exceeded` (`candidate_sets_bytes`), raised when the observation is built, not when an artifact is written |
 

@@ -599,6 +599,52 @@ fn a_fifth_call_and_an_area_beyond_the_frame_are_refused_before_the_provider_is_
     assert_eq!(outcome.value("limit_count"), Some(&json!(640 * 360)));
 }
 
+// Workflow #396 REC-8: a page gate's reads of the field and reading targets it keeps are reads
+// of the page recognition, one per target.
+#[test]
+fn a_fifth_kept_target_a_page_gate_reads_is_refused_before_the_provider_is_called() {
+    let provider =
+        ScriptedOcr::new(|region| result(&[("ALPHA".to_owned(), region, Some(0.875))], None));
+    let field = |index: i32| {
+        ocr_target(
+            &format!("text/{index}"),
+            region_json(rect(index * 100, 0, 80, 40)),
+            "exact",
+            &["ALPHA"],
+            None,
+        )
+    };
+    let evaluator = evaluator(pack_json((0..5).map(field).collect()), provider.clone());
+    let kept = (0..5)
+        .map(|index| format!("text/{index}"))
+        .collect::<HashSet<_>>();
+    let scene = scene();
+    let context = evaluator
+        .scene_context(&scene)
+        .with_remembered_targets(&kept);
+    for index in 0..4 {
+        assert!(
+            context
+                .evaluate_target(&format!("text/{index}"))
+                .expect("within budget")
+                .passed
+        );
+    }
+
+    let error = context
+        .evaluate_target("text/4")
+        .expect_err("the fifth kept read exceeds the budget");
+
+    assert_eq!(provider.calls(), 4);
+    let outcome = error.outcome().expect("typed outcome");
+    assert!(outcome.is(RecognitionPackCode::TextReadBudgetExceeded));
+    assert_eq!(outcome.value("stage"), Some(&json!("text_read_request")));
+    assert_eq!(outcome.value("text_read_budget"), Some(&json!("calls")));
+    assert_eq!(outcome.value("count"), Some(&json!(4)));
+    assert_eq!(outcome.value("limit_count"), Some(&json!(4)));
+    assert_eq!(outcome.value("target_id"), Some(&json!("text/4")));
+}
+
 #[test]
 fn a_sample_deadline_too_short_for_the_read_calls_no_ocr() {
     let provider = ScriptedOcr::blocks(vec![("ALPHA", rect(190, 240, 80, 20), Some(0.875))]);

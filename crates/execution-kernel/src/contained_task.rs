@@ -785,6 +785,28 @@ struct PreparedOcrFields {
     dictionaries: BTreeMap<String, OcrFieldDictionary>,
 }
 
+/// Workflow #396 REC-6, REC-8: the OCR targets a run collects or reads (fields, the collection
+/// mode's targets, readings), whose observation by a page gate is kept for the same frame and
+/// counts in the page recognition's text read budget.
+fn kept_ocr_targets(
+    fields: Option<&PreparedOcrFields>,
+    prepared: Option<&PreparedPostAdmissionOcr>,
+    readings: Option<&[ResourceReadingDeclaration]>,
+) -> HashSet<String> {
+    let fields = fields
+        .into_iter()
+        .flat_map(|fields| fields.declaration.fields.iter())
+        .map(|field| field.target_id.clone());
+    let collected = prepared
+        .into_iter()
+        .flat_map(|prepared| prepared.target_ids.iter().cloned());
+    let readings = readings
+        .into_iter()
+        .flatten()
+        .map(|reading| reading.target_id.clone());
+    fields.chain(collected).chain(readings).collect()
+}
+
 #[derive(Debug, Clone, Default)]
 struct PostAdmissionOcrObservedAggregate {
     occurrences: u32,
@@ -828,21 +850,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
     /// Workflow #396 REC-6: the OCR targets this run collects or reads (fields, the collection
     /// mode's targets, readings), whose observation by a page gate is kept for the same frame.
     fn remembered_ocr_targets(&self) -> HashSet<String> {
-        let fields = self
-            .fields
-            .into_iter()
-            .flat_map(|fields| fields.declaration.fields.iter())
-            .map(|field| field.target_id.clone());
-        let collected = self
-            .prepared
-            .into_iter()
-            .flat_map(|prepared| prepared.target_ids.iter().cloned());
-        let readings = self
-            .resource_readings
-            .into_iter()
-            .flatten()
-            .map(|reading| reading.target_id.clone());
-        fields.chain(collected).chain(readings).collect()
+        kept_ocr_targets(self.fields, self.prepared, self.resource_readings)
     }
 
     #[cfg(test)]
@@ -2365,25 +2373,7 @@ impl PreparedContainedTask {
         })?;
         detector
             .validate(&evaluator)
-            .map_err(|error| match error.declaration_issue() {
-                // Workflow #396 REC-1: a page set whose text reads exceed one consumer's
-                // budget is a refused declaration, pointing at the page that exceeds it.
-                Some(issue) => {
-                    let mut refused = ContainedTaskError::with_detail(
-                        SharedCode::ResourceDeclarationInvalid.code(),
-                        error.to_string(),
-                    );
-                    let mut issue = issue.clone();
-                    if let Some(path) = bundle.pages_path() {
-                        issue.declaration_file = path.to_owned();
-                    }
-                    refused.declaration_issue = Some(Box::new(issue));
-                    refused
-                }
-                None => ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskRecognitionInvalid.code(),
-                ),
-            })?;
+            .map_err(|error| page_set_refusal(&error, &bundle))?;
         evaluator
             .pack()
             .validate_candidate_layout_pages(|page_id| detector.contains_page(page_id))
@@ -2442,6 +2432,18 @@ impl PreparedContainedTask {
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
         program.validate_resource_reading_targets(&bundle, &evaluator)?;
+        // Workflow #396 REC-8: a page that names a field, reading or collection target reads
+        // it in the page recognition, one more text read of that consumer's budget.
+        let kept = kept_ocr_targets(
+            post_admission_fields.as_ref(),
+            post_admission_ocr.as_ref(),
+            program.resource_readings.as_deref(),
+        );
+        if !kept.is_empty() {
+            detector
+                .validate_keeping(&evaluator, kept)
+                .map_err(|error| page_set_refusal(&error, &bundle))?;
+        }
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -8218,6 +8220,31 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
         TargetKind::ColorDigest => "color_digest",
         TargetKind::Composite => "composite",
         TargetKind::ValueTest => "value_test",
+    }
+}
+
+/// A page set the recognition pack refuses. Workflow #396 REC-1: a page set whose text reads
+/// exceed one consumer's budget is a refused declaration, pointing at the page that exceeds it.
+fn page_set_refusal(
+    error: &actingcommand_page_detector::PageDetectorError,
+    bundle: &LoadedBundle,
+) -> ContainedTaskError {
+    match error.declaration_issue() {
+        Some(issue) => {
+            let mut refused = ContainedTaskError::with_detail(
+                SharedCode::ResourceDeclarationInvalid.code(),
+                error.to_string(),
+            );
+            let mut issue = issue.clone();
+            if let Some(path) = bundle.pages_path() {
+                issue.declaration_file = path.to_owned();
+            }
+            refused.declaration_issue = Some(Box::new(issue));
+            refused
+        }
+        None => {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskRecognitionInvalid.code())
+        }
     }
 }
 

@@ -154,6 +154,7 @@ field:
 | Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
 | A `repeated_anchor` layout names its `anchor` (a string), `max_instances` 1 to 64, an `order` of `top_to_bottom` or `left_to_right`, and optionally `suppress_iou_milli` 0 to 999. | `/candidate_layouts/i/anchor`, `…/max_instances`, `…/order`, `…/suppress_iou_milli` | gate |
 | Its `instance_rect` and `click` are integer rectangles relative to the anchor match: a signed origin and a positive size. Its optional `readable_band` is an integer rectangle with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `/candidate_layouts/i/instance_rect`, `…/click`, `…/readable_band` (a field's type or value at `…/x` and so on) | gate |
+| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on; an older task schema refuses it with `UnconsumedField`, and a `repeated_anchor` layout with `UnknownField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. | `/candidate_layouts/i/shared_ocr` and its fields | gate |
 | The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
 | A feature's own `target` is a `template`, `color`, `color_digest` or `ocr` target of the derived pack: an `nn` or `composite` feature cannot be read at an offset. | `…/features/j/target` | parser |
@@ -165,7 +166,9 @@ full page-set ID `<game>/<page>` that the page set declares and the load-site ch
 exactly (an ID that already holds `/` is kept as written), and the fields of a layout, a
 feature, a slot and a rectangle are written in the order of the examples below; a slot's
 `targets` keep their declared order. A feature writes `name`, `value`, `target` and `offset`,
-then `identity`, `consensus` and `integer` as declared. Layouts are written in the order the tasks declare them,
+then `identity`, `consensus` and `integer` as declared. A layout writes its `shared_ocr` last,
+with its region in the pack's form (a rectangle or `full_frame`) and its other members as
+declared. Layouts are written in the order the tasks declare them,
 after `targets`. The pack's own rules (layouts per page and per pack, OCR and NN evaluations per
 projection) are checked by the recognition pack when the derived pack is validated or loaded
 (section Rules).
@@ -233,6 +236,45 @@ relative to the match's top-left corner:
 - A layout declares no privacy. A candidate's privacy derives from the targets its features
   read ([candidate-projection.md](candidate-projection.md)).
 
+### Shared OCR read
+
+Workflow #396 REC-8. A `fixed_slots` layout may declare one OCR detection read that its slots
+share:
+
+```json
+{"id": "layout/roster", "page_id": "list_page", "kind": "fixed_slots",
+ "features": [{"name": "member", "value": "identity", "identity": {}}],
+ "slots": [],
+ "shared_ocr": {"region": {"x": 40, "y": 120, "width": 1200, "height": 480},
+                "languages": ["en"], "timeout_ms": 5000,
+                "model_ref": "<model>", "model_sha256": "<64 hex>",
+                "blocks": "detect", "line_merge": {"gap_factor": 0}}}
+```
+
+- The read runs the detector in its region, a rectangle or `full_frame`, and reads every box on
+  its own, with the declared line merge (`blocks` and `line_merge` as for located text,
+  [ocr-fields.md](ocr-fields.md), section Located text).
+- An OCR target without `locate` that a slot or a feature reads takes its text from the read
+  when its `model_ref`, `model_sha256` and `languages` equal the read's and its region lies
+  entirely inside the read's region. The region is the one the sample reads: moved to the slot
+  origin plus the feature's offset, shifted by the sample's jitter, or placed at its anchor's
+  match. The target's text is that of the blocks whose center `(x + floor(w/2), y + floor(h/2))`
+  lies in its region, in the sorted order `(y, x, height, width, text)`, joined with `\n`; its
+  confidence is the lowest of theirs, and absent without blocks or when one block has none.
+  Without blocks the text is empty, and the feature's existing rules make it Unknown. The
+  target's verdict and evidence are those of an OCR target that read this text. Every other OCR
+  target reads on its own.
+- One projection calls the provider once for each frame whose read serves a target; the read's
+  PP-OCR reports go with the first target it serves.
+- When the detector found more boxes than the model folder's `max_boxes`, the projection fails
+  with `candidate_feature_failed`, whose cause is the evaluation error
+  `text_read_blocks_truncated` (stage `text_read_shared`, `count` boxes detected, `limit_count`
+  the folder's `max_boxes`): a slot may lack its blocks.
+- The read counts as one provider evaluation for each frame it serves, and a target it serves
+  counts none ([candidate-projection.md](candidate-projection.md), section Budgets). Admission
+  knows a target's region before the frame unless it is `template_relative`; such a target
+  keeps its own evaluation in the count, and the frame may still serve it.
+
 ### Rules
 
 The recognition pack checks every rule that needs only the pack when its evaluator is built.
@@ -253,7 +295,8 @@ Each failure message starts with the pointer of the offending field.
 | The region a feature reads at an offset, for each of its samples, lies inside the `instance_rect`, or inside each slot's `rect`; a slot's `targets` never map such a feature. | `…/features/j/offset`, `…/slots/k`, `…/slots/k/targets/<name>` |
 | `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
 | Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
-| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read. One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. | `/candidate_layouts/i/slots`, `…/features` |
+| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. | `/candidate_layouts/i/slots`, `…/features` |
+| Workflow #396 REC-8: only a `fixed_slots` layout declares `shared_ocr`. Its region is a rectangle with a non-negative origin and a positive size inside `coordinate_space`, or `full_frame`; `blocks` is `detect` with a `line_merge` whose `gap_factor` is 0 to 16; `timeout_ms` is 1 to 60000; and at least one OCR target of its slots or features takes its text from it. | `/candidate_layouts/i/shared_ocr`, `…/shared_ocr/region`, `…/shared_ocr/blocks`, `…/shared_ocr/line_merge`, `…/shared_ocr/timeout_ms` |
 
 `coordinate_space` is required for every pack schema, so layouts need no rule of their own for
 it.

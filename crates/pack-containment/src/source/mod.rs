@@ -2778,6 +2778,26 @@ fn derive_candidate_layouts(
                     derived[key] = value.clone();
                 }
             }
+            // Workflow #396 REC-8: the shared read with its region in the pack's form.
+            if let Some(shared) = layout.get("shared_ocr") {
+                let mut generated = ordered_object([(
+                    "region",
+                    ocr_region_to_pack(required_field(shared, "region")?)?,
+                )]);
+                for key in [
+                    "languages",
+                    "timeout_ms",
+                    "model_ref",
+                    "model_sha256",
+                    "blocks",
+                ] {
+                    generated[key] = required_field(shared, key)?.clone();
+                }
+                if let Some(line_merge) = shared.get("line_merge") {
+                    generated["line_merge"] = line_merge.clone();
+                }
+                derived["shared_ocr"] = generated;
+            }
             keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
         }
     }
