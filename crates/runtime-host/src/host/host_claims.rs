@@ -45,7 +45,8 @@ impl HostClaimWork {
         match self {
             Self::StartupPackage(_) => "startup_package",
             Self::RecoveryLadder(_) => "recovery_ladder",
-            Self::LinkRestore(_) => "device_link_restore",
+            // The payload runs the registered host operation of a link's restore.
+            Self::LinkRestore(_) => HostLocation::DeviceLinkRestore.as_str(),
         }
     }
 }
