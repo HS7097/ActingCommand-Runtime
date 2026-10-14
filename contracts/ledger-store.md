@@ -51,6 +51,15 @@ semantic core, query, projection and subscription behavior.
 - **Every stored record** carries `capture_seq`, its capture time (also its `timestamp`) and, for
   a revisioned source, the source (lineage, revision); per (source, lineage) revisions are
   contiguous or covered by gap records (`ledger_store_revision_skipped` otherwise).
+- **As built by AO-2**: `DurableStorage::persist_batch` writes a batch, its index rows and its
+  joint work in one transaction at the batch's sync level; `read_back_batch` reads the batch's
+  event ids back for a retry. `LedgerStore` keeps `commit_captured` and `committed_sequence`
+  (the barrier's lookup); the per-record `append` and `append_transaction` paths and the
+  storage's `persist_transaction` and `read_back` are gone. The records the writer drafts itself
+  carry no capture envelope until AO-3 and AO-4. See
+  [ledger-observer.md §7](ledger-observer.md#7-capture-queue-and-watermarks-ao-2),
+  [§8](ledger-observer.md#8-flush-ao-2) and
+  [§11.1](ledger-observer.md#111-the-index-table-ledger_index).
 
 ## Open, ownership and append durability
 

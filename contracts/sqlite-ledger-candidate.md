@@ -34,7 +34,9 @@ propagate as fatal errors. Duplicate EventId ingress retains its nonfatal
 Request result and consumes no sequence.
 
 The Ledger-owned [schema](../crates/ledger/src/global/sqlite/schema.sql) contains
-`ledger_events`, `ledger_links`, `ledger_artifacts` and `ledger_meta`. On initial
+`ledger_events`, `ledger_links`, `ledger_artifacts` and `ledger_meta`, and, from Workflow #383
+AO-2, the index table `ledger_index`
+([ledger-observer.md §11.1](ledger-observer.md#111-the-index-table-ledger_index)). On initial
 candidate use these tables are created atomically only with a newly created
 writer lock. An existing owner record with missing or partial Ledger schema fails
 closed, including an interrupted first initialization whose completeness cannot
@@ -51,6 +53,12 @@ indexes and statistics. The existing writer then acknowledges and sends live
 notifications. A failed append does not establish absence: persistence may have
 completed before a later failure. Fatal errors terminate the writer and reach
 subscribers through the existing path.
+
+As built by Workflow #383 AO-2, the transaction holds a batch: every record of the batch
+with its relations and artifacts, chained to the one before it, the batch's
+`ledger_index` rows, a joint record's state work, and one head update. It commits at
+the batch's sync level: `FULL` when the batch holds a decision or tagged record,
+otherwise `NORMAL`.
 
 Recovery checks typed schemas, sequence continuity, EventId uniqueness, canonical
 bytes, record hash, previous hash, domain-separated integrity tag, indexed fields,
