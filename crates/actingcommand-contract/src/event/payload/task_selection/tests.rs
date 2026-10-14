@@ -251,6 +251,7 @@ fn record(
         },
         fact_snapshot_id: "snapshot-a".to_owned(),
         input_ledger_position: 1,
+        input_fact_revisions: None,
         now_unix_ms: 1_752_147_200_000,
         input_sha256: format!("sha256:{}", "e".repeat(64)),
         selection_result,
