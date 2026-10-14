@@ -22,6 +22,8 @@ mod sqlite;
 mod storage;
 mod store;
 pub use migration::*;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use sqlite::after_release_baseline_head_for_test;
 pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,

@@ -396,3 +396,12 @@ tests = [
     "actingcommand-ledger::lib::fact::capture_tests::l4_a_stored_record_reads_its_capture_and_refuses_another_time",
 ]
 incident = ["#383 SH-1"]
+
+# The release baseline check reads one fixed snapshot while appends commit
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-state::lib::store::tests::release_baseline_check_reads_one_snapshot_while_an_append_lands_mid_scan",
+]
+incident = ["#381 A"]

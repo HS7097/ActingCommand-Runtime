@@ -60,6 +60,25 @@ impl RuntimeStateError {
         }
     }
 
+    /// A database failure relayed with its detail, which keeps the SQLite extended code
+    /// (`sqlite=<code>`) that the plain conversion drops (Workflow #381 L2).
+    pub(crate) fn database_with_detail(
+        error: actingcommand_runtime_database::RuntimeDatabaseError,
+    ) -> Self {
+        let mut result = Self::fatal(error.code(), error.operation());
+        result.detail = error.detail().map(str::to_owned);
+        result
+    }
+
+    /// `code` at `operation`, with the SQLite extended code of `error` when it has one.
+    pub(crate) fn fatal_sql(code: Code, operation: Location, error: &rusqlite::Error) -> Self {
+        let mut result = Self::fatal(code, operation);
+        result.detail = error
+            .sqlite_error()
+            .map(|error| format!("sqlite={}", error.extended_code));
+        result
+    }
+
     pub(crate) fn maintenance_sql(operation: Location, error: &rusqlite::Error) -> Self {
         let mut result = Self::fatal(StateCode::StateSnapshotFailed.code(), operation);
         result.detail = error

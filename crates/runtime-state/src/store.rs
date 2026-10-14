@@ -3808,4 +3808,83 @@ mod tests {
             2
         );
     }
+
+    // Workflow #381 L1 (ledger gate 39): the release baseline's whole-chain check reads one fixed
+    // snapshot. An append that commits in the middle of the scan, after the head is read and
+    // before the first row page, is not seen: the check still succeeds with head 1.
+    #[test]
+    fn release_baseline_check_reads_one_snapshot_while_an_append_lands_mid_scan() {
+        use actingcommand_contract::{
+            AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction,
+            EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
+            IdentifierIssuer, OriginModule,
+        };
+        let root = TempDir::new().expect("tempdir");
+        let database = Arc::new(
+            RuntimeStateStore::open_database(root.path(), b"release-mid-scan-spec")
+                .expect("runtime database"),
+        );
+        let limits = actingcommand_runtime_database::MaintenanceLimits::default();
+        let maintenance = actingcommand_ledger::LedgerMaintenance::acquire(
+            root.path(),
+            true,
+            limits,
+            limits.deadline().expect("maintenance deadline"),
+        )
+        .expect("empty Ledger maintenance");
+        maintenance
+            .initialize_empty(&database)
+            .expect("empty Ledger");
+        let ledger = Arc::new(
+            maintenance
+                .open_writer(Arc::clone(&database), "release-mid-scan-spec".to_owned())
+                .expect("Ledger writer"),
+        );
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let fingerprinter =
+            actingcommand_ledger::Sha256SecretFingerprinter::new(b"release-mid-scan-spec")
+                .expect("fingerprinter");
+        let draft = |timestamp_unix_ms: u64| {
+            EventDraft::new(
+                ids.mint_event_id().expect("event id"),
+                timestamp_unix_ms,
+                EventSeverity::Error,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                ),
+                EventLinksDraft::default(),
+                CommandPayloadDraft::rejected(
+                    EventAction::RuntimeStart,
+                    DiagnosticCode::CommandRejected,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(&fingerprinter)
+            .expect("sanitized draft")
+        };
+        ledger.append(draft(1)).expect("first Ledger event");
+        let mid_scan = draft(2);
+        let appended = Arc::new(std::sync::Mutex::new(None));
+        let hook_ledger = Arc::clone(&ledger);
+        let hook_appended = Arc::clone(&appended);
+        let store =
+            Arc::new(RuntimeStateStore::from_database(Arc::clone(&database)).expect("state store"));
+        actingcommand_ledger::after_release_baseline_head_for_test(Box::new(move || {
+            *hook_appended.lock().expect("append result") =
+                Some(hook_ledger.append(mid_scan).map(|event| event.sequence()));
+        }));
+        store
+            .prepare_release_boundary(None)
+            .expect("the check sees head 1 only and succeeds");
+        let appended = appended
+            .lock()
+            .expect("append result")
+            .take()
+            .expect("the hook ran in the middle of the scan");
+        assert_eq!(appended.expect("the append committed during the scan"), 2);
+    }
 }

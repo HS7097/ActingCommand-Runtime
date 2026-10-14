@@ -519,16 +519,24 @@ impl RuntimeStateStore {
     /// the check are not in that snapshot. The baseline fact is written only by this start's
     /// reconciliation, after this read, so a baseline that exists is always inside `1..=H`.
     /// A failure to open or read the snapshot is returned; nothing falls back to the shared
-    /// connection.
+    /// connection. A failed open or begin keeps the SQLite extended code, and a failed begin
+    /// names this read, not the shared connection's `release_state` (Workflow #381 L2).
     fn read_release_baseline_snapshot(
         &self,
     ) -> RuntimeStateResult<Option<actingcommand_ledger::VerifiedReleaseLedgerSource>> {
         let mut connection = self
             .database
-            .read_snapshot_connection(StateLocation::ReadReleaseBaselineSnapshot.location())?;
+            .read_snapshot_connection(StateLocation::ReadReleaseBaselineSnapshot.location())
+            .map_err(RuntimeStateError::database_with_detail)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|_| release_error(StateCode::StateTransactionBeginFailed.code()))?;
+            .map_err(|error| {
+                RuntimeStateError::fatal_sql(
+                    StateCode::StateTransactionBeginFailed.code(),
+                    StateLocation::ReadReleaseBaselineSnapshot.location(),
+                    &error,
+                )
+            })?;
         let source = actingcommand_ledger::read_release_baseline_source(
             &self.database,
             &self.database.borrow_transaction(&transaction),
