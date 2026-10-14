@@ -20,7 +20,7 @@ const POLL_LIMIT: usize = 100_000;
 // What the test hears while the installer's commit is in flight.
 enum Commit {
     Waiting,
-    Answered(RuntimeReceipt),
+    Answered(Box<RuntimeReceipt>),
 }
 
 // The installer's control connection, with its governance identity declared, as acsetup's.
@@ -152,7 +152,7 @@ fn shutfu_an_idle_runtime_accepts_the_install_commit_shutdown_right_after_ready(
     let committing = thread::spawn(move || {
         let receipt = installer.send(&commit);
         // The test may have stopped listening; then the answer has no reader.
-        let _ = events.send(Commit::Answered(receipt));
+        let _ = events.send(Commit::Answered(Box::new(receipt)));
     });
     match heard
         .recv_timeout(GATE_WAIT)
@@ -169,7 +169,7 @@ fn shutfu_an_idle_runtime_accepts_the_install_commit_shutdown_right_after_ready(
     let accepted = loop {
         match heard.recv_timeout(GATE_WAIT).expect("the commit answers") {
             Commit::Waiting => {}
-            Commit::Answered(receipt) => break receipt,
+            Commit::Answered(receipt) => break *receipt,
         }
     };
     committing.join().expect("the installer's commit");
