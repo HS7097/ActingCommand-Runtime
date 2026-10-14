@@ -72,6 +72,19 @@ pub fn resource_reading_snapshot_id(run: &str, frame: &str, reading_id: &str) ->
     format!("run:{run}/frame:{frame}/{reading_id}")
 }
 
+/// Workflow #390 READ-1: the `source_snapshot_id` of a mark's capacity, the second reading of
+/// its frame, `run:<run>/frame:<frame>/<reading id>/capacity`. Like two marks read on one
+/// frame (Workflow #384 D2-S2), the value and the capacity are two observations, so each is
+/// refreshed, adjusted and invalidated on its own; the fact store refuses a second observation
+/// under a snapshot id that already names an active record (`fact_observation_version_conflict`).
+/// [`parse_resource_reading_snapshot_id`] reads the run and the frame back.
+pub fn resource_reading_capacity_snapshot_id(run: &str, frame: &str, reading_id: &str) -> String {
+    format!(
+        "{}/capacity",
+        resource_reading_snapshot_id(run, frame, reading_id)
+    )
+}
+
 /// The run and the frame that a resource reading's `source_snapshot_id` names; `None` for any
 /// text that [`resource_reading_snapshot_id`] does not write.
 pub fn parse_resource_reading_snapshot_id(value: &str) -> Option<(crate::RunId, crate::FrameId)> {

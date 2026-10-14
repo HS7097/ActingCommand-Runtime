@@ -88,8 +88,14 @@ frame, the mark's `valid_for_ms`. `min..=max` bounds the current value only; the
 written as read, and a capacity beyond `2^53-1` makes the mark give no reading (`out_of_range`).
 A mark gives both readings or none: a mark that gives no reading is one miss, which names its
 `fact_key`. Without `capacity_fact_key` a `current_capacity` mark writes the current value alone,
-as before. `ResourceReadingDeclaration::parse_parts` returns both parts; `fact_keys` lists the
-keys a mark writes (its `fact_key`, then its `capacity_fact_key`), which is what "the keys of a
+as before. The two readings are published as two observations, the capacity right after the
+value, like the readings of two marks on one frame: the capacity's `source_snapshot_id` is the
+value's followed by `/capacity` (the record table below). The fact store groups the records of
+one snapshot id into one observation and refuses a second observation under a snapshot id that
+already names an active record (`fact_observation_version_conflict`), so the value and the
+capacity are refreshed, adjusted and invalidated each on its own.
+`ResourceReadingDeclaration::parse_parts` returns both parts; `fact_keys` lists the keys a mark
+writes (its `fact_key`, then its `capacity_fact_key`), which is what "the keys of a
 mark" means everywhere below: a requested key set, an adjustment's mark of its key, the
 recognition maintenance package's marked keys and their checks.
 
@@ -228,14 +234,14 @@ readings.
 | Field | Value |
 | --- | --- |
 | `scope` | `{"kind": "instance", "instance_id": <the run's registered instance alias>}` |
-| `key` | `fact_key`; for a mark's capacity, its `capacity_fact_key` (Workflow #390 READ-1; every other field is as for the mark's value, `source_detector` and `source_snapshot_id` included) |
+| `key` | `fact_key`; for a mark's capacity, its `capacity_fact_key` (Workflow #390 READ-1; every other field but `source_snapshot_id` is as for the mark's value, `source_detector` included) |
 | `content` | inline `integer`, the reading |
 | `observed_at_unix_ms` | the device capture time of the frame the reading was taken on, in Unix ms. It is wall clock time, the clock domain of the Runtime clock that refuses an observation in the future |
 | `expires_at_unix_ms` | `observed_at_unix_ms + valid_for_ms` |
 | `ttl_policy` | `{"minimum_ms": valid_for_ms, "maximum_ms": valid_for_ms, "source": "detector_contract"}` |
 | `confidence_milli` | the reading's `ocr_confidence_milli` |
 | `source_detector` | `resource_reading:<entry task id>/<reading id>` |
-| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<reading id>`, the canonical `run_<hex>` and `frame_<hex>` ids |
+| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<reading id>`, the canonical `run_<hex>` and `frame_<hex>` ids; for a mark's capacity `run:<run id>/frame:<frame id>/<reading id>/capacity` (Workflow #390 READ-1, `resource_reading_capacity_snapshot_id`) |
 | `schema_version` | `fact.v1` |
 | `resource_bundle_hash` | the lowercase hex SHA-256 of `package:<package_id>`, the admitted package's `package_id` (Workflow #336 PKG-S2, option 丙): a package changed in place keeps the value, two packages never share one, and no package content is hashed |
 | `invalidate_on` | `[]` |

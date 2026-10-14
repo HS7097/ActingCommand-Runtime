@@ -216,7 +216,8 @@ fn fraction_record(host: &RuntimeHost, key: &str) -> FactRecord {
 // READ-1 (FCM O-08, row READ-1 "分数格式读数同时输出分母（容量）为第二读数键"), end to end: one
 // manual run publishes the terminal page's 35/60 as `resource.k2` = 35 and its denominator as
 // the second key `resource.k2_capacity` = 60. Read by one mark on one frame, the second record
-// carries the same observation and expiry, confidence, detector and snapshot as the first.
+// carries the same observation and expiry, confidence and detector as the first; it is an
+// observation of its own (register RE2), its snapshot the first's followed by `/capacity`.
 #[test]
 fn read1_a_run_publishes_the_denominator_under_the_second_reading_key() {
     let root = TempDir::new().expect("tempdir");
@@ -282,9 +283,10 @@ fn read1_a_run_publishes_the_denominator_under_the_second_reading_key() {
         FactRecord {
             key: "resource.k2_capacity".to_owned(),
             content: capacity.content.clone(),
+            source_snapshot_id: format!("{}/capacity", value.source_snapshot_id),
             ..value.clone()
         },
-        "the second record differs from the first only in its key and content"
+        "the second record differs from the first only in its key, content and snapshot"
     );
     assert_eq!(
         value.expires_at_unix_ms,

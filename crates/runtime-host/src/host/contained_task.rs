@@ -259,7 +259,8 @@ pub(super) struct JoinedReadingFrame {
 /// from the detector contract. `None` for a reading the fact record cannot hold (an integer
 /// beyond `i64`, an expiry beyond `u64`). Workflow #390 READ-1: the key is the reading's own,
 /// so a mark's capacity is written under its `capacity_fact_key`, with the mark's detector and
-/// snapshot.
+/// a snapshot of its own (`resource_reading_capacity_snapshot_id`): one observation per reading,
+/// as for two marks read on one frame.
 fn resource_reading_fact_record(
     readings: &ContainedTaskResourceReadings,
     reading: &ResourceReadingValue,
@@ -290,11 +291,19 @@ fn resource_reading_fact_record(
             readings.task_label,
             declaration.id
         ),
-        source_snapshot_id: actingcommand_contract::resource_reading_snapshot_id(
-            run_text,
-            frame_text,
-            &declaration.id,
-        ),
+        source_snapshot_id: if reading.fact_key == declaration.fact_key {
+            actingcommand_contract::resource_reading_snapshot_id(
+                run_text,
+                frame_text,
+                &declaration.id,
+            )
+        } else {
+            actingcommand_contract::resource_reading_capacity_snapshot_id(
+                run_text,
+                frame_text,
+                &declaration.id,
+            )
+        },
         schema_version: "fact.v1".to_owned(),
         resource_bundle_hash: readings.resource_bundle_hash.clone(),
         invalidate_on: Vec::new(),
