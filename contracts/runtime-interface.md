@@ -533,6 +533,7 @@ two.
 | `ac_run_pack` | operation | actinglab `run start` (new) | `instance`, `package`, `recovery_package`, `deadline_s` ↔ same flags; `deadline_s` 60–1800, default 1800 | option two |
 | `ac_stop_run` | operation | actinglab `run stop` (new) | `handle` ↔ `--request-id`; `wait_s` ↔ `--wait-s` (0–25); `--cancel-only` while this process's job still runs | option two |
 | `ac_emulator` | operation | actinglab `emulator start`, `stop`, `restart` (new) | `instance`, `action` ↔ `--instance` and the subcommand | option two |
+| `ac_app` (new, #389 MCP-13a; operator before U-3) | operation | actinglab `session app <launch\|restart\|stop\|force-stop>` | `action` ↔ the action word, `instance` ↔ `--instance` (both required); never `--record`; `force-stop` is the same action as `stop`; marked destructive; actinglab's data verbatim and its errors as every Lab tool relays them | option two |
 | `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG) | option two |
 
 - `ac_overview` past the output budget (#389 MCP-8, MCP-0 command table §4.9): it cuts one
