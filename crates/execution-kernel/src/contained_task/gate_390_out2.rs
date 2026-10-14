@@ -22,6 +22,8 @@ const TASK_TIMEOUT: Duration = Duration::from_secs(60);
 const NOW_UNIX_MS: u64 = 1_000_000;
 const CAP_FACT: &str = "session.example.collect.remaining";
 const UNRESOLVED: &str = "contained_task_designated_effect_cap_unresolved";
+// The required home entry page of a page-graph task that starts on `home`.
+const HOME: &str = "neutral/home";
 
 // What the screen shows: the left pixel names the page.
 #[derive(Debug, Clone, Copy)]
@@ -278,14 +280,19 @@ fn task(operations: Vec<Value>, outcome: Value) -> PreparedContainedTask {
     }
 }
 
-// The static reachability check of a page-graph task over `operations`.
-fn coverage(operations: Vec<Value>, outcome: Value) -> Result<(), ContainedTaskError> {
+// The static reachability check of a page-graph task over `operations`, from every page (`None`:
+// a run may start on any page, the terminal one included) or from the required home entry page.
+fn coverage(
+    entry: Option<&str>,
+    operations: Vec<Value>,
+    outcome: Value,
+) -> Result<(), ContainedTaskError> {
     let operations = operations
         .into_iter()
         .map(|operation| serde_json::from_value::<TaskOperation>(operation).expect("operation"))
         .collect::<Vec<_>>();
     validate_scheduling_outcome_coverage(
-        None,
+        entry,
         "neutral",
         &["terminal".to_owned()],
         &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
@@ -396,11 +403,13 @@ fn out2_a_designated_effect_set_declares_caps_and_needs_a_way_on_once_capped() {
 
     // A counted loop on `home` with `leave` to go on once the cap is reached.
     coverage(
+        None,
         loop_operations(),
         declaration(json!([{"operation_id": "collect", "max_repeats": 3}])),
     )
     .expect("a constant cap with a way on");
     coverage(
+        None,
         loop_operations(),
         declaration(json!([{"operation_id": "collect", "max_repeats": {"fact_key": CAP_FACT}}])),
     )
@@ -408,33 +417,46 @@ fn out2_a_designated_effect_set_declares_caps_and_needs_a_way_on_once_capped() {
     // Without `leave`, a capped `collect` leaves `home` without an operation.
     assert_eq!(
         refused(coverage(
+            Some(HOME),
             vec![tap("collect", "home", json!(["home", "terminal"]))],
             declaration(json!([{"operation_id": "collect", "max_repeats": 3}])),
         )),
         incomplete
     );
-    // A fact cap may be 0: the run then leaves at once with no designated effect, so the
-    // terminal page needs a mapping for that too.
+    // The terminal page reached with no designated effect needs its own mapping.
     let only_completed = |effects: Value| {
         let mut outcome = declaration(effects);
         outcome["mappings"] = json!([{"outcome_key": "collected",
             "effect": "designated_effect_completed", "terminal_pages": ["terminal"]}]);
         outcome
     };
+    // A fact cap may be 0: a run from `home` then leaves at once with no designated effect.
     assert_eq!(
         refused(coverage(
+            Some(HOME),
             loop_operations(),
             only_completed(json!([{"operation_id": "collect",
                 "max_repeats": {"fact_key": CAP_FACT}}])),
         )),
         incomplete
     );
-    // A constant cap is at least 1: the first visit of `home` runs `collect`.
+    // A constant cap is at least 1: a run from `home` runs `collect` on its first visit.
     coverage(
+        Some(HOME),
         loop_operations(),
         only_completed(json!([{"operation_id": "collect", "max_repeats": 3}])),
     )
-    .expect("a constant cap needs no mapping without an effect");
+    .expect("from home, a constant cap needs no mapping without an effect");
+    // Without a required home entry page a run may start on the terminal page, with no
+    // designated effect, whatever the cap (the existing page-graph rule).
+    assert_eq!(
+        refused(coverage(
+            None,
+            loop_operations(),
+            only_completed(json!([{"operation_id": "collect", "max_repeats": 3}])),
+        )),
+        incomplete
+    );
 }
 
 // FCM O-01, O-02, R-03: one run repeats each member up to its cap, the next operation of the page

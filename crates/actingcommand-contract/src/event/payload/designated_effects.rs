@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #390 OUT-2 (forced compromises O-01, O-02, R-03, S-01): a task's designated effect
-//! set. A task schema `0.9` package may name several designated operations in
-//! `scheduling_outcome.designated_effects`, each with an explicit repeat cap: a constant, or the
-//! integer value of an instance fact read once before the run's first step. An effect that
-//! reached its cap is not selected again; the page's next operation runs instead, so a package
-//! can loop over a counted business step and leave the loop. The terminal's scheduling
-//! disposition records how often each effect of the set completed, so "done n times" and "there
-//! was nothing to do" are told apart.
+// Workflow #390 OUT-2 (forced compromises O-01, O-02, R-03, S-01): a task's designated effect
+// set. A task schema `0.9` package may name several designated operations in
+// `scheduling_outcome.designated_effects`, each with an explicit repeat cap: a constant, or the
+// integer value of an instance fact read once before the run's first step. An effect that
+// reached its cap is not selected again; the page's next operation runs instead, so a package
+// can loop over a counted business step and leave the loop. The terminal's scheduling
+// disposition records how often each effect of the set completed, so "done n times" and "there
+// was nothing to do" are told apart.
 
 use super::{SanitizationError, SchedulingEffectCondition, validate_task_semantic_label};
 use crate::codes::SanitizationCode;
