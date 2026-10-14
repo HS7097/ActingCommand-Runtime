@@ -1,13 +1,13 @@
 # Flaky-test table, CI mirror (test plan v2.2 §2.2, Alice 10-09 D5).
 #
-# The register is board issue HS7097/ActingCommand-Workflow #71: FLK-01..06 in comment
-# 6073813916, FLK-01/02 corrected in 6074097808, FLK-05 removed as fixed in 6073946990. Only the
-# coordinator registers an entry there; this file only mirrors it, and a change lands on #71
-# first, then here. FLK-03 (`watchdog_restarts_a_killed_runtime_through_the_fixed_entry`) and
-# FLK-06 (the 500 ms process-test clients) are not mirrored: Batch 0a retired that test (§4 #8)
-# and moved those clients to the production 5 s budget (§4 #11). FLK-01
-# (`typed_client_discovers_runtime_and_routes_queries_and_input`) left after H-6 set its test
-# lease TTL to 5 s (#71 comment 6101156993).
+# The register is board issue HS7097/ActingCommand-Workflow #71: FLK-01..06 in comment 6073813916,
+# FLK-01/02 corrected in 6074097808, FLK-05 removed as fixed in 6073946990, FLK-07 in 6159396773.
+# Only the coordinator registers an entry there; this file only mirrors it, and a change lands on
+# #71 first, then here. FLK-03 (`watchdog_restarts_a_killed_runtime_through_the_fixed_entry`) and
+# FLK-06 (the 500 ms process-test clients) are not mirrored: Batch 0a retired that test (§4 #8) and
+# moved those clients to the production 5 s budget (§4 #11). FLK-01
+# (`typed_client_discovers_runtime_and_routes_queries_and_input`) left after H-6 set its test lease
+# TTL to 5 s (#71 comment 6101156993).
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -46,3 +46,12 @@ job = "apps"
 features = [""]
 register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6073813916"
 status = "cause not located on #71 (ConnectionReset); skipped until it is"
+
+[[test]]
+id = "FLK-07"
+name = "actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success"
+crate = "actingcommand-runtime-host"
+job = "host-lab"
+features = ["actingcommand-runtime-host/fixture-backends"]
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6159396773"
+status = "cause not located (local IPC receipt read_error under load); skipped until it is"
