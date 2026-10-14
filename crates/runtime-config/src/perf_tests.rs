@@ -9,7 +9,9 @@
 // `bounds.s1` to `bounds.s4` (a configuration key is lowercase).
 
 use super::*;
-use actingcommand_contract::{ConfigParameterSource, FactScalar, RuntimeConfigManifest};
+use actingcommand_contract::{
+    ConfigParameterSource, ConfigSettingChange, FactScalar, RuntimeConfigManifest,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -373,16 +375,21 @@ fn tc_1_every_performance_key_is_in_the_defaults_file_and_config_parameters_with
 /// The configuration's `perf_config_invalid` at start: its code and the key it names.
 fn refused(section: Value) -> (ConfigCode, String) {
     let failure = from_file(section)
-        .check(&CheckContext::new(
-            5_000,
-            DeviceBounds {
-                application_stop_ms: 60_000,
-                emulator_stop_ms: 200_000,
-                emulator_start_ms: 190_000,
-            },
-        ))
+        .check(&context())
         .expect_err("the section breaks a rule");
     (failure.failure_code(), failure.config_key().to_owned())
+}
+
+/// The heartbeat bound and device bounds the other sections' checks read: inputs of the check.
+fn context() -> CheckContext {
+    CheckContext::new(
+        5_000,
+        DeviceBounds {
+            application_stop_ms: 60_000,
+            emulator_stop_ms: 200_000,
+            emulator_start_ms: 190_000,
+        },
+    )
 }
 
 /// The default curve with `point`'s member `name` set to `value`.
@@ -480,4 +487,89 @@ fn tc_5_calibration_values_that_break_a_rule_are_refused_naming_the_key() {
             "{case}"
         );
     }
+}
+
+/// Coordinator ruling (2026-10-14) on the curve's length: at most 8 points, the largest count
+/// whose `config.parameters` text stays within 1 024 bytes for every curve the other rules allow.
+/// The longest curve of 8 points is accepted with its text within 1 024 bytes (the longest of 9
+/// would pass it); 9 points are refused, at start as `perf_config_invalid` and through an
+/// instruction as `config_value_invalid`, both `out_of_range` and naming the curve.
+#[test]
+fn a_curve_of_eight_points_is_accepted_and_nine_are_refused_by_file_and_by_instruction() {
+    const CURVE: &str = "performance.pacing.curve";
+    const LONGEST: i64 = i64::MAX;
+    // The longest text the other rules allow: `r_bp` 10 000 first, four digits in between and 0
+    // last; `extra_retries` and `factor_milli` at their largest; every share full.
+    let curve = |points: i64| {
+        Value::Array(
+            (0..points)
+                .map(|at| {
+                    let r_bp = match at {
+                        0 => 10_000,
+                        _ if at + 1 == points => 0,
+                        _ => 9_999 - at,
+                    };
+                    json!({"r_bp": r_bp, "stage": "S0", "factor_milli": LONGEST,
+                           "extra_retries": LONGEST, "share_milli": 1_000})
+                })
+                .collect(),
+        )
+    };
+    assert!(canonical_json(&curve(9)).len() > 1_024);
+    let change = |curve: Value| ConfigSettingChange {
+        key: CURVE.to_owned(),
+        value: Some(curve),
+    };
+    let stamp = InstructionStamp {
+        set_unix_ms: 1,
+        set_in_owner_epoch: "epoch".to_owned(),
+        request_id: "request".to_owned(),
+    };
+
+    // By file.
+    let accepted = from_file(json!({"pacing": {"max_factor_milli": LONGEST, "curve": curve(8)}}));
+    accepted
+        .check(&context())
+        .expect("eight points are accepted");
+    let Some(FactScalar::String(text)) = accepted.value(CURVE) else {
+        panic!("the curve is reported as text");
+    };
+    assert!(text.len() <= 1_024, "{} bytes", text.len());
+    let refused = from_file(json!({"pacing": {"max_factor_milli": LONGEST, "curve": curve(9)}}))
+        .check(&context())
+        .expect_err("nine points are refused");
+    assert_eq!(
+        (
+            refused.failure_code(),
+            refused.config_key(),
+            refused.problem()
+        ),
+        (
+            ConfigCode::PerfConfigInvalid,
+            CURVE,
+            Some(ConfigValueProblem::OutOfRange)
+        )
+    );
+
+    // By instruction: the curve is settable.
+    let running = from_file(json!({"pacing": {"max_factor_milli": LONGEST}}));
+    let applied = running
+        .apply(&[change(curve(8))], &stamp, &context())
+        .expect("eight points by instruction");
+    assert_eq!(applied.config.value(CURVE), accepted.value(CURVE));
+    let refused = running
+        .apply(&[change(curve(9))], &stamp, &context())
+        .expect_err("nine points by instruction are refused");
+    assert_eq!(
+        (
+            refused.failure_code(),
+            refused.config_key(),
+            refused.problem()
+        ),
+        (
+            ConfigCode::ConfigValueInvalid,
+            CURVE,
+            Some(ConfigValueProblem::OutOfRange)
+        )
+    );
 }

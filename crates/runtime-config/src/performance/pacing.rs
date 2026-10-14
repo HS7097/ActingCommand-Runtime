@@ -50,6 +50,14 @@ const PRESSURE_KINDS: &[&str] = &[
     "ledger_backlog",
 ];
 
+/// The most points a curve may have (coordinator ruling, 2026-10-14): the largest count whose
+/// `config.parameters` text, the curve's canonical JSON, stays within 1 024 bytes for every curve
+/// the other rules allow. The longest such text puts `extra_retries` and `factor_milli` at
+/// `i64::MAX` (19 digits, with `max_factor_milli` there too), every share at 1 000, `r_bp` at
+/// 10 000 first, four digits in between and 0 last: 117 × points − 1 bytes, so 8 points take 935
+/// bytes and 9 take 1 052.
+pub const MAX_CURVE_POINTS: usize = 8;
+
 /// The first and last `r_bp` of a curve.
 const CURVE_TOP_BP: i64 = 10_000;
 const CURVE_BOTTOM_BP: i64 = 0;
@@ -275,11 +283,15 @@ impl CurvePoint {
 
 /// §4.1: from `r_bp` 10 000 to 0, strictly falling; the factor never falls and the share never
 /// rises as R falls; the stages S0 to S3 never step back; no two neighbours drop the share from
-/// a full share straight to none ("不能一开始就直接停止").
+/// a full share straight to none ("不能一开始就直接停止"). At most [`MAX_CURVE_POINTS`] points.
 fn check_curve(curve: &Value, max_factor_milli: i64) -> Result<(), ConfigFailure> {
     let points = curve
         .as_array()
-        .ok_or_else(|| failure(CURVE, ConfigValueProblem::WrongType))?
+        .ok_or_else(|| failure(CURVE, ConfigValueProblem::WrongType))?;
+    if points.len() > MAX_CURVE_POINTS {
+        return Err(failure(CURVE, ConfigValueProblem::OutOfRange));
+    }
+    let points = points
         .iter()
         .map(|point| CurvePoint::read(point, max_factor_milli))
         .collect::<Result<Vec<_>, _>>()?;

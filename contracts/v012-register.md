@@ -357,8 +357,9 @@ P-c brings the `performance` section of `crates/runtime-config` (one file per su
 | PC3 | `perf_config_invalid` (error, ladder class `none`, `config_key`, `config_value_problem?`; domain `perf_`, owner `runtime-config`) | new code | P-c | P-c | a start and `check-config` refuse with it before the ledger opens (exit 1); through an instruction the same values are `config_value_invalid` |
 
 Configuration keys (§5): the `performance.*` rows of §5, every key of PERF §10, parsed, checked and
-defaulted in `distribution/windows/actingd.defaults.json`. Deviations from §5's counts and
-spellings: §10.4 has 19 keys (§5 says 18; `bounds.*` are four); the pressure streaks keep their
+defaulted in `distribution/windows/actingd.defaults.json`. §5's §10.4 count is corrected to 19
+(`bounds.*` are four keys). `performance.pacing.curve` holds at most 8 points (coordinator
+ruling 2026-10-14). Deviations from §5's spellings: the pressure streaks keep their
 file members, so their keys are `performance.pressure_start_samples` / `_end_samples` rather than
 `performance.pressure.start_samples` / `.end_samples`; the stage boundaries are
 `performance.calibration.bounds.s1` to `.s4` (PERF writes `bounds.S1`; a configuration key is a
@@ -444,7 +445,7 @@ when it takes effect.
 | `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
-| `performance.calibration.*` | PERF §10.4 (18 keys) | PERF §10.4 | P-c (built, §1.24: 19 keys) | P-a (0.12.x) |
+| `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | P-c | P-c |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
