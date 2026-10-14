@@ -28,13 +28,14 @@ use super::instance_workers::{
 };
 use super::*;
 use actingcommand_contract::{
-    EmulatorInstanceAction, InstallTransitionAction, RecoveryLadderOutcome, RecoveryRung,
-    RecoveryRungOutcome, RuntimePayload,
+    EmulatorInstanceAction, FactPayload, InstallTransitionAction, RecoveryLadderOutcome,
+    RecoveryRung, RecoveryRungOutcome, RuntimePayload,
 };
 use actingcommand_policy::SchedulingDecisionState;
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
 const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
+const STOP: EmulatorInstanceAction = EmulatorInstanceAction::Stop;
 /// The policy driver's re-evaluation after the failed run (§6 step 2, W-1 review M-6), at the
 /// trigger's next occurrence. The fixture task's trigger is any of an hourly clock (every
 /// 3 600 000 ms from 0) and a `resource.primary` fact this fixture never records. The run's
@@ -104,6 +105,75 @@ fn await_call(calls: &mpsc::Receiver<EmulatorCall>, expected: EmulatorCall) {
 fn await_readiness_wait(calls: &mpsc::Receiver<EmulatorCall>) {
     await_call(calls, EmulatorCall::Control(START));
     await_call(calls, EmulatorCall::ObserveForeground);
+}
+
+/// Returns once rung 3's emulator Stop has reached the fake, where `block_emulator_stop` holds
+/// it: rungs 1 and 2 have run, and the Stop's invalidation of the self-check (Workflow #317 sc1)
+/// has not happened yet.
+fn await_held_stop(state: &FakeState) {
+    let deadline = std::time::Instant::now() + GATE_WAIT;
+    while !state
+        .emulator_actions
+        .lock()
+        .expect("fake emulator actions lock")
+        .contains(&STOP)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "rung 3's Stop within {GATE_WAIT:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The operator's self-check of the policy instance (`SelfCheckInstance`), on `connection`: its
+/// preparation opens input and capture, and the self-check passes.
+fn self_check_passes(host: &RuntimeHost, connection: u64) {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = host
+        .process_request_for_test(
+            &runtime_request(
+                &ids,
+                RuntimeOperation::SelfCheckInstance {
+                    instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
+                },
+            ),
+            ConnectionId::new(connection).expect("connection"),
+        )
+        .expect("self-check receipt");
+    let Some(RuntimeResult::InstanceSelfChecked { selfcheck, .. }) = receipt.result() else {
+        panic!("a self-check result: {receipt:?}");
+    };
+    assert!(
+        selfcheck.capture.ok && selfcheck.touch.ok && selfcheck.failure_code.is_none(),
+        "the instance's self-check passes: {receipt:?}"
+    );
+}
+
+/// Every `session.instance.available` publication of the policy instance, in ledger order: its
+/// value and its source snapshot (`backend_selfcheck:<entry>:<generation>` or
+/// `backend_selfcheck:unchecked` for a self-check's withdrawal, Workflow #317 sc3).
+fn availability_publications(host: &RuntimeHost) -> Vec<(bool, String)> {
+    let scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    let events = all_events(host);
+    events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Fact(FactPayload::Published(payload)) => Some(payload.record()),
+            _ => None,
+        })
+        .filter(|record| {
+            record.key == crate::fact_store::POLICY_INSTANCE_AVAILABLE_KEY && record.scope == scope
+        })
+        .filter_map(|record| match &record.content {
+            FactContent::Inline {
+                value: ContractFactValue::Boolean(value),
+            } => Some((*value, record.source_snapshot_id.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The policy instance's `lease_active` and `queued_request_count`, as `Status` reports them.
@@ -246,12 +316,18 @@ fn assert_wait_interrupted(events: &[PersistedEvent], run_lease: LeaseId, reason
 /// ladder has released), so the evaluations never precede the records they read.
 ///
 /// The instance stays available through the re-evaluation, as in the model's incident (the run
-/// was dispatched to a device whose self-check passed): the fake's opens report a passed
-/// self-check from the scheduled run on. Model-369 v3.1 §3.3 W-1 defers a held instance's
-/// candidates `dispatch_instance_held`; an instance projected unavailable has no candidate and is
-/// blocked at placement `instance_unavailable` (contracts/scheduling/README.md, #317 sc3), which
-/// unobserved opens or rung 3's emulator Stop would cause. Each capture takes 400 ms until the
-/// re-evaluation, so rungs 1 and 2 (one capture or more each) keep rung 3's Stop after it.
+/// was dispatched to a device whose self-check passed). Model-369 v3.1 §3.3 W-1 defers a held
+/// instance's candidates `dispatch_instance_held`; an instance projected unavailable has no
+/// candidate and is blocked at placement `instance_unavailable` (contracts/scheduling/README.md,
+/// #317 sc3). Under sc3 a physical instance is available only while its stored self-check passes,
+/// which needs `nemu`, or both `input` and `capture`, `passed`. The instance gets its emulator
+/// binding (and with it the self-check gate) after the start, so the start prepared nothing, and
+/// the scheduled run, failing at its first observation, opens only its capture: alone that leaves
+/// `input` missing and withdraws availability (`backend_selfcheck:capture:<generation>`). So an
+/// operator self-check passes first (input and capture). Rung 3's emulator Stop drops the
+/// self-check and withdraws availability again (sc1), so the fake holds that Stop until the
+/// re-evaluation and the status read are done: the ladder holds its key there, after rungs 1
+/// and 2, with the self-check intact.
 #[test]
 fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_its_release() {
     let root = TempDir::new().expect("tempdir");
@@ -274,14 +350,16 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     .expect("physical runtime host");
     bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, registered, &state);
     let calls = state.emulator.listen();
+    state.observed_open.store(true, Ordering::Release);
+    self_check_passes(&host, 220);
     let context = admit_ladder_run(&host, &request);
     state.unknown_capture.store(true, Ordering::Release);
-    state.observed_open.store(true, Ordering::Release);
-    state.capture_delay_ms.store(400, Ordering::Release);
+    state.block_emulator_stop.store(true, Ordering::Release);
     let failure = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("the scheduled run fails");
     assert!(!failure.is_fatal(), "{}", failure.code());
+    await_held_stop(&state);
 
     // §6 step 2 (W-1): the re-evaluation defers the held instance's due candidate with
     // `dispatch_instance_held`, the ladder as its holder (H-1), and writes no intent.
@@ -322,7 +400,8 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     assert_eq!(
         decision.state,
         SchedulingDecisionState::Deferred,
-        "{decision:#?}"
+        "{decision:#?}\navailability publications (value, source): {:#?}",
+        availability_publications(&host)
     );
     let held = decision
         .reasons
@@ -343,7 +422,7 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
         queued <= 1,
         "at most the ladder's continuation waits: {queued}"
     );
-    state.capture_delay_ms.store(0, Ordering::Release);
+    state.block_emulator_stop.store(false, Ordering::Release);
     await_readiness_wait(&calls);
     assert_eq!(
         lease_status(&host, 222),
