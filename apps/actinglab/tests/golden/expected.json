@@ -755,7 +755,8 @@
                   "payload": {
                     "data": {
                       "action": "runtime.task_run",
-                      "audit": {}
+                      "audit": {},
+                      "channel": "lab"
                     },
                     "kind": "received"
                   }
@@ -4010,6 +4011,7 @@
             }
           ],
           "receipt": {
+            "channel": "lab",
             "correlation_id": "<CORRELATION_ID>",
             "outcome": {
               "category": "success",
