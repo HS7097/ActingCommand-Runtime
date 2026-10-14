@@ -261,6 +261,20 @@ tests = [
 ]
 incident = []
 
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4)
+[[gate]]
+key = "41"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters",
+    "actingcommand-actingctl::gate::mcp_observe_parity::gate_observe_export_and_ac_observe_answer_the_same_frame_for_the_same_instance_argument",
+    "actingcommand-actingctl::gate::mcp_runs_parity::gate_actingctl_runs_and_ac_runs_answer_the_same_run_list_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_diagnose_parity::gate_actingctl_diagnose_and_ac_diagnose_answer_the_same_diagnosis_with_its_groups",
+    "actingcommand-actingctl::gate::mcp_packs::gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuration",
+    "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
+]
+incident = ["#389"]
+
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
 key = "42"
@@ -298,12 +312,3 @@ tests = [
     "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_stray_word_naming_it",
 ]
 incident = ["#382 A1-FLAG"]
-
-# actingctl facts --instance, facts --program and status --config answer what ac_facts answers for the same arguments (Workflow #389 MCP-4, command table §2.3 and §4.4; the parity rule of key 41)
-[[gate]]
-key = "45"
-coverage = "Y"
-tests = [
-    "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
-]
-incident = ["#389 MCP-4"]
