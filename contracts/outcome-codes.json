@@ -1609,6 +1609,14 @@
       "type": "vocab:device_binding_problem",
       "description": "What is wrong with the private device-binding file (Workflow #398 RD-1b)."
     },
+    "device_link_state": {
+      "type": "vocab:device_link_state",
+      "description": "The state of a handset's wired device link (Workflow #398 RD-2)."
+    },
+    "device_watch_problem": {
+      "type": "vocab:device_watch_problem",
+      "description": "What went wrong with the device-link watch, the Runtime's one adb track-devices process (Workflow #398 RD-2)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -4856,6 +4864,52 @@
         },
         "serial_invalid": {
           "description": "A serial is not 1 to 64 bytes of printable ASCII without white space."
+        }
+      }
+    },
+    "device_link_state": {
+      "description": "The state of a handset's wired device link (model-398 section 4.2). The first six are what the adb server reports for the bound serial; the last two are the Runtime's own.",
+      "tokens": {
+        "device": {
+          "description": "adb reports device: the handset answers."
+        },
+        "absent": {
+          "description": "The bound serial is not in adb's device list (the cable is out)."
+        },
+        "offline": {
+          "description": "adb reports offline."
+        },
+        "unauthorized": {
+          "description": "adb reports unauthorized: a person allows USB debugging on the handset."
+        },
+        "no_permissions": {
+          "description": "adb reports no permissions (a driver problem on the host)."
+        },
+        "other": {
+          "description": "adb reports another state (authorizing, connecting, recovery, sideload, bootloader and the like)."
+        },
+        "unwatched": {
+          "description": "The link watch is not running, so the Runtime cannot see the link."
+        },
+        "unbound": {
+          "description": "The private binding file binds no device to the handset instance."
+        }
+      }
+    },
+    "device_watch_problem": {
+      "description": "What went wrong with the device-link watch (model-398 section 4.3).",
+      "tokens": {
+        "spawn_failed": {
+          "description": "The watch process could not be started."
+        },
+        "exited": {
+          "description": "The watch process ended, or its output closed."
+        },
+        "protocol_invalid": {
+          "description": "The watch's output has a shape the parser does not know."
+        },
+        "restart_budget_spent": {
+          "description": "The watch ended more often within the restart window than the restart limit allows."
         }
       }
     },
@@ -22411,6 +22465,92 @@
       "common_causes": "The phone does not dismiss its keyguard from the shell.",
       "handling": "Set device_state.keyguard_insecure to wait, or remove the keyguard on the phone."
     },
+    "device_link_lost": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "device_label": "optional",
+        "device_link_state": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run, or a climbing recovery ladder, ended because the handset's wired device link left device (#398 R1 RD-2, model-398 section 4.4, 4.5): the device failure the run met is its caused_by link and no input follows. The default recovery_ladder.exclude_codes lists it: a cable is not something the ladder can fix.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_link_reconnect_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "device_label": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The one adb reconnect of an offline handset's transport (device_link.offline_action = kick_once) failed (#398 R1 RD-2, model-398 section 4.3); the Runtime waits for the link as under wait. adb's text is the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_link_restored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset is back at device and the preparation queued after device_link.settle_ms passed (#398 R1 RD-2, model-398 section 4.3): it is available again and device.connected is true.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_link_waiting": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "optional",
+        "device_link_state": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset left device (#398 R1 RD-2, model-398 section 4.2): its availability is withdrawn under device_link:<state>, device.link and device.connected are recorded, its retained session is closed and the Runtime waits for the link. Recorded once per state.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "device_locked": {
       "category": "warning",
       "ladder_class": "budget_or_permission",
@@ -22487,6 +22627,48 @@
       "description": "The handset's screen was still not awake after one KEYCODE_WAKEUP and the configured settle time (device_state.wake_settle_ms). The run does not start and no other input is sent.",
       "common_causes": "The settle time is shorter than the phone needs to turn the screen on; the wake key failed.",
       "handling": "Raise device_state.wake_settle_ms, or check the phone."
+    },
+    "device_watch_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "device_watch_problem": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The device-link watch could not start, read an output of unknown shape, or ended more often within device_link.watch.restart_window_ms than device_link.watch.restart_limit allows (#398 R1 RD-2, model-398 section 4.3): every handset is unwatched and unavailable, emulators go on, and a person's self-check of a handset starts the watch again.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_watch_restarted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_watch_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The device-link watch, the Runtime's one adb track-devices process, ended and was started again within its restart budget (#398 R1 RD-2, model-398 section 4.3).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     },
     "diagnostic_json_invalid": {
       "category": "error",
@@ -80756,6 +80938,62 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a session-opening refusal: the instance is a handset the private binding file binds no device to (Workflow #398 RD-1b), so no adb command runs against it."
+    },
+    "device_link_apply": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: apply a handset's device-link change or a timer of its restore (Workflow #398 RD-2)."
+    },
+    "device_link_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: read a handset's device-link state (Workflow #398 RD-2)."
+    },
+    "device_link_reconnect": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the one adb reconnect of an offline handset's transport (Workflow #398 RD-2)."
+    },
+    "device_link_restore": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: queue and run a handset's preparation on a self-check claim after its link came back (Workflow #398 RD-2)."
+    },
+    "device_link_run": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: end a run whose device failed while its handset is not at device with device_link_lost (Workflow #398 RD-2)."
+    },
+    "device_link_session_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: close the session retained for a handset that left device (Workflow #398 RD-2)."
+    },
+    "device_link_watch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: start, read, restart or stop the device-link watch of the bound handsets (Workflow #398 RD-2)."
     },
     "device_registry_input_operation": {
       "owner": "runtime-host",
