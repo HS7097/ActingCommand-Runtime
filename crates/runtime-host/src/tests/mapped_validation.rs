@@ -4,6 +4,9 @@ use super::*;
 
 #[test]
 fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
+    // Workflow #390 OUT-1 (FCM O-03): a catalog may reference a subset of the declared keys, so
+    // only a referenced key the package does not declare is refused; the subset case is
+    // `gate_390_out1`'s.
     for (case, package, outcome_keys) in [
         (
             "missing-declaration",
@@ -23,11 +26,6 @@ fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
                 "mapped-result-alternate",
                 "required-result",
             ],
-        ),
-        (
-            "extra-declared-key",
-            neutral_mapped_contained_task_package("mapped-result", "designated_effect_completed"),
-            vec!["mapped-result"],
         ),
     ] {
         let root = TempDir::new().expect("tempdir");
@@ -93,7 +91,7 @@ fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
                 .expect("mismatched package request");
         let error = host
             .run_scheduled_contained_task(&context, &request)
-            .expect_err("mapped catalog must reject a non-exact package declaration");
+            .expect_err("mapped catalog must reject a key the package does not declare");
         assert_eq!(
             error.code(),
             "policy_run_outcome_declaration_mismatch",
