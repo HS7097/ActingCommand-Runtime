@@ -592,9 +592,10 @@ impl Declaration<'_> {
     /// A select step (`contracts/selection-graph.md`, section Select step):
     /// `{"layout_id", "policy": {"path"}}`, where the layout ID has the candidate layout grammar
     /// and the policy is a task-local `policies/<name>.json` document (a `sha256` the policy may
-    /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it declares its `guard` and
-    /// its `expect_after`, and is never an unguarded trusted coordinate. Whether the layout and
-    /// the policy fit the task is checked with the policy document (`select_policy`).
+    /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it
+    /// declares its `guard` and its `expect_after`, and is never an unguarded trusted
+    /// coordinate. Whether the layout and the policy fit the task is checked with the policy
+    /// document (`select_policy`).
     fn select_step(
         &self,
         operation: &Map<String, Value>,
@@ -2144,10 +2145,10 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// (floats, unsafe integers, duplicate keys), then validated. Each select step that names it
 /// must name a candidate layout its own task declares on the step's `from` page (a
 /// `policy.sha256` it may still carry is ignored, Workflow #336 PKG-S2); the document must
-/// apply to that layout, read only features the
-/// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
-/// require exactly one candidate. A document that declares a record list, which `keyed_fact`
-/// reads by the candidate's identity, needs a layout whose `unknown_identity` is `reject`.
+/// apply to that layout, read only features the layout declares with their type (`passed` as
+/// boolean, `measure_milli` as integer), and require exactly one candidate. A document that
+/// declares a record list, which `keyed_fact` reads by the candidate's identity, needs a layout
+/// whose `unknown_identity` is `reject`.
 /// The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
 fn select_policy(
