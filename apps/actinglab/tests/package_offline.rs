@@ -154,6 +154,33 @@ fn package_dry_run_defers_declared_ocr_without_provider_and_reports_it_explicitl
     assert_deferred_post_admission_ocr(&terminal_record["simulation"]["post_admission_ocr"]);
 }
 
+// Workflow #396 LAB-3: this actinglab runs outside an installation, so it has no OCR model. The
+// replay of a package with an OCR target keeps its decision and its exit code, and reports the
+// OCR state as unavailable under lab_ocr_unavailable without failing.
+#[test]
+fn package_dry_run_without_an_ocr_model_keeps_its_decision_and_reports_ocr_unavailable() {
+    let fixture = TestFixture::new(
+        PackageOptions {
+            operation_schema: "0.7",
+            post_admission_ocr: true,
+            post_admission_ocr_page: "home",
+            ..PackageOptions::default()
+        },
+        home_frame(true),
+    );
+    let output = fixture.run(&[], "no-ocr-model.result.zip");
+    assert_success(&output, "would_click");
+    let data = envelope_data(&output);
+    assert_eq!(data["decision"]["operation_label"], "open_terminal");
+    let ocr = &data["ocr"];
+    assert_eq!(ocr["available"], false);
+    assert_eq!(ocr["execution_provider"], "cpu");
+    let outcome = &ocr["unavailable"]["outcome"];
+    assert_eq!(outcome["code"], "lab_ocr_unavailable");
+    assert_eq!(outcome["category"], "error");
+    assert_eq!(outcome["causes"][0]["code"], "lab_ocr_vision_unconfigured");
+}
+
 // Defect: https://github.com/HS7097/ActingCommand-Workflow/issues/269#issuecomment-5553755777
 #[test]
 fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation() {

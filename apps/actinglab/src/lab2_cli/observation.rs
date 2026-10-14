@@ -5,7 +5,9 @@ use actingcommand_contract::page_projection::{
     self as shared, ActionKey, ElementInput, ElementResolution, ElementRole, FrameIdentity,
     Geometry, MissingTarget, NotEvaluatedReason, PageProjection, ProjectionInput,
 };
-use actingcommand_lab::{CurrentPageRequest, ReadonlyRecognitionInput, RecoveryHintResponse};
+use actingcommand_lab::{
+    CurrentPageRequest, LabOcr, ReadonlyRecognitionInput, RecoveryHintResponse,
+};
 use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
 use sha2::{Digest, Sha256};
 
@@ -90,12 +92,17 @@ pub(super) fn detect(
     ))
 }
 
+/// Workflow #396 LAB-3: OCR targets resolve with `ocr`, the Runtime's OCR provider the
+/// evaluator was loaded with. Without an OCR model an action's OCR target is not evaluated,
+/// as observe never evaluated it before; the second value names those targets, which observe
+/// reports under `lab_ocr_unavailable` without failing.
 pub(super) fn build(
     view: &super::super::contained_resources::ObservationResources,
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     outcome: &PageDetectionOutcome,
-) -> CliOutcome<PageProjection> {
+    ocr: &LabOcr,
+) -> CliOutcome<(PageProjection, std::collections::BTreeSet<String>)> {
     let mut elements = Vec::new();
     let mut resolved = std::collections::BTreeMap::new();
     if outcome.matched {
@@ -116,7 +123,7 @@ pub(super) fn build(
                     .source
                     .clone()
                     .unwrap_or_else(|| "navigation".to_string()),
-                resolution: resolve(&edge.input, evaluator, scene, &mut resolved)?,
+                resolution: resolve(&edge.input, evaluator, scene, &mut resolved, ocr)?,
             });
         }
         for operation in view
@@ -133,7 +140,7 @@ pub(super) fn build(
                 },
                 purpose: operation.purpose.clone(),
                 source: "page_operations".to_string(),
-                resolution: resolve(&operation.input, evaluator, scene, &mut resolved)?,
+                resolution: resolve(&operation.input, evaluator, scene, &mut resolved, ocr)?,
             });
         }
     }
@@ -196,7 +203,8 @@ pub(super) fn build(
             });
         }
     }
-    shared::project(
+    let ocr_not_evaluated = not_evaluated_ocr_targets(evaluator, &resolved);
+    let projection = shared::project(
         ProjectionInput {
             frame: FrameIdentity {
                 kind: shared::FrameKind::Rgb8,
@@ -215,7 +223,28 @@ pub(super) fn build(
             fields: Vec::new(),
         },
         &view.metadata,
-    )
+    )?;
+    Ok((projection, ocr_not_evaluated))
+}
+
+/// The OCR targets of actions resolved as not evaluated: those `resolve` left without a model.
+fn not_evaluated_ocr_targets(
+    evaluator: &RecognitionEvaluator,
+    resolved: &std::collections::BTreeMap<String, ElementResolution>,
+) -> std::collections::BTreeSet<String> {
+    resolved
+        .iter()
+        .filter(|(target_id, resolution)| {
+            matches!(
+                resolution,
+                ElementResolution::NotEvaluated {
+                    reason: NotEvaluatedReason::DynamicTarget,
+                    ..
+                }
+            ) && matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr))
+        })
+        .map(|(target_id, _)| target_id.clone())
+        .collect()
 }
 
 fn geometry(input: &SemanticInput) -> CliOutcome<Geometry> {
@@ -228,6 +257,7 @@ fn resolve(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     resolved: &mut std::collections::BTreeMap<String, ElementResolution>,
+    ocr: &LabOcr,
 ) -> CliOutcome<ElementResolution> {
     let SemanticInput::TargetCenter { target_id } = input else {
         return Ok(ElementResolution::Declared(geometry(input)?));
@@ -239,12 +269,21 @@ fn resolve(
         .target_kind(target_id)
         .map_err(|error| CliError::package_invalid(error.to_string()))?
     {
+        // Workflow #396 LAB-3: without an OCR model an action's OCR target stays not evaluated,
+        // as before; `observe` reports it under `lab_ocr_unavailable` (`build`).
+        TargetKind::Ocr if ocr.provider().is_none() => ElementResolution::NotEvaluated {
+            target_id: target_id.clone(),
+            reason: NotEvaluatedReason::DynamicTarget,
+        },
         // A digest or composite is evaluated like a color target and, having no template
-        // match, gives no geometry.
+        // match, gives no geometry. Workflow #396 LAB-3: so is an OCR target, with the Runtime's
+        // OCR provider; a composite with an OCR member is refused without an OCR model.
         TargetKind::Template
         | TargetKind::Color
         | TargetKind::ColorDigest
-        | TargetKind::Composite => {
+        | TargetKind::Composite
+        | TargetKind::Ocr => {
+            ocr.require(evaluator.pack(), [target_id.as_str()])?;
             let evaluated = evaluator
                 .evaluate_target(scene, target_id)
                 .map_err(|error| CliError::usage(error.to_string()))?;
@@ -263,7 +302,7 @@ fn resolve(
                 geometry,
             }
         }
-        TargetKind::Ocr | TargetKind::Nn => ElementResolution::NotEvaluated {
+        TargetKind::Nn => ElementResolution::NotEvaluated {
             target_id: target_id.clone(),
             reason: NotEvaluatedReason::DynamicTarget,
         },
@@ -306,6 +345,7 @@ pub(super) fn project(
             "candidate_sets",
             "candidate_coverage",
             "recognition_coverage",
+            "ocr",
         ]
         .map(str::to_string),
     );
@@ -609,6 +649,146 @@ mod tests {
             details["actual_bytes"]
                 .as_u64()
                 .is_some_and(|bytes| bytes > MIN_PROJECTION_HARD_LIMIT_BYTES as u64)
+        );
+    }
+}
+
+#[cfg(test)]
+mod lab3_tests {
+    // Workflow #396 LAB-3 (FCM T-02): offline `observe` evaluates an action's OCR target with the
+    // Runtime's OCR provider. Without an OCR model the action is not evaluated, as before, and its
+    // target is named for the `ocr` member observe reports under `lab_ocr_unavailable`; observe
+    // does not fail for an action it only lists.
+
+    use super::*;
+    use actingcommand_recognition_pack::{
+        FsAssetResolver, NnProviderRequest, NnProviderResult, OcrProviderRequest,
+        OcrProviderResult, OcrProviderTextBlock, VisionProvider, VisionProviderError,
+        VisionProviderErrorCode,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    // Reads "Start" in every region, at confidence 0.95.
+    #[derive(Debug)]
+    struct ReadsStart;
+
+    impl VisionProvider for ReadsStart {
+        fn require_ocr_model(
+            &self,
+            _model_ref: &str,
+            _model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            Ok(())
+        }
+
+        fn require_nn_model(
+            &self,
+            _model_ref: &str,
+            _model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "no NN model in this fixture",
+            ))
+        }
+
+        fn read_text(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            Ok(OcrProviderResult {
+                ppocr_diagnostics: Vec::new(),
+                text: "Start".to_string(),
+                blocks: vec![OcrProviderTextBlock {
+                    text: "Start".to_string(),
+                    rect: request.region,
+                    confidence: Some(0.95),
+                }],
+                confidence: Some(0.95),
+                detection: None,
+            })
+        }
+
+        fn classify(
+            &self,
+            _request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "no NN model in this fixture",
+            ))
+        }
+    }
+
+    fn evaluator(provider: Option<Arc<dyn VisionProvider>>) -> RecognitionEvaluator {
+        let pack = load_pack_from_json_str(
+            &json!({
+                "schema_version": "0.7",
+                "coordinate_space": {"width": 64, "height": 32},
+                "targets": [{
+                    "type": "ocr", "id": "label/open", "region": {"x": 8, "y": 8, "width": 32, "height": 16},
+                    "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact",
+                    "expected": ["Start"], "case_sensitive": false, "minimum_confidence": 0.8,
+                    "model_ref": "neutral-ocr", "model_sha256": MODEL_SHA256
+                }]
+            })
+            .to_string(),
+        )
+        .expect("the neutral pack");
+        let resolver = Arc::new(FsAssetResolver::new(PathBuf::new()));
+        match provider {
+            Some(provider) => RecognitionEvaluator::with_vision_provider(pack, resolver, provider),
+            None => RecognitionEvaluator::with_asset_resolver(pack, resolver),
+        }
+        .expect("evaluator")
+    }
+
+    #[test]
+    fn lab3_observe_evaluates_an_action_ocr_target_and_names_it_not_evaluated_without_a_model() {
+        let scene = Scene::from_rgb8(64, 32, &[255u8, 0, 0].repeat(64 * 32)).expect("scene");
+        let input = SemanticInput::TargetCenter {
+            target_id: "label/open".to_string(),
+        };
+
+        let provider: Arc<dyn VisionProvider> = Arc::new(ReadsStart);
+        let available = LabOcr::with_provider(Arc::clone(&provider));
+        let resolution = resolve(
+            &input,
+            &evaluator(Some(provider)),
+            &scene,
+            &mut BTreeMap::new(),
+            &available,
+        )
+        .expect("an OCR target is evaluated");
+        assert!(
+            matches!(
+                &resolution,
+                ElementResolution::Target { target_id, passed: true, .. } if target_id == "label/open"
+            ),
+            "{resolution:?}"
+        );
+
+        let unavailable = LabOcr::from_installation(None);
+        let without_model = evaluator(None);
+        let mut resolved = BTreeMap::new();
+        let resolution = resolve(&input, &without_model, &scene, &mut resolved, &unavailable)
+            .expect("an action's OCR target without a model does not fail observe");
+        assert!(
+            matches!(
+                &resolution,
+                ElementResolution::NotEvaluated {
+                    target_id,
+                    reason: NotEvaluatedReason::DynamicTarget,
+                } if target_id == "label/open"
+            ),
+            "{resolution:?}"
+        );
+        assert_eq!(
+            not_evaluated_ocr_targets(&without_model, &resolved),
+            std::collections::BTreeSet::from(["label/open".to_string()])
         );
     }
 }

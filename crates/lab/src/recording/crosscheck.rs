@@ -10,9 +10,10 @@
 use super::container::table_digest;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep};
-use super::marks::OCR_NOT_EVALUATED;
 use super::model::{MarkFamily, RecordedFrame};
 use super::store::{blocked, invalid, with_details};
+use crate::LabOcr;
+use crate::codes::LabCode;
 use actingcommand_contract::{
     ContentDirectory, ContentDirectoryVersion, InputAction, LabError, LabResult, PackageRef,
 };
@@ -107,17 +108,18 @@ pub(crate) fn round_trip(
 
 /// Section 4.6 item 2: the kernel admits the content table as actingd loads a content
 /// directory: source compilation, declaration and `linear_steps` validation (Workflow #336
-/// PKG-S1: no digest comparison). No vision provider: OCR is admitted and only its evaluation
-/// would need one.
+/// PKG-S1: no digest comparison). The Lab's OCR provider, when it has one, evaluates OCR in the
+/// first decision (Workflow #396 LAB-3); admission itself never calls it.
 pub(crate) fn admit(
     entries: &BTreeMap<String, Vec<u8>>,
     digest: &str,
+    ocr: &LabOcr,
 ) -> LabResult<PreparedContainedTask> {
     PreparedContainedTask::load_content_entries(
         ADMISSION_INSTANCE,
         entries.clone(),
         &content_reference(digest),
-        None,
+        ocr.provider(),
         Instant::now() + ADMISSION_BUDGET,
     )
     .map_err(|error| {
@@ -137,17 +139,19 @@ pub(crate) fn admit(
     })
 }
 
-/// The admitted bundle whose evaluator the cross-check uses (section 4.6 item 4).
+/// The admitted bundle whose evaluator the cross-check uses (section 4.6 item 4), with the
+/// Lab's OCR provider when it has one (Workflow #396 LAB-3).
 pub(crate) fn evaluator_bundle(
     entries: &BTreeMap<String, Vec<u8>>,
     digest: &str,
+    ocr: &LabOcr,
 ) -> LabResult<ExternallyVerifiedBundle> {
     ExternallyVerifiedBundle::load_content_entries(
         ADMISSION_INSTANCE,
         entries.clone(),
         &content_reference(digest),
         false,
-        None,
+        ocr.provider(),
         Instant::now() + ADMISSION_BUDGET,
     )
     .map_err(|error| {
@@ -194,12 +198,13 @@ fn not_evaluated_warning(reason: &str, message: &str) -> Value {
 
 /// Section 4.6 item 3 with R24: a package with an application step is simulated on the first
 /// live frame and must be refused before any capture; a first step involving OCR is not
-/// simulated; otherwise the first step's primary frame must give the first click, inside its
-/// rectangle.
+/// simulated when the Lab has no OCR model (Workflow #396 LAB-3: `lab_ocr_unavailable`);
+/// otherwise the first step's primary frame must give the first click, inside its rectangle.
 pub(crate) fn first_decision(
     prepared: &PreparedContainedTask,
     plan: &Plan,
     cache: &FrameCache,
+    ocr: &LabOcr,
 ) -> LabResult<FirstDecision> {
     let first = plan
         .steps
@@ -252,13 +257,15 @@ pub(crate) fn first_decision(
             warning,
         });
     }
-    if plan.involves_ocr(&first.required)? {
+    if ocr.provider().is_none() && plan.involves_ocr(&first.required)? {
+        let reason = LabCode::LabOcrUnavailable.as_str();
         return Ok(FirstDecision {
-            value: json!({"status": "not_evaluated", "reason": OCR_NOT_EVALUATED}),
+            value: json!({"status": "not_evaluated", "reason": reason}),
             warning: Some(not_evaluated_warning(
-                OCR_NOT_EVALUATED,
-                "step 1 involves OCR and Lab has no OCR provider: the first decision was not \
-                 simulated; make sure step 1 really needs OCR",
+                reason,
+                "step 1 involves OCR and the Lab has no OCR model: the first decision was not \
+                 simulated; install the OCR model under the Runtime's vision root, or make sure \
+                 step 1 really needs OCR",
             )),
         });
     }
@@ -355,18 +362,20 @@ fn evaluation_margin(evaluation: &TargetEvaluation) -> Option<f64> {
         .map(|digest| f64::from(digest.max_mean_milli) - f64::from(digest.mean_milli))
 }
 
-/// Per-target evaluation with the admitted evaluator: OCR is undetermined and never called
-/// (Lab has no provider), a check is derived from its members as at mark time.
+/// Per-target evaluation with the admitted evaluator: OCR with the Lab's OCR provider, and
+/// undetermined without an OCR model, when it is never called (Workflow #396 LAB-3); a check
+/// is derived from its members as at mark time.
 struct Evaluation<'a> {
     plan: &'a Plan,
     evaluator: &'a RecognitionEvaluator,
+    ocr_available: bool,
 }
 
 impl Evaluation<'_> {
     fn target(&self, scene: &Scene, id: &str) -> LabResult<(Verdict, Option<f64>)> {
         let mark = self.plan.mark(id)?;
         match mark.family {
-            MarkFamily::Ocr => Ok((Verdict::Undetermined, None)),
+            MarkFamily::Ocr if !self.ocr_available => Ok((Verdict::Undetermined, None)),
             MarkFamily::Check => {
                 let mut members = Vec::new();
                 for member in mark.check_members() {
@@ -819,8 +828,13 @@ pub(crate) fn cross_check(
     plan: &Plan,
     evaluator: &RecognitionEvaluator,
     cache: &FrameCache,
+    ocr: &LabOcr,
 ) -> LabResult<CrossCheck> {
-    let evaluation = Evaluation { plan, evaluator };
+    let evaluation = Evaluation {
+        plan,
+        evaluator,
+        ocr_available: ocr.provider().is_some(),
+    };
     let mut partial = false;
     let mut own = Vec::new();
     let mut margins: BTreeMap<(u32, String, String), f64> = BTreeMap::new();

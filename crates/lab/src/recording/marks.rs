@@ -9,17 +9,23 @@ use super::model::{
     SelfTestMargin, SelfTestStatus,
 };
 use super::store::{blocked, hex_sha256, invalid};
+use crate::LabOcr;
+use crate::codes::LabCode;
 use actingcommand_contract::LabResult;
 use actingcommand_recognition::color_digest::{
     self, ColorDigest, ColorDigestGrid, ColorDigestThresholds,
 };
 use actingcommand_recognition::{MatchMetric, Rect};
+use actingcommand_recognition_pack::{
+    FsAssetResolver, RecognitionEvaluator, VisionProvider, load_pack_from_json_str,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub(crate) const MAX_MARK_ID_BYTES: usize = 128;
 const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
-pub(crate) const OCR_NOT_EVALUATED: &str = "lab_ocr_provider_unverified";
 
 /// One live frame of the step (primary, samples, or the transition's frames).
 pub(crate) struct EvalFrame<'a> {
@@ -500,14 +506,20 @@ pub(crate) fn evaluate_mark(
     template_png: Option<&[u8]>,
     frames: &[EvalFrame<'_>],
     defaults: &RecordingDefaults,
+    ocr: &LabOcr,
 ) -> LabResult<(SelfTest, Option<Value>)> {
     let count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
     match mark.family {
-        MarkFamily::Ocr => {
-            let mut test = self_test(SelfTestStatus::NotEvaluated, count);
-            test.reason = Some(OCR_NOT_EVALUATED.to_string());
-            Ok((test, None))
-        }
+        MarkFamily::Ocr => match ocr.provider() {
+            Some(provider) => evaluate_ocr(mark, frames, count, provider),
+            // Workflow #396 LAB-3: without an OCR model the mark is not evaluated, under the
+            // registered reason; not evaluated is never reported as passed.
+            None => {
+                let mut test = self_test(SelfTestStatus::NotEvaluated, count);
+                test.reason = Some(LabCode::LabOcrUnavailable.as_str().to_string());
+                Ok((test, None))
+            }
+        },
         MarkFamily::Check => Err(invalid(
             "validation_failed",
             "a check mark is derived from its members",
@@ -706,6 +718,88 @@ fn evaluate_digest(
             .max_cell
             .map(|limit| i64::from(limit) - i64::from(worst_cell)),
     });
+    Ok((test, failure))
+}
+
+/// Workflow #396 LAB-3: an OCR mark is the OCR target the package declares for it, evaluated
+/// on every frame by the recognition pack with the Lab's OCR provider, as the Runtime
+/// evaluates it. A frame whose text or confidence does not pass fails the mark; a provider or
+/// evaluation error fails it as `self_test_error`.
+fn evaluate_ocr(
+    mark: &RecordedMark,
+    frames: &[EvalFrame<'_>],
+    count: u32,
+    provider: Arc<dyn VisionProvider>,
+) -> LabResult<(SelfTest, Option<Value>)> {
+    let region = region_of(mark)?;
+    let spec = mark.ocr.as_ref().ok_or_else(|| {
+        invalid(
+            "validation_failed",
+            format!("ocr '{}' has no OCR fields", mark.id),
+        )
+    })?;
+    let mut test = self_test(SelfTestStatus::Passed, count);
+    let Some(primary) = frames.first() else {
+        return Ok((test, None));
+    };
+    let size = primary.frame.size();
+    let pack = json!({
+        "schema_version": "0.7",
+        "coordinate_space": {"width": size.width, "height": size.height},
+        "targets": [{
+            "type": "ocr",
+            "id": mark.id,
+            "region": {"x": region.x, "y": region.y, "width": region.width, "height": region.height},
+            "languages": spec.languages,
+            "timeout_ms": spec.timeout_ms,
+            "match_mode": spec.match_mode,
+            "expected": spec.expected,
+            "case_sensitive": spec.case_sensitive,
+            "minimum_confidence": spec.minimum_confidence,
+            "model_ref": spec.model_ref,
+            "model_sha256": spec.model_sha256
+        }]
+    });
+    let evaluator = load_pack_from_json_str(&pack.to_string())
+        .and_then(|pack| {
+            RecognitionEvaluator::with_vision_provider(
+                pack,
+                Arc::new(FsAssetResolver::new(PathBuf::new())),
+                provider,
+            )
+        })
+        .map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("ocr '{}' cannot be evaluated: {error}", mark.id),
+            )
+        })?;
+    let mut failure = None;
+    for eval in frames {
+        match evaluator.evaluate_target(&eval.frame.scene, &mark.id) {
+            Ok(evaluation) if evaluation.passed => {}
+            Ok(evaluation) => {
+                test.status = SelfTestStatus::Failed;
+                test.reason = Some("self_test_failed".to_string());
+                let read = evaluation.ocr.as_deref();
+                failure.get_or_insert(json!({
+                    "frame_id": eval.id,
+                    "text": read.map(|read| read.text.clone()),
+                    "confidence": read.and_then(|read| read.confidence),
+                    "expected": spec.expected,
+                    "minimum_confidence": spec.minimum_confidence
+                }));
+            }
+            Err(error) => {
+                test.status = SelfTestStatus::Failed;
+                test.reason = Some("self_test_error".to_string());
+                failure.get_or_insert(json!({
+                    "frame_id": eval.id,
+                    "error": error.to_string()
+                }));
+            }
+        }
+    }
     Ok((test, failure))
 }
 

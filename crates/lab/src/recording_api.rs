@@ -4,6 +4,7 @@
 //! call takes the per-instance `RecordingLock`, so the lock is taken before any write;
 //! `record_status` only reads.
 
+use crate::LabOcr;
 use crate::recording::container::{
     container_kind, encode, extension, preflight_lab_dir, table_digest, write_lab_dir,
     write_recording_copy,
@@ -151,10 +152,12 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
 /// and writes the package (section 4.7) and the stopped recording; a stopped recording with a
 /// package copies it to `--lab-dir` again (`already_generated`). `dry_run` runs everything and
 /// writes nothing. Any refusal leaves the recording and the session active. Without Lab steps
-/// the outcome has no `lab` and `record stop` behaves as before.
+/// the outcome has no `lab` and `record stop` behaves as before. The self-checks evaluate OCR
+/// with `ocr` (Workflow #396 LAB-3).
 pub fn record_stop(
     lock: &RecordingLock,
     options: &RecordStopOptions,
+    ocr: &LabOcr,
 ) -> LabResult<RecordStopOutcome> {
     for (name, value) in [
         ("--timeout-ms", options.timeout_ms),
@@ -221,9 +224,9 @@ pub fn record_stop(
     // First pass: admit the package, decide its first step and cross-check its pages.
     let first_entries = render(&plan, None, &crops)?;
     let first_digest = table_digest(&first_entries);
-    let first_prepared = admit(&first_entries, &first_digest)?;
-    let decision = first_decision(&first_prepared, &plan, &cache)?;
-    let bundle = evaluator_bundle(&first_entries, &first_digest)?;
+    let first_prepared = admit(&first_entries, &first_digest, ocr)?;
+    let decision = first_decision(&first_prepared, &plan, &cache, ocr)?;
+    let bundle = evaluator_bundle(&first_entries, &first_digest, ocr)?;
     let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
         LabError::safety_blocked(
             "record_artifact_admission_failed",
@@ -232,7 +235,7 @@ pub fn record_stop(
         )
         .with_details(json!({"stage": "evaluator"}))
     })?;
-    let checks = cross_check(&plan, evaluator, &cache)?;
+    let checks = cross_check(&plan, evaluator, &cache, ocr)?;
     let mut warnings = plan.warnings.clone();
     warnings.extend(decision.warning.clone());
     warnings.extend(checks.warnings.clone());
@@ -251,8 +254,8 @@ pub fn record_stop(
     let kind = container_kind(&entries);
     let bytes = encode(&entries, kind)?;
     round_trip(&bytes, kind, &entries, &digest)?;
-    let prepared = admit(&entries, &digest)?;
-    let final_decision = first_decision(&prepared, &plan, &cache)?;
+    let prepared = admit(&entries, &digest, ocr)?;
+    let final_decision = first_decision(&prepared, &plan, &cache, ocr)?;
     if final_decision.value != decision.value {
         return Err(LabError::safety_blocked(
             "record_artifact_admission_failed",
@@ -944,10 +947,12 @@ fn validate_optional(request: &MarkRequest) -> LabResult<()> {
 
 /// `record mark`: marks, clicks, samples and pages; transitions; or one step operation.
 /// Everything is checked and self-tested first and written once; `dry_run` writes nothing.
+/// OCR marks are self-tested with `ocr` (Workflow #396 LAB-3).
 pub fn record_mark(
     lock: &RecordingLock,
     request: &MarkRequest,
     dry_run: bool,
+    ocr: &LabOcr,
 ) -> LabResult<MarkOutcome> {
     validate_mark_request(request)?;
     let mut session = open_session(lock)?;
@@ -978,12 +983,12 @@ pub fn record_mark(
         outcome.status = status.to_string();
         step
     } else if let Some(spec) = &request.transition {
-        let applied = apply_transition(&mut session, request, spec)?;
+        let applied = apply_transition(&mut session, request, spec, ocr)?;
         outcome.marks = applied.marks;
         outcome.reused = applied.reused;
         applied.step
     } else {
-        let applied = apply_marks(&mut session, request)?;
+        let applied = apply_marks(&mut session, request, ocr)?;
         outcome.step_opened = applied.opened;
         outcome.closed_step = applied.closed_step;
         outcome.frame = applied.frame;

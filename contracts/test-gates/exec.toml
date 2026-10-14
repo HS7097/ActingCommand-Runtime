@@ -618,6 +618,21 @@ tests = [
 ]
 incident = ["#396"]
 
+# actinglab and the Lab load the Runtime's OCR provider (CPU, the vision root's model folders, the vision section); observe and the Lab self-test evaluate OCR targets with it; without an OCR model OCR is unavailable under lab_ocr_unavailable with its cause: a command that evaluates an OCR target refuses, and observe's actions and the dry-run replay keep their outcome and report it
+[[gate]]
+key = "47"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::tests::lab3_a_vision_root_with_an_ocr_model_folder_gives_the_runtime_provider",
+    "actingcommand-lab::lib::ocr::tests::lab3_without_a_usable_ocr_model_ocr_is_unavailable_with_its_cause",
+    "actingcommand-lab::lib::ocr::tests::lab3_the_runtime_configuration_vision_section_names_the_vision_root",
+    "actingcommand-lab::lib::ocr::tests::lab3_an_ocr_target_without_a_model_is_refused_with_its_code_never_skipped",
+    "actingcommand-lab::lib::ocr::tests::lab3_the_mark_self_test_evaluates_an_ocr_mark_on_every_frame",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::lab3_tests::lab3_observe_evaluates_an_action_ocr_target_and_names_it_not_evaluated_without_a_model",
+    "actingcommand-actinglab::package_offline::package_dry_run_without_an_ocr_model_keeps_its_decision_and_reports_ocr_unavailable",
+]
+incident = ["#396"]
+
 # Resource validation: a repository's declared directories admit its regression case families in place of the "no mapped parser" refusal; unknown JSON elsewhere and a malformed declaration are refused (#396 TOOL-2)
 [[gate]]
 key = "48"

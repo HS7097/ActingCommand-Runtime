@@ -1,0 +1,68 @@
+{
+  "owner": "lab",
+  "codes": {
+    "lab_ocr_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "optional",
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3: an OCR evaluation of actinglab or the Lab cannot run because the offline tool loaded no usable OCR model. The offline tools load the OCR provider the Runtime uses (the in-process ppocr-ctc engine over the model folders of the vision root that the Runtime configuration's vision section names, always on the CPU). A command that would evaluate an OCR target refuses with this code (exit 3) and names the target as target_id; a Lab mark self-test, the first decision of record stop and the capabilities report give it as their reason. path is the vision root when it is known. Its caused_by link says why: lab_ocr_vision_unconfigured, a configuration read or decode code, vision_root_unavailable, vision_models_empty, lab_ocr_model_missing or lab_ocr_runtime_missing.",
+      "common_causes": "actinglab runs outside an installation, the configuration has no vision section, or the vision root holds no OCR model folder.",
+      "handling": "Install the OCR model folder and ONNX Runtime under the Runtime's vision root and run actinglab from the installation."
+    },
+    "lab_ocr_vision_unconfigured": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the offline tool has no Runtime configuration with a vision section. It does not run from an installation, or the selected configuration has no vision section.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "lab_ocr_model_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root's models folder (path) holds model folders, but none is an OCR model.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "lab_ocr_runtime_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root has no usable ONNX Runtime library at path (ort\\onnxruntime.dll). Its caused_by link is the OS failure when the OS reported one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    }
+  }
+}

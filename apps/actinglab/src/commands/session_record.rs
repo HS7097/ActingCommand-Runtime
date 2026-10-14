@@ -393,7 +393,7 @@ fn run_session_record_inner(
                 }));
             };
             let lock = held_record_lock(&record_lock)?;
-            let outcome = record_stop(lock, &options)?;
+            let outcome = record_stop(lock, &options, crate::offline_ocr::lab_ocr())?;
             if !options.dry_run {
                 record.status = "stopped".to_string();
                 record.updated_at_unix_ms = current_unix_ms();
@@ -2671,7 +2671,7 @@ fn run_record_mark(
         }
     };
     let dry_run = global.dry_run || record_flag_switch(flags, "--dry-run")?;
-    let outcome = record_mark(lock, &request, dry_run)?;
+    let outcome = record_mark(lock, &request, dry_run, crate::offline_ocr::lab_ocr())?;
     serde_json::to_value(outcome)
         .map_err(|error| CliError::usage(format!("failed to encode record mark output: {error}")))
 }

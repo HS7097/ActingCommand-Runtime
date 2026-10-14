@@ -52,6 +52,7 @@ pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutco
     reject_legacy_session_routing(&flags)?;
     let target = flags.required("--target")?;
     let prepared = prepare_recognition_input(global, &flags, false)?;
+    require_ocr_target(&prepared.input, &target)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
     )?;
@@ -68,12 +69,17 @@ pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOut
     let mut ledger = semantic_ledger_context("detect-page", global, args);
     let result = (|| -> CliOutcome<Value> {
         let prepared = prepare_recognition_input(global, &flags, true)?;
+        let check_pages = flags.bool("--check-pages");
+        // `--check-pages` validates the page set and evaluates nothing.
+        if !check_pages {
+            super::offline_ocr::require_pages(&prepared.input.resources)?;
+        }
         let mut lab = super::env_detection::build_readonly_lab_for_capture(
             prepared.capture_instance_alias.as_deref(),
         )?;
         let request = DetectPageRequest {
             input: prepared.input,
-            check_pages: flags.bool("--check-pages"),
+            check_pages,
         };
         let output = lab.detect_page(request)?;
         record_detect_page_output(&mut ledger, output)
@@ -85,6 +91,7 @@ pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOu
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
     let prepared = prepare_recognition_input(global, &flags, true)?;
+    super::offline_ocr::require_pages(&prepared.input.resources)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
     )?;
@@ -98,12 +105,14 @@ pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutc
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
     let prepared = prepare_recognition_input(global, &flags, false)?;
+    let target = target_argument(&flags, "is-visible")?;
+    require_ocr_target(&prepared.input, &target)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
         prepared.capture_instance_alias.as_deref(),
     )?;
     let request = IsVisibleRequest {
         input: prepared.input,
-        target: target_argument(&flags, "is-visible")?,
+        target,
     };
     serialize_response(lab.is_visible(request)?)
 }
@@ -111,6 +120,15 @@ pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutc
 struct PreparedReadonlyInput {
     input: ReadonlyRecognitionInput,
     capture_instance_alias: Option<String>,
+}
+
+/// Workflow #396 LAB-3: an OCR target (or a composite with an OCR member) is refused with
+/// `lab_ocr_unavailable` when actinglab has no OCR model, before anything is evaluated.
+fn require_ocr_target(input: &ReadonlyRecognitionInput, target: &str) -> CliOutcome<()> {
+    match input.resources.loaded_bundle().evaluator() {
+        Some(evaluator) => super::offline_ocr::require_target(evaluator, target),
+        None => Ok(()),
+    }
 }
 
 fn prepare_recognition_input(
