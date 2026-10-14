@@ -171,6 +171,8 @@ mod host_claims;
 mod input;
 mod installation;
 mod instance_discovery;
+// Workflow #389 MCP-4: the instance fact read (register W2).
+mod instance_fact_read;
 mod lab_operation;
 mod lease;
 mod lifecycle;

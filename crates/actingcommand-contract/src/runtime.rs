@@ -3363,6 +3363,12 @@ pub enum RuntimeOperation {
     },
     MonitorStatus,
     RuntimeFactSnapshot,
+    /// Reads one instance's facts (Workflow #389 MCP-4, register W2): a general read from memory
+    /// that records nothing, like `Status`. `instance` is the registered instance alias; the
+    /// answer is `RuntimeResult::InstanceFactSnapshot`.
+    InstanceFactSnapshot {
+        instance: String,
+    },
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -3753,9 +3759,10 @@ impl RuntimeOperation {
             | Self::ApplicationLifecycle { instance_alias, .. }
             | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::ClearMonitor { instance_alias }
-            | Self::ResourceTargetView { instance_alias } => {
-                validate_instance_alias(instance_alias)
-            }
+            | Self::ResourceTargetView { instance_alias }
+            | Self::InstanceFactSnapshot {
+                instance: instance_alias,
+            } => validate_instance_alias(instance_alias),
             Self::ConfigureMonitor {
                 instance_alias,
                 policy,
@@ -3898,6 +3905,9 @@ impl fmt::Debug for RuntimeOperation {
             }
             Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
             Self::RuntimeFactSnapshot => "RuntimeOperation::RuntimeFactSnapshot",
+            Self::InstanceFactSnapshot { .. } => {
+                "RuntimeOperation::InstanceFactSnapshot(<redacted>)"
+            }
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -4760,6 +4770,12 @@ pub enum RuntimeResult {
     RuntimeFactSnapshot {
         snapshot: crate::RuntimeFactSnapshot,
     },
+    /// `InstanceFactSnapshot` (Workflow #389 MCP-4, register W2): the instance's facts and the
+    /// read's state source (register W1), never a ledger position of the snapshot.
+    InstanceFactSnapshot {
+        snapshot: Box<crate::InstanceFactView>,
+        source: crate::RuntimeStateSource,
+    },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
     },
@@ -5502,6 +5518,14 @@ impl RuntimeReceipt {
             Some(RuntimeResult::MonitorStatus { status }) => status.validate().map_err(|_| {
                 RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeMonitorStatus)
             })?,
+            Some(RuntimeResult::InstanceFactSnapshot { snapshot, source }) => {
+                snapshot
+                    .validate()
+                    .map_err(|error| RuntimeContractError::new(error.code()))?;
+                source.validate().map_err(|_| {
+                    RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
+                })?;
+            }
             Some(
                 RuntimeResult::MonitorConfigured { status }
                 | RuntimeResult::MonitorCleared { status },

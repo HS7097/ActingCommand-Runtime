@@ -152,6 +152,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeEventsReported => "runtime_events_reported": success / none,
         InstanceFrameExported => "instance_frame_exported": success / none,
         RunListReported => "run_list_reported": success / none,
+        // Workflow #389 MCP-4: `facts --instance`.
+        InstanceFactsReported => "instance_facts_reported": success / none,
         RuntimeDiagnosisReported => "runtime_diagnosis_reported": success / none,
         PackageBindingsReported => "package_bindings_reported": success / none,
         StartRuntimeStarted => "start_runtime_started": success / none,

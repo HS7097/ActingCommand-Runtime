@@ -1052,6 +1052,33 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads one instance's facts (`InstanceFactSnapshot`, Workflow #389 MCP-4, register W2):
+    /// every active record that applies to the registered instance `instance_alias`, the server
+    /// and game the Runtime resolved for it, and the read's state source (register W1). Read-only:
+    /// the Runtime records nothing. An answer for another instance is an unexpected result.
+    pub fn instance_fact_snapshot(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeClientResult<(
+        actingcommand_contract::InstanceFactView,
+        actingcommand_contract::RuntimeStateSource,
+    )> {
+        const OPERATION: Location = ClientLocation::RuntimeInstanceFactSnapshot.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::InstanceFactSnapshot {
+                instance: instance_alias.to_owned(),
+            },
+        )? {
+            RuntimeResult::InstanceFactSnapshot { snapshot, source }
+                if snapshot.instance_alias == instance_alias =>
+            {
+                Ok((*snapshot, source))
+            }
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     pub fn publish_fact(&self, record: FactRecord) -> RuntimeClientResult<EventId> {
         match self.execute(
             ContractLocation::PublishFact.location(),

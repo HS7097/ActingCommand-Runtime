@@ -549,3 +549,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
 ]
 incident = ["#383 SH-1"]
+
+# The instance fact read answers one instance's facts (its own, its configured server's and game's) with the resolved server and game, appends no ledger record, names the committed head in its state source and puts no ledger position on the wire; an unknown alias is instance_unknown and a reply past one frame is refused instance_fact_snapshot_too_large_for_frame while the Runtime goes on (Workflow #389 MCP-4, register W2)
+[[gate]]
+key = "60"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_389_mcp4::mcp4_an_instance_fact_read_answers_the_instance_s_facts_and_appends_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_389_mcp4::mcp4_an_instance_fact_read_larger_than_one_frame_is_refused_and_the_runtime_goes_on",
+]
+incident = ["#389 MCP-4"]

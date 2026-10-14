@@ -583,6 +583,73 @@ impl InstanceFactSnapshot {
     }
 }
 
+/// One instance's facts as the general read `InstanceFactSnapshot` answers them (Workflow #389
+/// MCP-4, register W2): every active record that applies to the instance, its own and those of
+/// the server and the game the configuration binds it to, each with its observation and expiry
+/// times. It carries no ledger position and no snapshot id (`contracts/ledger-observer.md` §13):
+/// the read's `RuntimeStateSource` beside it says where the answer comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceFactView {
+    /// The registered instance alias: the `instance_id` of the instance's own records.
+    pub instance_alias: String,
+    /// The server the configuration binds the instance to. It and `game_id` are both absent when
+    /// the configuration binds none (a Runtime without a policy section); then only the
+    /// instance's own records apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
+    /// The game the configuration binds the instance to, absent with `server_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_id: Option<String>,
+    /// Ordered by key, then by scope (instance, server, game).
+    pub records: Vec<FactRecord>,
+}
+
+impl InstanceFactView {
+    /// Validates the read: the alias, the server and the game named together or not at all, at
+    /// most 256 records, each valid, applying to the instance and named once by scope and key.
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        crate::validate_instance_alias(&self.instance_alias).map_err(|_| {
+            SanitizationError::new(SanitizationCode::InvalidFactToken, "instance_alias")
+        })?;
+        match (&self.server_id, &self.game_id) {
+            (Some(server_id), Some(game_id)) => {
+                validate_token(server_id, "server_id")?;
+                validate_token(game_id, "game_id")?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidFactSnapshot,
+                    "fact_snapshot",
+                ));
+            }
+        }
+        if self.records.len() > MAX_FACT_RECORDS {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidFactSnapshot,
+                "fact_snapshot",
+            ));
+        }
+        let mut identities = BTreeSet::new();
+        for record in &self.records {
+            record.validate()?;
+            let applies = match &record.scope {
+                FactScope::Instance { instance_id } => *instance_id == self.instance_alias,
+                FactScope::Server { server_id } => self.server_id.as_ref() == Some(server_id),
+                FactScope::Game { game_id } => self.game_id.as_ref() == Some(game_id),
+            };
+            if !applies || !identities.insert((&record.scope, record.key.as_str())) {
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidFactSnapshotRecord,
+                    "fact_snapshot",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn validate_fact_invalidation(
     data: &FactInvalidationEventData,
 ) -> Result<(), SanitizationError> {

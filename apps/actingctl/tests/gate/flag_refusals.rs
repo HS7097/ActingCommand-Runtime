@@ -147,6 +147,20 @@ const CLIENT: &[Subcommand] = &[
         &["--config"],
         &["--program"],
     ),
+    // Workflow #389 MCP-4: `facts --instance` and `--key-prefix`.
+    result(
+        &[
+            "facts",
+            "--instance",
+            "neutral.instance",
+            "--key-prefix",
+            "session.",
+            "--state-root",
+            ROOT,
+        ],
+        &["--config"],
+        &["--key-prefix", "session."],
+    ),
     result(
         &["monitor-status", "--state-root", ROOT],
         &["--recover"],

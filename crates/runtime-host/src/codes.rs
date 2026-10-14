@@ -985,6 +985,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeFactInstanceUnknown => "runtime_fact_instance_unknown": error / none,
         RuntimeFactMissing => "runtime_fact_missing": error / none,
         RuntimeFactSnapshotTooLargeForFrame => "runtime_fact_snapshot_too_large_for_frame": error / none,
+        // Workflow #389 MCP-4: an instance fact read whose reply exceeds one IPC frame.
+        InstanceFactSnapshotTooLargeForFrame => "instance_fact_snapshot_too_large_for_frame": error / none,
         RuntimeFactStale => "runtime_fact_stale": error / none,
         RuntimeFactStoreDesync => "runtime_fact_store_desync": error / none,
         RuntimeFrameEncodeFailed => "runtime_frame_encode_failed": error / none,

@@ -298,3 +298,12 @@ tests = [
     "actingcommand-actingctl::gate::flag_refusals::gate_every_subcommand_refuses_a_stray_word_naming_it",
 ]
 incident = ["#382 A1-FLAG"]
+
+# actingctl facts --instance, facts --program and status --config answer what ac_facts answers for the same arguments (Workflow #389 MCP-4, command table §2.3 and §4.4; the parity rule of key 41)
+[[gate]]
+key = "45"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
+]
+incident = ["#389 MCP-4"]

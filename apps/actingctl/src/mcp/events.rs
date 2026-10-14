@@ -160,8 +160,9 @@ fn payload_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
 }
 
 /// The page as JSON, written by the export writer as `<sha256>.json`. A page that does not
-/// encode is `material_export_failed` caused by the encoder's failure.
-fn export_json(page: &Value) -> Result<Value, ToolError> {
+/// encode is `material_export_failed` caused by the encoder's failure. Workflow #389 MCP-4:
+/// `ac_facts` exports its answer the same way.
+pub(super) fn export_json(page: &Value) -> Result<Value, ToolError> {
     let bytes = serde_json::to_vec(page).map_err(|error| {
         ToolError::new("runtime", ActingctlCode::MaterialExportFailed).caused_by(
             Outcome::new(ContractCode::ForeignDataError)

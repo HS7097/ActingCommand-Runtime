@@ -298,6 +298,7 @@ U-6 deletes the source gates.
 | `BindChannel{channel, via?}` | handshake | — | the runtime client's handshake, once on every new TCP connection | no |
 | `UpgradeState{target, action}` (`enter`, `cancel`, `leave`) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
 | `UpgradeStateStatus{transition_id}` | general | read | cli | no |
+| `InstanceFactSnapshot{instance}` (#389 MCP-4) | general | read (one instance's facts, from memory) | cli `facts --instance`; mcp `ac_facts` (scope instance) | no |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
 | D2 S5 transition query, `performance_status` | general | read | cli, mcp | no |
@@ -470,7 +471,8 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | Command | Request | Block | New home |
 |---|---|---|---|
 | `status` | Status | general read | stays; `ac_overview` covers it |
-| `status --config`, `facts --program` | RuntimeFactSnapshot | general read | stays; reports the two Lab options from `config.*` and checks `<root>\tools\actinglab.exe` locally, reporting a mismatch; `ac_facts` (new) |
+| `status --config`, `facts --program` | RuntimeFactSnapshot | general read | stays; reports the two Lab options from `config.*` and checks `<root>\tools\actinglab.exe` locally, reporting a mismatch; `ac_facts` (new); #389 MCP-4: both answer `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}`, `facts --program` also takes `--key-prefix` |
+| new: `facts --instance <alias\|instance_id\|ADB port> [--key-prefix <prefix>]` (#389 MCP-4, before U-3) | InstanceFactSnapshot | general read | actingctl; `ac_facts` with `scope` instance |
 | `monitor-status` | MonitorStatus | general read | stays; `ac_overview` covers it |
 | `emulator status` | Status (one instance) | general read | stays; `ac_overview` with `instance` covers it |
 | `observe`, `stream` | ObserveReadonly, CaptureSequence | general read | stay (pin `Explicit`); `ac_observe`, `ac_stream` (new) |
@@ -512,7 +514,7 @@ two.
 | `ac_resume` | instruction | `actingctl resume` | the CLI gains the optional expected-pause parameter `ac_resume` has; selector as above | general |
 | `ac_targets_set` | instruction | the actingctl command with `--instance`, `--targets`, `--valid-days` that builds the v2 document as the tool does today (named by U-3) | `instance`, `targets`, `valid_days` | general (§14.2) |
 | `ac_request_shutdown` (new) | instruction | `actingctl request-shutdown` | `wait_s` ↔ `--wait` in seconds; MCP allows 0–20 s inside its 25 s call budget, the CLI 3600 s (presentation); an expired wait gives the CLI's answer | general |
-| `ac_facts` (new) | read | `actingctl facts --program` or `status --config` | `scope` (`program` or `config`) selects the form; output as the CLI's, exported to a file past the output budget | general |
+| `ac_facts` (new; #389 MCP-4, observer before U-3) | read | `actingctl facts --program`, `facts --instance` or `status --config` | `scope` (`program`, `instance` or `config`) selects the form; `instance` ↔ `--instance` (alias, `instance_id` or ADB port; scope instance only), `key_prefix` ↔ `--key-prefix` (program and instance); output as the CLI's, exported to a file past the output budget | general |
 | `ac_observe` (new) | read (frames) | `actingctl observe` | `instance` ↔ `--instance`; pins `Explicit` | general |
 | `ac_stream` (new) | read (frames) | `actingctl stream` | `instance`, `max_frames`, `interval_ms` ↔ same flags (defaults 1 frame, 250 ms); past the call budget it returns a process-local handle | general |
 | `ac_emulator_discover` (new) | read (discovery) | `actingctl emulator discover` | as the CLI | general |
