@@ -186,10 +186,10 @@ impl Root {
             limits,
             limits.deadline().expect("deadline"),
         )?
-        .open_writer_planned(
+        .open_writer_timed(
             Arc::clone(&self.database),
             OWNER.into(),
-            plan,
+            Some(plan),
             &mut LedgerOpenTiming::default(),
         )
     }
@@ -491,7 +491,7 @@ fn ao1_d_an_integrity_failure_is_not_retried_and_dumps_the_unflushed_records() {
     let stall = WriterStallGate::arm(root.directory.path()).expect("writer stall gate");
     let first = draft(&ids);
     let second = draft(&ids);
-    let expected = vec![id_value(first.event_id()), id_value(second.event_id())];
+    let expected = [id_value(first.event_id()), id_value(second.event_id())];
     ledger.append_deferred(first).expect("accepted");
     assert!(stall.wait_held_commit(GATE_WAIT));
     ledger.append_deferred(second).expect("queued");
@@ -584,7 +584,7 @@ fn ao1_f_a_stalled_attempt_is_dumped_by_the_probe_and_a_waiting_read_gets_an_err
     let stall = WriterStallGate::arm(root.path()).expect("writer stall gate");
     let first = draft(&ids);
     let second = draft(&ids);
-    let expected = vec![id_value(first.event_id()), id_value(second.event_id())];
+    let expected = [id_value(first.event_id()), id_value(second.event_id())];
     ledger.append_deferred(first).expect("accepted");
     assert!(stall.wait_held_commit(GATE_WAIT));
     ledger.append_deferred(second).expect("queued");

@@ -409,6 +409,10 @@ actingcommand_contract::outcome_locations! {
         JoinCancelledWriter => "join_cancelled_writer",
         JoinWriter => "join_writer",
         LatestSequence => "latest_sequence",
+        /// Workflow #383 AO-1: the probe that watches the start of the write attempt in progress.
+        LedgerAttemptWatch => "ledger_attempt_watch",
+        /// Workflow #383 AO-1: writing one record with its retries.
+        LedgerWriteRetry => "ledger_write_retry",
         ListSegments => "list_segments",
         LocateReadOnlyCorruptTail => "locate_read_only_corrupt_tail",
         LockWriterWithoutMetadataWrite => "lock_writer_without_metadata_write",
@@ -489,8 +493,6 @@ actingcommand_contract::outcome_locations! {
         ResolveLedgerArtifact => "resolve_ledger_artifact",
         ResolveMaintenanceRoot => "resolve_maintenance_root",
         RetentionCandidates => "retention_candidates",
-        /// Workflow #383 AO-1: writing one record with its retries.
-        RetryLedgerWrite => "retry_ledger_write",
         RollbackImportDryRun => "rollback_import_dry_run",
         RollbackJointEvent => "rollback_joint_event",
         RollbackLedgerSchema => "rollback_ledger_schema",
@@ -559,8 +561,6 @@ actingcommand_contract::outcome_locations! {
         VerifySqliteRecord => "verify_sqlite_record",
         VerifySqliteRelations => "verify_sqlite_relations",
         VerifyTransactionEvent => "verify_transaction_event",
-        /// Workflow #383 AO-1: the probe that watches the start of the write attempt in progress.
-        WatchLedgerAttempt => "watch_ledger_attempt",
         /// Workflow #383 AO-1: writing the dump file and stopping fatally.
         WriteLedgerDump => "write_ledger_dump",
         WriteWriterMetadata => "write_writer_metadata",

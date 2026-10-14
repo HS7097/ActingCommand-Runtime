@@ -388,8 +388,8 @@ process stopping fatally after retries are exhausted (§9.2). A stalled attempt 
 - **As built by AO-1** (before AO-2's capture queue):
   - The rules hold for the running Runtime's writer, opened with a *failure plan*: the write
     policy of §15, the two dump places and the sink that reports and stops
-    (`LedgerMaintenance::open_writer_planned`). An offline writer (§6) has no plan: one attempt,
-    and its first failure ends it as before.
+    (`LedgerMaintenance::open_writer_timed` with a plan). An offline writer (§6) has no plan:
+    one attempt, and its first failure ends it as before.
   - A batch is one record. The unflushed records are the record in flight and the plain appends
     still queued for the writer. A joint record (`append_transaction`, G15's work) is never
     dumped: its state work rolls back with it, so neither took effect, and its caller gets

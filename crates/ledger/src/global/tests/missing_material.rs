@@ -90,7 +90,7 @@ fn reopen(database: &Arc<RuntimeDatabase>, timing: &mut LedgerOpenTiming) -> Glo
         limits.deadline().expect("deadline"),
     )
     .expect("maintenance owner")
-    .open_writer_timed(Arc::clone(database), "material-reopen".into(), timing)
+    .open_writer_timed(Arc::clone(database), "material-reopen".into(), None, timing)
     .expect("the writer opens without reading material")
 }
 

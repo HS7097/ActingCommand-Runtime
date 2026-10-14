@@ -7839,7 +7839,7 @@
       "since": "0.12.0",
       "description": "Reading the ledger head and the record's event id back after a failed write, before the write is tried again (Workflow #383 AO-1, ledger observer §9.1)."
     },
-    "retry_ledger_write": {
+    "ledger_write_retry": {
       "owner": "ledger",
       "layer": "store",
       "review": "pending",
@@ -7847,7 +7847,7 @@
       "since": "0.12.0",
       "description": "Writing one record with its configured attempts and waits (Workflow #383 AO-1, ledger observer §9.1)."
     },
-    "watch_ledger_attempt": {
+    "ledger_attempt_watch": {
       "owner": "ledger",
       "layer": "store",
       "review": "pending",

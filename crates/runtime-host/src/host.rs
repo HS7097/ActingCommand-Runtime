@@ -1253,8 +1253,12 @@ impl RuntimeHost {
         // back and retries a failed write by `ledger_observer.*`, dumps and stops when it gives
         // up, and the open imports a dump an earlier run left before any new record.
         let plan = ledger_failure_plan(&config, owner_epoch, started_at_unix_ms)?;
-        let opened =
-            maintenance.open_writer_planned(Arc::clone(&database), ledger_owner, plan, &mut timing);
+        let opened = maintenance.open_writer_timed(
+            Arc::clone(&database),
+            ledger_owner,
+            Some(plan),
+            &mut timing,
+        );
         println!(
             "actingd ledger_open {timing} deadline_ms={}",
             limits.timeout_seconds.saturating_mul(1000)

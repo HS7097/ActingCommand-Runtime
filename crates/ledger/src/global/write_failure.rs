@@ -369,7 +369,7 @@ impl WriteFailureState {
         let error = if last.is_write_failure() {
             GlobalLedgerError::fatal(
                 LedgerCode::LedgerWriteFailed.code(),
-                LedgerLocation::RetryLedgerWrite.location(),
+                LedgerLocation::LedgerWriteRetry.location(),
             )
             .with_detail(format!(
                 "attempts={attempts}; last={}@{}",
@@ -652,7 +652,7 @@ fn fatal_record(outcome: Outcome) -> GlobalLedgerResult<SanitizedEventDraft> {
                 "ledger_write",
                 LedgerLocation::WriteLedgerDump.location(),
                 "ledger",
-                LedgerLocation::RetryLedgerWrite.as_str(),
+                LedgerLocation::LedgerWriteRetry.as_str(),
             ),
             AuditInput::new(),
         )

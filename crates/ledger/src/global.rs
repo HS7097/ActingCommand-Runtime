@@ -1214,7 +1214,7 @@ impl WriteProbe {
             .map_err(|error| {
                 GlobalLedgerError::io(
                     LedgerCode::WriterSpawnFailed.code(),
-                    LedgerLocation::WatchLedgerAttempt.location(),
+                    LedgerLocation::LedgerAttemptWatch.location(),
                     &error,
                 )
             })?;
@@ -1228,7 +1228,7 @@ impl WriteProbe {
         self.thread.join().map_err(|_| {
             GlobalLedgerError::fatal(
                 LedgerCode::WriterPanicked.code(),
-                LedgerLocation::WatchLedgerAttempt.location(),
+                LedgerLocation::LedgerAttemptWatch.location(),
             )
         })
     }

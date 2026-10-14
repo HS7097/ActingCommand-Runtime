@@ -333,6 +333,7 @@ impl SegmentStore {
             retention,
             recovering_retention,
             events,
+            write_failure: None,
         };
         let recovery_result = (|| {
             if let Some(owner_id) = stale_owner {
