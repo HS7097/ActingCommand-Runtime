@@ -8,6 +8,8 @@
 // Workflow #389 MCP-7: the child-process runner moved to the crate, where `actingctl diagnose`
 // runs `actingd suspended` with it too.
 use crate::child;
+// Workflow #389 MCP-14: ac_outcome_code.
+mod code_lookup;
 mod events;
 // Workflow #389 MCP-4: ac_facts.
 mod facts;
