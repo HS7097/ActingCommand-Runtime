@@ -500,6 +500,18 @@ tables; [instance-fact-store.md](instance-fact-store.md), "Reading the seeds").
 |---|---|---|---|---|---|
 | M41 | `actingctl facts --program`, `facts --instance <selector>` and `status --config` ↔ `ac_facts` (`scope` program, instance or config; `instance`; `key_prefix`): `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}` | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | MCP-4 | MCP-4 | `snapshot` is the `RuntimeFactSnapshot` (program) or the instance's `InstanceFactView` (W2); `records` the `config.*` records (config); `read_at_unix_ms` is the Runtime's clock at the read (the snapshot's `taken_at_unix_ms`, the instance read's `sampled_completed_at_unix_ms`); `records_total` counts the records read, `records_kept` those answered after `key_prefix` (program and instance only); the selector is the alias, instance_id or ADB port, resolved with one status read; MCP exports an answer past its output budget (`answer_exported`); CLI success codes `runtime_facts_reported`, `instance_facts_reported` (new) and `runtime_config_reported` |
 
+### 1.29 Wave 8 slice REC-6 (#396, REC-M v1.2.1 §8)
+
+REC-6 brings and writes both members of R6-1, in the task diagnostic stream; R6-2 is resource file
+format, not a ledger shape. No ledger record type is added. The retired code
+`contained_task_post_admission_ocr_target_in_page_gate` and the new codes, locations, keys and
+vocabularies are catalog entries, not rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R6-1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTargetData.value_test` (`TaskDiagnosticValueTestData`) and `TaskDiagnosticTargetData.skipped` (`TaskDiagnosticTargetSkip`) | two new optional members, absent when unused | REC-6 (#396, REC-M v1.2.1 §2, §8.3, §8.4) | REC-6 | `value_test` = `{left: TaskDiagnosticValueOperand, op, right?, passed}` with `TaskDiagnosticValueOperand {target_id, raw_text?, value?, problem?}` (`deny_unknown_fields`), `op` one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `parses`, `problem` one of `empty`, `invalid`, `overflow`, `out_of_range`, `region_unresolved`, `low_confidence`, and `right` = `{"kind": "const", "const"}` or `{"kind": "operand", "operand", "mul", "add"}`, absent for `parses`; REC-1's `failure` (V3) then carries `value_test_unresolved` or `value_test_not_met`. `skipped` = `page_unmatched` on a page target row the page recognition left unevaluated (not passed, no child rows); the page detector's `PageTargetEvaluation.skipped` carries the same value |
+| R6-2 | task schema `0.9` `checks[].value_test` (`{left, op, right?}`); recognition pack schema `0.7` target type `value_test`; `OcrUnsignedIntegerFormat::ClockHms` (`clock_hms`, for fields, readings and value tests); a value test side's `trim` `whitespace_all_v1`; the page gate of a page that collects or reads OCR | new members and values, one rule relaxed (resource file format, not a ledger shape) | REC-6 | resource side | older task and pack schemas refuse the new members (`UnconsumedField`); a value test in a page rule's `forbidden`, directly or through a check, is refused at `/pages/<i>/forbidden/<j>`; a page that collects fields, collection-mode targets or readings may gate on any backend and on those targets themselves (the gate's observation is the collection's); the `package` interface revision for these is declared once by A8 |
+
 ### 1.30 Wave 8 slice L-5b (#382: the K/T remnants L-5 left)
 
 L-5b removes what is left of the retired K/T policy (Workflow #382 L-5, after #375 R5d) and

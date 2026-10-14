@@ -37,9 +37,9 @@ file. The following is the member only, not a complete task:
 | `id` | `[A-Za-z0-9_\-/.:]`, `1..=128` bytes, unique in the task | `InvalidValue` @ `/resource_readings/<i>/id` |
 | `fact_key` | starts with `resource.` or `inventory.`, satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` |
 | `page_id` | an identifier like `id` (not `any`) that is one of the task's `scheduling_outcome` terminal pages; the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id` |
-| `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`, named by no page gate (`required`, `optional`, `any_of`, `forbidden`), directly or as a member of a check the page gate names | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
+| `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the terminal frame is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
-| `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
+| `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`, `clock_hms`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
 | `minimum_confidence_milli` | `1..=1000` | `InvalidValue` @ `…/minimum_confidence_milli` |
 | `valid_for_ms` | `1..=31_536_000_000` | `InvalidValue` @ `…/valid_for_ms` |
 | any other member | none | `UnknownField` @ `…/<member>` |
@@ -113,10 +113,10 @@ device capture time and, per reading, the declaration, the integer value and the
 milli. The trace is never serialized. `evaluate_resource_readings` is the exported function the
 kernel uses for this evaluation.
 
-Before any input, the Runtime refuses a package whose reading target is not one OCR target, is
-named by a page gate (directly or as a member of a composite target), or is marked personal by the projection metadata, with
+Before any input, the Runtime refuses a package whose reading target is not one OCR target,
+locates text, or is marked personal by the projection metadata, with
 `contained_task_resource_reading_invalid` and the detail `<id>:<reason>` (`target_not_ocr`,
-`target_in_page_gate`, `target_personal`). A program that violates the declaration rules is
+`target_locates_text`, `target_personal`). A program that violates the declaration rules is
 refused with the same code and the rule's reason as detail.
 
 For these three target qualification refusals, the kernel attaches the verified bundle's

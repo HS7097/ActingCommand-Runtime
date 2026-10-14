@@ -13,9 +13,9 @@ use actingcommand_contract::{
     TaskDiagnosticOcrLocatedData, TaskDiagnosticPageData, TaskDiagnosticPayload as Payload,
     TaskDiagnosticRecognitionError, TaskDiagnosticRecord, TaskDiagnosticStepElapsedData,
     TaskDiagnosticStepStartedData, TaskDiagnosticTargetData, TaskDiagnosticTargetFailure,
-    TaskDiagnosticTargetSource, TaskDiagnosticTemplateData, TaskDiagnosticTerminalData,
-    TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage, TaskDiagnosticUniquenessData,
-    TaskRecordSubphases, TaskTimingResult,
+    TaskDiagnosticTargetSkip, TaskDiagnosticTargetSource, TaskDiagnosticTemplateData,
+    TaskDiagnosticTerminalData, TaskDiagnosticUnexecutedData, TaskDiagnosticUnexecutedPage,
+    TaskDiagnosticUniquenessData, TaskRecordSubphases, TaskTimingResult,
 };
 use actingcommand_execution_kernel::ContainedTaskGuardEvaluation;
 use actingcommand_page_detector::{PageBatchResult, PageOutcome, PageTargetEvaluation};
@@ -113,6 +113,7 @@ fn target_payload(
             actingcommand_recognition_pack::TargetKind::Nn => "nn",
             actingcommand_recognition_pack::TargetKind::ColorDigest => "color_digest",
             actingcommand_recognition_pack::TargetKind::Composite => "composite",
+            actingcommand_recognition_pack::TargetKind::ValueTest => "value_test",
         }
         .to_owned(),
         passed: target.passed,
@@ -142,6 +143,12 @@ fn target_payload(
             second_rect: value.second_rect.map(region_rect),
         }),
         correction: None,
+        // Workflow #396 REC-6.
+        value_test: target
+            .value_test
+            .as_ref()
+            .map(|value_test| Box::new(value_test.data.clone())),
+        skipped: None,
     }
 }
 
@@ -548,6 +555,7 @@ impl RuntimeContainedTask<'_> {
                 target_id: target.target_id.clone(),
                 passed: target.passed,
             },
+            target.skipped,
         )
     }
 
@@ -611,6 +619,7 @@ impl RuntimeContainedTask<'_> {
                 TaskDiagnosticTargetSource::Guard {
                     phase: phase.to_owned(),
                 },
+                None,
             ),
             Some(Err(error)) => self
                 .diagnostic(
@@ -644,16 +653,18 @@ impl RuntimeContainedTask<'_> {
         ppocr_diagnostic::finish_task_ppocr_record(recorded, &reports, primary)
     }
 
+    /// The target row, then its OCR, NN, digest and member rows. `skipped` marks a page target
+    /// the page recognition left unevaluated (Workflow #396 REC-6).
     fn diagnostic_target(
         &mut self,
         parent: Option<u64>,
         target: &TargetEvaluation,
         source: TaskDiagnosticTargetSource,
+        skipped: Option<TaskDiagnosticTargetSkip>,
     ) -> Result<(), RequestFailure> {
-        let mut record = self.diagnostic_record(
-            parent,
-            Payload::Target(Box::new(target_payload(target, source))),
-        );
+        let mut payload = target_payload(target, source);
+        payload.skipped = skipped;
+        let mut record = self.diagnostic_record(parent, Payload::Target(Box::new(payload)));
         if matches!(
             target.sampling,
             Some(actingcommand_contract::TaskDiagnosticSamplingData::Sample { .. })
@@ -727,6 +738,7 @@ impl RuntimeContainedTask<'_> {
                         composite_target_id: target.id.clone(),
                         member_index,
                     },
+                    None,
                 )?;
             }
         }
@@ -924,10 +936,14 @@ mod tests {
     use super::*;
     use actingcommand_contract::OcrRegionEvidence;
     use actingcommand_contract::outcome::Outcome;
+    use actingcommand_contract::{
+        TaskDiagnosticValueOperand, TaskDiagnosticValueRight, TaskDiagnosticValueTestData,
+        ValueTestOp, ValueTestProblem,
+    };
     use actingcommand_recognition_pack::{
         OcrEvaluation, OcrLocatedEvidence, OcrMatchMode, OcrTextEvidence, PackRect,
         RecognitionPackCode, RecognitionPackLocation, TargetKind, TargetMatchKind,
-        TargetUniquenessEvidence, TemplateEvaluation,
+        TargetUniquenessEvidence, TemplateEvaluation, ValueProblem, ValueSide, ValueTestEvaluation,
     };
 
     fn rect(x: i32, y: i32, width: i32, height: i32) -> PackRect {
@@ -996,6 +1012,7 @@ mod tests {
             color_digest: None,
             composite: None,
             failure,
+            value_test: None,
             uniqueness: None,
             message: "ocr text located".to_owned(),
             sampling: None,
@@ -1186,6 +1203,7 @@ mod tests {
             color_digest: None,
             composite: None,
             failure: Some(failure),
+            value_test: None,
             uniqueness: Some(TargetUniquenessEvidence {
                 score_milli: 1000,
                 second_score_milli: Some(1000),
@@ -1229,5 +1247,78 @@ mod tests {
             Some(&serde_json::json!("template"))
         );
         assert_eq!(failure.value("margin_milli"), Some(&serde_json::json!(50)));
+    }
+
+    // Workflow #396 REC-6: a value test's guard row carries its sides, comparison and result, a
+    // page target the recognition left unevaluated carries `skipped`, and both round-trip.
+    #[test]
+    fn a_value_test_row_and_a_skipped_page_target_row_round_trip() {
+        let data = TaskDiagnosticValueTestData {
+            left: TaskDiagnosticValueOperand {
+                target_id: "text/count".to_owned(),
+                raw_text: Some("3".to_owned()),
+                value: Some(3),
+                problem: None,
+            },
+            op: ValueTestOp::Eq,
+            right: Some(TaskDiagnosticValueRight::Operand {
+                operand: TaskDiagnosticValueOperand {
+                    target_id: "text/cost".to_owned(),
+                    raw_text: Some("6x".to_owned()),
+                    value: None,
+                    problem: Some(ValueTestProblem::Invalid),
+                },
+                mul: 20,
+                add: -1,
+            }),
+            passed: false,
+        };
+        let mut tested = TargetEvaluation::not_evaluated("check/quantity", TargetKind::ValueTest);
+        tested.value_test = Some(Box::new(ValueTestEvaluation {
+            data: data.clone(),
+            ppocr_diagnostics: Vec::new(),
+        }));
+        tested.failure = Some(
+            Outcome::new(RecognitionPackCode::ValueTestUnresolved)
+                .target_id("check/quantity")
+                .value_side(ValueSide::Right)
+                .value_problem(ValueProblem::Invalid)
+                .stage(RecognitionPackLocation::ValueTestEvaluate),
+        );
+        let guard_row = target_payload(
+            &tested,
+            TaskDiagnosticTargetSource::Guard {
+                phase: "guard".to_owned(),
+            },
+        );
+        assert_eq!(guard_row.kind, "value_test");
+        assert_eq!(guard_row.value_test.as_deref(), Some(&data));
+        let mut skipped_row = target_payload(
+            &TargetEvaluation::not_evaluated("text/entry", TargetKind::Ocr),
+            TaskDiagnosticTargetSource::Page {
+                role: "Optional".to_owned(),
+                group_index: None,
+                target_index: 0,
+                target_id: "text/entry".to_owned(),
+                passed: false,
+            },
+        );
+        skipped_row.skipped = Some(TaskDiagnosticTargetSkip::PageUnmatched);
+        let constant = TaskDiagnosticValueTestData {
+            right: Some(TaskDiagnosticValueRight::Const { constant: 0 }),
+            op: ValueTestOp::Gt,
+            passed: true,
+            ..data
+        };
+        let mut constant_row = guard_row.clone();
+        constant_row.value_test = Some(Box::new(constant));
+
+        for row in [
+            record(1, None, Payload::Target(Box::new(guard_row))),
+            record(2, Some(0), Payload::Target(Box::new(skipped_row))),
+            record(3, None, Payload::Target(Box::new(constant_row))),
+        ] {
+            assert_eq!(round_trip(&row), row);
+        }
     }
 }

@@ -216,6 +216,8 @@ impl RecognitionEvaluator {
                         })
                 })
             }
+            // Workflow #396 REC-6: a value test reads each of its sides once.
+            RecognitionTarget::ValueTest(test) => Ok(self.value_test_provider_ms(test)),
             _ => Ok(0),
         }
     }

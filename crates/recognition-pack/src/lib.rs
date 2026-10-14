@@ -30,6 +30,8 @@ mod template_mask;
 // Workflow #396 REC-2.
 mod target_unique;
 mod text_locate;
+// Workflow #396 REC-6.
+mod value_test;
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
@@ -39,6 +41,10 @@ pub use text_locate::{
     OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
     OcrProviderDetection, TEXT_READ_MAX_CALLS, TextReadBudgetOverrun, TextReadCount,
 };
+pub use value_test::{
+    ValueTestConst, ValueTestEvaluation, ValueTestOperand, ValueTestPart, ValueTestRight,
+    ValueTestTarget, ValueTestValue,
+};
 
 pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, CandidateSampleVariant};
 
@@ -47,7 +53,10 @@ pub use candidate_identity::{
     CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, normalize_name,
 };
 
-pub use codes::{RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget};
+pub use codes::{
+    RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget, ValueOp,
+    ValueProblem, ValueSide,
+};
 
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
@@ -393,6 +402,8 @@ pub enum RecognitionTarget {
     Nn(NnTarget),
     ColorDigest(ColorDigestTarget),
     Composite(CompositeTarget),
+    /// Schema 0.7: a comparison of read values (Workflow #396 REC-6).
+    ValueTest(ValueTestTarget),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -817,6 +828,7 @@ pub enum TargetKind {
     Nn,
     ColorDigest,
     Composite,
+    ValueTest,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -832,9 +844,12 @@ pub struct TargetEvaluation {
     pub color_digest: Option<Box<ColorDigestEvaluation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<Box<CompositeEvaluation>>,
+    /// Workflow #396 REC-6: a value test's sides, comparison and result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_test: Option<Box<ValueTestEvaluation>>,
     /// Why the target did not pass, when a registered reason exists (Workflow #396 REC-1:
-    /// `text_locate_not_found`, `text_locate_outside_cells`; REC-2: `target_match_not_unique`);
-    /// absent otherwise.
+    /// `text_locate_not_found`, `text_locate_outside_cells`; REC-2: `target_match_not_unique`;
+    /// REC-6: `value_test_unresolved`, `value_test_not_met`); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<Outcome>,
     /// Workflow #396 REC-2: the uniqueness check of a target that declares `unique` (a second
@@ -849,12 +864,38 @@ pub struct TargetEvaluation {
 }
 
 impl TargetEvaluation {
-    /// A composite carries the reports of all its members; any other target its own.
+    /// Workflow #396 REC-6: a target its consumer did not evaluate (a page recognition's lazy
+    /// target on a page that could no longer match): not passed, with no evidence.
+    pub fn not_evaluated(target_id: &str, kind: TargetKind) -> Self {
+        Self {
+            id: target_id.to_owned(),
+            kind,
+            passed: false,
+            template: None,
+            color: None,
+            ocr: None,
+            nn: None,
+            color_digest: None,
+            composite: None,
+            value_test: None,
+            failure: None,
+            uniqueness: None,
+            message: "not evaluated".to_owned(),
+            sampling: None,
+            sample_evaluations: Vec::new(),
+        }
+    }
+
+    /// A composite carries the reports of all its members, a value test those of its sides;
+    /// any other target its own.
     pub fn ppocr_diagnostics(
         &self,
     ) -> &[std::sync::Arc<actingcommand_contract::PpocrNodePlacementDiagnostic>] {
         if let Some(composite) = &self.composite {
             return composite.ppocr_diagnostics.as_slice();
+        }
+        if let Some(value_test) = &self.value_test {
+            return value_test.ppocr_diagnostics.as_slice();
         }
         self.ocr
             .as_ref()
@@ -1057,14 +1098,17 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
     let pack: RecognitionPack = serde_json::from_value(value).map_err(|err| {
         RecognitionPackError::fatal(format!("failed to parse recognition pack JSON: {err}"))
     })?;
-    text_locate::validate_locate_declarations(&pack).map_err(|refusal| {
+    let refused = |refusal: text_locate::LocateRefusal| {
         let mut error = RecognitionPackError::fatal(refusal.explanation)
             .at_declaration(refusal.pointer, refusal.reason);
         if let Some(issue) = &mut error.declaration_issue {
             issue.schema_version = Some(schema_version.clone());
         }
         error
-    })?;
+    };
+    text_locate::validate_locate_declarations(&pack).map_err(refused)?;
+    // Workflow #396 REC-6.
+    value_test::validate_value_test_declarations(&pack).map_err(refused)?;
     if matches!(schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5")
         && pack
             .targets
@@ -1096,9 +1140,11 @@ pub(crate) enum JointSearch<'a> {
 }
 
 /// A template cache bound to one immutable Scene and its admitted evaluator.
-/// OCR results are not cached, except the text reads of locate targets, which are remembered
-/// per request for this Scene only (Workflow #396 REC-1); callers cannot import evaluations
-/// from another frame.
+/// OCR results are not cached, except the text reads of locate targets and value tests, which
+/// are remembered per request for this Scene only (Workflow #396 REC-1, REC-6), and the
+/// observations of the field and reading targets a page gate evaluates, which are remembered by
+/// target for the same frame's collection (REC-6); callers cannot import evaluations from
+/// another frame.
 pub struct SceneEvaluation<'a> {
     evaluator: &'a RecognitionEvaluator,
     scene: &'a Scene,
@@ -1112,6 +1158,26 @@ pub struct SceneEvaluation<'a> {
     search_clock: fn() -> std::time::Instant,
     /// Workflow #396 REC-2: the transforms of the regions unique templates search in.
     spectra: RefCell<recognition::RegionSpectra>,
+    /// Workflow #396 REC-6: the OCR targets whose provider observation an evaluation here keeps
+    /// by target, for the field or reading collection of the same frame.
+    remembered_targets: Option<&'a HashSet<String>>,
+    /// Workflow #396 REC-6: the observations kept, by target.
+    observations: RefCell<RememberedOcrObservations>,
+}
+
+/// Workflow #396 REC-6: provider observations of field and reading targets that a page gate
+/// evaluated on one frame, by target. Page recognition hands them to the same frame's field
+/// collection and readings, which take each once instead of calling the provider again.
+#[derive(Debug, Clone, Default)]
+pub struct RememberedOcrObservations {
+    observations: HashMap<String, RememberedOcrObservation>,
+}
+
+#[derive(Debug, Clone)]
+struct RememberedOcrObservation {
+    region: PackRect,
+    region_evidence: OcrRegionEvidence,
+    observation: OcrProviderObservation,
 }
 
 impl SceneEvaluation<'_> {
@@ -1120,6 +1186,19 @@ impl SceneEvaluation<'_> {
     }
     pub fn scene(&self) -> &Scene {
         self.scene
+    }
+
+    /// Workflow #396 REC-6: the observations this context kept, taken out of it.
+    pub fn take_remembered_observations(&self) -> RememberedOcrObservations {
+        std::mem::take(&mut *self.observations.borrow_mut())
+    }
+
+    /// Workflow #396 REC-6: observations another context kept on this context's frame. The first
+    /// raw OCR observation of each of their targets here takes its kept observation instead of
+    /// calling the provider; its PP-OCR reports went with the evaluation that made it.
+    pub fn with_remembered_observations(self, observations: RememberedOcrObservations) -> Self {
+        *self.observations.borrow_mut() = observations;
+        self
     }
 
     pub fn evaluate_target(&self, target_id: &str) -> RecognitionPackResult<TargetEvaluation> {
@@ -1144,6 +1223,7 @@ impl SceneEvaluation<'_> {
         let provider_ms = match self.evaluator.target(target_id)? {
             RecognitionTarget::Ocr(target) => target.timeout_ms,
             RecognitionTarget::Nn(target) => target.timeout_ms,
+            RecognitionTarget::ValueTest(test) => self.evaluator.value_test_provider_ms(test),
             _ => 0,
         };
         if self.sample_deadline.is_some_and(|deadline| {
@@ -1272,6 +1352,16 @@ impl SceneEvaluation<'_> {
     }
 }
 
+impl<'a> SceneEvaluation<'a> {
+    /// Workflow #396 REC-6: an evaluation of one of `targets`, an ordinary OCR target, here keeps
+    /// its provider observation (with its execution evidence) by target; a later evaluation of
+    /// the same target in this context uses it.
+    pub fn with_remembered_targets(mut self, targets: &'a HashSet<String>) -> Self {
+        self.remembered_targets = Some(targets);
+        self
+    }
+}
+
 impl From<PackRect> for OcrRegionRect {
     fn from(rect: PackRect) -> Self {
         Self {
@@ -1309,6 +1399,8 @@ impl RecognitionEvaluator {
             text_reads: RefCell::new(text_locate::TextReads::default()),
             search_clock: std::time::Instant::now,
             spectra: RefCell::new(recognition::RegionSpectra::default()),
+            remembered_targets: None,
+            observations: RefCell::new(RememberedOcrObservations::default()),
         }
     }
     pub fn new(pack_root: PathBuf, pack: RecognitionPack) -> RecognitionPackResult<Self> {
@@ -1408,6 +1500,7 @@ impl RecognitionEvaluator {
             RecognitionTarget::Nn(target) => self.evaluate_nn(scene, target),
             RecognitionTarget::ColorDigest(target) => self.evaluate_color_digest(scene, target),
             RecognitionTarget::Composite(target) => self.evaluate_composite(context, target),
+            RecognitionTarget::ValueTest(target) => self.evaluate_value_test(context, target),
         }
     }
 
@@ -1613,7 +1706,21 @@ impl RecognitionEvaluator {
                 "post-admission OCR target '{target_id}' is not an OCR target"
             )));
         };
-        let (region, region_evidence) = context.ocr_region(target)?;
+        // Workflow #396 REC-6: the observation a page gate made of this target on this frame,
+        // taken once; its PP-OCR reports went with the gate's evaluation.
+        let kept = if timeout_ms.is_none() {
+            context
+                .observations
+                .borrow_mut()
+                .observations
+                .remove(target_id)
+        } else {
+            None
+        };
+        let (region, region_evidence) = match &kept {
+            Some(kept) => (kept.region, kept.region_evidence.clone()),
+            None => context.ocr_region(target)?,
+        };
         let timeout_ms = timeout_ms
             .unwrap_or(target.timeout_ms)
             .min(target.timeout_ms);
@@ -1622,26 +1729,35 @@ impl RecognitionEvaluator {
         }
         let mut diagnostics = Vec::new();
         (|| {
-            let provider = self.vision_provider.as_ref().ok_or_else(|| {
-                RecognitionPackError::fatal_with_code(
-                    RecognitionPackErrorCode::VisionProviderMissing,
-                    format!("ocr target '{}' has no injected vision provider", target.id),
-                )
-            })?;
-            provider
-                .require_ocr_model(&target.model_ref, &target.model_sha256)
-                .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-            let observation = provider
-                .read_text_with_execution_evidence(OcrProviderRequest {
-                    frame: provider_frame(scene),
-                    region,
-                    languages: &target.languages,
-                    timeout_ms,
-                    model_ref: &target.model_ref,
-                    model_sha256: &target.model_sha256,
-                    blocks: OcrProviderBlocks::Implicit,
-                })
-                .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
+            let observation = match kept {
+                Some(kept) => {
+                    let mut observation = kept.observation;
+                    observation.result.ppocr_diagnostics = Vec::new();
+                    observation
+                }
+                None => {
+                    let provider = self.vision_provider.as_ref().ok_or_else(|| {
+                        RecognitionPackError::fatal_with_code(
+                            RecognitionPackErrorCode::VisionProviderMissing,
+                            format!("ocr target '{}' has no injected vision provider", target.id),
+                        )
+                    })?;
+                    provider
+                        .require_ocr_model(&target.model_ref, &target.model_sha256)
+                        .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
+                    provider
+                        .read_text_with_execution_evidence(OcrProviderRequest {
+                            frame: provider_frame(scene),
+                            region,
+                            languages: &target.languages,
+                            timeout_ms,
+                            model_ref: &target.model_ref,
+                            model_sha256: &target.model_sha256,
+                            blocks: OcrProviderBlocks::Implicit,
+                        })
+                        .map_err(|err| provider_error(&target.id, "ocr observation", err))?
+                }
+            };
             diagnostics = observation.result.ppocr_diagnostics.clone();
             let execution = observation.execution.ok_or_else(|| {
                 RecognitionPackError::fatal_with_code(
@@ -1723,6 +1839,10 @@ impl RecognitionEvaluator {
                 "composite target '{}' cannot be clicked",
                 target.id
             ))),
+            RecognitionTarget::ValueTest(target) => Err(RecognitionPackError::fatal(format!(
+                "value test target '{}' cannot be clicked",
+                target.id
+            ))),
         }
     }
 
@@ -1747,7 +1867,8 @@ impl RecognitionEvaluator {
             | RecognitionTarget::Ocr(_)
             | RecognitionTarget::Nn(_)
             | RecognitionTarget::ColorDigest(_)
-            | RecognitionTarget::Composite(_) => Ok(None),
+            | RecognitionTarget::Composite(_)
+            | RecognitionTarget::ValueTest(_) => Ok(None),
         }
     }
 
@@ -1761,6 +1882,7 @@ impl RecognitionEvaluator {
             RecognitionTarget::Nn(_) => TargetKind::Nn,
             RecognitionTarget::ColorDigest(_) => TargetKind::ColorDigest,
             RecognitionTarget::Composite(_) => TargetKind::Composite,
+            RecognitionTarget::ValueTest(_) => TargetKind::ValueTest,
         })
     }
 
@@ -1851,6 +1973,7 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            value_test: None,
             failure: None,
             uniqueness: None,
             message: template_message(template_ok, color_ok),
@@ -2013,6 +2136,7 @@ impl RecognitionEvaluator {
                 nn: None,
                 color_digest: None,
                 composite: None,
+                value_test: None,
                 failure: None,
                 uniqueness: None,
                 message: match unresolved {
@@ -2055,6 +2179,7 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            value_test: None,
             failure: None,
             uniqueness: None,
             message: if passed {
@@ -2085,17 +2210,52 @@ impl RecognitionEvaluator {
             provider
                 .require_ocr_model(&target.model_ref, &target.model_sha256)
                 .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-            let result = provider
-                .read_text(OcrProviderRequest {
-                    frame: provider_frame(scene),
-                    region,
-                    languages: &target.languages,
-                    timeout_ms: target.timeout_ms,
-                    model_ref: &target.model_ref,
-                    model_sha256: &target.model_sha256,
-                    blocks: OcrProviderBlocks::Implicit,
-                })
-                .map_err(|err| provider_error(&target.id, "ocr", err))?;
+            let request = OcrProviderRequest {
+                frame: provider_frame(scene),
+                region,
+                languages: &target.languages,
+                timeout_ms: target.timeout_ms,
+                model_ref: &target.model_ref,
+                model_sha256: &target.model_sha256,
+                blocks: OcrProviderBlocks::Implicit,
+            };
+            // Workflow #396 REC-6: a field or reading target keeps its observation for the
+            // frame's collection, and a second evaluation here reuses it.
+            let result = if context
+                .remembered_targets
+                .is_some_and(|targets| targets.contains(&target.id))
+            {
+                let kept = context
+                    .observations
+                    .borrow()
+                    .observations
+                    .get(&target.id)
+                    .map(|kept| kept.observation.result.clone());
+                match kept {
+                    Some(mut result) => {
+                        result.ppocr_diagnostics = Vec::new();
+                        result
+                    }
+                    None => {
+                        let observation = provider
+                            .read_text_with_execution_evidence(request)
+                            .map_err(|err| provider_error(&target.id, "ocr", err))?;
+                        context.observations.borrow_mut().observations.insert(
+                            target.id.clone(),
+                            RememberedOcrObservation {
+                                region,
+                                region_evidence: region_evidence.clone(),
+                                observation: observation.clone(),
+                            },
+                        );
+                        observation.result
+                    }
+                }
+            } else {
+                provider
+                    .read_text(request)
+                    .map_err(|err| provider_error(&target.id, "ocr", err))?
+            };
             let ocr = validate_ocr_result(result, region)?;
             let matched_expected = target
                 .expected
@@ -2137,6 +2297,7 @@ impl RecognitionEvaluator {
                 nn: None,
                 color_digest: None,
                 composite: None,
+                value_test: None,
                 failure: None,
                 uniqueness: None,
                 message,
@@ -2201,6 +2362,7 @@ impl RecognitionEvaluator {
             }),
             color_digest: None,
             composite: None,
+            value_test: None,
             failure: None,
             uniqueness: None,
             message: if passed {
@@ -2257,6 +2419,7 @@ impl RecognitionEvaluator {
                 observed_cells: observed.to_hex(),
             })),
             composite: None,
+            value_test: None,
             failure: None,
             uniqueness: None,
             message: if passed {
@@ -2333,6 +2496,7 @@ impl RecognitionEvaluator {
                 members,
                 ppocr_diagnostics,
             })),
+            value_test: None,
             failure: None,
             uniqueness: None,
             message,
@@ -2415,7 +2579,8 @@ pub fn unsupported_recognition_targets(
             | RecognitionTarget::Ocr(_)
             | RecognitionTarget::Nn(_)
             | RecognitionTarget::ColorDigest(_)
-            | RecognitionTarget::Composite(_) => None,
+            | RecognitionTarget::Composite(_)
+            | RecognitionTarget::ValueTest(_) => None,
         })
         .collect()
 }
@@ -2430,6 +2595,7 @@ impl RecognitionTarget {
             Self::Nn(target) => &target.id,
             Self::ColorDigest(target) => &target.id,
             Self::Composite(target) => &target.id,
+            Self::ValueTest(target) => &target.id,
         }
     }
 }
@@ -2542,7 +2708,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 &["type", "id", "region", "expected", "click", "max_distance"][..]
             }
             "color" => &["type", "id", "region", "expected", "click"][..],
-            "color_digest" | "composite" if schema != SCHEMA_0_7 => {
+            "color_digest" | "composite" | "value_test" if schema != SCHEMA_0_7 => {
                 return Err(RecognitionPackError::fatal_with_code(
                     RecognitionPackErrorCode::UnsupportedTarget,
                     format!(
@@ -2567,6 +2733,11 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 "max_cell",
             ][..],
             "composite" => &["type", "id", "mode", "members"][..],
+            // Workflow #396 REC-6.
+            "value_test" => {
+                value_test::validate_value_test_wire(object, index)?;
+                &["type", "id", "left", "op", "right"][..]
+            }
             "click_only" => &["type", "id", "click"][..],
             "ocr" if schema != SCHEMA_0_7 && object.contains_key("locate") => {
                 return Err(RecognitionPackError::fatal_with_code(
@@ -3085,6 +3256,14 @@ fn validate_pack(
                 }
                 validate_composite_members(pack, index, target, errors);
             }
+            RecognitionTarget::ValueTest(target) => {
+                if !schema_0_7 {
+                    errors.push(format!(
+                        "target[{index}] value test '{}' requires schema_version '{SCHEMA_0_7}'",
+                        target.id
+                    ));
+                }
+            }
         }
     }
     target_consensus::validate_target_consensus(pack, errors);
@@ -3096,6 +3275,10 @@ fn validate_pack(
     target_unique::validate_unique_declarations(pack, errors);
     // Workflow #396 REC-7.
     template_mask::validate_mask_declarations(pack, errors);
+    // Workflow #396 REC-6.
+    if let Err(refusal) = value_test::validate_value_test_declarations(pack) {
+        errors.push(format!("{}: {}", refusal.pointer, refusal.explanation));
+    }
 }
 
 /// Algorithm, grid, grid fit, cells and exclusion list of a digest declaration. The region
@@ -3114,7 +3297,8 @@ fn validate_color_digest_declaration(target: &ColorDigestTarget) -> Result<(), C
     Ok(())
 }
 
-/// 2..=8 distinct members, each an existing template, color, color_digest, OCR or NN target.
+/// 2..=8 distinct members, each an existing template, color, color_digest, OCR or NN target or
+/// (Workflow #396 REC-6) value test.
 fn validate_composite_members(
     pack: &RecognitionPack,
     index: usize,
@@ -3161,7 +3345,8 @@ fn validate_composite_members(
                 | RecognitionTarget::Color(_)
                 | RecognitionTarget::ColorDigest(_)
                 | RecognitionTarget::Ocr(_)
-                | RecognitionTarget::Nn(_),
+                | RecognitionTarget::Nn(_)
+                | RecognitionTarget::ValueTest(_),
             ) => {}
         }
     }

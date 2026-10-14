@@ -199,6 +199,7 @@ impl RecognitionEvaluator {
             nn: None,
             color_digest: None,
             composite: None,
+            value_test: None,
             failure: None,
             uniqueness: None,
             message: template_message(template_ok, color_ok),

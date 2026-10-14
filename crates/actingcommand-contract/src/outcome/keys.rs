@@ -153,6 +153,10 @@ outcome_keys! {
     score_milli: integer,
     second_score_milli: integer,
     margin_milli: integer,
+    // Workflow #396 REC-6.
+    value_side: vocab(value_side),
+    value_problem: vocab(value_problem),
+    value_op: vocab(value_op),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),

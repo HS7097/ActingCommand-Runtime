@@ -106,8 +106,10 @@ retain their `0.3` through `0.7` version boundary. Fields execution uses Runtime
 
 There are one or two unique admitted pages and 1–32 ordered fields. Each field has a unique
 ID and OCR target; its group ID associates fields within one admitted frame only. IDs are
-1–128 ASCII alphanumeric characters or `_-/.:`. Each target must be a bounded OCR ROI and
-must not form part of its page's recognition gate. Fields are collected at the existing
+1–128 ASCII alphanumeric characters or `_-/.:`. Each target must be a bounded OCR ROI.
+Workflow #396 REC-6: the page's recognition gate may use any recognition backend and may name
+a field target, directly or as a member of a check; the gate's observation of that target on
+the admitted frame is the field's observation. Fields are collected at the existing
 post-admission capture points, in declaration order, with one provider observation per
 target. Parsing and dictionary mapping never call OCR again.
 
@@ -135,9 +137,12 @@ or substitutes a declared search rectangle. Existing absolute/full-frame OCR is 
 
 Page recognition and field collection share a Scene-bound template evaluation context.
 A previously evaluated template is reused; an unevaluated anchor is evaluated once in
-that Scene. The text reads of locate targets (section Located text) are remembered per
-request within that Scene; other OCR output is not cached, and callers cannot import an
-old template result.
+that Scene. The text reads of locate targets (section Located text) and of value tests
+(`resource-declarations.md`, section Task schema `0.9` value tests) are remembered per request
+within that Scene. The observation a page gate makes of a field or reading target (or of a
+`0.7` collection target) is kept by target and taken once by that frame's collection or
+reading, with its execution evidence; its PP-OCR reports stay with the gate's evaluation.
+Other OCR output is not cached, and callers cannot import an old template result.
 The context is bounded by admitted target identities and is released with the frame.
 Best-match score, threshold and the existing color check govern the anchor. An anchor that
 declares `unique` (`resource-declarations.md`, section Task schema `0.9` unique matches) is
@@ -190,13 +195,21 @@ ASCII decimal rule on both sides.
 or `×` (U+00D7), immediately followed by one or more ASCII decimal digits and nothing else.
 `x2`, `×6`, `X10` and `1` resolve to `2`, `6`, `10` and `1`; the prefix alone, a space after
 the prefix, a repeated prefix, any other leading character such as `<1`, and a trailing
-prefix are invalid. Internal whitespace, signs, decimal points and non-ASCII digits are
-invalid in all four formats. Group separators are exclusive to `comma_grouped`; unknown
+prefix are invalid.
+
+`clock_hms` (Workflow #396 REC-6) accepts `H:MM:SS`: 1 to 3 ASCII digits of hours, then two
+ASCII digits each of minutes and seconds in `00..=59`, separated by `:`. The value is the number
+of seconds: `1:05:00` resolves to `3900`; `1:5:00`, `1:05:60` and `1234:00:00` are invalid. Fields
+and readings accept it like the other formats. Internal whitespace, signs, decimal points and
+non-ASCII digits are invalid in every format. Group separators are exclusive to `comma_grouped`; unknown
 formats fail declaration admission. A pack that declares `times_prefixed` needs Runtime
 v0.11.3 or later; an older Runtime refuses its program at admission.
 
 The contract owner's pure `OcrUnsignedIntegerFormat::parse` entry is shared by execution
-and official client value verification. It retains the original raw/trimmed text,
+and official client value verification. Its `parse_parts` (Workflow #396 REC-6) returns both
+parts without a range check: the value, and for `current_capacity` the capacity, which only a
+value test reads; `parse` checks the value against the range, and fields and readings keep
+their output. It retains the original raw/trimmed text,
 ROI/FrameId binding, observation budgets and existing field value/reason types; parsing
 does not invoke OCR or create another observation or ledger event.
 
@@ -408,7 +421,9 @@ other hit passes with `truncated: true`. A target that declares `unique` fails w
 error on its recognition error row.
 
 Reads are counted per consumer: one page recognition (every page rule of the page set) or
-one guard evaluation. A consumer reads with at most 4 provider calls and at most one frame
+one guard evaluation. The reads are those of locate targets and (Workflow #396 REC-6) of value
+tests' sides, which read an ordinary OCR target as one request of its own region. A consumer
+reads with at most 4 provider calls and at most one frame
 of summed region area, each distinct request once; requests are the same when their
 resolved region, model, languages, timeout, `blocks` and `line_merge` are equal. Within one
 Scene a request calls the provider once; a later locate target with the same request reads

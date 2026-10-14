@@ -287,6 +287,53 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "value_test_unresolved": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "value_side": "required",
+        "value_problem": "required",
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A value test did not pass because one of its sides could not be read (Workflow #396 REC-6). target_id is the value test; value_side names the side (the left side is reported first) and value_problem why: the trimmed text was empty, not in the declared format or too large for 64 bits, its value (or the declared part) lay outside min..=max, the OCR target's region could not be resolved, or the read's confidence was missing or below the OCR target's minimum_confidence. A provider failure is an evaluation error instead. Carried as the target evaluation's failure: a page whose rule needs the value test does not match, and a guard refuses its input with it as the cause. The read text and value are not values of the code; they are in the value test's evidence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "value_test_not_met": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "value_op": "required",
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A value test did not pass: both sides read, and the left value compared with the right one (a constant, or the other read value times mul plus add) does not satisfy value_op (Workflow #396 REC-6). target_id is the value test. Carried as the target evaluation's failure: a page whose rule needs the value test does not match, and a guard refuses its input with it as the cause. The values are not values of the code; they are in the value test's evidence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "recognition_pack_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -468,6 +515,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Scoring a masked template target that declares no unique on its exact score map (Workflow #396 REC-7)."
+    },
+    "value_test_evaluate": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading, parsing and comparing the sides of a value test (Workflow #396 REC-6)."
     }
   }
 }
