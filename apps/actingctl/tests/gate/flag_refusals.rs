@@ -335,6 +335,12 @@ const CLIENT: &[Subcommand] = &[
         &["--limit", "5"],
         &["--state-root", ROOT],
     ),
+    // Workflow #389 MCP-8: `overview` and `--sections`.
+    result(
+        &["overview", "--state-root", ROOT, "--sections", "instances"],
+        &["--limit", "5"],
+        &["--sections", "instances"],
+    ),
     result(
         &["packs", "--root", ROOT],
         &["--state-root", ROOT],
