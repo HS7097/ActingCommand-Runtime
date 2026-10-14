@@ -1222,7 +1222,21 @@ impl CaptureQueue {
     /// The writer drains for its close (§8.2): the segment edges of that drain are not reported
     /// after the close record.
     pub(super) fn begin_close(&self) {
-        self.lock().closing = true;
+        let mut state = self.lock();
+        state.closing = true;
+        self.release(state);
+    }
+
+    /// Test hook: waits up to `wait` for the close to begin ([`Self::begin_close`]); whether it
+    /// has.
+    #[cfg(test)]
+    pub(super) fn wait_close_begun(&self, wait: Duration) -> bool {
+        let state = self.lock();
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, wait, |state| !state.closing)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.closing
     }
 
     /// The writer ended: waiters of the barrier wake.
@@ -1659,6 +1673,13 @@ impl LedgerCaptureHandle {
             fingerprinter,
             reply_timeout,
         }
+    }
+
+    /// Test hook: waits up to `wait` for the writer's close to begin (§8.2), from which the
+    /// drain's segment edges are no longer reported; whether it has.
+    #[cfg(test)]
+    pub(crate) fn wait_close_begun(&self, wait: Duration) -> bool {
+        self.queue.wait_close_begun(wait)
     }
 }
 

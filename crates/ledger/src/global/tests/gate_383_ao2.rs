@@ -1122,7 +1122,9 @@ fn ao2_h_the_budget_the_batches_and_the_dump_limit_follow_the_configuration() {
 
 // AO2-i: the close: with records in the dump segment and in memory and the close record captured
 // last, the close drains both and then closes the ledger; the close record is the epoch's last
-// record and the index's `last_close`.
+// record and the index's `last_close`. The writer is released only once the close has begun
+// (§8.2): released earlier, it drains on its own wake and can cross the spilled and busy ends
+// before the closer thread begins the close, and those edges' findings follow the close record.
 #[test]
 fn ao2_i_the_close_drains_both_segments_and_the_close_record_is_last() {
     let root = Root::new();
@@ -1153,6 +1155,7 @@ fn ao2_i_the_close_drains_both_segments_and_the_close_record_is_last() {
     let closer = thread::spawn(move || {
         let _ = closed.send(ledger.close());
     });
+    assert!(capture.wait_close_begun(GATE_WAIT), "the close begins");
     stall.release();
     finished
         .recv_timeout(GATE_WAIT)
