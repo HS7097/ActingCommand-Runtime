@@ -22,6 +22,8 @@ mod mcp_facts_parity;
 mod mcp_harness;
 mod mcp_instance_alias;
 mod mcp_observe_parity;
+// Workflow #389 MCP-8: `actingctl overview` ↔ `ac_overview`.
+mod mcp_overview_parity;
 mod mcp_packs;
 mod mcp_runs_parity;
 mod mcp_shell;

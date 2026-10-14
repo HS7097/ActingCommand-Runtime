@@ -590,11 +590,12 @@ impl Declaration<'_> {
     }
 
     /// A select step (`contracts/selection-graph.md`, section Select step):
-    /// `{"layout_id", "policy": {"path", "sha256"}}`, where the layout ID has the candidate
-    /// layout grammar and the policy is a task-local `policies/<name>.json` document sealed by
-    /// the SHA-256 of its bytes. The step is guarded and confirmed: it declares its `guard` and
-    /// its `expect_after`, and is never an unguarded trusted coordinate. Whether the layout and
-    /// the policy fit the task is checked with the policy document (`select_policy`).
+    /// `{"layout_id", "policy": {"path"}}`, where the layout ID has the candidate layout grammar
+    /// and the policy is a task-local `policies/<name>.json` document (a `sha256` the policy may
+    /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it
+    /// declares its `guard` and its `expect_after`, and is never an unguarded trusted
+    /// coordinate. Whether the layout and the policy fit the task is checked with the policy
+    /// document (`select_policy`).
     fn select_step(
         &self,
         operation: &Map<String, Value>,
@@ -752,6 +753,62 @@ impl Declaration<'_> {
         for field in ["verify_template", "color_probe", "check", "verify_text"] {
             if let Some(value) = object.get(field).filter(|value| !value.is_null()) {
                 self.string(value, &child(pointer, field))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #396 REC-8: `candidate_layouts[].shared_ocr` of task schema `0.9`, a
+    /// `fixed_slots` layout's one shared detection read: a `rect` or `full_frame` region, the
+    /// OCR request's `languages`, `timeout_ms`, `model_ref` and `model_sha256`, `blocks` and an
+    /// optional `line_merge`. Its shape is checked here; its values with the derived
+    /// recognition pack (`contracts/selection-graph.md`, section Shared OCR read).
+    fn shared_ocr(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(
+            value,
+            pointer,
+            &[
+                "region",
+                "languages",
+                "timeout_ms",
+                "model_ref",
+                "model_sha256",
+                "blocks",
+                "line_merge",
+            ],
+        )?;
+        self.source_region(
+            self.required(object, pointer, "region")?,
+            &child(pointer, "region"),
+            false,
+        )?;
+        self.strings(
+            self.required(object, pointer, "languages")?,
+            &child(pointer, "languages"),
+        )?;
+        self.unsigned(
+            self.required(object, pointer, "timeout_ms")?,
+            &child(pointer, "timeout_ms"),
+        )?;
+        for field in ["model_ref", "model_sha256", "blocks"] {
+            self.string(
+                self.required(object, pointer, field)?,
+                &child(pointer, field),
+            )?;
+        }
+        if let Some(line_merge) = object.get("line_merge") {
+            let line_merge_pointer = child(pointer, "line_merge");
+            if line_merge.is_object() {
+                let factor = self.object(line_merge, &line_merge_pointer, &["gap_factor"])?;
+                self.unsigned(
+                    self.required(factor, &line_merge_pointer, "gap_factor")?,
+                    &child(&line_merge_pointer, "gap_factor"),
+                )?;
+            } else {
+                self.string(line_merge, &line_merge_pointer)?;
             }
         }
         Ok(())
@@ -1399,6 +1456,7 @@ impl Declaration<'_> {
                     "slots",
                     "unknown_identity",
                     "sample_interval_ms",
+                    "shared_ocr",
                 ],
             )?;
             let id_pointer = child(&pointer, "id");
@@ -1422,7 +1480,7 @@ impl Declaration<'_> {
                 }
             };
             let other_kind: &[&str] = if anchored {
-                &["slots"]
+                &["slots", "shared_ocr"]
             } else {
                 &[
                     "anchor",
@@ -1439,6 +1497,9 @@ impl Declaration<'_> {
                     &child(&pointer, field),
                     ResourceDeclarationReason::UnknownField,
                 ));
+            }
+            if let Some(shared) = object.get("shared_ocr") {
+                self.shared_ocr(shared, &child(&pointer, "shared_ocr"))?;
             }
             let features_pointer = child(&pointer, "features");
             let features = self.array(
@@ -1571,8 +1632,14 @@ impl Declaration<'_> {
                     self.string(target, &target_pointer)?;
                 }
             }
+            // Workflow #396 REC-8: `shared_ocr` holds a source region, checked above; the
+            // features are checked on the pack shape without it.
+            let mut layout = layout.clone();
+            if let Some(object) = layout.as_object_mut() {
+                object.remove("shared_ocr");
+            }
             let typed: actingcommand_recognition_pack::CandidateLayout =
-                serde_json::from_value(layout.clone()).map_err(|error| {
+                serde_json::from_value(layout).map_err(|error| {
                     self.refuse(
                         &pointer,
                         ResourceDeclarationReason::InvalidType,
@@ -2142,12 +2209,12 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// (`contracts/selection-graph.md`, section Select step). It is read as the selection-policy
 /// crate reads a document: decoded, refused when its canonical form would be ambiguous
 /// (floats, unsafe integers, duplicate keys), then validated. Each select step that names it
-/// must name a candidate layout its own task declares on the step's `from` page (its
-/// `policy.sha256` is format-checked by the declaration grammar and compared with nothing,
-/// Workflow #336 PKG-S1); the document must apply to that layout, read only features the
-/// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
-/// require exactly one candidate. A document that declares a record list, which `keyed_fact`
-/// reads by the candidate's identity, needs a layout whose `unknown_identity` is `reject`.
+/// must name a candidate layout its own task declares on the step's `from` page (a
+/// `policy.sha256` it may still carry is ignored, Workflow #336 PKG-S2); the document must
+/// apply to that layout, read only features the layout declares with their type (`passed` as
+/// boolean, `measure_milli` as integer), and require exactly one candidate. A document that
+/// declares a record list, which `keyed_fact` reads by the candidate's identity, needs a layout
+/// whose `unknown_identity` is `reject`.
 /// The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
 fn select_policy(
@@ -2827,31 +2894,20 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// A task-local JSON document reference: `{"path"}`. Workflow #336 PKG-S2 (option 丙, D5):
+    /// a `sha256` the reference may still carry is optional and ignored, whatever its value.
     fn json_reference(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         let object = self.object(value, pointer, &["path", "sha256"])?;
-        for field in ["path", "sha256"] {
-            self.string(
-                self.required(object, pointer, field)?,
-                &child(pointer, field),
-            )?;
-        }
+        self.string(
+            self.required(object, pointer, "path")?,
+            &child(pointer, "path"),
+        )?;
         if !object["path"]
             .as_str()
             .is_some_and(super::safe_task_local_resource_path)
         {
             return Err(self.error(
                 &child(pointer, "path"),
-                ResourceDeclarationReason::InvalidValue,
-            ));
-        }
-        if !object["sha256"].as_str().is_some_and(|hash| {
-            hash.len() == 64
-                && hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        }) {
-            return Err(self.error(
-                &child(pointer, "sha256"),
                 ResourceDeclarationReason::InvalidValue,
             ));
         }

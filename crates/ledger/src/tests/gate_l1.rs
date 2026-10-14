@@ -151,7 +151,6 @@ fn selection_evaluated() -> TaskSemanticFact {
             projection: projection.into(),
             policy: TaskSelectionPolicy {
                 path: "policy.json".to_owned(),
-                package_sha256: "c".repeat(64),
                 policy_sha256: format!("sha256:{}", "d".repeat(64)),
                 policy_id: "policy-a".to_owned(),
             },

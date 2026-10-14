@@ -2105,6 +2105,7 @@ pub(crate) mod test_spellings {
             AppendPolicyExecution => "append_policy_execution",
             AppendTestApprovalEvent => "append_test_approval_event",
             AppendTestContainedTaskSemantic => "append_test_contained_task_semantic",
+            AppendTestLifecycleObserved => "append_test_lifecycle_observed",
             BuildTestClaimConnection => "build_test_claim_connection",
             CompletePolicySuccessWithPartialLinksForTest => "complete_policy_success_with_partial_links_for_test",
             CompleteScheduledPolicyFailureWithoutTerminalForTest => "complete_scheduled_policy_failure_without_terminal_for_test",
@@ -2167,9 +2168,11 @@ pub(crate) mod test_spellings {
             ScanTestLeaseExpiry => "scan_test_lease_expiry",
             ScheduleStartupPackageForTest => "schedule_startup_package_for_test",
             SerializeTestLeaseExpiryScan => "serialize_test_lease_expiry_scan",
+            SetPolicyConditionForTest => "set_policy_condition_for_test",
             SetTestPolicyInputs => "set_test_policy_inputs",
             StagePolicyCatalogForCasTest => "stage_policy_catalog_for_cas_test",
             StoreTestReport => "store_test_report",
+            TakePolicyConditionForTest => "take_policy_condition_for_test",
             ValidatePolicyAdmissionRequestForTest => "validate_policy_admission_request_for_test",
         }
     }

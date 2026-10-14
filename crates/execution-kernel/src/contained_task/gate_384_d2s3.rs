@@ -17,6 +17,7 @@
 use super::*;
 use actingcommand_contract::{PackageRef, ResourceDeclarationReason};
 use actingcommand_device::CaptureBackendName;
+use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition_pack::{
     FsAssetResolver, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
     OcrProviderObservation, OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock,

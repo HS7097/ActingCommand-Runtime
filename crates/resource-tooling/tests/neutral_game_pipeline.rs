@@ -79,11 +79,13 @@ fn fields_v1_neutral_declaration_and_reference_closure() {
                 invalid["post_admission_ocr"]["fields"][0]["value"] =
                     json!({"type":"unsigned_integer","min":9,"max":2})
             }
-            // Workflow #336 PKG-S1 (model M-PKG v1.1 §4.2): the pin is still required and its
-            // format still checked, so a 64-character pin that is not hex is refused.
+            // Workflow #336 PKG-S2 (model M-PKG v1.1 §4.3, D5): a dictionary pin is ignored,
+            // whatever its value; the reference without its path is refused.
             5 => {
-                invalid["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
-                    json!("g".repeat(64))
+                invalid["post_admission_ocr"]["fields"][0]["value"]["dictionary"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("path");
             }
             6 => {
                 invalid["post_admission_ocr"]["fields"][0]

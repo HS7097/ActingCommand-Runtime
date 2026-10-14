@@ -145,8 +145,7 @@ fn verify_lab_projection(
         || evidence.request_id != source.operation.record.prepared.request_id
         || evidence.correlation_id != source.operation.record.prepared.correlation_id
         || evidence.instance_id != prepared.instance_id
-        || evidence.expected_package_sha256 != prepared.expected_package_sha256
-        || evidence.actual_package_sha256 != prepared.actual_package_sha256
+        || evidence.package_label != prepared.package_label
         || evidence.frame != frame.observation
         || evidence.frame != observation.frame
         || evidence.projection != observation.projection
@@ -383,8 +382,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                     })?;
                 let projection = ContainedPageObservation {
                     instance_id: evidence.instance_id,
-                    expected_package_sha256: evidence.expected_package_sha256,
-                    actual_package_sha256: evidence.actual_package_sha256,
+                    package_label: evidence.package_label,
                     frame: evidence.frame,
                     status: evidence.status,
                     projection: evidence.projection,

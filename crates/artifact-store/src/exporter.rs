@@ -1901,12 +1901,8 @@ mod tests {
             identity: EvidenceExportIdentity {
                 run_id: *identity.run.transport(),
                 correlation_id: *identity.correlation.transport(),
-                package: EvidencePackage::new(
-                    "sealed-package.zip",
-                    "b".repeat(64),
-                    PackageVerification::Passed,
-                )
-                .expect("package"),
+                package: EvidencePackage::new("sealed-package.zip", PackageVerification::Passed)
+                    .expect("package"),
                 task_outcome: outcome,
                 terminal_receipt: terminal.clone(),
                 projection_profile: ProjectionProfile::Forensic,

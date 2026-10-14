@@ -52,6 +52,11 @@ pub(super) fn help_data() -> Value {
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
             "package digest": ["--package <directory | .zip | .json container>"],
+            "replay": [
+                "--package <directory | .zip | .json container>",
+                "--frames <directory of PNG frames, replayed in file-name order>",
+                "--facts <the instance answer of actingctl facts --instance or ac_facts, read without a key prefix>"
+            ],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>",

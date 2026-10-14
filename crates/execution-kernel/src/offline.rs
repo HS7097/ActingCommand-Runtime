@@ -9,7 +9,7 @@ use crate::{
     PreparedContainedTask, SelectionState, SelectionStateRequest,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Detail, Outcome};
 use actingcommand_contract::{InputAction, InstanceFactContext, InstanceFactSnapshot};
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::Sha256Hash;
@@ -383,16 +383,7 @@ impl ContainedTaskRuntime for OfflineRuntime {
         self.selection_now_unix_ms = Some(now_unix_ms);
         self.confirmation_repeats_last_frame = true;
         Ok(SelectionState::Snapshot {
-            snapshot: InstanceFactSnapshot {
-                snapshot_id: OFFLINE_SNAPSHOT_ID.to_owned(),
-                ledger_position: OFFLINE_SNAPSHOT_POSITION,
-                context: InstanceFactContext {
-                    instance_id: OFFLINE_INSTANCE.to_owned(),
-                    server_id: request.server,
-                    game_id: request.game,
-                },
-                records: Vec::new(),
-            },
+            snapshot: empty_offline_snapshot(request),
             now_unix_ms,
         })
     }
@@ -445,6 +436,373 @@ impl ContainedTaskRuntime for OfflineRuntime {
                     action,
                     guard,
                 });
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// The empty fact snapshot of an offline select step, in the package's game and server.
+fn empty_offline_snapshot(request: SelectionStateRequest) -> InstanceFactSnapshot {
+    InstanceFactSnapshot {
+        snapshot_id: OFFLINE_SNAPSHOT_ID.to_owned(),
+        ledger_position: OFFLINE_SNAPSHOT_POSITION,
+        context: InstanceFactContext {
+            instance_id: OFFLINE_INSTANCE.to_owned(),
+            server_id: request.server,
+            game_id: request.game,
+        },
+        records: Vec::new(),
+    }
+}
+
+/// Workflow #308 SEL-L6a (FCM T-01, T-03): the facts a replayed select step evaluates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OfflineReplayFacts {
+    /// No snapshot was given: a select step evaluates the empty offline snapshot (the dry run's)
+    /// at `now_unix_ms`.
+    Empty { now_unix_ms: u64 },
+    /// One instance's fact snapshot as a Runtime answered it (`actingctl facts --instance`, MCP
+    /// `ac_facts`), evaluated at the instant the Runtime read it.
+    Snapshot {
+        snapshot: InstanceFactSnapshot,
+        read_at_unix_ms: u64,
+    },
+}
+
+/// The entry check of a replayed run: the entry pages it required and the one its frame matched
+/// (`None` when it matched none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfflineReplayEntry {
+    pub required_pages: Vec<String>,
+    pub matched_page: Option<String>,
+}
+
+/// One input a replayed step would have sent, with the guard outcome it was sent under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfflineReplayEffect {
+    pub action: InputAction,
+    pub guard: ContainedTaskGuardOutcome,
+}
+
+/// One step of a replayed run, in the order the interpreter started it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OfflineReplayStep {
+    pub step_index: u32,
+    pub operation_label: String,
+    pub from_page: String,
+    /// The pages the operation declares it reaches, as the run waits for them: its `to` page
+    /// set (more than one page for a multi-destination operation), else its `expect_after`
+    /// page; empty when it declares neither.
+    pub destinations: Vec<String>,
+    /// A select step's decision record (Workflow #308), the last attempt's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Box<actingcommand_contract::TaskSelectionRecord>>,
+    /// The inputs the step would have sent, in order.
+    pub effects: Vec<OfflineReplayEffect>,
+    /// The page the step finished on; `None` when the run ended inside the step.
+    pub reached_page: Option<String>,
+}
+
+/// How a replayed run ended.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OfflineReplayEnd {
+    /// The run completed on `final_page`; `scheduling_outcome_key` is the key the run selected
+    /// for its scheduling outcome, when it selected one.
+    Completed {
+        final_page: Option<String>,
+        executed_steps: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scheduling_outcome_key: Option<String>,
+    },
+    /// The run ended with the outcome of its failure; a run that needed a frame after the last
+    /// one ends with `offline_fixture_exhausted`.
+    Refused {
+        #[serde(serialize_with = "full_envelope")]
+        outcome: Outcome,
+    },
+}
+
+/// An outcome in its full interface form: the replay is read by the person or the CI job that
+/// ran it.
+fn full_envelope<S: Serializer>(outcome: &Outcome, serializer: S) -> Result<S::Ok, S::Error> {
+    outcome.envelope(Detail::Full).serialize(serializer)
+}
+
+/// Workflow #308 SEL-L6a: a whole contained task replayed over a saved frame sequence.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OfflineReplayResult {
+    pub mode: &'static str,
+    pub executed: bool,
+    /// The package's identity, its `package_id` (Workflow #336 PKG-S1: no package digest).
+    pub package_id: String,
+    pub task_id: String,
+    /// The frames the run captured, from the first of the sequence on.
+    pub frames_read: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<OfflineReplayEntry>,
+    /// Every page recognition of the run, in order.
+    pub recognition: Vec<OfflineRecognitionResult>,
+    pub steps: Vec<OfflineReplayStep>,
+    pub end: OfflineReplayEnd,
+    /// The instant a select step evaluated at; present only when one was evaluated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_now_unix_ms: Option<u64>,
+}
+
+/// Why a replay gave no result.
+#[derive(Debug)]
+pub enum OfflineReplayError<E> {
+    /// The frame sequence failed to give its next frame; its error unchanged.
+    Frames(E),
+    /// The interpreter broke an invariant of the replay adapter.
+    Invariant(OfflineSimulationError),
+}
+
+/// Workflow #308 SEL-L6a (FCM T-01, T-03): replays the whole of `task` with the production
+/// contained-task interpreter over `frames`. Every capture takes the next frame of the
+/// sequence, a select step's confirmation and every sample of a multi-frame consensus
+/// included; every input is recorded and performs nothing, and the next capture shows what the
+/// recording saw after it. A select step evaluates `facts`. No device backend can be injected
+/// through this boundary.
+pub fn replay_contained_task<I, E>(
+    task: &PreparedContainedTask,
+    frames: I,
+    facts: OfflineReplayFacts,
+) -> Result<OfflineReplayResult, OfflineReplayError<E>>
+where
+    I: Iterator<Item = Result<Frame, E>>,
+{
+    let mut runtime = ReplayRuntime {
+        task,
+        frames,
+        facts,
+        frames_read: 0,
+        entry: None,
+        recognition: Vec::new(),
+        steps: Vec::new(),
+        pending_action: None,
+        selection_now_unix_ms: None,
+    };
+    let end = match task.run(&mut runtime) {
+        Ok(outcome) => OfflineReplayEnd::Completed {
+            final_page: outcome.final_page,
+            executed_steps: outcome.executed_steps,
+            scheduling_outcome_key: outcome.selected_scheduling_outcome,
+        },
+        Err(ContainedTaskRunError::Task(error)) => OfflineReplayEnd::Refused {
+            outcome: error.outcome(),
+        },
+        Err(
+            ContainedTaskRunError::Boundary(boundary)
+            | ContainedTaskRunError::NonfatalOperation(boundary),
+        ) => match boundary {
+            ReplayBoundary::FramesExhausted => OfflineReplayEnd::Refused {
+                outcome: Outcome::new(FIXTURE_EXHAUSTED_CODE),
+            },
+            ReplayBoundary::Step(error) => OfflineReplayEnd::Refused {
+                outcome: error.outcome(),
+            },
+            ReplayBoundary::Frames(error) => return Err(OfflineReplayError::Frames(error)),
+            ReplayBoundary::Invariant(code) => {
+                return Err(OfflineReplayError::Invariant(OfflineSimulationError::new(
+                    code,
+                )));
+            }
+        },
+    };
+    Ok(OfflineReplayResult {
+        mode: "offline_replay",
+        executed: false,
+        package_id: task.package_label().to_string(),
+        task_id: task.task_label().to_string(),
+        frames_read: runtime.frames_read,
+        entry: runtime.entry,
+        recognition: runtime.recognition,
+        steps: runtime.steps,
+        end,
+        selection_now_unix_ms: runtime.selection_now_unix_ms,
+    })
+}
+
+struct ReplayRuntime<'t, I> {
+    task: &'t PreparedContainedTask,
+    frames: I,
+    facts: OfflineReplayFacts,
+    frames_read: usize,
+    entry: Option<OfflineReplayEntry>,
+    recognition: Vec<OfflineRecognitionResult>,
+    steps: Vec<OfflineReplayStep>,
+    /// The action of the last effect intent, which the next input must send.
+    pending_action: Option<InputAction>,
+    selection_now_unix_ms: Option<u64>,
+}
+
+#[derive(Debug)]
+enum ReplayBoundary<E> {
+    /// The run needed a frame after the last one of the sequence.
+    FramesExhausted,
+    Frames(E),
+    /// A started step names an operation the replay cannot describe; the run ends with it.
+    Step(Box<crate::ContainedTaskError>),
+    Invariant(Code),
+}
+
+impl<I> ReplayRuntime<'_, I> {
+    /// The step `step_index` started last; `None` for a step that never started.
+    fn step(&mut self, step_index: u32) -> Option<&mut OfflineReplayStep> {
+        self.steps
+            .iter_mut()
+            .rev()
+            .find(|step| step.step_index == step_index)
+    }
+}
+
+/// A step trace for a step that never started.
+fn step_not_started<E>() -> ReplayBoundary<E> {
+    ReplayBoundary::Invariant(SharedCode::ContainedTaskStateInvalid.code())
+}
+
+impl<I, E> ContainedTaskRuntime for ReplayRuntime<'_, I>
+where
+    I: Iterator<Item = Result<Frame, E>>,
+{
+    type Error = ReplayBoundary<E>;
+
+    fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
+        let frame = self
+            .frames
+            .next()
+            .ok_or(ReplayBoundary::FramesExhausted)?
+            .map_err(ReplayBoundary::Frames)?;
+        self.frames_read += 1;
+        Ok(frame.into())
+    }
+
+    /// A saved sequence holds every sample the recording took, so a multi-frame consensus takes
+    /// its samples from it.
+    fn sampling_supported(&self) -> bool {
+        true
+    }
+
+    fn selection_state(
+        &mut self,
+        request: SelectionStateRequest,
+    ) -> Result<SelectionState, Self::Error> {
+        let (snapshot, now_unix_ms) = match &self.facts {
+            OfflineReplayFacts::Empty { now_unix_ms } => {
+                (empty_offline_snapshot(request), *now_unix_ms)
+            }
+            OfflineReplayFacts::Snapshot {
+                snapshot,
+                read_at_unix_ms,
+            } => (snapshot.clone(), *read_at_unix_ms),
+        };
+        self.selection_now_unix_ms = Some(now_unix_ms);
+        Ok(SelectionState::Snapshot {
+            snapshot,
+            now_unix_ms,
+        })
+    }
+
+    fn input(
+        &mut self,
+        action: InputAction,
+        _frame: Option<InputFrameContext>,
+    ) -> Result<(), Self::Error> {
+        match self.pending_action.take() {
+            None => Err(ReplayBoundary::Invariant(
+                ExecutionKernelCode::OfflineSimulationEffectIntentMissing.code(),
+            )),
+            Some(intended) if intended != action => Err(ReplayBoundary::Invariant(
+                ExecutionKernelCode::OfflineSimulationActionMismatch.code(),
+            )),
+            Some(_) => Ok(()),
+        }
+    }
+
+    fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        match trace {
+            ContainedTaskTrace::EntryRecognition {
+                required_pages,
+                matched_page,
+            } => {
+                self.entry = Some(OfflineReplayEntry {
+                    required_pages,
+                    matched_page,
+                });
+            }
+            ContainedTaskTrace::RecognitionCompleted {
+                candidate_pages,
+                page_label,
+                width,
+                height,
+                ..
+            } => self.recognition.push(OfflineRecognitionResult {
+                candidate_pages,
+                matched_page: page_label,
+                width,
+                height,
+            }),
+            ContainedTaskTrace::StepStarted {
+                step_index,
+                operation_label,
+                from_page,
+                ..
+            } => {
+                let destinations = self
+                    .task
+                    .operation_destinations(&operation_label)
+                    .map_err(|error| ReplayBoundary::Step(Box::new(error)))?;
+                self.steps.push(OfflineReplayStep {
+                    step_index,
+                    operation_label,
+                    from_page,
+                    destinations,
+                    selection: None,
+                    effects: Vec::new(),
+                    reached_page: None,
+                });
+            }
+            ContainedTaskTrace::SelectionEvaluated {
+                step_index,
+                selection,
+                ..
+            } => {
+                self.step(step_index)
+                    .ok_or_else(step_not_started::<E>)?
+                    .selection = Some(selection);
+            }
+            ContainedTaskTrace::EffectIntent {
+                step_index,
+                action,
+                guard,
+                ..
+            } => {
+                if self.pending_action.is_some() {
+                    return Err(ReplayBoundary::Invariant(
+                        ExecutionKernelCode::OfflineSimulationMultipleEffects.code(),
+                    ));
+                }
+                self.step(step_index)
+                    .ok_or_else(step_not_started::<E>)?
+                    .effects
+                    .push(OfflineReplayEffect {
+                        action: action.clone(),
+                        guard,
+                    });
+                self.pending_action = Some(action);
+            }
+            ContainedTaskTrace::StepFinished {
+                step_index,
+                page_label,
+                ..
+            } => {
+                self.step(step_index)
+                    .ok_or_else(step_not_started::<E>)?
+                    .reached_page = Some(page_label);
             }
             _ => {}
         }

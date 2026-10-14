@@ -65,9 +65,15 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     .and_then(|file| {
         // Workflow #398 RD-1b: the device refusal's detail, when the assembly meets it.
         let device = file.device_refusal();
+        // Workflow #369 S6a: the instance a `start_emulator` refusal names.
+        let start_emulator = file.start_emulator_refusal();
         file.assemble().map_err(|code| {
             if let Some(device) = device.filter(|device| device.code() == code) {
                 rejection = Some(Rejection::Device(device));
+            } else if code == ActingdCode::StartEmulatorRequiresDiscoveryBinding.code()
+                && let Some(alias) = start_emulator
+            {
+                rejection = Some(Rejection::StartEmulator(alias));
             }
             registered(code, ActingdLocation::ConfigAssemble)
         })
@@ -85,6 +91,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             adb_requirement,
             unbound_handsets,
             unused_device_bindings,
+            emulator_autostart,
         } = assembly;
         // Workflow #398 RD-1b (model-398 v1.1 §3.6): a handset the private binding file binds
         // no device to is refused here; a start registers it unavailable and goes on.
@@ -179,6 +186,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
             adb_default,
             vision,
             unused_device_bindings,
+            emulator_autostart,
         };
         let mut report = summarize(&config_path, &checked, &resource_packages)?;
         // Workflow #384 D2-S2: the bound recognition package of each instance that names one,
@@ -239,6 +247,12 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
                     Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
                     Rejection::RecognitionBinding(detail, message) => (detail, message),
                     Rejection::Device(refused) => (refused.detail(), refused.to_string()),
+                    Rejection::StartEmulator(alias) => (
+                        json!({ "alias": alias }),
+                        format!(
+                            "instance {alias:?} names start_emulator but is not bound by discovery"
+                        ),
+                    ),
                     Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
                     Rejection::PolicyState(refused, elapsed_ms) => {
                         // Review P6: a refused plan carries its remedy; a ledger or state
@@ -346,6 +360,8 @@ enum Rejection {
     /// Workflow #384 D2-S2: a recognition package binding that is no reader (stage
     /// `config_recognition_binding`): its `error.detail` and developer text.
     RecognitionBinding(serde_json::Value, String),
+    /// Workflow #369 S6a: the instance whose `start_emulator` is refused (stage `assemble`).
+    StartEmulator(String),
 }
 
 /// Everything `summarize` reports once every check passed: the registry as configured and
@@ -371,6 +387,8 @@ struct CheckedAssembly {
     /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
     /// has, in file order.
     unused_device_bindings: Vec<String>,
+    /// Workflow #369 S6a: the instances whose `start_emulator` is `true`.
+    emulator_autostart: Vec<String>,
 }
 
 /// Workflow #361 C3: `policy_plan`, startup's catalog plan as previewed from the ledger.
@@ -501,6 +519,8 @@ fn summarize(
                     "startup_package": startup_package,
                     "stuck_recovery": stuck_recovery.enabled,
                     "stuck_recovery_cooldown_secs": stuck_recovery.cooldown_secs,
+                    // Workflow #369 S6a: started by the daemon when stopped at its start (S6c).
+                    "start_emulator": checked.emulator_autostart.contains(&alias),
                 }));
             }
             let resolved = registry.resolve(&alias).ok_or_else(|| {

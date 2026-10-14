@@ -73,8 +73,12 @@ at assembly; [device-binding.md](device-binding.md)), present only for an instan
 of the instance's recognition maintenance package, from the entry's `recognition_package.package`
 resolved against the configuration file's directory; a location only, never a digest; default
 `none`, not settable, read once at assembly; [resource-readings.md](resource-readings.md),
-"Recognition maintenance packages"), present only for an instance that names it. A manifest key
-the table does not have fails the start (`config_key_unknown`). The
+"Recognition maintenance packages"), present only for an instance that names it. Workflow #369
+S6a's row: the per-instance `start_emulator` (boolean, from the entry's `start_emulator`, default
+`none`, so a file that does not name it leaves it off and reports no row; not settable, read once
+at assembly; allowed only on a discovery-bound instance, `start_emulator_requires_discovery_binding`,
+[actingd-check-config.md](actingd-check-config.md)); the daemon acts on it from S6c on. A manifest
+key the table does not have fails the start (`config_key_unknown`). The
 manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
 `performance`, `scheduling`, `ledger_observer`), then each instance's per-instance keys together.
 

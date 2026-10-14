@@ -54,22 +54,19 @@ impl HostShared {
                     None,
                 )
             })?;
-        let package = EvidencePackage::new(
-            package_name,
-            summary.verified_sha256(),
-            PackageVerification::Passed,
-        )
-        .map_err(|error| {
-            RequestFailure::request(
-                RuntimeHostError::relayed_request(
-                    error.code(),
-                    ContractLocation::DebugPackage.as_str(),
-                    RuntimeErrorCode::PackageInvalid,
-                ),
-                RuntimeReceiptState::Failed,
-                None,
-            )
-        })?;
+        // Workflow #336 PKG-S2: the evidence names the package by its file name only.
+        let package =
+            EvidencePackage::new(package_name, PackageVerification::Passed).map_err(|error| {
+                RequestFailure::request(
+                    RuntimeHostError::relayed_request(
+                        error.code(),
+                        ContractLocation::DebugPackage.as_str(),
+                        RuntimeErrorCode::PackageInvalid,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    None,
+                )
+            })?;
         let mut debug_runs = lock(&self.debug_runs, HostLocation::LockRuntimeDebugRuns)?;
         let existing = debug_runs.get(&validated.correlation_id()).cloned();
         let context = match existing {

@@ -240,8 +240,10 @@ pub struct LabOperationPrepared {
     pub request_id: RequestId,
     pub correlation_id: CorrelationId,
     pub instance_id: InstanceId,
-    pub expected_package_sha256: crate::PackageRef,
-    pub actual_package_sha256: crate::PackageRef,
+    /// Workflow #336 PKG-S2 (option 丙): the admitted package's `package_id`, absent when its
+    /// control declares none; no package digest is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_label: Option<String>,
     pub lease_id: Option<LeaseId>,
     pub selection: LabOperationSelection,
     pub projection_hint: LabProjectionHint,
@@ -336,13 +338,15 @@ impl ContainedLabOperationResult {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         let record = &self.record;
         let prepared = &record.prepared;
-        prepared.expected_package_sha256.validate()?;
         prepared.selection.validate()?;
         record.prepared_artifact.validate()?;
         self.terminal_artifact.validate()?;
         if prepared.schema_version != LAB_OPERATION_PREPARED_SCHEMA
             || record.schema_version != LAB_OPERATION_TERMINAL_SCHEMA
-            || prepared.expected_package_sha256 != prepared.actual_package_sha256
+            || prepared
+                .package_label
+                .as_deref()
+                .is_some_and(|label| !is_package_label(label))
             || record.prepared_artifact.verified.sequence
                 >= self.terminal_artifact.verified.sequence
             || record.input_action_id.is_some() != record.input_intent.is_some()
@@ -406,7 +410,7 @@ impl ContainedLabOperationResult {
                     .as_ref()
                     .is_none_or(|frame| projection.frame != frame.observation)
                     || projection.instance_id != prepared.instance_id
-                    || projection.expected_package_sha256 != prepared.expected_package_sha256
+                    || projection.package_label != prepared.package_label
                 {
                     return Err(RuntimeContractError::new(
                         RuntimeContractCode::InvalidLabOperationProjection,

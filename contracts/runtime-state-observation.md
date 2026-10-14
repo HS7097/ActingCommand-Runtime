@@ -93,7 +93,9 @@ epoch is `running`; a later `runtime.started` or `runtime.takeover` makes it
 states. The internal first-fact sequence drives interruption classification;
 `admitted_sequence` and `restarted_after_admission` describe only the actual main
 admission. Main package metadata remains absent until recorded, and maintenance
-hashes belong only to `recovery_packages`.
+packages belong only to `recovery_package_labels`. Workflow #336 PKG-S2 (option 丙): a run
+names its packages by `package_id` (`package_label`, `recovery_package_labels`); no package
+digest is projected.
 
 `recent_runs` reads by run (Workflow #391 item 3): it first lists the runs of the
 window by the facts each run records only a few of, its main admission

@@ -26,7 +26,11 @@ A feature has `value: "identity"` and a required `identity` object:
 }
 ```
 
-The existing slot `targets` map binds an OCR identity feature to its OCR target. The pack
+The existing slot `targets` map binds an OCR identity feature to its OCR target. When the layout
+declares a shared OCR read (Workflow #396 REC-8, `selection-graph.md`, section Shared OCR read)
+and the target lies inside it, the target's text is that of the read's blocks whose centers lie
+in its region, joined in `(y, x)` order, with the lowest of their confidences; a region without
+blocks reads an empty text without a confidence, which is Unknown by the rules below. The pack
 declares the identity domain as its entries: 1..=1024 unique `(id, variant)` pairs, with no
 separate cap field; identifiers/variants are nonempty, control-free, at most 128 bytes. Each entry has 1..=8 aliases of at most 128 Unicode characters/512 bytes.
 Normalization folds fullwidth ASCII and halfwidth katakana, composes voiced kana, lowercases,

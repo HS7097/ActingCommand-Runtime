@@ -11,7 +11,7 @@ use std::path::Path;
 mod capacity;
 pub mod codes;
 pub use capacity::{CapacitySample, CapacityTarget, CapacityUnavailable, sample_capacity};
-pub use codes::{HostMetricsCode, HostMetricsLocation};
+pub use codes::{ConnectivityReason, HostMetricsCode, HostMetricsLocation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalMemorySample {
@@ -57,6 +57,39 @@ pub fn probe_process(pid: u32) -> ProcessProbe {
     {
         let _ = pid;
         ProcessProbe::Unknown(HostMetricsCode::ProcessProbeUnsupported.code())
+    }
+}
+
+/// What the operating system reports about the host's internet connectivity (Workflow #369 S6a,
+/// from #361 P3). It is the operating system's own status (on Windows
+/// `GetNetworkConnectivityHint`, which its network connectivity status indicator keeps): reading
+/// it opens no socket, sends nothing and resolves no name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkConnectivity {
+    /// Internet access, constrained internet access (for example behind a captive portal)
+    /// included.
+    Internet,
+    /// No internet access: no network, local access only, or a hidden network.
+    NoInternet,
+    /// The operating system did not decide: why, with its error code when it gave one.
+    Unknown {
+        reason: ConnectivityReason,
+        os_error: Option<u32>,
+    },
+}
+
+/// Reads the operating system's connectivity status once; see [`NetworkConnectivity`].
+pub fn network_connectivity() -> NetworkConnectivity {
+    #[cfg(windows)]
+    {
+        windows::network_connectivity()
+    }
+    #[cfg(not(windows))]
+    {
+        NetworkConnectivity::Unknown {
+            reason: ConnectivityReason::UnsupportedOs,
+            os_error: None,
+        }
     }
 }
 

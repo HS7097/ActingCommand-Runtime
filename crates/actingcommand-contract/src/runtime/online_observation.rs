@@ -147,8 +147,10 @@ pub struct ContainedObservationEvidence {
     pub request_id: RequestId,
     pub correlation_id: CorrelationId,
     pub instance_id: InstanceId,
-    pub expected_package_sha256: crate::PackageRef,
-    pub actual_package_sha256: crate::PackageRef,
+    /// Workflow #336 PKG-S2 (option 丙): the admitted package's `package_id`, absent when its
+    /// control declares none; no package digest is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_label: Option<String>,
     pub frame: ReadonlyObservation,
     pub rgb8_sha256: String,
     pub status: PageObservationStatus,
@@ -167,8 +169,10 @@ impl fmt::Debug for ContainedObservationEvidence {
 #[serde(deny_unknown_fields)]
 pub struct ContainedPageObservation {
     pub instance_id: InstanceId,
-    pub expected_package_sha256: crate::PackageRef,
-    pub actual_package_sha256: crate::PackageRef,
+    /// Workflow #336 PKG-S2 (option 丙): the admitted package's `package_id`, absent when its
+    /// control declares none; no package digest is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_label: Option<String>,
     pub frame: ReadonlyObservation,
     pub status: PageObservationStatus,
     pub projection: PageProjection,
@@ -185,8 +189,10 @@ impl ContainedPageObservation {
             RuntimeContractError::new(RuntimeContractCode::InvalidPageObservationArtifact)
         })?;
         self.facts.validate()?;
-        self.expected_package_sha256.validate()?;
-        if self.expected_package_sha256 != self.actual_package_sha256
+        if self
+            .package_label
+            .as_deref()
+            .is_some_and(|label| !is_package_label(label))
             || self.artifact.kind != ArtifactKind::DiagnosticJson
             || self.artifact.byte_count > MAX_OBSERVATION_ARTIFACT_BYTES as u64
             || self.artifact.frame_id != self.frame.artifact().frame_id

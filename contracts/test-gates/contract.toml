@@ -246,10 +246,9 @@ tests = [
     "actingcommand-runtime-client::lib::tests::official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_overlimit_facts",
     "actingcommand-runtime-client::lib::tests::official_ocr_projection_folds_matching_created_and_verified_lifecycle_facts",
     "actingcommand-runtime-client::lib::tests::official_ocr_projection_rejects_conflicting_immutable_lifecycle_facts",
-    "actingcommand-runtime-client::lib::client::run_summary_package_tests::exactly_one_matching_package_admission_is_required",
-    "actingcommand-runtime-client::lib::client::run_summary_package_tests::duplicate_package_admission_fails_closed",
-    "actingcommand-runtime-client::lib::client::run_summary_package_tests::mismatched_package_admission_fails_closed",
-    "actingcommand-runtime-client::lib::client::run_summary_package_tests::missing_package_admission_fails_closed",
+    "actingcommand-runtime-client::lib::client::run_summary_package_tests::s2_t3_the_summary_names_the_one_admitted_package_by_its_label",
+    "actingcommand-runtime-client::lib::client::run_summary_package_tests::s2_t3_a_missing_or_repeated_package_admission_fails_closed",
+    "actingcommand-runtime-client::lib::client::run_status::tests::s2_t3_run_status_names_its_packages_by_label_without_a_digest",
 ]
 incident = []
 
@@ -459,3 +458,14 @@ tests = [
     "actingcommand-contract::lib::page_projection::tests::a_value_test_reading_a_personal_target_is_personal_and_its_evidence_is_redacted",
 ]
 incident = ["#396"]
+
+# Workflow #336 PKG-S2 (option 丙): the package facts, the declaration refusal and the selection record name a package by its package_id and carry no package digest; each reads back unchanged and a stored record that still carries a removed digest member is not read (M-PKG v1.1 §4.3 S2-T1, S2-T7; register §2)
+[[gate]]
+key = "K22"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::pkg_s2::s2_t1_package_facts_name_their_package_by_label_and_refuse_a_digest",
+    "actingcommand-contract::lib::event::tests::pkg_s2::s2_t1_a_declaration_refusal_names_its_package_by_label_only",
+    "actingcommand-contract::lib::event::tests::pkg_s2::s2_t7_a_selection_record_carries_no_package_pin",
+]
+incident = ["#336 PKG-S2"]

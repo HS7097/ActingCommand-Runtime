@@ -5869,6 +5869,12 @@ fn validate_duration(duration_ms: u64) -> RuntimeContractResult<()> {
     Ok(())
 }
 
+/// Workflow #336 PKG-S2 (option 丙): a package named by its `package_id` in Lab and observation
+/// evidence (`package_label`), bounded as a task label: 1 to 256 bytes, no control character.
+fn is_package_label(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+}
+
 fn validate_sha256_hex(value: &str) -> RuntimeContractResult<()> {
     if value.len() != 64
         || !value

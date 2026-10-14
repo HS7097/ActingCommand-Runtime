@@ -55,7 +55,7 @@ An entry the declaration table does not list is `no_effect` when its status is `
 |---|---|---|---|
 | `dry_run_unsupported` | 2 | the #341 refusals below | `details.dry_run: true`, `details.executed: false`, `blocked_by: []` |
 | `explicit_offline_entry_required` | 3 | `lab run` | none; identified by this table and `dry_run_refusal_code` |
-| `offline_device_scope_forbidden` | 2 | `package dry-run` | none |
+| `offline_device_scope_forbidden` | 2 | `package dry-run`, `replay` | none |
 | `resource_production_retired` | 2 | `package build-task/build-pack`, `resource convert`, `record build-task/promote/publish`, including `session record` aliases | none; unconditional retirement refusal |
 | `validation_failed` | 2 | `scheduling compile`, `scheduling timeline` | none |
 | `record_flag_unsupported` | 2 | `observe --capture --record`, `do --capture --record`, `session app --record`, `session instance app --record` | none |
@@ -134,6 +134,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `recognize` | no_effect | | |
 | `recognize-artifact` | no_effect | | |
 | `observe` | mixed | | `--capture --record`: refused, `record_flag_unsupported`; `--with-frame <path>` (offline and `--capture`, without `--record`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; a bare `--with-frame` and other forms without `--record`: no_effect |
+| `replay` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads (Workflow #308 SEL-L6a) |
 | `do` | preview | `executed_false` | `--capture --dry-run` writes the registered debug audit events |
 | `ensure` | preview | `executed_false` | as `do` |
 | `wait` | no_effect | | |
@@ -295,7 +296,7 @@ refusals added by #341 do not send even a read request: they open no Runtime con
 
 - Read `commands[].dry_run_mode` before probing a command with `--dry-run`.
 - `refused` only means the flag is rejected; it does not mean the command has a side effect
-  (`scheduling compile`, `scheduling timeline` and `package dry-run` only read).
+  (`scheduling compile`, `scheduling timeline`, `package dry-run` and `replay` only read).
 - A dry-run refusal is not an argument error. Run the read-only alternative it names; never drop
   `--dry-run` and retry on your own.
 - `planned` and `validated` are not an admission; `not_checked` names what was not checked.
