@@ -610,6 +610,14 @@
       "type": "vocab:reader_problem",
       "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
     },
+    "reading_id": {
+      "type": "id",
+      "description": "The id of a contained task's reading mark (resource_readings[].id)."
+    },
+    "reading_problem": {
+      "type": "vocab:reading_problem",
+      "description": "Why a reading mark gave no reading on a frame handed to recognition."
+    },
     "entry_problem": {
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
@@ -2629,6 +2637,41 @@
         },
         "interval_exceeds_freshness": {
           "description": "The minimum reading interval exceeds the freshness the document or the mark requires."
+        },
+        "package_unreadable": {
+          "description": "The bound package cannot be read or admitted (Workflow #384 D2-S2)."
+        }
+      }
+    },
+    "reading_problem": {
+      "description": "Why a reading mark gave no reading on a frame handed to recognition (Workflow #384 D2-S2).",
+      "tokens": {
+        "empty": {
+          "description": "The trimmed text is empty."
+        },
+        "invalid_integer": {
+          "description": "The text is not an integer of the declared format."
+        },
+        "overflow": {
+          "description": "The integer does not fit 64 bits."
+        },
+        "out_of_range": {
+          "description": "The integer is outside the declared range."
+        },
+        "region_unresolved": {
+          "description": "The OCR target's region could not be placed on the frame."
+        },
+        "provider_failed": {
+          "description": "The OCR provider failed, or the recognition ended without an answer."
+        },
+        "confidence_missing": {
+          "description": "The provider gave no confidence."
+        },
+        "low_confidence": {
+          "description": "The confidence is below the mark's floor."
+        },
+        "join_timeout": {
+          "description": "The recognition had not returned when the run's join timeout ended."
         }
       }
     },
@@ -7880,7 +7923,8 @@
       "execution-kernel"
     ],
     "recognition_pack_": [
-      "recognition-pack"
+      "recognition-pack",
+      "resource-tooling"
     ],
     "instances_": [
       "actingctl"
@@ -19813,12 +19857,15 @@
       "handling": "TBD"
     },
     "contained_task_resource_reading_unresolved": {
-      "category": "error",
-      "ladder_class": "pack_logic_mismatch",
+      "category": "warning",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "reading_id": "required",
+        "fact_key": "required",
+        "reading_problem": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -19828,9 +19875,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A declared resource reading could not be resolved on its page.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Workflow #384 D2-S2: a reading mark gave no reading on a frame the run handed to recognition (its text did not parse, its confidence was missing or below the mark's floor, its region or provider failed, or its recognition had not returned when the join timeout ended). The run goes on and settles as it would without the mark; the key's earlier record stays until its own expiry. Written as a recognition error row of the task diagnostic, on the frame.",
+      "common_causes": "The marked page showed no readable value on that frame, or the OCR provider was slow or failed.",
+      "handling": "Read the task diagnostic row and the OCR evaluation of the frame; adjust the mark's target or confidence floor in the package if the value was on screen."
     },
     "contained_task_return_home_entry_unmatched": {
       "category": "error",
@@ -25535,6 +25582,100 @@
       "description": "The Runtime host reports fact publisher projection missing.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "fact_reader_binding_ignored": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S2: a Runtime start found an instance's recognition package binding invalid (its caused_by link is fact_reader_binding_invalid) and runs without it; the start goes on. Recorded as a note link of the recognition_packages row of config.subsystems.",
+      "common_causes": "The bound package could not be read at the start, or its marks are claimed by policy.facts or a ledger_fact pool.",
+      "handling": "Run check-config for the full refusal and fix the binding; until then the instance has no reader."
+    },
+    "fact_reader_binding_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "reader_problem": "required",
+        "instance_id": "optional",
+        "path": "optional",
+        "package_id": "optional",
+        "fact_key": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S2: an instance's recognition maintenance package binding (instances[].recognition_package) is no reader: its package cannot be read (package_unreadable, caused by the loader's refusal), it does not qualify (designated_operation, no_marks, recognize_only, stability_termination), or one of its marks writes a key the configuration's policy.facts declares or a ledger_fact pool observes for the instance (policy_fact_authority, live_pool_key). check-config refuses the configuration; a Runtime start ignores the binding (fact_reader_binding_ignored).",
+      "common_causes": "acsetup or a hand edit bound a package that is not the standard package's recognition maintenance package, or the package changed.",
+      "handling": "Bind the standard package's recognition maintenance package, or fix the package or the configuration the reader_problem names."
+    },
+    "fact_reader_document_mismatch": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "fact_key": "required",
+        "reader_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2: a reading mark is looser than the scheduling-layer selection document that reads its key (confidence_below_document) or the reading interval exceeds the freshness it needs (interval_exceeds_freshness). check-config warning; emitted once actingd loads a scheduling-layer document (D2-S1 decision D3) and, for the interval, once D2-S4 reads scheduling.fact_refresh.min_interval_ms.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "fact_reader_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "task_id": "optional",
+        "rule_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S2: the scheduler reads a realistic instance fact (resource.* or inventory.*; a catalog task's trigger or stop predicate in the instance's scope) that the instance's recognition maintenance package does not mark, or the instance has none. check-config warning; the configuration is still accepted.",
+      "common_causes": "The recognition maintenance package lacks a mark for the key, or no package is bound.",
+      "handling": "Add a mark for the key to the instance's recognition maintenance package, or bind one."
     },
     "fact_record_invalid": {
       "category": "error",
@@ -55735,6 +55876,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recognition_pack_undeclared": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package) but the declarations do not name it for recognition. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
+      "common_causes": "A reading pack of the standard package is not declared in maintenance.json.",
+      "handling": "Declare the standard package's one recognition maintenance package with the use recognition, and merge other reading packs into it."
+    },
     "recognition_sample_budget_insufficient": {
       "category": "error",
       "ladder_class": "budget_or_permission",
@@ -78573,6 +78730,14 @@
       "since": "0.12.0",
       "description": "check-config and unlock-owner stage: loading the configuration file (v1 token load)."
     },
+    "config_recognition_binding": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "check-config stage: checking the recognition maintenance package bindings (Workflow #384 D2-S2)."
+    },
     "config_validate": {
       "owner": "actingd",
       "layer": "config",
@@ -78628,6 +78793,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger's operation or stage: configure fingerprinter."
+    },
+    "configure_ledger_write_policy": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking the write policy (attempts, waits, stall limit, probe period, dump limit) the ledger is opened with (Workflow #383 AO-1)."
     },
     "configure_monitor_policy": {
       "owner": "runtime-host",
@@ -80021,6 +80194,14 @@
       "since": "0.12.0",
       "description": "Identifying the volume of a capacity target by its GUID root."
     },
+    "import_ledger_dump": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Importing the dump file an earlier run left, at the start, after the ledger is opened and verified and before any new record (Workflow #383 AO-1, ledger observer §9.4)."
+    },
     "import_monitor_registry": {
       "owner": "runtime-host",
       "layer": "host",
@@ -80621,6 +80802,14 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: latest sequence."
     },
+    "ledger_attempt_watch": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The probe that watches the start of the write attempt in progress and stops a stalled one (Workflow #383 AO-1, ledger observer §14 T8)."
+    },
     "ledger_query_selection": {
       "owner": "ledger",
       "layer": "store",
@@ -80628,6 +80817,14 @@
       "status": "active",
       "since": "0.11.5",
       "description": "Answering a query on a selected ledger read (GlobalLedger::open_selected)."
+    },
+    "ledger_write_retry": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Writing one record with its configured attempts and waits (Workflow #383 AO-1, ledger observer §9.1)."
     },
     "lift_failed_instance_pause": {
       "owner": "runtime-host",
@@ -83380,6 +83577,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read awaited client resets."
+    },
+    "read_back_ledger_write": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading the ledger head and the record's event id back after a failed write, before the write is tried again (Workflow #383 AO-1, ledger observer §9.1)."
     },
     "read_backend_selfcheck_fact": {
       "owner": "runtime-host",
@@ -88893,6 +89098,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingledger's operation or stage: write forensic output."
+    },
+    "write_ledger_dump": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Writing every unflushed record into the dump file, then stopping fatally (Workflow #383 AO-1, ledger observer §9.2)."
     },
     "write_owner_file": {
       "owner": "runtime-host",
