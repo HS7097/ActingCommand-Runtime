@@ -4860,7 +4860,25 @@ fn ledger_failure_plan(
     if let Some(sink) = &config.ledger_failure_sink {
         plan = plan.with_sink(Arc::clone(sink));
     }
-    Ok(plan)
+    // Workflow #383 AO-2 (`contracts/ledger-observer.md` §7, §8, §11, §15): the capture queue's
+    // budget, tiers and batches and the index's keys; the writer checks them when it opens.
+    Ok(
+        plan.with_capture_policy(actingcommand_ledger::LedgerCapturePolicy {
+            buffer_bytes: section.buffer_bytes,
+            buffer_records: section.buffer_records,
+            ratios: actingcommand_ledger::WatermarkRatios {
+                tier1: section.tiers.tier1_ratio,
+                tier2: section.tiers.tier2_ratio,
+                tier3: section.tiers.tier3_ratio,
+                hysteresis: section.tiers.hysteresis_ratio,
+            },
+            spill_batch_bytes: section.spill_batch_bytes,
+            flush_batch_records: section.flush_batch_records,
+            flush_batch_records_busy: section.flush_batch_records_busy,
+            request_index_records: section.request_index_records,
+            workbench_patterns: section.tag_workbench_patterns,
+        }),
+    )
 }
 
 fn lock_poison_error(operation: impl Into<Location>) -> RuntimeHostError {

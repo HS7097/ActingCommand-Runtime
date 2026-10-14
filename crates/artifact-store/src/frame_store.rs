@@ -276,22 +276,38 @@ impl MemoryBudget {
         let budget_bytes = requested
             .min(available_after_reserve)
             .min(total_after_reserve);
-        let tier1_bytes = ratio_bytes(budget_bytes, config.tier1_ratio);
-        let tier2_bytes = ratio_bytes(budget_bytes, config.tier2_ratio);
-        let tier3_bytes = ratio_bytes(budget_bytes, config.tier3_ratio);
-        let release_ratio = 1.0 - config.hysteresis_ratio;
+        // Workflow #383 AO-2 (`contracts/ledger-observer.md` §7.1): the lines come from the
+        // shared watermark module.
+        let lines = crate::WatermarkRatios {
+            tier1: config.tier1_ratio,
+            tier2: config.tier2_ratio,
+            tier3: config.tier3_ratio,
+            hysteresis: config.hysteresis_ratio,
+        }
+        .lines(budget_bytes);
         Self {
             total_bytes: sample.total_bytes,
             available_bytes: sample.available_bytes,
             os_reserve_bytes: config.os_reserve_bytes,
             budget_bytes,
-            tier1_bytes,
-            tier2_bytes,
-            tier3_bytes,
-            tier1_release_bytes: ratio_bytes(tier1_bytes, release_ratio),
-            tier2_release_bytes: ratio_bytes(tier2_bytes, release_ratio),
-            tier3_release_bytes: ratio_bytes(tier3_bytes, release_ratio),
+            tier1_bytes: lines.tier1,
+            tier2_bytes: lines.tier2,
+            tier3_bytes: lines.tier3,
+            tier1_release_bytes: lines.tier1_release,
+            tier2_release_bytes: lines.tier2_release,
+            tier3_release_bytes: lines.tier3_release,
             flush_workspace_reserve_bytes: config.flush_workspace_reserve_bytes,
+        }
+    }
+
+    fn lines(&self) -> crate::WatermarkLines {
+        crate::WatermarkLines {
+            tier1: self.tier1_bytes,
+            tier2: self.tier2_bytes,
+            tier3: self.tier3_bytes,
+            tier1_release: self.tier1_release_bytes,
+            tier2_release: self.tier2_release_bytes,
+            tier3_release: self.tier3_release_bytes,
         }
     }
 
@@ -301,28 +317,24 @@ impl MemoryBudget {
                 "frame store memory budget is zero after OS reserve",
             ));
         }
-        if !(self.tier1_bytes < self.tier2_bytes && self.tier2_bytes < self.tier3_bytes) {
-            return Err(CliError::usage(format!(
+        match self.lines().validate(self.flush_workspace_reserve_bytes) {
+            Ok(()) => Ok(()),
+            Err(crate::WatermarkConfigError::LinesNotDistinct) => Err(CliError::usage(format!(
                 "frame store watermarks must be byte-distinct, got tier1={}, tier2={}, tier3={}",
                 self.tier1_bytes, self.tier2_bytes, self.tier3_bytes
-            )));
-        }
-        if self.tier1_release_bytes >= self.tier1_bytes
-            || self.tier2_release_bytes >= self.tier2_bytes
-            || self.tier3_release_bytes >= self.tier3_bytes
-        {
-            return Err(CliError::usage(
+            ))),
+            Err(crate::WatermarkConfigError::ReleaseNotBelowActivation) => Err(CliError::usage(
                 "frame store release lines must be below activation lines",
-            ));
-        }
-        if self.tier3_bytes.saturating_sub(self.tier2_bytes) < self.flush_workspace_reserve_bytes {
-            return Err(CliError::usage(format!(
+            )),
+            Err(
+                crate::WatermarkConfigError::GapTooSmall
+                | crate::WatermarkConfigError::RatiosInvalid,
+            ) => Err(CliError::usage(format!(
                 "tier2/tier3 gap too small: gap={} bytes, required flush workspace reserve={} bytes",
                 self.tier3_bytes.saturating_sub(self.tier2_bytes),
                 self.flush_workspace_reserve_bytes
-            )));
+            ))),
         }
-        Ok(())
     }
 
     fn to_json(self) -> Value {
@@ -1768,10 +1780,6 @@ pub fn thumb_similarity(left: &FrameThumbnail, right: &FrameThumbnail) -> f32 {
         .map(|(a, b)| a.abs_diff(*b) as u64)
         .sum();
     1.0 - (diff as f32 / (len as f32 * 255.0))
-}
-
-fn ratio_bytes(bytes: u64, ratio: f64) -> u64 {
-    ((bytes as f64) * ratio).floor() as u64
 }
 
 fn validate_ratio_f32(name: &str, value: f32) -> Result<(), FrameStoreConfigRefusal> {

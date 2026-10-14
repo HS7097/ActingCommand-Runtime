@@ -167,6 +167,30 @@ impl LedgerGapPayload {
         Ok(payload)
     }
 
+    /// Workflow #383 AO-2 (`ledger-observer.md` §10): the gap of one record the flush thread
+    /// refused: its capture time, its event id and, for a revisioned source, the source.
+    pub(super) fn rejected(
+        captured_at_unix_ms: u64,
+        event_id: EventId,
+        source: Option<SourceRevision>,
+        outcome: Outcome,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::LedgerRecovery,
+            gap_kind: LedgerGapKind::RecordRejected,
+            gap_start_unix_ms: captured_at_unix_ms,
+            gap_end_unix_ms: captured_at_unix_ms,
+            record_count: Some(1),
+            event_id: Some(event_id),
+            source,
+            outcome,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     /// A gap's time range is ordered; a rejected record is one record at one capture time,
     /// with its event id; every other gap's count is unknown and names no record.
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
@@ -220,6 +244,22 @@ pub struct LedgerHealthPayload {
 }
 
 impl LedgerHealthPayload {
+    /// Workflow #383 AO-2 (`ledger-observer.md` §14.1): one finding of the ledger itself.
+    pub(super) fn new(
+        outcome: Outcome,
+        segment_edge: Option<LedgerSegmentEdge>,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::LedgerProbe,
+            outcome,
+            segment_edge,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub const fn segment_edge(&self) -> Option<LedgerSegmentEdge> {
         self.segment_edge
     }

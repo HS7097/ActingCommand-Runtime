@@ -67,6 +67,11 @@ impl EventIndexes {
         self.event_ids.contains_key(event_id)
     }
 
+    /// Workflow #383 AO-2: the position of a record in the store's memory, by its event id.
+    pub(super) fn position_of(&self, event_id: &EventId) -> Option<usize> {
+        self.event_ids.get(event_id).copied()
+    }
+
     pub(super) fn insert<E: LedgerEventRead>(&mut self, event: &E, position: usize) {
         self.event_ids.insert(*event.event_id(), position);
         self.event_types

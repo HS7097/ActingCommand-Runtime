@@ -39,10 +39,15 @@ pub(super) fn event_trace(
     }
     let events = vec![first, second, third];
     for (index, (actual, draft)) in events.iter().zip(drafts).enumerate() {
+        let expected = PersistedEvent::from_sanitized(index as u64 + 1, draft.clone())
+            .expect("expected typed fact");
+        // Workflow #383 AO-2 (register L4): an appended record carries its capture, numbered in
+        // capture order at the draft's own time.
+        let capture = actual.capture().expect("an appended record's capture");
+        assert_eq!(capture.capture_seq, index as u64 + 1);
         assert_eq!(
             actual,
-            &PersistedEvent::from_sanitized(index as u64 + 1, draft.clone())
-                .expect("expected typed fact")
+            &expected.with_capture(*capture).expect("the capture")
         );
     }
     let duplicate = ledger.append(drafts[0].clone()).expect_err("duplicate ID");

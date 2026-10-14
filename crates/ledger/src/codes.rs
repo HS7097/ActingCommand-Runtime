@@ -314,6 +314,20 @@ actingcommand_contract::outcome_locations! {
     pub enum LedgerLocation {
         /// Answering a query on a selected ledger read.
         QuerySelection => "ledger_query_selection",
+        /// Workflow #383 AO-2: checking the capture queue's policy the writer is opened with.
+        ConfigureLedgerCapture => "configure_ledger_capture",
+        /// Workflow #383 AO-2: taking a record into the capture queue.
+        LedgerCaptureRecord => "ledger_capture_record",
+        /// Workflow #383 AO-2: the spill thread writing memory records to the dump file.
+        LedgerSpillRecords => "ledger_spill_records",
+        /// Workflow #383 AO-2: the flush thread committing captured records.
+        LedgerFlushCaptured => "ledger_flush_captured",
+        /// Workflow #383 AO-2: maintaining the index table in a batch's transaction.
+        LedgerIndexRows => "ledger_index_rows",
+        /// Workflow #383 AO-2: writing the previous epoch's tail gap at the start.
+        LedgerTailGap => "ledger_tail_gap",
+        /// Workflow #383 AO-2: reading the dump segment back from the dump file.
+        LedgerReadSpilled => "ledger_read_spilled",
         AcquireWriterLock => "acquire_writer_lock",
         AdmitArtifactEviction => "admit_artifact_eviction",
         AppendDeferred => "append_deferred",

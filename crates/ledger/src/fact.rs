@@ -8,7 +8,7 @@ use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactMediaType, ArtifactProducer, ArtifactRedactionState,
     ArtifactReference, CorrelationId, EventId, EventLinks, EventOrigin, EventPayload,
     EventSeverity, EventType, FrameId, ProjectedArtifactReference, RecordCapture, RetentionClass,
-    RunId, SanitizedEventDraft, Sensitivity, VerifiedArtifactReference,
+    RunId, SanitizedEventDraft, Sensitivity, SourceRevision, VerifiedArtifactReference,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -50,6 +50,10 @@ pub struct PersistedEvent {
     artifacts: Vec<LedgerArtifactReference>,
     #[serde(skip)]
     artifact_evictions: artifact::ArtifactRetentionReadState,
+    /// Workflow #383 AO-2 (register L4): the record's capture when it passed the capture queue;
+    /// stored with the record, not part of its public serialization.
+    #[serde(skip)]
+    capture: Option<RecordCapture>,
 }
 
 impl PersistedEvent {
@@ -64,6 +68,15 @@ impl PersistedEvent {
     pub(crate) fn from_sanitized_with_event_id(
         sequence: u64,
         draft: SanitizedEventDraft,
+        event_id: EventId,
+    ) -> Result<Self, FactValidationError> {
+        Self::from_sanitized_ref(sequence, &draft, event_id)
+    }
+
+    /// Workflow #383 AO-2: the record of a sanitized draft the capture queue still shares.
+    pub(crate) fn from_sanitized_ref(
+        sequence: u64,
+        draft: &SanitizedEventDraft,
         event_id: EventId,
     ) -> Result<Self, FactValidationError> {
         let event = Self {
@@ -84,9 +97,30 @@ impl PersistedEvent {
                 .map(LedgerArtifactReference::from_issued)
                 .collect(),
             artifact_evictions: artifact::ArtifactRetentionReadState::default(),
+            capture: None,
         };
         event.validate()?;
         Ok(event)
+    }
+
+    /// Workflow #383 AO-2 (register L4): the record with its capture, which names the record's
+    /// own time (`RecordCapture::validate`).
+    pub(crate) fn with_capture(
+        mut self,
+        capture: RecordCapture,
+    ) -> Result<Self, FactValidationError> {
+        capture
+            .validate(self.timestamp_unix_ms)
+            .map_err(|error| FactValidationError::new(error.code()))?;
+        self.capture = Some(capture);
+        Ok(self)
+    }
+
+    /// Workflow #383 AO-2 (register L4): the record's capture: its capture number, its capture
+    /// time and the revisioned source that applied it; absent for a record the ledger wrote
+    /// itself without passing the capture queue.
+    pub const fn capture(&self) -> Option<&RecordCapture> {
+        self.capture.as_ref()
     }
 
     pub fn schema_version(&self) -> &str {
@@ -306,7 +340,7 @@ impl StoredEventRecord {
                 .iter()
                 .map(StoredArtifactRecord::from_reference)
                 .collect(),
-            capture: None,
+            capture: event.capture,
         }
     }
 
@@ -377,6 +411,7 @@ impl StoredEventRecord {
             payload: self.payload,
             artifacts,
             artifact_evictions: artifact::ArtifactRetentionReadState::default(),
+            capture: self.capture,
         };
         event.validate()?;
         Ok(event)
@@ -399,6 +434,9 @@ pub(crate) struct DumpedDraft {
     payload_schema: String,
     payload: EventPayload,
     artifacts: Vec<ProjectedArtifactReference>,
+    /// Workflow #383 AO-2 (§9.3): the revisioned source of a captured record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<SourceRevision>,
 }
 
 impl DumpedDraft {
@@ -420,6 +458,7 @@ impl DumpedDraft {
                 .iter()
                 .map(|artifact| artifact.project(true))
                 .collect(),
+            source: event.capture.and_then(|capture| capture.source),
         }
     }
 
@@ -441,7 +480,18 @@ impl DumpedDraft {
                 .iter()
                 .map(|artifact| artifact.project(true))
                 .collect(),
+            source: None,
         }
+    }
+
+    /// Workflow #383 AO-2: the draft of a captured record whose revisioned source is `source`.
+    pub(crate) fn with_source(mut self, source: Option<SourceRevision>) -> Self {
+        self.source = source;
+        self
+    }
+
+    pub(crate) const fn source(&self) -> Option<&SourceRevision> {
+        self.source.as_ref()
     }
 
     pub(crate) const fn event_id(&self) -> &EventId {
@@ -478,6 +528,7 @@ impl DumpedDraft {
             payload: self.payload,
             artifacts,
             artifact_evictions: artifact::ArtifactRetentionReadState::default(),
+            capture: None,
         };
         event.validate()?;
         Ok(event)
