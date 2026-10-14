@@ -363,6 +363,22 @@ impl HostShared {
             })
     }
 
+    /// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
+    /// when a run joins the readings it handed to recognition.
+    pub(super) fn recognition_join_timeout(&self) -> RuntimeHostResult<Duration> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .recognition_join_timeout_ms()
+            .map(Duration::from_millis)
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
     /// each step of a contained run (the kernel's `step_pacing()`).
     pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {

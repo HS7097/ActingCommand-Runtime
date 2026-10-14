@@ -331,19 +331,29 @@ impl LedgerMaintenance {
         database: Arc<RuntimeDatabase>,
         owner_id: String,
     ) -> GlobalLedgerResult<GlobalLedger> {
-        self.open_writer_timed(database, owner_id, &mut LedgerOpenTiming::default())
+        self.open_writer_timed(database, owner_id, None, &mut LedgerOpenTiming::default())
     }
 
     /// `open_writer` that also reports its phase timings (Workflow #375 H1); `timing`
     /// keeps the phases that ran, also when an error is returned.
+    ///
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9, §12 step 2): with a `plan` it
+    /// opens the running Runtime's writer. The open imports a dump an earlier run left before
+    /// any new record; the writer reads back and retries a failed write, and dumps and stops by
+    /// `plan`. Without one (an offline writer, §6) a failed write is not tried again.
     pub fn open_writer_timed(
         self,
         database: Arc<RuntimeDatabase>,
         owner_id: String,
+        plan: Option<super::LedgerFailurePlan>,
         timing: &mut LedgerOpenTiming,
     ) -> GlobalLedgerResult<GlobalLedger> {
         self.validate_database(&database)?;
         let config = GlobalLedgerConfig::new(self.root.join("ledger"), owner_id);
+        let config = match plan {
+            Some(plan) => config.with_failure_plan(plan),
+            None => config,
+        };
         let deadline = self.deadline;
         GlobalLedger::open_with_store(config, move |config| {
             sqlite::open_formal(

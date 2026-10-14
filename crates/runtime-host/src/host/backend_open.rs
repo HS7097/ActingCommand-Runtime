@@ -41,9 +41,6 @@ impl HostShared {
             &self.fact_write_gate,
             HostLocation::AppendBackendOpenObservations,
         )?;
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error(HostLocation::AppendBackendOpenObservations));
-        }
         let mut persisted = Vec::new();
         let mut recorded = Vec::new();
         for observation in observations {
@@ -51,44 +48,38 @@ impl HostShared {
             if receipt.get().is_some() {
                 continue;
             }
-            let event = self
-                .append_event_under_fact_gate(
-                    if observation.report.status == BackendObservationStatus::Failed
-                        || observation.report.capture_check == BackendObservationStatus::Failed
-                        || observation.report.input_check == BackendObservationStatus::Failed
-                    {
-                        EventSeverity::Error
-                    } else if !observation.report.warnings.is_empty()
-                        || observation
-                            .report
-                            .attempts
-                            .iter()
-                            .any(|attempt| attempt.status == BackendObservationStatus::Failed)
-                    {
-                        EventSeverity::Warning
-                    } else {
-                        EventSeverity::Info
-                    },
-                    source,
-                    module,
-                    EventActor::Runtime,
-                    links.clone(),
-                    RuntimePayloadDraft::backend_open_observed(
-                        self.owner_epoch,
-                        observation.report.clone(),
-                    ),
-                )
-                .inspect_err(|_| {
-                    self.lifecycle_append_failed.store(true, Ordering::Release);
-                })?;
+            let event = self.append_event_under_fact_gate(
+                if observation.report.status == BackendObservationStatus::Failed
+                    || observation.report.capture_check == BackendObservationStatus::Failed
+                    || observation.report.input_check == BackendObservationStatus::Failed
+                {
+                    EventSeverity::Error
+                } else if !observation.report.warnings.is_empty()
+                    || observation
+                        .report
+                        .attempts
+                        .iter()
+                        .any(|attempt| attempt.status == BackendObservationStatus::Failed)
+                {
+                    EventSeverity::Warning
+                } else {
+                    EventSeverity::Info
+                },
+                source,
+                module,
+                EventActor::Runtime,
+                links.clone(),
+                RuntimePayloadDraft::backend_open_observed(
+                    self.owner_epoch,
+                    observation.report.clone(),
+                ),
+            )?;
             let _ = receipt.set(*event.event_id());
             persisted.push(event);
             recorded.push(&observation.report);
         }
         if !persisted.is_empty() {
-            self.synchronize_fact_store_under_gate().inspect_err(|_| {
-                self.lifecycle_append_failed.store(true, Ordering::Release);
-            })?;
+            self.synchronize_fact_store_under_gate()?;
         }
         drop(gate);
         for event in persisted {

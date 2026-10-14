@@ -81,11 +81,6 @@ impl HostShared {
             HostLocation::AppendApprovalTransaction,
         )
         .map_err(RequestFailure::poison_without_terminal)?;
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(RequestFailure::poison_without_terminal(ledger_error(
-                HostLocation::AppendApprovalTransaction,
-            )));
-        }
         let links = validated.event_links(None, None, None);
         let draft = self
             .events
@@ -108,7 +103,6 @@ impl HostShared {
             .map_err(|error| {
                 let error = crate::approval::approval_transaction_error(error);
                 if error.is_fatal() {
-                    self.lifecycle_append_failed.store(true, Ordering::Release);
                     RequestFailure::poison_without_terminal(error)
                 } else {
                     RequestFailure::request(error, RuntimeReceiptState::Denied, None)
@@ -123,7 +117,6 @@ impl HostShared {
         observed
             .and_then(|()| self.observe_pipeline_event(&persisted))
             .map_err(|error| {
-                self.lifecycle_append_failed.store(true, Ordering::Release);
                 let _ = error
                     .diagnostics()
                     .recorded_event()

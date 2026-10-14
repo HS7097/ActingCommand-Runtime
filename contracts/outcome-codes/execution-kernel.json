@@ -1983,12 +1983,15 @@
       "handling": "TBD"
     },
     "contained_task_resource_reading_unresolved": {
-      "category": "error",
-      "ladder_class": "pack_logic_mismatch",
+      "category": "warning",
+      "ladder_class": "none",
       "owner": "execution-kernel",
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "reading_id": "required",
+        "fact_key": "required",
+        "reading_problem": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1998,9 +2001,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A declared resource reading could not be resolved on its page.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Workflow #384 D2-S2: a reading mark gave no reading on a frame the run handed to recognition (its text did not parse, its confidence was missing or below the mark's floor, its region or provider failed, or its recognition had not returned when the join timeout ended). The run goes on and settles as it would without the mark; the key's earlier record stays until its own expiry. Written as a recognition error row of the task diagnostic, on the frame.",
+      "common_causes": "The marked page showed no readable value on that frame, or the OCR provider was slow or failed.",
+      "handling": "Read the task diagnostic row and the OCR evaluation of the frame; adjust the mark's target or confidence floor in the package if the value was on screen."
     },
     "contained_task_stability_capture_invalid": {
       "category": "error",

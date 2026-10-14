@@ -65,7 +65,7 @@ one operation is at fault; an existing check keeps its existing code.
 | no `phases` | `phases` |
 | 1 to 1000 operations | `operation_count` |
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
-| no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`, `resource_readings`; `stop_on_confirmation` is not `false` | the field name |
+| no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
 | each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
@@ -154,6 +154,16 @@ operation in order, so its `step_index` is the operation index and its `executed
 operation count. The next operation is always the one the passing page selects (below), never
 the result of a comparison with the target page: a path that passes the target page before its
 end runs on to its last operation.
+
+**Reading marks (Workflow #384 D2-S2).** A linear task may carry reading marks
+([resource-readings.md](resource-readings.md)) on its step pages. The entry frame and the frame
+each step arrives on are handed to recognition when their page carries a mark the run reads;
+the run does not wait, and a successful run joins the readings before `Finalizing`. A path that
+starts on a page, ends on it and returns to it on the way, without optional operations, has one
+segment per return: each leaves the entry page, reaches its pages and comes back. A run given a
+requested key set (the scheduler's reading dispatch) does not run a segment that reaches no page
+marking one of its keys, so it stays on the entry page; every other path, and every run without
+a key set, runs whole.
 
 ## Intermediate states
 

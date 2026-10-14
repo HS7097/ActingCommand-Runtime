@@ -559,8 +559,11 @@ impl GlobalLedger {
             },
             LedgerLocation::ResolveLedgerArtifact.location(),
         )?;
-        let resolved =
-            receive_response(receiver, LedgerLocation::ResolveLedgerArtifact.location())??;
+        let resolved = receive_response(
+            receiver,
+            LedgerLocation::ResolveLedgerArtifact.location(),
+            self.reply_timeout,
+        )??;
         read_only::check_read_budget(budget, 0, 0)?;
         Ok(resolved)
     }

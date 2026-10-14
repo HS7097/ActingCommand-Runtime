@@ -2631,6 +2631,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         writer: Some(writer),
         commit_statistics: Arc::new(CommitStatistics::new(0).expect("statistics")),
         deferred: Mutex::new(Vec::new()),
+        reply_timeout: GlobalLedger::REPLY_TIMEOUT,
+        probe: None,
     };
     let (done_sender, done_receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -2986,3 +2988,6 @@ mod gate_395;
 // Workflow #382 L-5b: replay refuses an eviction intent that carries retired failed-run evidence.
 #[path = "tests/gate_l5b.rs"]
 mod gate_l5b;
+// Workflow #383 AO-1: retry, dump, fatal stop and import (test rows AO1-a to AO1-k).
+#[path = "tests/gate_383_ao1.rs"]
+mod gate_383_ao1;

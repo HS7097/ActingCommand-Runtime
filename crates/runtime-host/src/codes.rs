@@ -478,6 +478,21 @@ actingcommand_contract::outcome_codes! {
         FactObservationPrecedesInput => "fact_observation_precedes_input": error / none,
         FactObservationVersionConflict => "fact_observation_version_conflict": error / none,
         FactProjectionSourceMissing => "fact_projection_source_missing": error / none,
+        /// Warning (Workflow #384 D2-S2). A start found an instance's recognition package
+        /// binding invalid and runs without it (keys `instance_id`, `package_id`; caused by
+        /// `fact_reader_binding_invalid`).
+        FactReaderBindingIgnored => "fact_reader_binding_ignored": warning / none,
+        /// Error (Workflow #384 D2-S2). An instance's recognition package binding is no reader:
+        /// its package cannot be read, does not qualify, or marks a key the configuration
+        /// claims (keys `reader_problem`, `package_id`, `fact_key`, `instance_id`, `path`).
+        FactReaderBindingInvalid => "fact_reader_binding_invalid": error / none,
+        /// Warning (Workflow #384 D2-S2). The scheduler reads a realistic instance fact whose
+        /// instance has no reader marking it (keys `instance_id`, `fact_key`, `task_id`).
+        FactReaderMissing => "fact_reader_missing": warning / none,
+        /// Warning (Workflow #384 D2). A reading mark is looser than the scheduling document that
+        /// reads its key (keys `package_id`, `fact_key`, `reader_problem`); emitted once actingd
+        /// loads a scheduling-layer document.
+        FactReaderDocumentMismatch => "fact_reader_document_mismatch": warning / none,
         FactPublicationSequenceMissing => "fact_publication_sequence_missing": error / none,
         FactPublisherProjectionMissing => "fact_publisher_projection_missing": error / none,
         FactRecordInvalid => "fact_record_invalid": error / none,

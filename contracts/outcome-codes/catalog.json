@@ -610,6 +610,14 @@
       "type": "vocab:reader_problem",
       "description": "Why no reader can refresh an instance fact, or what is wrong with a reader binding."
     },
+    "reading_id": {
+      "type": "id",
+      "description": "The id of a contained task's reading mark (resource_readings[].id)."
+    },
+    "reading_problem": {
+      "type": "vocab:reading_problem",
+      "description": "Why a reading mark gave no reading on a frame handed to recognition."
+    },
     "entry_problem": {
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
@@ -2629,6 +2637,41 @@
         },
         "interval_exceeds_freshness": {
           "description": "The minimum reading interval exceeds the freshness the document or the mark requires."
+        },
+        "package_unreadable": {
+          "description": "The bound package cannot be read or admitted (Workflow #384 D2-S2)."
+        }
+      }
+    },
+    "reading_problem": {
+      "description": "Why a reading mark gave no reading on a frame handed to recognition (Workflow #384 D2-S2).",
+      "tokens": {
+        "empty": {
+          "description": "The trimmed text is empty."
+        },
+        "invalid_integer": {
+          "description": "The text is not an integer of the declared format."
+        },
+        "overflow": {
+          "description": "The integer does not fit 64 bits."
+        },
+        "out_of_range": {
+          "description": "The integer is outside the declared range."
+        },
+        "region_unresolved": {
+          "description": "The OCR target's region could not be placed on the frame."
+        },
+        "provider_failed": {
+          "description": "The OCR provider failed, or the recognition ended without an answer."
+        },
+        "confidence_missing": {
+          "description": "The provider gave no confidence."
+        },
+        "low_confidence": {
+          "description": "The confidence is below the mark's floor."
+        },
+        "join_timeout": {
+          "description": "The recognition had not returned when the run's join timeout ended."
         }
       }
     },
@@ -7880,7 +7923,8 @@
       "execution-kernel"
     ],
     "recognition_pack_": [
-      "recognition-pack"
+      "recognition-pack",
+      "resource-tooling"
     ],
     "instances_": [
       "actingctl"

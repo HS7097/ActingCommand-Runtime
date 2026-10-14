@@ -7815,6 +7815,54 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger's operation or stage: write writer metadata."
+    },
+    "configure_ledger_write_policy": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking the write policy (attempts, waits, stall limit, probe period, dump limit) the ledger is opened with (Workflow #383 AO-1)."
+    },
+    "import_ledger_dump": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Importing the dump file an earlier run left, at the start, after the ledger is opened and verified and before any new record (Workflow #383 AO-1, ledger observer §9.4)."
+    },
+    "read_back_ledger_write": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading the ledger head and the record's event id back after a failed write, before the write is tried again (Workflow #383 AO-1, ledger observer §9.1)."
+    },
+    "ledger_write_retry": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Writing one record with its configured attempts and waits (Workflow #383 AO-1, ledger observer §9.1)."
+    },
+    "ledger_attempt_watch": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The probe that watches the start of the write attempt in progress and stops a stalled one (Workflow #383 AO-1, ledger observer §14 T8)."
+    },
+    "write_ledger_dump": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Writing every unflushed record into the dump file, then stopping fatally (Workflow #383 AO-1, ledger observer §9.2)."
     }
   }
 }

@@ -41,9 +41,6 @@ impl HostShared {
                 )?;
                 let draft = self.events.sanitize(draft)?;
                 let fact_gate = lock(&self.fact_write_gate, HostLocation::StageReleaseSet)?;
-                if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                    return Err(ledger_error(HostLocation::StageReleaseSet));
-                }
                 let outcome = self
                     .ledger
                     .append_transaction(draft, Box::new(ReleaseTransaction { state: Ok(work) }))

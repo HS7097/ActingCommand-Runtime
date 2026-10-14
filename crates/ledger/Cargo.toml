@@ -10,7 +10,8 @@ publish = false
 
 [features]
 default = []
-# Workflow #381 A (LED-I3): the writer stall gate (`WriterStallGate`) for tests in other crates.
+# Workflow #381 A (LED-I3): the writer stall gate (`WriterStallGate`) for tests in other crates;
+# Workflow #383 AO-1: the write fault gate (`LedgerWriteFaultGate`).
 test-hooks = []
 
 [dependencies]
@@ -19,7 +20,8 @@ actingcommand-contract = { workspace = true }
 actingcommand-runtime-database = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# Workflow #383 AO-1: the dump file's record lines keep their record member's exact bytes.
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]

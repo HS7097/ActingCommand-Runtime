@@ -26,10 +26,15 @@ pub mod local_time;
 pub mod owner_journal;
 pub mod signatures;
 #[cfg(any(test, feature = "test-hooks"))]
+mod write_fault;
+#[cfg(any(test, feature = "test-hooks"))]
 mod writer_stall;
 pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
+// Workflow #383 AO-1: the write faults of a state root, for tests in other crates.
+#[cfg(any(test, feature = "test-hooks"))]
+pub use write_fault::LedgerWriteFaultGate;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use writer_stall::WriterStallGate;
 

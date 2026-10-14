@@ -385,6 +385,24 @@ process stopping fatally after retries are exhausted (§9.2). A stalled attempt 
 - Reports: `ledger_write_retried` (warning, merged per segment, `attempts`);
   `ledger_write_failed` (fatal, `attempts`, `io_kind` of the last failure; `timeout_ms` when the
   attempt stalled).
+- **As built by AO-1** (before AO-2's capture queue):
+  - The rules hold for the running Runtime's writer, opened with a *failure plan*: the write
+    policy of §15, the two dump places and the sink that reports and stops
+    (`LedgerMaintenance::open_writer_timed` with a plan). An offline writer (§6) has no plan:
+    one attempt, and its first failure ends it as before.
+  - A batch is one record. The unflushed records are the record in flight and the plain appends
+    still queued for the writer. A joint record (`append_transaction`, G15's work) is never
+    dumped: its state work rolls back with it, so neither took effect, and its caller gets
+    `ledger_write_failed`.
+  - Write failures are SQLite's I/O, busy, locked, read-only, full-disk, permission,
+    out-of-memory, interrupted, cannot-open and lock-protocol results. Any other failure on the
+    write path (a constraint, a head that moved, a connection the database refuses) is an
+    integrity failure. The database has one shared connection and no reopen: a connection
+    refused after a failed sync restore fails every retry and ends in §9.2.
+  - `attempts` of `ledger_write_retried` counts the failed attempts of a write that committed in
+    the end; it is reported once per such write through the plan's sink (actingd's
+    `WARN actingd:` and `OUTCOME actingd:` lines). `attempts` of `ledger_write_failed` counts the
+    attempts made. AO-8 brings the counts to status.
 
 ### 9.2 Exhausted: dump, then stop fatally (rule 11)
 
@@ -397,6 +415,14 @@ process stopping fatally after retries are exhausted (§9.2). A stalled attempt 
 4. **Stop**: write the OUTCOME line through actingd's start-refusal writer (stderr and the
    fallback log) and exit fatally. The watchdog does not restart after a fatal; a person repairs
    the disk or file and starts again; the next start imports (§9.4).
+
+As built by AO-1: the writer seals itself when a write gives up; the probe seals it when an
+attempt stalls (T8). Every queued command is answered with `ledger_write_failed`. The plan's
+sink receives `ledger_write_failed` with the dump's `path`, or `ledger_dump_failed`; actingd's
+sink writes `FATAL actingd: <code>` and the `OUTCOME actingd:` line in one write to stderr and
+exits with code 2 (A6a brings the start-refusal writer's fallback log and the watchdog's
+reading of the exit). A dump that would pass `dump_max_bytes` keeps the records that fit and no
+trailer, so its import writes a `dump_incomplete` gap for the rest.
 
 The v1.1 degraded mode, `ledger_write_unconfirmed` and the 10-minute halt do not exist.
 
@@ -424,6 +450,14 @@ The v1.1 degraded mode, `ledger_write_unconfirmed` and the 10-minute halt do not
     `ledger_dump_unsupported`.
 - The dump holds sanitized drafts only; it is private to the state root and never exported. Its
   existence, size and import result are reported through actingctl and IPC, never its content.
+- As built by AO-1 (register §1.26 AO1): the header's `owner_epoch` is the owner epoch's id
+  (`epoch_…`); `runtime_commit` is present when the build knows its commit. A record's `draft`
+  holds the sanitized draft's members (`schema_version`, `event_id`, `timestamp_unix_ms`,
+  `event_type`, `severity`, `sensitivity`, `origin`, `links`, `payload_schema`, `payload`, and
+  `artifacts` as projected references with their object keys); `captured_at_unix_ms` is the
+  draft's time until AO-2 captures; `capture_seq` counts from 1 in each dump. Every `sha256` and
+  `lines_sha256` is 64 lowercase hex digits. A place that already holds a dump file is not
+  written to; the next place is tried.
 
 ### 9.4 Next start: import (AO-1)
 
@@ -449,6 +483,12 @@ After the ledger is opened and verified, before any new record (§12 step 2):
   dump untouched.
 - An epoch that ended in a complete sealed dump (trailer, last record `runtime.failed`) is
   complete: no tail gap is written for it.
+- As built by AO-1: the import runs inside the writer's open, after the ledger is verified and
+  before the stale-owner record. Both places are read first, so a newer version refuses the
+  start before anything is written; then each dump is imported, the older epoch first. A dump
+  without a trailer is incomplete whether or not its last line is cut; a trailer whose count or
+  `lines_sha256` does not match the verified lines makes the dump invalid. Imported records are
+  not held back by a retention recovery still pending: they precede every record of this start.
 
 ### 9.5 Fatal paths removed or changed (AO-1 unless named)
 
@@ -467,6 +507,13 @@ After the ledger is opened and verified, before any new record (§12 step 2):
 
 Still fatal: integrity or format failure; `ledger_write_failed`; `ledger_dump_failed`;
 `ledger_dump_unsupported`; `ledger_tag_index_mismatch` (§11.5).
+
+AO-1 built the writer reply row (a read's wait ends in `writer_response_timeout`, an error), the
+I/O error row (for the running Runtime's writer), the latch row (`lifecycle_append_failed` is
+gone) and the read half of the frame retention row (a read the writer did not answer in time is
+an error of the cleaner's round, recorded, and the next round reads again). The `ingress_full`
+and close-drain rows need AO-2's capture queue, the poison row AO-3's gates, the workbench and
+background-thread rows AO-4; the policy monitor row was AO-7's.
 
 ## 10 Gap records (AO-1, AO-2)
 
@@ -724,6 +771,11 @@ gate and probe counters.
 | T7 | silent gate | store revisions against captured revisions | with T1 |
 | T8 | writer alive, attempt stalled | writer health; current attempt's start time; beyond `flush_attempt_stall_ms` → §9.1 | with T3 |
 
+T8 as built by AO-1: a probe thread starts with every writer that has a failure plan and looks
+at the attempt in progress every `health_probe_interval_ms`; the attempt's start is read from
+the plan's monotonic clock. It holds the writer's queue weakly, so once the writer has ended
+every later command fails at once as `writer_unavailable`.
+
 - A finding is the record `ledger.health_observed` (the ledger's own record) with the finding's
   code: `ledger_store_mismatch` (error, needs a person; key, both revisions, both value hashes;
   neither side is changed, once per source and stretch), `ledger_store_revision_skipped`,
@@ -786,6 +838,15 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `tag.workbench_patterns` | `task.*.last_duration_ms`, `task.*.last_outcome`, `task.*.failure_streak`, `task.*.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition`, `host.install_transition.pauses`, `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides` | list | tagged workbench keys | AO-2 (index rows), AO-5 (rules), v0.12.0 |
 | `tag.reobserve_prefixes` | `device.`, `backend.`, `application.`, `lease.`, `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.` | list | workbench keys known to be untagged and re-observed | AO-5, 0.12.x |
 
+- `settable` as fixed by AO-1: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys` and
+  `status_gap_window_ms` are read where they are used (`true`); every other key is read when the
+  ledger opens, before any instruction value is restored (`false`, "used before the ledger
+  opens"), `health_probe_interval_ms` included, since the probe starts with the writer. The
+  section's check refuses a broken rule as `config_value_invalid` (`section_check`) naming the key:
+  the tiers rise strictly within (0, 1], the hysteresis lies within (0, 1), tier 3 − tier 2 of
+  `buffer_bytes` holds at least `spill_batch_bytes`, `write_retry_backoff_ms` lists one wait per
+  attempt, and the tag lists hold non-empty texts without spaces. Every integer and millisecond
+  key is at least 1.
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.pack_registry.` joins `tag.reobserve_prefixes` (Workflow #389 §6.5); `config.selection`
   (#387) and `config.catalog` (MCP-9a) fall under the existing `config.` prefix.

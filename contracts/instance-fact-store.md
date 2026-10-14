@@ -402,11 +402,12 @@ publication before RT-S1a could write, is never a policy: it is ignored with the
 ## Resource reading facts
 
 Workflow #335 S5b. A package's resource readings (`contracts/resource-readings.md`) are
-written by the host, through `publish_facts`, after a run that succeeds on the reading page
-with a confirmed settlement. Each reading is one observation with one instance-scoped
-`resource.` or `inventory.` record. Its origin is the Runtime's own (source and actor `runtime`,
-origin module `fact-store`), with system links. The observation time is the terminal frame's
-capture time, the TTL is the declared `valid_for_ms` and `invalidate_on` is empty. The store
+written by the host, through `publish_facts`, after a run that succeeds with a confirmed
+settlement. Each reading is one observation with one instance-scoped `resource.` or
+`inventory.` record. Its origin is the Runtime's own (source and actor `runtime`, origin module
+`fact-store`), with system links. The observation time is the capture time of the frame the
+reading was taken on (Workflow #384 D2-S2: a mark may stand on any page of the task), the TTL is
+the declared `valid_for_ms` and `invalidate_on` is empty. The store
 accepts or refuses it like any other observation. No write site is added: the host terminal
 calls the existing `publish_facts`.
 

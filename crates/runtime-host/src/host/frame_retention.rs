@@ -68,8 +68,11 @@ pub(super) fn spill_root(
 }
 
 impl super::HostShared {
-    /// Workflow #375 R5d: one cleaner round. Its errors are ledger errors only, which are
-    /// fatal; a frame that cannot be removed or moved is a Warning.
+    /// Workflow #375 R5d: one cleaner round. Its errors are ledger errors only; a frame that
+    /// cannot be removed or moved is a Warning. Workflow #383 AO-1 (`contracts/ledger-observer.md`
+    /// §9.5): a ledger read that fails without a fatal failure (a reply that did not come in
+    /// time) is recorded as the round's error and the next round reads again; only a fatal
+    /// failure stops the Runtime.
     pub(super) fn maintain_frame_retention(&self) -> RuntimeHostResult<bool> {
         let result = (|| {
             // Try-only, so a `clear-kept` that holds the lock makes the round skip.
@@ -110,6 +113,9 @@ impl super::HostShared {
                 );
                 let error =
                     failure.expect("retention error remains explicit after lifecycle recording");
+                if !error.is_fatal() {
+                    return Ok(true);
+                }
                 self.fatal.mark(error.clone())?;
                 Err(error)
             }
@@ -730,11 +736,23 @@ fn failure(code: impl Into<Code>) -> RuntimeHostError {
     )
 }
 
+/// A ledger failure of the cleaner. Workflow #383 AO-1 (§9.5): a read the writer did not answer
+/// in time is an error of the round (recorded, not fatal); every other ledger failure stays
+/// fatal.
 fn ledger_failure(error: GlobalLedgerError) -> RuntimeHostError {
-    RuntimeHostError::relayed_fatal(
-        error.code(),
-        error.operation(),
-        RuntimeErrorCode::LedgerFailure,
-    )
-    .with_native_detail(format!("{error}; detail={:?}", error.detail()))
+    let detail = format!("{error}; detail={:?}", error.detail());
+    let relayed = if error.is_fatal() {
+        RuntimeHostError::relayed_fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::LedgerFailure,
+        )
+    } else {
+        RuntimeHostError::relayed_request(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::RuntimeUnavailable,
+        )
+    };
+    relayed.with_native_detail(detail)
 }

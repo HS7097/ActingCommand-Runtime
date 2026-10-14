@@ -224,6 +224,9 @@ revision.
   `resource_package` is present only on an instance
   that declares one: the admitted `{ path, kind }` (see "Instance resource
   package"); an instance without the field carries no `resource_package` key.
+  Workflow #384 D2-S2: `recognition_package` is present only on an instance
+  that binds one: `{ package, fact_keys }`, the resolved location and the keys
+  its reading marks write (see "Recognition maintenance package").
 - `policy_configured` states whether a `policy` section was assembled.
 - `performance` echoes the effective pressure streaks of the performance
   monitor (see "Performance and device paths"): `pressure_start_samples` and
@@ -388,6 +391,10 @@ revision.
   the root itself cannot be listed (see "Standard packs"). Workflow #398 RD-1b
   adds one `device_binding_unused:<alias>` per alias the private binding file
   binds that no handset of the configuration has, in file order (see "Devices").
+  Workflow #384 D2-S2 adds one `fact_reader_missing:<instance>:<fact key>` per
+  realistic fact a catalog task reads in an instance's scope that the
+  instance's reader does not mark, or that an instance without a reader cannot
+  refresh (see "Recognition maintenance package").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
@@ -422,13 +429,16 @@ adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `RuntimeHostConfig::validate` codes), `vision` (`vision_root_unavailable`,
 `vision_root_in_program_slot`, `vision_runtime_unavailable`,
 `vision_models_empty`, `vision_model_folder_invalid`, see "Vision root") or
-`resource_package` (`resource_package_missing`, `resource_package_invalid`) or
+`resource_package` (`resource_package_missing`, `resource_package_invalid`),
+`config_recognition_binding` (`fact_reader_binding_invalid`, see "Recognition
+maintenance package") or
 `policy_state` (startup's catalog plan refused, or the state root unreadable, see
 "Catalog plan"), in
 that order. The
 secret fingerprint salt is never printed.
 
-A `resource_package` failure, an `adb_install_missing` /
+A `resource_package` failure, a `fact_reader_binding_invalid` failure
+(`{ alias, path, reader_problem, package_id, fact_key }`), an `adb_install_missing` /
 `adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a device
 failure (stage `assemble`, see "Devices"), a
 `vision` failure and a `policy_state` failure (see "Catalog plan") also carry
@@ -574,6 +584,27 @@ The admitted `{ path, kind }` (`kind` is `file` or `directory`) is echoed here
 and reported by the instance status entry (`RuntimeInstanceStatus`,
 `ProjectInstanceView`) as `resource_package`, omitted when none is configured.
 Nothing else consumes it yet.
+
+## Recognition maintenance package
+
+Workflow #384 D2-S2 (`contracts/resource-readings.md`, "Recognition maintenance
+packages"). An instance may bind its recognition maintenance package with
+`recognition_package: { "package": "<path>" }`: a location only, never a digest
+(option 丙). A relative path resolves against the configuration file's
+directory. `check-config` prepares each bound package (the metadata-only
+`PreparedContainedTask::describe_path`, one 60 s deadline) and refuses a binding
+that is no reader with `fact_reader_binding_invalid` at stage
+`config_recognition_binding`, the first in alias order: `reader_problem`
+`package_unreadable` when the package cannot be read, `recognize_only`,
+`stability_termination`, `designated_operation` or `no_marks` when it does not
+qualify, and `policy_fact_authority` or `live_pool_key` when one of its marks
+writes a key the configuration's `policy.facts` declares for the instance or a
+`ledger_fact` pool of the configured catalog observes in the instance's scope.
+`acsetup --commit-config` therefore does not commit such a binding. Daemon
+startup does not prepare the bound packages: it reads their marks, runs without
+a binding it cannot read or whose marks are claimed, and notes each one in the
+`recognition_packages` row of `config.subsystems` (`fact_reader_binding_ignored`,
+caused by its `fact_reader_binding_invalid`); the start goes on.
 
 ## Standard packs
 

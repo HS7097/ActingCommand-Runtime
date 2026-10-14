@@ -285,6 +285,58 @@
       "enabled": false,
       "min_ms": 60000,
       "max_ms": 3600000
+    },
+    "fact_refresh": {
+      "recognition_join_timeout_ms": 10000
+    }
+  },
+  "ledger_observer": {
+    "buffer_bytes": 67108864,
+    "buffer_records": 20480,
+    "buffer": {
+      "tier1_ratio": 0.6,
+      "tier2_ratio": 0.75,
+      "tier3_ratio": 0.9,
+      "hysteresis_ratio": 0.1
+    },
+    "spill_batch_bytes": 4194304,
+    "dump_max_bytes": 1073741824,
+    "flush_batch_records": 256,
+    "flush_batch_records_busy": 2048,
+    "write_attempts": 5,
+    "write_retry_backoff_ms": [0, 100, 250, 500, 1000],
+    "flush_attempt_stall_ms": 120000,
+    "flush_lag_warn_ms": 5000,
+    "health_probe_interval_ms": 1000,
+    "probe_interval_ms": 60000,
+    "probe_sample_keys": 1024,
+    "request_index_records": 4096,
+    "status_gap_window_ms": 86400000,
+    "tag": {
+      "workbench_patterns": [
+        "task.*.last_duration_ms",
+        "task.*.last_outcome",
+        "task.*.failure_streak",
+        "task.*.completed_at_unix_ms",
+        "host.scheduling_pause",
+        "host.install_transition",
+        "host.install_transition.pauses",
+        "host.perf_baseline.*",
+        "host.perf_calibration.*",
+        "host.config_overrides"
+      ],
+      "reobserve_prefixes": [
+        "device.",
+        "backend.",
+        "application.",
+        "lease.",
+        "provider.",
+        "config.",
+        "task.page",
+        "task.game",
+        "task.server",
+        "host.pack_registry."
+      ]
     }
   }
 }

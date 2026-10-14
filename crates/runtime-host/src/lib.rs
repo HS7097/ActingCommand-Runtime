@@ -38,6 +38,8 @@ mod project_interface;
 mod proposal;
 mod provider;
 mod provider_startup;
+// Workflow #384 D2-S2.
+mod recognition_binding;
 mod recovery_read;
 mod recovery_timing;
 mod strategy;
@@ -52,6 +54,9 @@ pub use strategy::StrategicPlanPreparation;
 pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
 
 pub use actingcommand_scheduler::SchedulerConfig;
+// Workflow #383 AO-1: actingd's side of the ledger's write path (`contracts/ledger-observer.md`
+// §9.2 step 4).
+pub use actingcommand_ledger::LedgerFailureSink;
 pub use agent_dispatcher::AgentDispatcherConfig;
 pub use catalog_plan::{
     CatalogApprovalPlan, CatalogTransitionPlan, CatalogTransitionPlanKind, CatalogTransitionRequest,
@@ -77,6 +82,10 @@ pub use policy_host::{
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
 pub use provider_startup::ProviderStartup;
+pub use recognition_binding::{
+    missing_fact_readers, recognition_binding_ignored, recognition_binding_invalid,
+    recognition_binding_key_conflict, recognition_binding_qualification,
+};
 pub use suspension_report::{SuspensionReportError, SuspensionReportRequest, suspension_report};
 
 #[cfg(test)]
