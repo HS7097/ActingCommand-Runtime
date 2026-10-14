@@ -105,9 +105,9 @@ fn gate_replay_refuses_an_eviction_intent_carrying_failed_run_evidence() {
         );
     }
 
-    let refused = reopen(&database)
-        .err()
-        .expect("a root whose intent carries failed-run evidence is refused");
+    let Err(refused) = reopen(&database) else {
+        panic!("a root whose intent carries failed-run evidence is refused");
+    };
     assert_eq!(
         (refused.code(), refused.operation()),
         ("corrupt_ledger_record", "decode_sqlite_record")
