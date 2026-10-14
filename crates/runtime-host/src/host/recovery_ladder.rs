@@ -16,9 +16,10 @@
 //! - the startup and connection preparation stages: a failed daemon-start or connection
 //!   preparation (emulator start or restart, resume, self-check) whose resources were disposed
 //!   of safely;
-//! - direction ① (`stability_warnings`, §3.4): the `count`-th record of an item's classes or
-//!   codes on one instance within `window_ms`, counted in memory as records are committed and
-//!   admitted by the lease sweep, never on the write path;
+//! - direction ① (`stability_warnings`, §3.4): the `count`-th failure of an item's classes or
+//!   codes on one instance within `window_ms`, counted in memory as records are committed (one
+//!   failure once, however many records it commits: Workflow #387 D1c-H) and admitted by the
+//!   lease sweep, never on the write path;
 //! - a resource fence (Workflow #403), which matches no trigger item: a fence that manual work
 //!   met starts none while `rules.direct_runs = exempt` (B1, coordinator ruling 4).
 //!
@@ -58,13 +59,13 @@
 use super::contained_task::{FailedTaskTerminal, PackageIdentity};
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::{ClaimGrantSlot, HostClaim, HostClaimAdmission};
+use super::resource_fence::manual_claim;
 use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::error::spelled;
 use crate::failure_identity::identifier_text;
-use actingcommand_contract::codes::DeviceSelfCheckFailure;
 use actingcommand_contract::outcome::{Code, CodeStr, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, ContainedTaskRecoveryBinding,
@@ -210,8 +211,9 @@ pub(super) const fn ladder_exhausted_severity(interrupted: bool) -> EventSeverit
 /// M387 §2.2a: what each of the five rules decides, one function per rule; the ladder's code
 /// paths read them, so each rule's two values lead to its two behaviours (D1-L8).
 ///
-/// B1: a run's terminal (and its records, for direction ①) is left alone when it was a direct
-/// run and `direct_runs` is `exempt`.
+/// B1: manual work is left alone while `direct_runs` is `exempt`: a direct run's terminal, and
+/// for direction ① every record committed while manual work holds the instance's key (the set a
+/// resource fence treats as manual, `manual_claim`; Workflow #387 D1c-H).
 pub(super) fn direct_run_exempt(rules: &LadderRules, direct: bool) -> bool {
     direct && rules.direct_runs == DirectRuns::Exempt
 }
@@ -439,25 +441,72 @@ struct EmulatorRestartBounds<'a> {
 /// Workflow #387 D1c (M387 §3.4): direction ①'s per-instance windows, memory only and untagged
 /// (a restart starts every window empty, LEDG:932). A leaf lock: the append path takes it while
 /// it holds `fact_write_gate` and takes nothing under it; the lease sweep admits what it
-/// registered.
+/// registered. Workflow #387 D1c-H (Alice 10-14): a window holds failures, not records; one
+/// failure counts once, however many matching records it commits.
 #[derive(Default)]
 pub(super) struct StabilityCounter {
     /// The section in effect, refreshed whenever the configuration changes.
     config: Option<Arc<LadderConfig>>,
     /// The instances a ladder climbs on: their records are its own work.
     climbing: BTreeSet<InstanceId>,
-    /// The requests of direct runs in flight (B1).
-    direct_requests: BTreeSet<RequestId>,
-    /// Per instance and trigger item, the counted records in the window, oldest first.
+    /// Per instance and trigger item, when each counted failure counted, oldest first.
     windows: BTreeMap<InstanceId, BTreeMap<String, VecDeque<u64>>>,
+    /// Per instance, the failures of recent records and the failures counted (D1c-H).
+    failures: BTreeMap<InstanceId, InstanceFailures>,
     /// Bursts registered and not admitted yet, oldest first.
     bursts: Vec<StabilityBurst>,
     /// Codes met that the catalog does not list, not recorded yet.
     unclassified: Vec<String>,
 }
 
+/// Workflow #387 D1c-H: the failure a counted record belongs to, from the links the record
+/// already carries, in this order: the run it belongs to; else the request it answers; else
+/// the record its failure entered from (a `runtime.failed` record's `entered_event_id`), as
+/// the failure that record belongs to; else the record itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum FailureIdentity {
+    Run(RunId),
+    Request(RequestId),
+    Record(EventId),
+}
+
+/// Workflow #387 D1c-H: one instance's memory of failures. `records` names the failure each
+/// recent record belongs to, so that a record entering from it joins that failure; `counted`
+/// holds the failures that counted, each with when it counted. Both forget what is older than
+/// the longest window.
+#[derive(Default)]
+struct InstanceFailures {
+    records: BTreeMap<EventId, (u64, FailureIdentity)>,
+    counted: BTreeMap<FailureIdentity, u64>,
+}
+
+impl InstanceFailures {
+    fn forget_older_than(&mut self, at_unix_ms: u64, horizon_ms: u64) {
+        self.records
+            .retain(|_, (seen, _)| at_unix_ms.saturating_sub(*seen) <= horizon_ms);
+        self.counted
+            .retain(|_, counted| at_unix_ms.saturating_sub(*counted) <= horizon_ms);
+    }
+
+    /// The failure `record` belongs to; the record is remembered as part of it.
+    fn identify(&mut self, record: &CountedRecord<'_>) -> FailureIdentity {
+        let failure = match (record.run_id, record.request_id, record.entered_event_id) {
+            (Some(run_id), _, _) => FailureIdentity::Run(run_id),
+            (None, Some(request_id), _) => FailureIdentity::Request(request_id),
+            (None, None, Some(entered)) => self
+                .records
+                .get(&entered)
+                .map_or(FailureIdentity::Record(entered), |(_, failure)| *failure),
+            (None, None, None) => FailureIdentity::Record(record.event_id),
+        };
+        self.records
+            .insert(record.event_id, (record.at_unix_ms, failure));
+        failure
+    }
+}
+
 /// One burst direction ① registered (§3.4): its trigger item in the configuration it matched
-/// by, the window's first and last record and the last record's code.
+/// by, the window's first and last failure and the last record's code.
 pub(super) struct StabilityBurst {
     instance_id: InstanceId,
     config: Arc<LadderConfig>,
@@ -469,11 +518,16 @@ pub(super) struct StabilityBurst {
     failure_code: CodeStr,
 }
 
-/// What direction ① reads of one committed record: its instance link, its request link, when,
-/// how severe, and its code.
+/// What direction ① reads of one committed record: its instance, its own event id, its run and
+/// request links, the record its failure entered from, the kind of claim that held the
+/// instance's key when it was committed, when, how severe, and its code.
 pub(super) struct CountedRecord<'a> {
     pub(super) instance_id: InstanceId,
+    pub(super) event_id: EventId,
+    pub(super) run_id: Option<RunId>,
     pub(super) request_id: Option<RequestId>,
+    pub(super) entered_event_id: Option<EventId>,
+    pub(super) holder: Option<ClaimKind>,
     pub(super) at_unix_ms: u64,
     pub(super) severity: EventSeverity,
     pub(super) spelling: &'a str,
@@ -493,20 +547,14 @@ impl StabilityCounter {
         }
     }
 
-    /// A direct run of `request_id` starts or ends.
-    pub(super) fn set_direct_run(&mut self, request_id: RequestId, running: bool) {
-        if running {
-            self.direct_requests.insert(request_id);
-        } else {
-            self.direct_requests.remove(&request_id);
-        }
-    }
-
     /// Counts one committed record (§3.4): a warning or worse, on an instance no ladder climbs
-    /// on, not under a direct run while `rules.direct_runs = exempt`, whose code the first
-    /// stability-warnings trigger item matches. The `count`-th record within the item's window
-    /// registers a burst; whether it is then admitted or suppressed, every window of the
-    /// instance starts empty again.
+    /// on, not committed while manual work holds the instance's key under
+    /// `rules.direct_runs = exempt` (B1, the fence's set), whose code the first
+    /// stability-warnings trigger item matches. Workflow #387 D1c-H: the record counts only as
+    /// the first matching record of its failure (`FailureIdentity`); the `count`-th failure
+    /// within the item's window registers a burst. Whether it is then admitted or suppressed,
+    /// every window of the instance starts empty again, and the failures it counted stay
+    /// counted, so their later records do not count again.
     pub(super) fn count(&mut self, record: &CountedRecord<'_>) {
         let Some(config) = self.config.clone() else {
             return;
@@ -515,15 +563,20 @@ impl StabilityCounter {
             record.severity,
             EventSeverity::Warning | EventSeverity::Error | EventSeverity::Fatal
         ) || self.climbing.contains(&record.instance_id)
-            || direct_run_exempt(
-                &config.rules,
-                record
-                    .request_id
-                    .is_some_and(|request_id| self.direct_requests.contains(&request_id)),
-            )
+            || direct_run_exempt(&config.rules, record.holder.is_some_and(manual_claim))
         {
             return;
         }
+        let horizon_ms = config
+            .triggers
+            .iter()
+            .filter_map(|item| item.burst)
+            .map(|burst| burst.window_ms)
+            .max()
+            .unwrap_or(0);
+        let failures = self.failures.entry(record.instance_id).or_default();
+        failures.forget_older_than(record.at_unix_ms, horizon_ms);
+        let failure = failures.identify(record);
         if ladder_class_of(record.spelling).is_none() {
             if !self
                 .unclassified
@@ -549,6 +602,10 @@ impl StabilityCounter {
         else {
             return;
         };
+        if failures.counted.contains_key(&failure) {
+            return;
+        }
+        failures.counted.insert(failure, record.at_unix_ms);
         let window = self
             .windows
             .entry(record.instance_id)
@@ -1066,35 +1123,37 @@ impl HostShared {
         Ok(())
     }
 
-    /// Workflow #387 D1c (B1, §3.4): a direct run of `request_id` starts or ends; while it runs,
-    /// direction ① counts its records only under `rules.direct_runs = trigger`.
-    pub(super) fn track_direct_run(
-        &self,
-        request_id: RequestId,
-        running: bool,
-    ) -> RuntimeHostResult<()> {
-        lock(
-            &self.stability_counter,
-            HostLocation::RecoveryStabilityCount,
-        )?
-        .set_direct_run(request_id, running);
-        Ok(())
-    }
-
     /// Workflow #387 D1c (§3.4): direction ①'s count of one committed record, under the append
-    /// path's `fact_write_gate`: memory only, its own leaf lock, nothing recorded and no
-    /// admission. A record counts by its outcome's code; a backend open observation, which
-    /// carries none, by the open failure code of its entry when it failed.
+    /// path's `fact_write_gate`: memory only, nothing recorded and no admission. A record counts
+    /// by its outcome's code; a record without an outcome counts for nothing (Workflow #387
+    /// D1c-H: a backend open observation carries none; an open failure counts through the
+    /// preparation, capture, input or task record that carries it). Its run and request links
+    /// and the record its failure entered from name the failure it belongs to; the kind of claim
+    /// holding its instance's key says whether manual work committed it (B1). The scheduler's
+    /// lock is taken and dropped before the counter's leaf lock; nothing that holds the
+    /// scheduler's lock appends a record.
     pub(super) fn count_stability_record(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
         let Some(instance_id) = event.links().instance_id().copied() else {
             return Ok(());
         };
-        let spelling = match event.payload().outcome() {
-            Some(outcome) => outcome.code().as_str().to_owned(),
-            None => match backend_open_failure(event.payload()) {
-                Some(code) => code.as_str().to_owned(),
-                None => return Ok(()),
-            },
+        let Some(outcome) = event.payload().outcome() else {
+            return Ok(());
+        };
+        // Only a warning or worse can count; the key's holder is read for those alone.
+        if !matches!(
+            event.severity(),
+            EventSeverity::Warning | EventSeverity::Error | EventSeverity::Fatal
+        ) {
+            return Ok(());
+        }
+        let holder = lock(&self.scheduler, HostLocation::RecoveryStabilityCount)?
+            .active_lease(instance_id)
+            .map(|lease| lease.kind());
+        let entered_event_id = match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(value)) => value
+                .lifecycle_failure()
+                .and_then(|failure| failure.entered_event_id()),
+            _ => None,
         };
         lock(
             &self.stability_counter,
@@ -1102,10 +1161,14 @@ impl HostShared {
         )?
         .count(&CountedRecord {
             instance_id,
+            event_id: *event.event_id(),
+            run_id: event.links().run_id().copied(),
             request_id: event.links().request_id().copied(),
+            entered_event_id,
+            holder,
             at_unix_ms: event.timestamp_unix_ms(),
             severity: event.severity(),
-            spelling: &spelling,
+            spelling: outcome.code().as_str(),
         });
         Ok(())
     }
@@ -2709,30 +2772,6 @@ impl HostShared {
         )
         .map(|_| ())
     }
-}
-
-/// The open failure code of a backend open observation that failed, by its entry (§3.4: such a
-/// record carries no outcome of its own).
-fn backend_open_failure(payload: &EventPayload) -> Option<Code> {
-    let EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) = payload else {
-        return None;
-    };
-    let report = value.backend_open()?;
-    let failed = [
-        report.status,
-        report.connection,
-        report.capture_check,
-        report.input_check,
-    ]
-    .contains(&BackendObservationStatus::Failed);
-    if !failed {
-        return None;
-    }
-    Some(match report.entry {
-        BackendOpenEntry::Input => DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
-        BackendOpenEntry::Capture => DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
-        BackendOpenEntry::NemuPair => DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
-    })
 }
 
 /// The outcome of a failed rung (ledger revision 3): its reason's outcome; a holding

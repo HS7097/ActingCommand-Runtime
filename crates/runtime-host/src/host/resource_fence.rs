@@ -84,8 +84,10 @@ pub(super) fn resource_fence_error(
 }
 
 /// M387 B1: whether a key of `kind` is held by a person's manual work (a direct task run, a
-/// client lease, an application or input command, a Lab operation), whose fence starts no ladder.
-fn manual_claim(kind: ClaimKind) -> bool {
+/// client lease, an application or input command, a Lab operation), whose fence starts no ladder
+/// and whose records direction ① does not count (Workflow #387 D1c-H) while
+/// `rules.direct_runs` is `exempt`.
+pub(super) fn manual_claim(kind: ClaimKind) -> bool {
     matches!(
         kind,
         ClaimKind::DirectTaskRun
@@ -211,11 +213,14 @@ impl HostShared {
         let fence = resource_fence_error(instance_id, fenced_projection_code(error))
             .with_caused_by(error.outcome());
         if newly {
+            // Workflow #387 D1c-H: the fence record enters from the unconfirmed failure's own
+            // record, so direction ① counts the two as one failure even where the fence's
+            // links name the instance alone (a failed lease end).
             self.append_lifecycle_failure(
                 RuntimeLifecycleFailureStage::SessionClose,
                 RuntimeLifecycleFailure::Host(&fence),
                 links.with_instance_id(self.events.issuer().issue_registered_instance(instance_id)),
-                None,
+                error.diagnostics().recorded_event().get().copied(),
             )?;
             self.withhold_policy_instance_availability(instance_id)?;
         }

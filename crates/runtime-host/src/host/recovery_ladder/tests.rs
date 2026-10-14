@@ -238,10 +238,32 @@ fn instance() -> InstanceId {
         .transport()
 }
 
+fn issuer() -> actingcommand_contract::IdentifierIssuer {
+    actingcommand_contract::IdentifierIssuer::new().expect("identifier issuer")
+}
+
+fn event_id() -> EventId {
+    *issuer().mint_event_id().expect("event id").transport()
+}
+
+fn run_id() -> RunId {
+    *issuer().mint_run_id().expect("run id").transport()
+}
+
+fn request_id() -> RequestId {
+    *issuer().mint_request_id().expect("request id").transport()
+}
+
+/// A record that is a failure of its own: it names no run, no request and no record it entered
+/// from, and no claim holds its instance's key.
 fn record(instance_id: InstanceId, at_unix_ms: u64, spelling: &str) -> CountedRecord<'_> {
     CountedRecord {
         instance_id,
+        event_id: event_id(),
+        run_id: None,
         request_id: None,
+        entered_event_id: None,
+        holder: None,
         at_unix_ms,
         severity: EventSeverity::Error,
         spelling,
@@ -380,11 +402,6 @@ fn h4_g6_direction_one_starts_at_the_configured_count_within_the_configured_wind
 fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     let node = instance();
     let other = instance();
-    let direct = *actingcommand_contract::IdentifierIssuer::new()
-        .expect("identifier issuer")
-        .mint_request_id()
-        .expect("request id")
-        .transport();
     let mut counter = StabilityCounter::default();
     counter.configure(ladder(serde_json::json!({})));
     // A warning and an error count; an info does not.
@@ -406,14 +423,14 @@ fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     }
     assert!(counter.take().0.is_empty(), "a climbing instance's records");
     counter.set_climbing(other, false);
-    // A direct run's records count only under `direct_runs = trigger`.
+    // A direct run's records (its key held by its `DirectTaskRun` claim) count only under
+    // `direct_runs = trigger`.
     let direct_records = |instance_id| {
         [1_000, 2_000, 3_000].map(|at_unix_ms| CountedRecord {
-            request_id: Some(direct),
+            holder: Some(ClaimKind::DirectTaskRun),
             ..record(instance_id, at_unix_ms, OPEN_FAILED)
         })
     };
-    counter.set_direct_run(direct, true);
     for record in &direct_records(other) {
         counter.count(record);
     }
@@ -422,7 +439,6 @@ fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     triggering.configure(ladder(
         serde_json::json!({"rules": {"direct_runs": "trigger"}}),
     ));
-    triggering.set_direct_run(direct, true);
     for record in &direct_records(other) {
         triggering.count(record);
     }
@@ -445,4 +461,272 @@ fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     let (registered, unclassified) = counter.take();
     assert!(registered.is_empty());
     assert_eq!(unclassified, vec!["neutral_unlisted_failure".to_owned()]);
+}
+
+// Workflow #387 D1c-H (Alice 10-14): the records one failure commits count once. Each family is
+// the records its producer commits, with the links the producer gives them: a lifecycle failure
+// with two causes (its primary record and one record per cause, all with the failure's code,
+// each cause entering from the primary record), a scheduled run's capture failure
+// (`capture.failed`, the `runtime.failed` entering from it and the run's `task.failed`, all under
+// the run and its request) and a monitor probe's capture failure (`capture.failed`, the
+// `runtime.failed` entering from it, `recognition.failed` and the probe's failure record, all
+// under the probe's run). One such failure registers no burst; neither do two, so the first
+// counted once; the third registers the burst.
+#[test]
+fn d1ch_the_records_of_one_failure_count_once() {
+    let node = instance();
+    let defaults = ladder(serde_json::json!({}));
+    let close_failed = "capture_backend_close_failed";
+    let operation_failed = "capture_backend_operation_failed";
+    let capture_failed = "capture_failed";
+    // Named by the instance alone, the strictest case: the causes join the primary record only
+    // through the record they enter from.
+    let lifecycle = |at_unix_ms: u64| {
+        let primary = record(node, at_unix_ms, close_failed);
+        let entered = Some(primary.event_id);
+        let mut records = vec![primary];
+        for offset in [1, 2] {
+            records.push(CountedRecord {
+                entered_event_id: entered,
+                ..record(node, at_unix_ms + offset, close_failed)
+            });
+        }
+        records
+    };
+    let scheduled_run = |at_unix_ms: u64| {
+        let run = Some(run_id());
+        let request = Some(request_id());
+        let captured = CountedRecord {
+            run_id: run,
+            request_id: request,
+            ..record(node, at_unix_ms, operation_failed)
+        };
+        let failed = CountedRecord {
+            run_id: run,
+            request_id: request,
+            entered_event_id: Some(captured.event_id),
+            ..record(node, at_unix_ms + 1, operation_failed)
+        };
+        let terminal = CountedRecord {
+            run_id: run,
+            request_id: request,
+            ..record(node, at_unix_ms + 2, operation_failed)
+        };
+        vec![captured, failed, terminal]
+    };
+    let monitor_probe = |at_unix_ms: u64| {
+        let run = Some(run_id());
+        let captured = CountedRecord {
+            run_id: run,
+            ..record(node, at_unix_ms, operation_failed)
+        };
+        let failed = CountedRecord {
+            run_id: run,
+            entered_event_id: Some(captured.event_id),
+            ..record(node, at_unix_ms + 1, operation_failed)
+        };
+        let recognition = CountedRecord {
+            run_id: run,
+            ..record(node, at_unix_ms + 2, capture_failed)
+        };
+        let probe = CountedRecord {
+            run_id: run,
+            ..record(node, at_unix_ms + 3, capture_failed)
+        };
+        vec![captured, failed, recognition, probe]
+    };
+    let defaults = &defaults;
+    assert_counts_once(defaults, "a lifecycle failure with two causes", lifecycle);
+    assert_counts_once(defaults, "a scheduled run's capture failure", scheduled_run);
+    assert_counts_once(defaults, "a monitor probe's capture failure", monitor_probe);
+}
+
+// Three failures of `family`, 1 s apart, on a fresh counter: neither one nor two register a
+// burst, so each counted once; the third registers it, spanning the first records of the first
+// and the third failure.
+fn assert_counts_once(
+    config: &Arc<LadderConfig>,
+    family: &str,
+    failure: impl Fn(u64) -> Vec<CountedRecord<'static>>,
+) {
+    let mut counter = StabilityCounter::default();
+    counter.configure(Arc::clone(config));
+    for record in &failure(1_000) {
+        counter.count(record);
+    }
+    assert!(counter.take().0.is_empty(), "{family}: one failure");
+    for record in &failure(2_000) {
+        counter.count(record);
+    }
+    assert!(counter.take().0.is_empty(), "{family}: two failures");
+    for record in &failure(3_000) {
+        counter.count(record);
+    }
+    let registered = counter.take().0;
+    let [burst] = registered.as_slice() else {
+        panic!("{family}: one burst: {}", registered.len());
+    };
+    assert_eq!(
+        (burst.first_unix_ms, burst.last_unix_ms),
+        (1_000, 3_000),
+        "{family}"
+    );
+}
+
+// Workflow #387 D1c-H: three separate failures of the same kind (three scheduled runs, each
+// committing three records) within the window register a burst at the third failure's first
+// record, and the rest of that failure's records do not count again after it. Three whose first
+// lies just over the window before the third register none; at exactly the window they do.
+#[test]
+fn d1ch_three_separate_failures_within_the_window_register_a_burst_and_just_over_do_not() {
+    let node = instance();
+    let defaults = ladder(serde_json::json!({}));
+    let operation_failed = "capture_backend_operation_failed";
+    let run_failure = |at_unix_ms: u64| {
+        let run = Some(run_id());
+        let request = Some(request_id());
+        [0, 1, 2].map(|offset| CountedRecord {
+            run_id: run,
+            request_id: request,
+            ..record(node, at_unix_ms + offset, operation_failed)
+        })
+    };
+    let counted = |starts: [u64; 3]| {
+        let mut counter = StabilityCounter::default();
+        counter.configure(Arc::clone(&defaults));
+        for at_unix_ms in starts {
+            for record in &run_failure(at_unix_ms) {
+                counter.count(record);
+            }
+        }
+        counter
+    };
+    let mut within = counted([1_000, 2_000, 3_000]);
+    let registered = within.take().0;
+    let [burst] = registered.as_slice() else {
+        panic!("one burst: {}", registered.len());
+    };
+    assert_eq!(
+        (
+            burst.count,
+            burst.window_ms,
+            burst.first_unix_ms,
+            burst.last_unix_ms
+        ),
+        (3, 600_000, 1_000, 3_000)
+    );
+    // The third failure's later records started no window: two more failures make two.
+    for at_unix_ms in [4_000, 5_000] {
+        for record in &run_failure(at_unix_ms) {
+            within.count(record);
+        }
+    }
+    assert!(within.take().0.is_empty(), "two failures after the burst");
+    assert!(
+        counted([1_000, 300_000, 601_001]).take().0.is_empty(),
+        "the first failure lies just over the window"
+    );
+    assert_eq!(
+        counted([1_000, 300_000, 601_000]).take().0.len(),
+        1,
+        "the first failure lies at exactly the window"
+    );
+}
+
+// Workflow #387 D1c-H (B1, the fence's set): while `rules.direct_runs` is `exempt`, the records
+// committed while manual work holds the instance's key count for nothing: an application
+// command's and an input command's (their `InputLifecycle` claim), a client lease's and a Lab
+// operation's. Under `trigger` they count, one failure once: the client lease's failures include
+// the fence record a failed lease end writes, which names the instance alone and enters from the
+// failure's record. An emulator control command is not manual work: its records count under
+// `exempt`.
+#[test]
+fn d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts() {
+    let node = instance();
+    let exempt = ladder(serde_json::json!({}));
+    let trigger = ladder(serde_json::json!({"rules": {"direct_runs": "trigger"}}));
+    // Three failures of one kind of work, 1 s apart, each under its own request while a claim of
+    // `holder` holds the instance's key; `fenced` adds each failure's fence record.
+    let failures = |holder: ClaimKind, spellings: &[&'static str], fenced: bool| {
+        let mut records = Vec::new();
+        for at_unix_ms in [1_000_u64, 2_000, 3_000] {
+            let request = Some(request_id());
+            let first = records.len();
+            for (offset, &spelling) in (0_u64..).zip(spellings) {
+                records.push(CountedRecord {
+                    request_id: request,
+                    holder: Some(holder),
+                    ..record(node, at_unix_ms + offset, spelling)
+                });
+            }
+            if fenced {
+                let entered = records.get(first).map(|failed| failed.event_id);
+                records.push(CountedRecord {
+                    entered_event_id: entered,
+                    holder: Some(holder),
+                    ..record(node, at_unix_ms + 10, "instance_resources_fenced")
+                });
+            }
+        }
+        records
+    };
+    let rows = [
+        (
+            "an application command",
+            ClaimKind::InputLifecycle,
+            &["application_backend_operation_failed"],
+            false,
+        ),
+        (
+            "an input command",
+            ClaimKind::InputLifecycle,
+            &["input_backend_operation_failed"],
+            false,
+        ),
+        (
+            "a client lease",
+            ClaimKind::ClientLease,
+            &["capture_backend_operation_failed"],
+            true,
+        ),
+        (
+            "a Lab operation",
+            ClaimKind::LabOperation,
+            &["capture_backend_operation_failed"],
+            false,
+        ),
+    ];
+    for (work, holder, spellings, fenced) in rows {
+        let records = failures(holder, spellings.as_slice(), fenced);
+        assert!(
+            bursts(Arc::clone(&exempt), &records).is_empty(),
+            "{work} under exempt"
+        );
+        let registered = bursts(Arc::clone(&trigger), &records);
+        let [burst] = registered.as_slice() else {
+            panic!("{work} under trigger: one burst: {}", registered.len());
+        };
+        assert_eq!(
+            (burst.first_unix_ms, burst.last_unix_ms),
+            (1_000, 3_000),
+            "{work} under trigger"
+        );
+    }
+    let control = failures(
+        ClaimKind::EmulatorControl,
+        ["backend_operation_failed", "emulator_control_failed"].as_slice(),
+        false,
+    );
+    let registered = bursts(exempt, &control);
+    let [burst] = registered.as_slice() else {
+        panic!(
+            "emulator control under exempt: one burst: {}",
+            registered.len()
+        );
+    };
+    assert_eq!(
+        (burst.first_unix_ms, burst.last_unix_ms),
+        (1_000, 3_000),
+        "emulator control under exempt"
+    );
 }

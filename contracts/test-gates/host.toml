@@ -592,3 +592,14 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# Workflow #387 D1c-H: the records one failure commits count once toward direction ① (by its run, else its request, else the failure of the record it entered from, else the record): a lifecycle failure with two causes, a scheduled run's capture failure and a monitor probe's capture failure each count once; three separate failures within the window register a burst and three at just over it do not; under rules.direct_runs = exempt the records committed while manual work (the fence's B1 set) holds the instance's key are not counted, under trigger they are, and emulator control records still count
+[[gate]]
+key = "71"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_the_records_of_one_failure_count_once",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_three_separate_failures_within_the_window_register_a_burst_and_just_over_do_not",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1ch_manual_work_counts_only_under_trigger_and_emulator_control_still_counts",
+]
+incident = ["#387"]

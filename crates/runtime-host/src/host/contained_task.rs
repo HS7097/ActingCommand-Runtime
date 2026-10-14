@@ -5112,10 +5112,9 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
-        // Workflow #387 D1c (B1, M387 §3.4): the run's records count for direction ① only under
-        // `rules.direct_runs = trigger`.
-        self.track_direct_run(original.request_id(), true)
-            .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #387 D1c-H (B1): the run's records count for direction ① only under
+        // `rules.direct_runs = trigger`; the counter sees its key held by the run's
+        // `DirectTaskRun` claim, the fence's manual set.
         let executed = self.execute_contained_task_with_lease(
             original,
             request,
@@ -5133,7 +5132,6 @@ impl HostShared {
             active_run.control(),
             None,
         );
-        let untracked = self.track_direct_run(original.request_id(), false);
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
         // that. Noted while the run is still registered, so a draining pause sees it.
@@ -5148,7 +5146,7 @@ impl HostShared {
         // `ac_run_pack`) starts no stuck-recovery ladder by default; whoever ran it has the
         // receipt and decides. Workflow #387 D1c: `rules.direct_runs = trigger` lets its failed
         // end queue one (`ladder_after_direct_run`).
-        with_recovery_ladder_staging(executed, awaited.and(untracked))
+        with_recovery_ladder_staging(executed, awaited)
     }
 
     pub(super) fn package_material_deadline(
