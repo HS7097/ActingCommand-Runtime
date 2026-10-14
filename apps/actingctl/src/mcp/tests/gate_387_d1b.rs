@@ -8,66 +8,23 @@ use super::super::jobs::Jobs;
 use super::super::runtime::RuntimeAccess;
 use super::super::settings::changes as mcp_changes;
 use super::super::tools::{Tier, TierSet, ToolContext, find};
+use crate::held_runtime::{HELD_SALT, NoInstances};
 use actingcommand_contract::{
-    ApplicationLifecycleAction, ConfigParameter, ConfigParameterSource, EventActor, EventSource,
-    FactScalar, FactValue, FencedWrite, RuntimeConfigManifest, config_parameter_section,
-    config_parameters_fact_key,
-};
-use actingcommand_device::{
-    CaptureBackend, DeviceError, DeviceResult, FrameMemoryBudget, InputBackend, OpenedBackend,
+    ConfigParameter, ConfigParameterSource, EventActor, EventSource, FactScalar, FactValue,
+    RuntimeConfigManifest, config_parameter_section, config_parameters_fact_key,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_config::{
     CheckContext, ConfigCode, DeviceBounds, EffectiveConfig, InstructionStamp, STUCK_RECOVERY,
     STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
-use actingcommand_runtime_host::{
-    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
-};
+use actingcommand_runtime_host::{RuntimeHost, RuntimeHostConfig};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tempfile::TempDir;
 
 const INSTANCE: &str = "instance_0123456789abcdef0123456789abcdef";
-const SALT: &[u8] = b"gate-387-d1b-test-salt";
-
-// A Runtime without instances: ConfigureSettings needs no device.
-struct NoInstances;
-
-impl ExecutionBackendProvider for NoInstances {
-    fn instance_aliases(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn resolve(&self, _instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        None
-    }
-
-    fn open_input(
-        &self,
-        _instance_alias: &str,
-    ) -> DeviceResult<OpenedBackend<Box<dyn InputBackend>>> {
-        Err(DeviceError::fatal("the test Runtime has no instance"))
-    }
-
-    fn open_capture(
-        &self,
-        _instance_alias: &str,
-        _memory: Option<&FrameMemoryBudget>,
-    ) -> DeviceResult<OpenedBackend<Box<dyn CaptureBackend>>> {
-        Err(DeviceError::fatal("the test Runtime has no instance"))
-    }
-
-    fn control_application(
-        &self,
-        _witness: &FencedWrite,
-        _instance_alias: &str,
-        _action: ApplicationLifecycleAction,
-    ) -> DeviceResult<()> {
-        Err(DeviceError::fatal("the test Runtime has no instance"))
-    }
-}
 
 #[test]
 fn d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_session() {
@@ -174,15 +131,17 @@ fn rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top() 
     // A misspelt member: no row of the key table has it.
     let misspelt = instance_key(INSTANCE, "stuck_recovery_cooldown_seconds");
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(root.path(), SALT).with_config_manifest(RuntimeConfigManifest {
-            subsystems: Vec::new(),
-            parameters: vec![ConfigParameter {
-                key: cooldown.clone(),
-                value: FactScalar::Integer(600),
-                source: ConfigParameterSource::Default,
-                settable: true,
-            }],
-        }),
+        RuntimeHostConfig::new(root.path(), HELD_SALT).with_config_manifest(
+            RuntimeConfigManifest {
+                subsystems: Vec::new(),
+                parameters: vec![ConfigParameter {
+                    key: cooldown.clone(),
+                    value: FactScalar::Integer(600),
+                    source: ConfigParameterSource::Default,
+                    settable: true,
+                }],
+            },
+        ),
         Arc::new(NoInstances),
     )
     .expect("the Runtime starts");
