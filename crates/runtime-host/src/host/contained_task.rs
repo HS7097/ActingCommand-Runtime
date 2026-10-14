@@ -287,17 +287,14 @@ fn resource_reading_fact_record(
     })
 }
 
-/// Workflow #335 S5b: `resource_bundle_hash` of a reading: the content directory digest, the
-/// sealed ZIP digest, or SHA-256 of a source tree reference's prefixed wire JSON.
-fn resource_reading_bundle_hash(package: &actingcommand_contract::PackageRef) -> String {
-    match package {
-        actingcommand_contract::PackageRef::ContentDirectory(reference) => reference.sha256.clone(),
-        actingcommand_contract::PackageRef::LegacyZipSha256(hash) => hash.clone(),
-        actingcommand_contract::PackageRef::GitSourceTree(_) => format!(
-            "{:x}",
-            Sha256::digest(package.prefixed_wire_value().to_string().as_bytes())
-        ),
-    }
+/// Workflow #335 S5b, #336 PKG-S2 (option 丙, M-PKG D8): `resource_bundle_hash` of a reading:
+/// the lowercase hex SHA-256 of `package:<package_id>`. A package changed in place keeps the
+/// value; two packages never share one; no package content is hashed.
+pub(crate) fn resource_reading_bundle_hash(package_id: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("package:{package_id}").as_bytes())
+    )
 }
 
 /// The canonical text of a typed identifier (`run_<hex>`, `frame_<hex>`).
@@ -1664,14 +1661,14 @@ impl RuntimeContainedTask<'_> {
 
     fn record_geometry_triggered_recovery_failure(
         &self,
-        package_sha256: actingcommand_contract::PackageRef,
+        package_label: String,
         primary: &RuntimeHostError,
     ) -> Result<(), RequestFailure> {
         // Preserve the two original recovery failure facts after a classified failure,
         // even when the operation has consumed its last remaining execution budget.
         for fact in [
             TaskSemanticFact::EntryRecoveryFailed {
-                package_sha256,
+                package_label: Some(package_label),
                 outcome: primary.outcome(),
                 role: None,
             },
@@ -1704,15 +1701,15 @@ impl RuntimeContainedTask<'_> {
     /// operation consumed its last remaining execution budget.
     pub(super) fn record_geometry_triggered_prerequisite_failure(
         &self,
-        open_packages: &[actingcommand_contract::PackageRef],
+        open_packages: &[String],
         primary: &RuntimeHostError,
     ) -> Result<(), RequestFailure> {
         let outcome = primary.outcome();
         for fact in open_packages
             .iter()
             .rev()
-            .map(|package_sha256| TaskSemanticFact::EntryRecoveryFailed {
-                package_sha256: package_sha256.clone(),
+            .map(|package_label| TaskSemanticFact::EntryRecoveryFailed {
+                package_label: Some(package_label.clone()),
                 outcome: outcome.clone(),
                 role: None,
             })
@@ -3645,7 +3642,6 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             ContainedTaskTrace::PackageAdmitted {
                 task_label,
                 package_label,
-                package_sha256,
             } => {
                 #[cfg(test)]
                 self.host
@@ -3665,7 +3661,6 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         TaskSemanticFact::PackageAdmitted {
                             package_label,
                             task_label,
-                            package_sha256,
                             response_deadline_monotonic_ms: Some(self.control.deadline()),
                         },
                         self.token.expires_at_monotonic_ms(),
@@ -4408,11 +4403,10 @@ pub(super) fn prepare_contained_task(
         vision_provider,
         deadline,
     )
-    .map_err(|error| contained_task_declaration_failure(request, error))
+    .map_err(contained_task_declaration_failure)
 }
 
 fn contained_task_declaration_failure(
-    request: &ContainedTaskRequest,
     error: actingcommand_execution_kernel::ContainedTaskError,
 ) -> RequestFailure {
     let mut refused = RuntimeHostError::relayed_request(
@@ -4433,12 +4427,12 @@ fn contained_task_declaration_failure(
         failure.error = Box::new(refused.with_native_detail(detail));
     }
     if let Some(issue) = error.declaration_issue() {
-        // Declaration parsing happens only after the package was read. Workflow #336 PKG-S1:
-        // both references are the request's, as the caller gave it; nothing verified it.
+        // Declaration parsing happens only after the package was read. Workflow #336 PKG-S2
+        // (option 丙): the package is named by the `package_id` its control declares, when
+        // preparation read one; no package digest is recorded.
         failure.error.lifecycle.resource_declaration = Some(Box::new(
             actingcommand_contract::ResourceDeclarationRejection {
-                declared_package: request.expected_sha256().clone(),
-                verified_package: Some(request.expected_sha256().clone()),
+                package_label: error.declaration_package().map(str::to_owned),
                 program_version: format!(
                     "actingcommand-runtime-host/{}",
                     env!("CARGO_PKG_VERSION")
@@ -5007,9 +5001,13 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
-        if let Some(recovered) =
-            self.recover_contained_task(original, request, resolved.instance_id(), task_request)?
-        {
+        if let Some(recovered) = self.recover_contained_task(
+            original,
+            request,
+            instance_alias,
+            resolved.instance_id(),
+            task_request,
+        )? {
             return Ok(recovered);
         }
         self.require_business_capacity(self.events.request_links(
@@ -6420,7 +6418,7 @@ impl HostShared {
                         instance_alias: instance_alias.to_owned(),
                         task_label: prepared.task_label().to_owned(),
                         resource_bundle_hash: resource_reading_bundle_hash(
-                            prepared.package_sha256(),
+                            prepared.package_label(),
                         ),
                         frames: taken_resource_readings,
                     }
@@ -6538,9 +6536,22 @@ impl HostShared {
             Err(mut failure) => {
                 let code = failure.error.code();
                 let outcome = failure.error.outcome();
+                // Workflow #336 PKG-S2 (option 丙): the refused package's `package_id`, when it
+                // is known: the configured return-home package's, or the one its refused
+                // declaration read. A request's own binding names only a path.
+                let package_label = if configured {
+                    self.return_home_packages
+                        .get(&(prepared.game().to_owned(), prepared.server().to_owned()))
+                        .cloned()
+                } else {
+                    failure
+                        .error
+                        .resource_declaration()
+                        .and_then(|rejection| rejection.package_label.clone())
+                };
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
-                        package_sha256: binding.expected_sha256().to_owned(),
+                        package_label,
                         outcome: outcome.clone(),
                         role: None,
                     })
@@ -6606,10 +6617,10 @@ impl HostShared {
                 SharedCode::ContainedTaskHomeRecoveryPackageIncompatible.as_str(),
             );
         }
-        let recovery_sha256 = recovery.package_sha256().to_owned();
+        let recovery_label = recovery.package_label().to_owned();
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
-                package_sha256: recovery_sha256.clone(),
+                package_label: recovery_label.clone(),
                 role: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
@@ -6627,7 +6638,7 @@ impl HostShared {
                 runtime
                     .record_configuration(
                         EffectiveConfigurationFacts::EntryRecovery {
-                            package_sha256: recovery.package_sha256().to_owned(),
+                            package_label: recovery_label.clone(),
                             timing: recovery.effective_timing(),
                         },
                         None,
@@ -6672,13 +6683,13 @@ impl HostShared {
                         primary = primary.with_native_detail(detail.to_owned());
                     }
                     runtime
-                        .record_geometry_triggered_recovery_failure(recovery_sha256, &primary)
+                        .record_geometry_triggered_recovery_failure(recovery_label, &primary)
                         .map_err(ContainedTaskRunError::Boundary)?;
                     return Err(ContainedTaskRunError::Task(error));
                 }
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
-                        package_sha256: recovery_sha256,
+                        package_label: Some(recovery_label),
                         outcome: Outcome::relayed(error.code().as_str()),
                         role: None,
                     })
@@ -6701,14 +6712,14 @@ impl HostShared {
                     )
                 {
                     runtime
-                        .record_geometry_triggered_recovery_failure(recovery_sha256, &failure.error)
+                        .record_geometry_triggered_recovery_failure(recovery_label, &failure.error)
                         .map_err(ContainedTaskRunError::Boundary)?;
                     return Err(ContainedTaskRunError::NonfatalOperation(failure));
                 }
                 let outcome = failure.error.outcome();
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
-                        package_sha256: recovery_sha256,
+                        package_label: Some(recovery_label),
                         outcome: outcome.clone(),
                         role: None,
                     })
@@ -6734,7 +6745,7 @@ impl HostShared {
         };
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecoveryCompleted {
-                package_sha256: recovery_sha256,
+                package_label: recovery_label,
                 final_page: final_page.clone(),
                 executed_steps: recovery_outcome.executed_steps,
                 role: None,
@@ -6796,10 +6807,29 @@ impl HostShared {
         Ok(outcome)
     }
 
+    /// Workflow #336 PKG-S2 (option 丙): the `package_id` of the package `request` names,
+    /// admitted again as a run admits it, for a replay that compares it with the label its run
+    /// recorded. Nothing is hashed; the package may have changed in place since.
+    fn replayed_package_label(
+        &self,
+        instance_alias: &str,
+        request: &ContainedTaskRequest,
+        deadline: Instant,
+    ) -> Result<String, RequestFailure> {
+        prepare_contained_task(
+            instance_alias,
+            request,
+            self.execution()?.vision_provider(),
+            deadline,
+        )
+        .map(|prepared| prepared.package_label().to_owned())
+    }
+
     fn recover_contained_task(
         &self,
         request: &RuntimeRequest,
         validated: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
         instance_id: InstanceId,
         task_request: &ContainedTaskRequest,
     ) -> Result<Option<OperationSuccess>, RequestFailure> {
@@ -6854,17 +6884,29 @@ impl HostShared {
             .iter()
             .filter_map(|(event, fact)| match fact {
                 TaskSemanticFact::PackageAdmitted {
-                    package_sha256,
+                    package_label,
                     response_deadline_monotonic_ms,
                     ..
-                } => Some((*event, package_sha256, *response_deadline_monotonic_ms)),
+                } => Some((*event, package_label, *response_deadline_monotonic_ms)),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        if packages.len() > 1
-            || packages
-                .first()
-                .is_some_and(|(_, package, _)| *package != task_request.expected_sha256())
+        if packages.len() > 1 {
+            return Err(contained_task_replay_denied(
+                HostCode::ContainedTaskRequestPackageReused,
+            ));
+        }
+        // Workflow #336 PKG-S2 (option 丙): a replay names the same package when the request's
+        // package, admitted again, has the `package_id` the run recorded; its content may have
+        // changed in place since. A replay is admitted under the request's own deadline.
+        let replay_deadline = Instant::now()
+            .checked_add(Duration::from_millis(task_request.response_deadline_ms()))
+            .ok_or_else(|| {
+                contained_task_package_failure(HostCode::ContainedTaskDeadlineOverflow)
+            })?;
+        if let Some((_, recorded, _)) = packages.first()
+            && self.replayed_package_label(instance_alias, task_request, replay_deadline)?
+                != **recorded
         {
             return Err(contained_task_replay_denied(
                 HostCode::ContainedTaskRequestPackageReused,
@@ -6875,34 +6917,55 @@ impl HostShared {
             .filter_map(|(_, fact)| match fact {
                 // Workflow #373 NAV-6: an interrupt layer is no gate package.
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
-                    package_sha256,
+                    package_label,
                     role: None,
-                } => Some(package_sha256),
+                } => Some(package_label),
                 _ => None,
             })
             .collect::<Vec<_>>();
         // Workflow #336 L2b: a prerequisite gate opens at most four distinct packages (three
         // declared and one return-home, L2c), each the request's binding or one of the host's
-        // prerequisite packages.
+        // prerequisite packages. Workflow #336 PKG-S2: by `package_id`, a configured package's
+        // by its configuration key, the request's binding by its package admitted again.
         if recovery_packages.len() > prerequisite::MAX_PREREQUISITE_DEPTH + 1
             || recovery_packages
                 .iter()
                 .enumerate()
                 .any(|(index, recorded)| recovery_packages[..index].contains(recorded))
-            || recovery_packages.iter().any(|recorded| {
-                task_request
-                    .recovery()
-                    .map(|binding| binding.expected_sha256())
-                    != Some(*recorded)
-                    && !self
-                        .prerequisite_packages
-                        .values()
-                        .any(|binding| binding.expected_sha256() == *recorded)
-            })
         {
             return Err(contained_task_replay_denied(
                 HostCode::ContainedTaskRequestRecoveryReused,
             ));
+        }
+        let mut binding_label = None;
+        for recorded in &recovery_packages {
+            if self.prerequisite_packages.contains_key(recorded.as_str()) {
+                continue;
+            }
+            let Some(binding) = task_request.recovery() else {
+                return Err(contained_task_replay_denied(
+                    HostCode::ContainedTaskRequestRecoveryReused,
+                ));
+            };
+            if binding_label.is_none() {
+                let binding_request =
+                    ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256())
+                        .map_err(|_| {
+                            contained_task_replay_denied(
+                                HostCode::ContainedTaskRequestRecoveryReused,
+                            )
+                        })?;
+                binding_label = Some(self.replayed_package_label(
+                    instance_alias,
+                    &binding_request,
+                    replay_deadline,
+                )?);
+            }
+            if binding_label.as_deref() != Some(recorded.as_str()) {
+                return Err(contained_task_replay_denied(
+                    HostCode::ContainedTaskRequestRecoveryReused,
+                ));
+            }
         }
         let deadline_monotonic_ms = packages.first().and_then(|(_, _, deadline)| *deadline);
         let task_id = identity.task_id;

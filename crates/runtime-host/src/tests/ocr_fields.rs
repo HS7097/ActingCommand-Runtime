@@ -457,7 +457,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         .remove("stability_termination");
     task["post_admission_ocr"] = json!({"mode":"fields_v1","page_ids":["home"],"fields":[{
         "id":"location","group":"page","target_id":"fixture/ocr","required":true,"privacy":"public","trim":"whitespace_v1",
-        "value":{"type":"dictionary_entry","dictionary":{"path":"truth.json","sha256":truth_sha}}}],
+        "value":{"type":"dictionary_entry","dictionary":{"path":"truth.json"}}}],
         "limits":{"max_frames":2,"max_items":16,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":16},"outcome_key":"fields_recorded"});
     task["scheduling_outcome"] = json!({"mappings":[{"outcome_key":"fields_recorded","effect":"no_designated_effect","terminal_pages":["terminal"]}]});
     let mut manifest: Value = serde_json::from_slice(&files["resources/manifest.json"]).unwrap();
@@ -1006,16 +1006,13 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             })
             .unwrap();
         let EffectiveConfigurationFacts::EntryRecovery {
-            package_sha256,
+            package_label,
             timing,
         } = &recovery_record.facts
         else {
             unreachable!()
         };
-        assert_eq!(
-            package_sha256,
-            &actingcommand_contract::PackageRef::from(format!("{:x}", Sha256::digest(&recovery)))
-        );
+        assert_eq!(package_label, "fixture01.configuration-recovery");
         assert_eq!(timing.task_timeout.milliseconds, 60_000);
         assert_eq!(timing.step_timeout.milliseconds, 5_000);
         assert_eq!(timing.capture_interval.milliseconds, 50);

@@ -36,7 +36,7 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
                 .as_slice()
         };
         let files: &[(&str, &[u8])] = &[
-            ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#),
+            ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
             ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
             ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.6","coordinate_space":{"width":2,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"ocr","id":"text","region":"full_frame","languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["home"],"case_sensitive":false,"minimum_confidence":0.9,"model_ref":"PP-OCRv6_medium","model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"type":"color","id":"later","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
             ("resources/recognition/neutral.test.pages.json", pages),
@@ -104,9 +104,10 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
                 format!("sha256:{:x}", Sha256::digest(verified.png())),
                 observation.frame.artifact().sha256
             );
+            // Workflow #336 PKG-S2: the observation names its package by `package_id` only.
             assert_eq!(
-                observation.actual_package_sha256,
-                actingcommand_contract::PackageRef::from(expected)
+                observation.package_label.as_deref(),
+                Some("neutral.observation")
             );
             assert!(
                 verified.receipt().terminal().unwrap().sequence > observation.projection_sequence

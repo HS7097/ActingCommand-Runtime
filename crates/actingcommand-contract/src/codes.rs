@@ -798,7 +798,6 @@ crate::outcome_codes! {
         InvalidTaskPhase => "invalid_task_phase": error / none,
         InvalidTaskEffect => "invalid_task_effect": error / none,
         InvalidTaskTerminal => "invalid_task_terminal": error / none,
-        InvalidTaskPackageFingerprint => "invalid_task_package_fingerprint": error / none,
         InvalidTaskFrameDimensions => "invalid_task_frame_dimensions": error / none,
         InvalidTaskRecognitionTargets => "invalid_task_recognition_targets": error / none,
         InvalidTaskCandidatePages => "invalid_task_candidate_pages": error / none,

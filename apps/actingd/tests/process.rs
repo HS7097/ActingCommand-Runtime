@@ -984,8 +984,8 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
 
 #[test]
 fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
-    let expected_package_sha256 = format!("{:x}", Sha256::digest(neutral_contained_task_package()));
-    let expected_package_digest = format!("sha256:{expected_package_sha256}");
+    // Workflow #336 PKG-S2 (option 丙): the run names its package by `package_id`.
+    let expected_package_label = "neutral.semantic.task";
     let actinglab_binary = prebuilt_actinglab();
     for (case, frames, max_inputs, expected_effects) in [
         (
@@ -1131,8 +1131,8 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                     EventPayload::Task(TaskPayload::Semantic(payload))
                         if matches!(
                             payload.fact(),
-                            TaskSemanticFact::PackageAdmitted { package_sha256, .. }
-                                if package_sha256 == &actingcommand_contract::PackageRef::from(&expected_package_sha256)
+                            TaskSemanticFact::PackageAdmitted { package_label, .. }
+                                if package_label == expected_package_label
                         )
                 )
         ));
@@ -1264,10 +1264,11 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         );
         assert_eq!(
             summary
-                .get("package_digest")
+                .get("package_label")
                 .and_then(serde_json::Value::as_str),
-            Some(expected_package_digest.as_str())
+            Some(expected_package_label)
         );
+        assert!(summary.get("package_digest").is_none());
         assert_eq!(
             summary.get("effect").and_then(serde_json::Value::as_str),
             Some(if expected_effects == 1 {
@@ -2129,7 +2130,6 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     let (package, frames) = sequential_contained_task_package(STEP_COUNT);
-    let expected_package_digest = format!("sha256:{:x}", Sha256::digest(&package));
     write_policy_execution_config_with_package(
         &config_path,
         root.path(),
@@ -2572,12 +2572,14 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             .and_then(serde_json::Value::as_u64),
         Some(0)
     );
+    // Workflow #336 PKG-S2 (option 丙): the summary names the package by `package_id`.
     assert_eq!(
         summary
-            .get("package_digest")
+            .get("package_label")
             .and_then(serde_json::Value::as_str),
-        Some(expected_package_digest.as_str())
+        Some("neutral.pagination.task")
     );
+    assert!(summary.get("package_digest").is_none());
     assert!(child.0.try_wait().expect("process state").is_none());
 
     drop(client);

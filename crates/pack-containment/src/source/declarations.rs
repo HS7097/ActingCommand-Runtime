@@ -590,11 +590,12 @@ impl Declaration<'_> {
     }
 
     /// A select step (`contracts/selection-graph.md`, section Select step):
-    /// `{"layout_id", "policy": {"path", "sha256"}}`, where the layout ID has the candidate
-    /// layout grammar and the policy is a task-local `policies/<name>.json` document sealed by
-    /// the SHA-256 of its bytes. The step is guarded and confirmed: it declares its `guard` and
-    /// its `expect_after`, and is never an unguarded trusted coordinate. Whether the layout and
-    /// the policy fit the task is checked with the policy document (`select_policy`).
+    /// `{"layout_id", "policy": {"path"}}`, where the layout ID has the candidate layout grammar
+    /// and the policy is a task-local `policies/<name>.json` document (a `sha256` the policy may
+    /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it
+    /// declares its `guard` and its `expect_after`, and is never an unguarded trusted
+    /// coordinate. Whether the layout and the policy fit the task is checked with the policy
+    /// document (`select_policy`).
     fn select_step(
         &self,
         operation: &Map<String, Value>,
@@ -2208,12 +2209,12 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// (`contracts/selection-graph.md`, section Select step). It is read as the selection-policy
 /// crate reads a document: decoded, refused when its canonical form would be ambiguous
 /// (floats, unsafe integers, duplicate keys), then validated. Each select step that names it
-/// must name a candidate layout its own task declares on the step's `from` page (its
-/// `policy.sha256` is format-checked by the declaration grammar and compared with nothing,
-/// Workflow #336 PKG-S1); the document must apply to that layout, read only features the
-/// layout declares with their type (`passed` as boolean, `measure_milli` as integer), and
-/// require exactly one candidate. A document that declares a record list, which `keyed_fact`
-/// reads by the candidate's identity, needs a layout whose `unknown_identity` is `reject`.
+/// must name a candidate layout its own task declares on the step's `from` page (a
+/// `policy.sha256` it may still carry is ignored, Workflow #336 PKG-S2); the document must
+/// apply to that layout, read only features the layout declares with their type (`passed` as
+/// boolean, `measure_milli` as integer), and require exactly one candidate. A document that
+/// declares a record list, which `keyed_fact` reads by the candidate's identity, needs a layout
+/// whose `unknown_identity` is `reject`.
 /// The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
 fn select_policy(
@@ -2770,31 +2771,20 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// A task-local JSON document reference: `{"path"}`. Workflow #336 PKG-S2 (option 丙, D5):
+    /// a `sha256` the reference may still carry is optional and ignored, whatever its value.
     fn json_reference(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         let object = self.object(value, pointer, &["path", "sha256"])?;
-        for field in ["path", "sha256"] {
-            self.string(
-                self.required(object, pointer, field)?,
-                &child(pointer, field),
-            )?;
-        }
+        self.string(
+            self.required(object, pointer, "path")?,
+            &child(pointer, "path"),
+        )?;
         if !object["path"]
             .as_str()
             .is_some_and(super::safe_task_local_resource_path)
         {
             return Err(self.error(
                 &child(pointer, "path"),
-                ResourceDeclarationReason::InvalidValue,
-            ));
-        }
-        if !object["sha256"].as_str().is_some_and(|hash| {
-            hash.len() == 64
-                && hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        }) {
-            return Err(self.error(
-                &child(pointer, "sha256"),
                 ResourceDeclarationReason::InvalidValue,
             ));
         }

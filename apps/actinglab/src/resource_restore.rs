@@ -104,6 +104,14 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             CliError::package_invalid(format!("resource restore package admission: {error}"))
         });
     let bundle = crate::contained_resources::finish_package_use(admitted, package.close())?;
+    // Workflow #336 PKG-S2 (option 丙): the Lab records pair with the original package by the
+    // `package_id` its control declares; its content is not checked.
+    let package_label = bundle
+        .control()
+        .and_then(|control| control.get("package_id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| restore_error("original package declares no package_id"))?;
 
     // Workflow #375 R5b: each artifact is verified separately. A file that does not exist (a
     // frame deleted by hand) skips its request, which is listed as a gap; any other artifact
@@ -228,15 +236,14 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             .as_ref()
             .ok_or_else(|| restore_error("native Lab package identity is unavailable"))?;
         if prepared.request_id != request_id
-            || prepared.expected_package_sha256 != expected
-            || prepared.actual_package_sha256 != expected
+            || prepared.package_label.as_deref() != Some(package_label.as_str())
             || instance.is_some_and(|value| value != prepared.instance_id)
             || events
                 .iter()
                 .any(|event| event.links.correlation_id() != Some(&prepared.correlation_id))
         {
             return Err(restore_error(
-                "request instance or external package hash mismatch",
+                "request instance or package identity mismatch",
             ));
         }
         instance = Some(prepared.instance_id);
@@ -262,7 +269,7 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             gaps.push(
                 json!({"request_id":request_id, "code":"lab_terminal_record_missing",
                 "correlation_id":prepared.correlation_id,"instance_id":prepared.instance_id,
-                "lease_id":prepared.lease_id,"package_sha256":prepared.actual_package_sha256,
+                "lease_id":prepared.lease_id,"package_label":prepared.package_label,
                 "prepared":prepared_reference,"native_inputs":native_inputs}),
             );
             continue;

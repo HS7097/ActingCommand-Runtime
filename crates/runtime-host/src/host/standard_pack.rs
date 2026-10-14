@@ -902,7 +902,7 @@ impl RuntimeContainedTask<'_> {
             ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
         })?;
         let role = Some(TaskEntryRecoveryRole::InterruptHandler);
-        let package_sha256 = package.package_sha256().clone();
+        let package_label = package.package_label().to_owned();
         // The run's steps stay within 1000 (§3.10, `MAX_GATED_STEPS`).
         if u64::from(self.planned_steps)
             + u64::from(self.interrupt_steps)
@@ -914,7 +914,7 @@ impl RuntimeContainedTask<'_> {
             ));
         }
         self.record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
-            package_sha256: package_sha256.clone(),
+            package_label: package_label.clone(),
             role,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
@@ -922,7 +922,7 @@ impl RuntimeContainedTask<'_> {
             self.interrupt_configurations = self.interrupt_configurations.saturating_add(1);
             self.record_configuration(
                 EffectiveConfigurationFacts::EntryRecovery {
-                    package_sha256: package_sha256.clone(),
+                    package_label: package_label.clone(),
                     timing: package.effective_timing(),
                 },
                 None,
@@ -961,7 +961,7 @@ impl RuntimeContainedTask<'_> {
                     return Err(error);
                 }
                 self.record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
-                    package_sha256,
+                    package_label: Some(package_label),
                     outcome: code,
                     role,
                 })
@@ -975,7 +975,7 @@ impl RuntimeContainedTask<'_> {
             ));
         };
         self.record_entry_fact(TaskSemanticFact::EntryRecoveryCompleted {
-            package_sha256,
+            package_label,
             final_page,
             executed_steps: outcome.executed_steps,
             role,

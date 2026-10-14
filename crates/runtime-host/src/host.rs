@@ -223,6 +223,7 @@ use contained_task::{
 pub(crate) use contained_task::{
     ContainedTaskCheckpointIdentity, ContainedTaskCheckpointPoint,
     ContainedTaskCheckpointTestControl, require_contained_task_sampling_run_seed,
+    resource_reading_bundle_hash,
 };
 #[cfg(test)]
 use contained_task::{ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft};

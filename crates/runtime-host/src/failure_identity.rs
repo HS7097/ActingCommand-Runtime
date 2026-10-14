@@ -529,8 +529,9 @@ fn semantic_fact(event: &PersistedEvent) -> Option<&TaskSemanticFact> {
 }
 
 /// The scope and step of a failure (§12.4) from its run's rows: `main` once the gate started the
-/// package (or without a prerequisite chain), else `pre:<digest>` of the innermost prerequisite
-/// package opened and not completed, else `gate`. The step is the scope's last `StepStarted`
+/// package (or without a prerequisite chain), else `pre:<I>` of the innermost prerequisite
+/// package opened and not completed, `I` the id hash of the `package_id` its rows record
+/// (Workflow #336 PKG-S2, M-PKG §3.4), else `gate`. The step is the scope's last `StepStarted`
 /// operation label, `entry` without one. The `prepare` scope is the caller's: it has no rows.
 pub(crate) fn failure_step(rows: &[PersistedEvent], chain: bool) -> (String, String) {
     let mut open: Vec<String> = Vec::new();
@@ -538,17 +539,17 @@ pub(crate) fn failure_step(rows: &[PersistedEvent], chain: bool) -> (String, Str
     let mut operations = BTreeMap::<String, String>::new();
     let scope_of = |started: bool, open: &[String]| match open.last() {
         _ if started => "main".to_owned(),
-        Some(digest) => format!("pre:{digest}"),
+        Some(id_hash) => format!("pre:{id_hash}"),
         None => "gate".to_owned(),
     };
     for fact in rows.iter().filter_map(semantic_fact) {
         match fact {
-            TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256, .. } if !started => {
-                open.push(package_digest_prefix(package_sha256));
+            TaskSemanticFact::EntryRecoveryPackageAdmitted { package_label, .. } if !started => {
+                open.push(package_id_hash(package_label));
             }
-            TaskSemanticFact::EntryRecoveryCompleted { package_sha256, .. } if !started => {
-                let digest = package_digest_prefix(package_sha256);
-                if let Some(index) = open.iter().rposition(|open| *open == digest) {
+            TaskSemanticFact::EntryRecoveryCompleted { package_label, .. } if !started => {
+                let id_hash = package_id_hash(package_label);
+                if let Some(index) = open.iter().rposition(|open| *open == id_hash) {
                     open.remove(index);
                 }
             }

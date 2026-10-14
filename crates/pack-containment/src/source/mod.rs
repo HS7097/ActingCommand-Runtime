@@ -3481,8 +3481,8 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
                     ));
                 }
                 let bytes = files.read(&path).map_err(CliError::package_invalid)?;
-                // Workflow #336 PKG-S1: the declared `sha256` is not compared; the bytes read
-                // must still be the length the file had when it was measured.
+                // Workflow #336 PKG-S2: a declared `sha256` is ignored; the bytes read must
+                // still be the length the file had when it was measured.
                 if bytes.len() as u64 != size {
                     return Err(CliError::package_invalid(
                         PackContainmentCode::OcrFieldsDictionaryHashMismatch.as_str(),
@@ -3560,25 +3560,13 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
         &["path", "sha256"],
         "post_admission_ocr.truth_set",
     )?;
+    // Workflow #336 PKG-S2 (option 丙, D5): a `sha256` the truth set may still carry is
+    // optional and ignored, whatever its value.
     let truth_path = truth
         .get("path")
         .and_then(Value::as_str)
         .filter(|path| safe_task_local_resource_path(path))
         .ok_or_else(|| CliError::package_invalid("post_admission_ocr.truth_set.path is unsafe"))?;
-    truth
-        .get("sha256")
-        .and_then(Value::as_str)
-        .filter(|value| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
-        .ok_or_else(|| {
-            CliError::package_invalid(
-                "post_admission_ocr.truth_set.sha256 must be lowercase SHA-256",
-            )
-        })?;
     let limits = require_exact_object(
         required_map_field(declaration, "limits")?,
         &[
@@ -3646,8 +3634,8 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
             bundle.dir.join(truth_path).display()
         ))
     })?;
-    // Workflow #336 PKG-S1: the declared `sha256` is format-checked above and compared with
-    // nothing; only the size bound applies to the bytes.
+    // Workflow #336 PKG-S2: a declared `sha256` is ignored; only the size bound applies to the
+    // bytes.
     if u64::try_from(truth_bytes.len()).map_or(true, |size| size > max_total_bytes) {
         return Err(CliError::package_invalid(
             "post_admission_ocr truth set exceeds max_total_bytes",

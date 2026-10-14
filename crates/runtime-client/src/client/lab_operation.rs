@@ -80,8 +80,9 @@ impl RuntimeDebugSession {
                 return Err(lab_error(ClientCode::RuntimeLabOperationResultUnexpected));
             };
             let prepared = &operation.record.prepared;
+            // Workflow #336 PKG-S2 (option 丙): the record names its package by `package_id`;
+            // no package digest is compared.
             if prepared.instance_id != instance
-                || prepared.expected_package_sha256 != request.expected_sha256
                 || prepared.selection != request.selection
                 || prepared.projection_hint != request.projection_hint
                 || prepared.after != request.after

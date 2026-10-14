@@ -108,6 +108,7 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+mod gate_336_pkgs2;
 mod gate_369s5;
 mod gate_372k2;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.

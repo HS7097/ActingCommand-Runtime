@@ -768,8 +768,9 @@ pub enum EffectiveConfigurationFacts {
         capture_observed: bool,
         input_observed: bool,
     },
+    /// Workflow #336 PKG-S2: the layer's package by its `package_id`.
     EntryRecovery {
-        package_sha256: crate::PackageRef,
+        package_label: String,
         timing: EffectiveTaskTiming,
     },
     Capture {

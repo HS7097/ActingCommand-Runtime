@@ -220,14 +220,15 @@ The other value type is:
 ```json
 {
   "type": "dictionary_entry",
-  "dictionary": { "path": "words.json", "sha256": "<64 lowercase hex digits>" }
+  "dictionary": { "path": "words.json" }
 }
 ```
 
 The path is relative to the task's operation directory, bounded to 256 bytes and cannot
-escape it. Workflow #336 PKG-S1: `sha256` stays required and must be 64 lowercase hex
-digits, but nothing compares it with the dictionary's bytes (PKG-S2 makes it optional).
-The dictionary uses `actingcommand.ocr-truth-set.v1` (`items`) or `.v2`
+escape it. Workflow #336 PKG-S2 (option 丙): a `sha256` the reference may still carry is
+optional and ignored, whatever its value; it is neither validated nor compared, and no
+report echoes it (PKG-S1b refuses the key again once the resource repositories no longer
+carry it). The dictionary uses `actingcommand.ocr-truth-set.v1` (`items`) or `.v2`
 (`items`, optional `aliases` with `observed`/`canonical`). Trim/lowercase matching selects
 one canonical item, preserving the item's declared spelling. Alias canonical references
 must exactly name a declared item. Duplicate normalized items, duplicate/conflicting
@@ -235,11 +236,10 @@ aliases and invalid canonical references fail admission as ambiguous. Unknown ob
 remain unresolved; no tolerant substitution or retry is applied to fields.
 
 Dictionary and post-admission truth-set preparation read the exact resource-relative
-path from the admitted bundle. Workflow #336 PKG-S1: no hash is compared at any step. The
-declared `sha256` must still be well formed (a malformed dictionary reference fails
-`ocr_fields_dictionary_reference_invalid`, a malformed truth-set one
-`contained_task_post_admission_ocr_truth_invalid`), a manifest's per-file hashes are not
-read, and only the existing size limits apply to the bytes: dictionaries above the field
+path from the admitted bundle. Workflow #336 PKG-S2: no hash is compared or validated at any
+step; a declared `sha256` of a dictionary or a truth set is ignored, a manifest's per-file
+hashes are not read, and the comparison report names its truth set by `truth_set_path` only
+(it has no `truth_set_sha256`). Only the existing size limits apply to the bytes: dictionaries above the field
 declaration's `max_total_bytes` fail `ocr_fields_dictionary_limit_exceeded`, a truth set above
 it `contained_task_post_admission_ocr_truth_mismatch`.
 

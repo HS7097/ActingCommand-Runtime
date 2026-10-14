@@ -94,7 +94,7 @@ pub struct SelectionDryRun {
     pub policy_override: bool,
 }
 
-/// The `select` of a task operation: `{layout_id, policy: {path, sha256}}`.
+/// The `select` of a task operation: `{layout_id, policy: {path}}`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TaskSelect {
@@ -102,31 +102,24 @@ pub(super) struct TaskSelect {
     policy: TaskSelectPolicy,
 }
 
-/// The task-local policy document a select step names, with the SHA-256 its author declared.
-/// Workflow #336 PKG-S1: `sha256` stays required and format-checked, and is compared with
-/// nothing (PKG-S2 makes it optional).
+/// The task-local policy document a select step names. Workflow #336 PKG-S2 (option 丙, D5):
+/// a `sha256` the step may still declare is an `IgnoredPin`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TaskSelectPolicy {
     path: String,
-    sha256: String,
+    #[serde(default, rename = "sha256")]
+    _ignored_sha256: actingcommand_contract::IgnoredPin,
 }
 
 impl TaskSelect {
     /// The layout ID has the candidate layout grammar; the document is a `policies/<name>.json`
-    /// path of the task directory with a lowercase hexadecimal SHA-256.
+    /// path of the task directory.
     pub(super) fn validate(&self, operation_id: &str) -> Result<(), ContainedTaskError> {
-        let sealed = self.policy.sha256.len() == 64
-            && self
-                .policy
-                .sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
         if validate_candidate_layout_id(&self.layout_id).is_err()
             || !safe_task_local_path(&self.policy.path)
             || !self.policy.path.starts_with("policies/")
             || !self.policy.path.ends_with(".json")
-            || !sealed
         {
             return Err(ContainedTaskError::with_detail(
                 SELECT_INVALID,
@@ -143,9 +136,6 @@ pub(super) struct PreparedSelect {
     layout_id: String,
     /// The document's package path, `operations/<task>/<declared path>`, below the resource root.
     path: String,
-    /// The SHA-256 the select step declares for the document, recorded and never compared
-    /// (Workflow #336 PKG-S1).
-    package_sha256: String,
     policy: SelectionPolicy,
 }
 
@@ -157,7 +147,6 @@ impl PreparedSelect {
         Self {
             layout_id: layout_id.to_owned(),
             path: "operations/task/policies/select.json".to_owned(),
-            package_sha256: "0".repeat(64),
             policy,
         }
     }
@@ -194,7 +183,7 @@ impl SelectedCandidate {
 /// validated: the layout is a candidate layout of the recognition pack on the step's `from`
 /// page; the policy document is present in the package, it reads as a selection-policy
 /// document, and it applies to the layout (`contracts/selection-graph.md`, section Select
-/// step). Its declared SHA-256 is compared with nothing (Workflow #336 PKG-S1).
+/// step). A `sha256` it may still declare is ignored (Workflow #336 PKG-S2).
 pub(super) fn prepare_select_steps(
     program: &mut TaskProgram,
     control: &TaskControl,
@@ -242,7 +231,6 @@ pub(super) fn prepare_select_steps(
         let prepared = PreparedSelect {
             layout_id: select.layout_id.clone(),
             path,
-            package_sha256: select.policy.sha256.clone(),
             policy,
         };
         operation.prepared_select = Some(Box::new(prepared));
@@ -610,7 +598,6 @@ fn selection_record(
         projection: projection.clone().into(),
         policy: TaskSelectionPolicy {
             path: prepared.path.clone(),
-            package_sha256: prepared.package_sha256.clone(),
             policy_sha256: decision.policy_sha256.clone(),
             policy_id: decision.policy_id.clone(),
         },
@@ -1541,7 +1528,6 @@ mod tests {
         program.operations[0].prepared_select = Some(Box::new(PreparedSelect {
             layout_id: "layout-list".to_owned(),
             path: "operations/task/policies/list.json".to_owned(),
-            package_sha256: "0".repeat(64),
             policy: keyed_policy(),
         }));
         let mut pack: actingcommand_recognition_pack::RecognitionPack =

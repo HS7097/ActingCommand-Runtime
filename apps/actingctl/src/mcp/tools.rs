@@ -1147,8 +1147,8 @@ fn run_status_schema() -> Value {
             "instance_id": {"type": "string"},
             "dispatch": {"type": "string", "enum": ["manual", "scheduled", "unknown"]},
             "origin": {"type": "string", "enum": ["cli", "ui", "lab", "scheduler", "unknown"]},
-            "package_ref": {},
-            "recovery_packages": {"type": "array"},
+            "package_label": {"type": "string"},
+            "recovery_package_labels": {"type": "array", "items": {"type": "string"}},
             "state": {
                 "type": "string",
                 "enum": [
@@ -1171,7 +1171,7 @@ fn run_status_schema() -> Value {
             "request_id",
             "dispatch",
             "origin",
-            "recovery_packages",
+            "recovery_package_labels",
             "state",
             "evidence",
         ],

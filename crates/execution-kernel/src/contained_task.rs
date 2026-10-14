@@ -30,7 +30,7 @@ use actingcommand_contract::{
     EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, validate_entry_page_set,
 };
 use actingcommand_device::{Frame, PixelFormat};
-use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
+use actingcommand_pack_containment::{ContainmentError, LoadedBundle};
 use actingcommand_page_detector::{
     PageBatchResult, PageDetector, PageEvaluation, PageOutcome, PageSet, PageTargetRole,
     require_all_page_evaluations,
@@ -190,6 +190,9 @@ pub struct ContainedTaskError {
     timing: Option<Box<TaskTimingFailure>>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
+    /// Workflow #336 PKG-S2 (option 丙): with a refused declaration, the `package_id` the
+    /// package's control declares, when preparation read one.
+    declaration_package: Option<Box<str>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     /// Workflow #386 SR-1: the failure's outcome with the values its code declares, when the
     /// kernel attached them (a sampling timeout's `attempts`, `timeout_ms` and `stage`; a
@@ -209,6 +212,7 @@ impl ContainedTaskError {
             timing: None,
             timing_check_position: None,
             declaration_issue: None,
+            declaration_package: None,
             ppocr_diagnostics: Vec::new(),
             values: None,
         }
@@ -221,6 +225,7 @@ impl ContainedTaskError {
             timing: None,
             timing_check_position: None,
             declaration_issue: None,
+            declaration_package: None,
             ppocr_diagnostics: Vec::new(),
             values: None,
         }
@@ -310,6 +315,13 @@ impl ContainedTaskError {
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
         self.declaration_issue.as_deref()
+    }
+
+    /// Workflow #336 PKG-S2 (option 丙): the `package_id` of the package whose declaration was
+    /// refused, when preparation read it from the package's control; the refusal record's
+    /// `package_label`.
+    pub fn declaration_package(&self) -> Option<&str> {
+        self.declaration_package.as_deref()
     }
 }
 
@@ -695,7 +707,6 @@ pub struct PostAdmissionOcrComparisonReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     target_ids: Option<Vec<String>>,
     truth_set_path: String,
-    truth_set_sha256: String,
     normalization: PostAdmissionOcrNormalization,
     comparison: PostAdmissionOcrComparisonMode,
     outcome_key: String,
@@ -727,11 +738,14 @@ impl PostAdmissionOcrComparisonReport {
     }
 }
 
+/// The truth set a post-admission comparison reads, by its task-local path. Workflow #336
+/// PKG-S2 (option 丙, D5): a `sha256` it may still declare is an `IgnoredPin`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PostAdmissionOcrTruthReference {
     path: String,
-    sha256: String,
+    #[serde(default, rename = "sha256")]
+    _ignored_sha256: actingcommand_contract::IgnoredPin,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1508,7 +1522,6 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             target_id: prepared.declaration.target_id.clone(),
             target_ids: prepared.declaration.target_ids.clone(),
             truth_set_path: prepared.declaration.truth_set.path.clone(),
-            truth_set_sha256: prepared.declaration.truth_set.sha256.clone(),
             normalization: prepared.declaration.normalization,
             comparison: prepared.declaration.comparison,
             outcome_key: prepared.declaration.outcome_key.clone(),
@@ -1744,7 +1757,6 @@ pub enum ContainedTaskTrace {
     PackageAdmitted {
         task_label: String,
         package_label: String,
-        package_sha256: actingcommand_contract::PackageRef,
     },
     RunStarted,
     /// Workflow #373 NAV-3b: the entry page set the run required and the one page of it the
@@ -2327,6 +2339,26 @@ impl PreparedContainedTask {
     /// Preparation over the already contained, externally verified package. Lab authoring
     /// preflight shares this exact owner with Runtime and never executes the prepared task.
     pub fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
+        // Workflow #336 PKG-S2 (option 丙): a refused declaration names its package by the
+        // `package_id` the package's control declares, when that is a label a record can carry.
+        let package_label = bundle
+            .loaded_bundle()
+            .control()
+            .and_then(|control| control.get("package_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|label| {
+                !label.is_empty() && label.len() <= 256 && !label.chars().any(char::is_control)
+            })
+            .map(Box::<str>::from);
+        Self::prepare_bundle(bundle).map_err(|mut error| {
+            if error.declaration_issue.is_some() {
+                error.declaration_package = package_label;
+            }
+            error
+        })
+    }
+
+    fn prepare_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
         let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
@@ -3282,7 +3314,6 @@ impl PreparedContainedTask {
             .record(ContainedTaskTrace::PackageAdmitted {
                 task_label: self.task_label().to_string(),
                 package_label: self.package_label().to_string(),
-                package_sha256: self.package_sha256.clone(),
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         runtime
@@ -6346,16 +6377,6 @@ impl TaskProgram {
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrOutcomeInvalid.code(),
             ));
         }
-        let declared_hash = Sha256Hash::parse_hex(&declaration.truth_set.sha256).map_err(|_| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-            )
-        })?;
-        if declared_hash.to_string() != declaration.truth_set.sha256 {
-            return Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-            ));
-        }
         let relative_path = format!("operations/{}/{}", self.task_id, declaration.truth_set.path);
         let bytes = bundle.resource_entry(&relative_path).map_err(|_| {
             ContainedTaskError::with_detail(
@@ -6363,8 +6384,8 @@ impl TaskProgram {
                 relative_path.clone(),
             )
         })?;
-        // Workflow #336 PKG-S1: the declared `sha256` is format-checked above and compared with
-        // nothing; only the size bound applies to the bytes.
+        // Workflow #336 PKG-S2: a declared `sha256` is ignored; only the size bound applies to the
+        // bytes.
         if u64::try_from(bytes.len()).map_or(true, |size| size > declaration.limits.max_total_bytes)
         {
             return Err(ContainedTaskError::with_detail(
@@ -6511,11 +6532,8 @@ impl TaskProgram {
         for field in &declaration.fields {
             if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
                 let path = format!("operations/{}/{}", self.task_id, dictionary.path);
-                // Workflow #336 PKG-S1: the declared `sha256` is format-checked and compared with
-                // nothing; only the total size bound applies to the bytes.
-                Sha256Hash::parse_hex(&dictionary.sha256).map_err(|_| {
-                    ContainedTaskError::new(SharedCode::OcrFieldsDictionaryReferenceInvalid.code())
-                })?;
+                // Workflow #336 PKG-S2: a declared `sha256` is ignored; only the total size bound
+                // applies to the bytes.
                 let bytes = bundle.resource_entry(&path).map_err(|_| {
                     ContainedTaskError::new(ExecutionKernelCode::OcrFieldsDictionaryMissing.code())
                 })?;
@@ -8753,7 +8771,7 @@ mod post_admission_ocr_tests {
                 target_ids: Some(target_ids.clone()),
                 truth_set: PostAdmissionOcrTruthReference {
                     path: "truth.json".to_string(),
-                    sha256: "c".repeat(64),
+                    _ignored_sha256: actingcommand_contract::IgnoredPin,
                 },
                 normalization: PostAdmissionOcrNormalization::TrimLowercaseV1,
                 comparison: PostAdmissionOcrComparisonMode::ExactSetV1,
@@ -8784,7 +8802,7 @@ mod post_admission_ocr_tests {
                 target_ids: None,
                 truth_set: PostAdmissionOcrTruthReference {
                     path: "truth.json".to_string(),
-                    sha256: "c".repeat(64),
+                    _ignored_sha256: actingcommand_contract::IgnoredPin,
                 },
                 normalization: PostAdmissionOcrNormalization::TrimLowercaseV1,
                 comparison: PostAdmissionOcrComparisonMode::ExactSetV1,
@@ -9816,6 +9834,50 @@ mod post_admission_ocr_tests {
             );
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         }
+    }
+
+    // Workflow #336 PKG-S2, model M-PKG v1.1 §4.3 S2-T7: a truth set declared without a
+    // `sha256` is compared as before, and the comparison report names it by its path only.
+    #[test]
+    fn s2_t7_a_truth_set_without_a_pin_is_compared_and_its_report_names_no_pin() {
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([provider_observation(
+                "pinless-1",
+                &["alpha".to_string()],
+            )])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let mut prepared = prepared_v2(&["alpha"], &[]);
+        prepared.declaration = serde_json::from_value(json!({
+            "page_id": "target",
+            "target_id": "fixture/ocr",
+            "truth_set": {"path": "truth.json"},
+            "normalization": "trim_lowercase_v1",
+            "comparison": "exact_set_v1",
+            "limits": {
+                "max_frames": 2,
+                "max_items": 500,
+                "max_string_bytes": 64,
+                "max_total_bytes": 1_000_000,
+                "max_truth_entries": 500
+            },
+            "outcome_key": "comparison_recorded"
+        }))
+        .expect("a truth set reference without a pin");
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        collector
+            .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+            .expect("observation")
+            .expect("admitted frame");
+        let report = collector.finish().expect("comparison").expect("report");
+
+        assert!(report.exact_match);
+        let encoded = serde_json::to_value(&report).expect("report JSON");
+        assert_eq!(encoded["truth_set_path"], "truth.json");
+        assert!(encoded.get("truth_set_sha256").is_none());
     }
 
     #[test]
@@ -11631,6 +11693,94 @@ mod retry_wiring_tests {
             .expect("the package is admitted");
         selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
             .expect("the select step is admitted with its declared pin unchecked");
+        assert!(task.program.operations[0].prepared_select.is_some());
+    }
+
+    // Workflow #336 PKG-S2, model M-PKG v1.1 §4.3 S2-T7: a select step whose policy declares
+    // no `sha256` is admitted, its document read and prepared for evaluation.
+    #[test]
+    fn s2_t7_a_select_step_without_a_policy_pin_is_admitted() {
+        use std::io::Write;
+        let mut task = omitted_policy_task(false, false);
+        let mut pack = task.evaluator.pack().clone();
+        pack.schema_version = "0.7".into();
+        pack.candidate_layouts = vec![
+            serde_json::from_value(json!({
+                "id": "choices",
+                "page_id": "neutral/home",
+                "kind": "fixed_slots",
+                "features": [{"name": "ready", "value": "passed"}],
+                "slots": [{
+                    "rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "targets": {"ready": "guard/ready"}
+                }]
+            }))
+            .expect("candidate layout"),
+        ];
+        task.evaluator =
+            RecognitionEvaluator::new(PathBuf::new(), pack).expect("recognition evaluator");
+        task.program.operations[0].select = Some(
+            serde_json::from_value(json!({
+                "layout_id": "choices",
+                "policy": {"path": "policies/choices.json"}
+            }))
+            .expect("a select declaration without a pin"),
+        );
+        task.program.operations[0].click = None;
+        let policy = serde_json::to_vec(&json!({
+            "schema_version": actingcommand_selection_policy::SELECTION_POLICY_SCHEMA_VERSION,
+            "policy_id": "policy.choices",
+            "applies_to": {
+                "candidate_layout_id": "choices",
+                "outcome_keys": {
+                    "selected": "outcome.selected",
+                    "empty": "outcome.empty",
+                    "insufficient": "outcome.insufficient",
+                    "ambiguous": "outcome.ambiguous",
+                    "unknown": "outcome.unknown"
+                }
+            },
+            "fields": [{"name": "ready", "value_type": {"type": "boolean"}}],
+            "facts": [],
+            "gates": [],
+            "scoring": [],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": []
+        }))
+        .expect("policy document");
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, bytes) in [
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/operations/task/task.json",
+                br#"{"task_id":"task"}"#.to_vec(),
+            ),
+            ("resources/operations/task/policies/choices.json", policy),
+        ] {
+            zip.start_file(path, zip::write::FileOptions::default())
+                .expect("zip entry");
+            zip.write_all(&bytes).expect("zip bytes");
+        }
+        let bytes = zip.finish().expect("zip").into_inner();
+        let mut containment = actingcommand_pack_containment::Containment::new();
+        let bundle = containment
+            .load(
+                &actingcommand_pack_containment::InstanceId::new("neutral-select")
+                    .expect("instance"),
+                &bytes,
+                &actingcommand_contract::PackageRef::LegacyZipSha256("0".repeat(64)),
+            )
+            .expect("the package is admitted");
+        selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
+            .expect("the select step is admitted without a pin");
         assert!(task.program.operations[0].prepared_select.is_some());
     }
 

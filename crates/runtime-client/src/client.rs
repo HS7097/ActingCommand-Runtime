@@ -437,7 +437,6 @@ pub struct RuntimeOfficialOcrComparison {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     target_ids: Option<Vec<String>>,
     truth_set_path: String,
-    truth_set_sha256: String,
     normalization: RuntimeOfficialOcrNormalization,
     comparison: RuntimeOfficialOcrComparisonMode,
     outcome_key: String,
@@ -4701,7 +4700,6 @@ fn parse_official_ocr_comparison(
         || report.duplicates.len() > MAX_OFFICIAL_OCR_ITEMS
         || report.outcome_key.trim().is_empty()
         || report.truth_set_path.trim().is_empty()
-        || !is_sha256_hex(&report.truth_set_sha256)
     {
         return Err(official_ocr_error(
             ClientCode::RuntimeOfficialOcrComparisonInvalid,
@@ -5554,7 +5552,6 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "decision_id": intent.decision_id(),
             "operation_id": intent.operation_id(),
             "instance_id": intent.instance_id(),
-            "package_digest": intent.package_digest().prefixed_wire_value(),
             "procedure_binding_digest": intent.procedure_binding_digest(),
             "reason_chain": {
                 "id": intent.reason_chain_id(),
@@ -5631,7 +5628,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     }
     validate_task_terminal(task_event, execution.policy_result())?;
     let task_timing = full_payload(task_event)?.task_timing();
-    validate_admitted_package(events, &lab_request_id, intent.package_digest())?;
+    let package_label = validate_admitted_package(events, &lab_request_id)?;
     let simulated_effect_count = validate_fixture_simulation(events)?;
     let result = result.unwrap_or(if simulated_effect_count == 0 {
         "no_op"
@@ -5647,7 +5644,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         "decision_id": intent.decision_id(),
         "operation_id": intent.operation_id(),
         "instance_id": intent.instance_id(),
-        "package_digest": intent.package_digest().prefixed_wire_value(),
+        "package_label": package_label,
         "procedure_binding_digest": intent.procedure_binding_digest(),
         "reason_chain": {
             "id": intent.reason_chain_id(),
@@ -5761,12 +5758,13 @@ fn is_policy_settlement_interrupted(execution: &PolicyExecutionOutcome) -> bool 
     )
 }
 
+/// The `package_id` of the one package the run's request admitted (Workflow #336 PKG-S2,
+/// option 丙: the summary names the package by it; no package digest is compared).
 fn validate_admitted_package(
     events: &[ProjectedEvent],
     request_id: &RequestId,
-    policy_package_digest: &actingcommand_contract::PackageRef,
-) -> RuntimeClientResult<()> {
-    let mut admitted_package_sha256 = Vec::new();
+) -> RuntimeClientResult<String> {
+    let mut admitted_package_labels = Vec::new();
     for event in events
         .iter()
         .filter(|event| event.event_type == EventType::TaskRequested)
@@ -5774,7 +5772,7 @@ fn validate_admitted_package(
         let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
             continue;
         };
-        let TaskSemanticFact::PackageAdmitted { package_sha256, .. } = payload.fact() else {
+        let TaskSemanticFact::PackageAdmitted { package_label, .. } = payload.fact() else {
             continue;
         };
         if event.links.request_id() != Some(request_id) {
@@ -5783,27 +5781,15 @@ fn validate_admitted_package(
                 ClientLocation::SummarizeRun.location(),
             ));
         }
-        admitted_package_sha256.push(package_sha256);
+        admitted_package_labels.push(package_label);
     }
-    let [admitted_package_sha256] = admitted_package_sha256.as_slice() else {
+    let [admitted_package_label] = admitted_package_labels.as_slice() else {
         return Err(RuntimeClientError::fatal(
             ClientCode::RunSummaryPackageFactCountInvalid,
             ClientLocation::SummarizeRun.location(),
         ));
     };
-    policy_package_digest.validate().map_err(|_| {
-        RuntimeClientError::fatal(
-            ClientCode::RunSummaryPackageDigestInvalid,
-            ClientLocation::SummarizeRun.location(),
-        )
-    })?;
-    if policy_package_digest != *admitted_package_sha256 {
-        return Err(RuntimeClientError::fatal(
-            ClientCode::RunSummaryPackageDigestMismatch,
-            ClientLocation::SummarizeRun.location(),
-        ));
-    }
-    Ok(())
+    Ok(String::clone(admitted_package_label))
 }
 
 fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult<usize> {
@@ -6272,16 +6258,10 @@ mod run_summary_package_tests {
         }
     }
 
-    fn digest(byte: char) -> (String, actingcommand_contract::PackageRef) {
-        let raw = byte.to_string().repeat(64);
-        let canonical = format!("sha256:{raw}");
-        (raw, canonical.into())
-    }
-
     fn package_event(
         issuer: &IdentifierIssuer,
         request_id: IssuedRequestId,
-        package_sha256: String,
+        package_label: &str,
         sequence: u64,
     ) -> ProjectedEvent {
         let sanitized = EventDraft::new(
@@ -6296,9 +6276,8 @@ mod run_summary_package_tests {
             EventLinksDraft::default().with_request_id(request_id),
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::PackageAdmitted {
-                    package_label: "package".to_string(),
+                    package_label: package_label.to_string(),
                     task_label: "task".to_string(),
-                    package_sha256: package_sha256.into(),
                     response_deadline_monotonic_ms: Some(60_000),
                 },
                 AuditInput::new(),
@@ -6325,56 +6304,39 @@ mod run_summary_package_tests {
         }
     }
 
+    // Workflow #336 PKG-S2 (M-PKG v1.1 §4.3 S2-T3): the summary names the run's one admitted
+    // package by its `package_id`; nothing of it is compared with a digest, so no digest can
+    // make the summary fail.
     #[test]
-    fn exactly_one_matching_package_admission_is_required() {
+    fn s2_t3_the_summary_names_the_one_admitted_package_by_its_label() {
         let issuer = IdentifierIssuer::new().expect("identifier issuer");
         let request_id = issuer.mint_request_id().expect("request id");
-        let (raw, canonical) = digest('a');
-        let events = [package_event(&issuer, request_id, raw, 1)];
-        validate_admitted_package(&events, request_id.transport(), &canonical)
-            .expect("matching admitted package");
-    }
-
-    #[test]
-    fn missing_package_admission_fails_closed() {
-        let issuer = IdentifierIssuer::new().expect("identifier issuer");
-        let request_id = issuer.mint_request_id().expect("request id");
-        let (_, canonical) = digest('a');
-        let error = validate_admitted_package(&[], request_id.transport(), &canonical)
-            .expect_err("missing package admission");
+        let events = [package_event(&issuer, request_id, "neutral.summary", 1)];
         assert_eq!(
-            error.code().as_str(),
-            "run_summary_package_fact_count_invalid"
+            validate_admitted_package(&events, request_id.transport())
+                .expect("the one admitted package"),
+            "neutral.summary"
         );
     }
 
+    // S2-T3: exactly one admission is still required; none, or one package admitted twice by
+    // the same request, fails closed.
     #[test]
-    fn duplicate_package_admission_fails_closed() {
+    fn s2_t3_a_missing_or_repeated_package_admission_fails_closed() {
         let issuer = IdentifierIssuer::new().expect("identifier issuer");
         let request_id = issuer.mint_request_id().expect("request id");
-        let (raw, canonical) = digest('a');
-        let events = [
-            package_event(&issuer, request_id, raw.clone(), 1),
-            package_event(&issuer, request_id, raw, 2),
+        let repeated = [
+            package_event(&issuer, request_id, "neutral.summary", 1),
+            package_event(&issuer, request_id, "neutral.summary", 2),
         ];
-        let error = validate_admitted_package(&events, request_id.transport(), &canonical)
-            .expect_err("duplicate package admission");
-        assert_eq!(
-            error.code().as_str(),
-            "run_summary_package_fact_count_invalid"
-        );
-    }
-
-    #[test]
-    fn mismatched_package_admission_fails_closed() {
-        let issuer = IdentifierIssuer::new().expect("identifier issuer");
-        let request_id = issuer.mint_request_id().expect("request id");
-        let (_, canonical) = digest('a');
-        let (other, _) = digest('b');
-        let events = [package_event(&issuer, request_id, other, 1)];
-        let error = validate_admitted_package(&events, request_id.transport(), &canonical)
-            .expect_err("mismatched package admission");
-        assert_eq!(error.code().as_str(), "run_summary_package_digest_mismatch");
+        for events in [&[][..], &repeated[..]] {
+            let error = validate_admitted_package(events, request_id.transport())
+                .expect_err("no single package admission");
+            assert_eq!(
+                error.code().as_str(),
+                "run_summary_package_fact_count_invalid"
+            );
+        }
     }
 }
 
