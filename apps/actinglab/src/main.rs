@@ -219,6 +219,11 @@ fn main() -> ExitCode {
     {
         let _ = CHANNEL_VIA.set(via);
     }
+    // Workflow #389 U-2 (model section 3.5): an actingd before U-2 leaves this process's
+    // connections unbound; the runtime client reports it once, on stderr.
+    actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
+        eprintln!("WARN actinglab: {outcome}");
+    });
     // Parsed admission refuses retired production before installation selection takes a slot.
     if invocation.is_ok()
         && let Err(error) = actingcommand_contract::process_installation()

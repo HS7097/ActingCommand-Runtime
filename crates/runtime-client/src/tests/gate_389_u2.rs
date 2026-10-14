@@ -157,9 +157,18 @@ fn u2_the_contained_task_timeout_recovery_binds_the_same_channel() {
 
 // TU-8: an actingd that cannot decode BindChannel drops the connection without a receipt. The
 // client reconnects once, checks the owner epoch, goes on unbound and is usable; it reports
-// `client_channel_unsupported`, and a later reconnect sends Health and no BindChannel.
+// `client_channel_unsupported` once through the frontend's reporter, and a later reconnect sends
+// Health and no BindChannel and reports nothing more.
 #[test]
 fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
+    // The frontend's reporter (here: this test's) receives the one report of the process.
+    static REPORTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    assert!(crate::set_channel_unsupported_reporter(|outcome| {
+        REPORTS
+            .lock()
+            .expect("reports")
+            .push(outcome.code().as_str().to_owned());
+    }));
     let root = TempDir::new().expect("tempdir");
     let after_reconnect = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&after_reconnect);
@@ -215,6 +224,10 @@ fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
     ))
     .expect("the client connects to the old actingd");
     assert!(client.channel_unsupported().expect("the client's state"));
+    assert_eq!(
+        *REPORTS.lock().expect("reports"),
+        vec!["client_channel_unsupported".to_owned()]
+    );
     client.status().expect("the unbound client is usable");
     let error = client
         .resource_target_view("node.a")
@@ -222,6 +235,7 @@ fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
     assert_eq!(error.code().as_str(), "runtime_operation_unsupported");
     drop(client);
     server.join().expect("scripted runtime");
+    assert_eq!(REPORTS.lock().expect("reports").len(), 1);
     assert!(
         !after_reconnect
             .lock()

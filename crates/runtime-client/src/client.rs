@@ -46,7 +46,7 @@ use std::fs;
 use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // Workflow #389 U-2: every frontend names its channel when it builds its configuration.
@@ -952,9 +952,9 @@ impl RuntimeClient {
     /// `BindChannel` on this connection (Workflow #389 U-2). An actingd before U-2 cannot decode
     /// it and drops the connection without a receipt (`send_or_dropped`): the client then
     /// reconnects once in the same owner epoch, goes on unbound, reports
-    /// `client_channel_unsupported` once per process on stderr and sends no `BindChannel` on its
-    /// later reconnects (model section 3.2 rule 8). Every other failure, a refusal included, is
-    /// returned.
+    /// `client_channel_unsupported` once per process through the frontend's reporter and sends no
+    /// `BindChannel` on its later reconnects (model section 3.2 rule 8). Every other failure, a
+    /// refusal included, is returned.
     fn bind_channel(&self) -> RuntimeClientResult<()> {
         const OPERATION: Location = ClientLocation::RuntimeBindChannel.location();
         let channel = {
@@ -6205,15 +6205,30 @@ enum SentOutcome {
     Dropped(RuntimeClientError),
 }
 
+/// Where this process reports `client_channel_unsupported` (Workflow #389 U-2, model section
+/// 3.5): the frontend's own line, on stderr or in the MCP warnings. The runtime client never
+/// writes to stderr itself (a Runtime-domain crate does not), so each frontend installs its
+/// reporter once at start.
+static CHANNEL_UNSUPPORTED_REPORTER: OnceLock<fn(&Outcome)> = OnceLock::new();
+
 /// Whether this process reported `client_channel_unsupported` already (catalog: once per client
 /// process).
 static CHANNEL_UNSUPPORTED_REPORTED: AtomicBool = AtomicBool::new(false);
 
-/// The one developer line of `client_channel_unsupported` on stderr, once per process
-/// (Workflow #389 U-2, model section 3.5).
+/// Installs this process's reporter of `client_channel_unsupported` (Workflow #389 U-2); `false`
+/// when one is installed already. Without a reporter the fallback stays visible through
+/// [`RuntimeClient::channel_unsupported`].
+pub fn set_channel_unsupported_reporter(reporter: fn(&Outcome)) -> bool {
+    CHANNEL_UNSUPPORTED_REPORTER.set(reporter).is_ok()
+}
+
+/// The one report of `client_channel_unsupported`, once per process (Workflow #389 U-2, model
+/// section 3.5), through the frontend's reporter.
 fn report_channel_unsupported(outcome: &Outcome) {
-    if !CHANNEL_UNSUPPORTED_REPORTED.swap(true, Ordering::SeqCst) {
-        eprintln!("WARN runtime-client: {outcome}");
+    if let Some(reporter) = CHANNEL_UNSUPPORTED_REPORTER.get()
+        && !CHANNEL_UNSUPPORTED_REPORTED.swap(true, Ordering::SeqCst)
+    {
+        reporter(outcome);
     }
 }
 

@@ -265,6 +265,12 @@ A refused `ApplyResourceTargets` receipt (Denied + `InvalidRequest`, host code
 (`RuntimeReceipt::resource_targets_rejection()`, `contracts/resource-targets.md`); it appears
 on no other receipt.
 
+Workflow #389 U-2: every receipt also carries the optional `channel` (`cli`, `mcp`, `ui`, `lab`)
+of the connection the request came on, and on the Lab channel the optional `via` (`mcp`, `ui`)
+of the counter that forwarded it (`RuntimeReceipt::channel()`, `RuntimeReceipt::via()`); both
+are absent on the handshake of a connection not bound yet. The door marks and never refuses by
+channel before U-6 ([runtime-interface.md](runtime-interface.md), "Channels").
+
 `committed_receipt()` keeps its original narrower eligibility and consumers:
 contained-task/shutdown failures with a terminal, the material failure receipt
 carried by the material-read contract, and the original after-commit projection
