@@ -183,6 +183,18 @@ impl Reply {
         }
     }
 
+    /// The batch holding the record goes to the store's persist call at `at`: the start of the
+    /// reply's `ledger_durable` span, which ends with persistence.
+    pub(super) fn durable_started(&mut self, at: Instant) {
+        if let Self::Append {
+            observation: Some(observation),
+            ..
+        } = self
+        {
+            observation.durable_started_at = Some(at);
+        }
+    }
+
     /// The record's write returned (committed or not).
     pub(super) fn persisted(&mut self, succeeded: bool) {
         if let Self::Append {

@@ -20,7 +20,6 @@ use crate::global::{
     Sha256SecretFingerprinter, WatermarkRatios, fallback_dump_path,
 };
 use crate::{LedgerCode, LedgerLocation, LedgerWriteFaultGate, PersistedEvent, WriterStallGate};
-use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ApplicationPayloadDraft, AuditInput, CaptureItem, CaptureTicket, CaptureTier,
@@ -33,6 +32,7 @@ use actingcommand_contract::{
     SanitizedEventDraft, SecretFingerprinter, SourceRevision, TaggedStateStore,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
+use actingcommand_runtime_host::codes::HostCode;
 use actingcommand_runtime_state::RuntimeStateStore;
 use serde_json::{Value, json};
 use std::fs;
@@ -192,14 +192,15 @@ fn close_record(ids: &IdentifierIssuer) -> CaptureItem {
     )
 }
 
-// A `runtime.failed` for a reason outside the ledger, as G16 captures it.
+// A `runtime.failed` for a reason outside the ledger, as G16 captures it: its outcome is the
+// host's own condition (a Runtime thread panicked), as the host's fatal stop records it.
 fn runtime_failed(ids: &IdentifierIssuer) -> CaptureItem {
     item(
         ids,
         RuntimePayloadDraft::failed(
             DiagnosticCode::RuntimeDiagnostic,
             EffectDisposition::Indeterminate,
-            Outcome::new(SharedCode::RuntimeFatal),
+            Outcome::new(HostCode::RuntimeThreadPanicked),
             DiagnosticDetailDraft::new(
                 "runtime_stop",
                 LedgerLocation::LedgerFlushCaptured.location(),

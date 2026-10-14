@@ -25,6 +25,7 @@ use actingcommand_contract::{
     EventId, EventType, IdentifierIssuer, RecordCapture, SanitizedEventDraft, SourceRevision,
 };
 use actingcommand_runtime_database::CommitSync;
+use std::time::Instant;
 
 /// What one flush of captured records did: the records committed (for the live subscribers),
 /// the replies to send, the capture numbers finished, the revision findings (§8.3) and, when
@@ -380,10 +381,15 @@ impl<B: DurableStorage> EventStore<B> {
         let Some((start, start_sequence, revisions)) = pending.start.take() else {
             return;
         };
-        let staged = std::mem::take(&mut pending.staged);
+        let mut staged = std::mem::take(&mut pending.staged);
         let events = &self.events[start..];
         let rows = IndexRows::of(events, &self.index_policy);
         let sync = batch_sync(events, &self.index_policy);
+        // Each waiting append's `ledger_durable` span starts here, at the batch's persist call.
+        let durable_started = Instant::now();
+        for reply in staged.iter_mut().filter_map(|entry| entry.reply.as_mut()) {
+            reply.durable_started(durable_started);
+        }
         let written = persist_batch_retried(
             &mut self.backend,
             self.write_failure.as_ref(),
