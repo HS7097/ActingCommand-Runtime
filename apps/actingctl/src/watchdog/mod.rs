@@ -29,7 +29,7 @@ mod state;
 mod task;
 
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Category, CauseRelation, Detail, IoOp, Outcome, RawSource};
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
@@ -156,13 +156,13 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "watchdog" {
         return None;
     }
+    let usage = || Report::new(Outcome::new(ActingctlCode::ActingctlUsageInvalid));
     let detail = match cli_line::detail() {
         Ok(detail) => detail,
         Err(invalid) => return Some(print(&Report::new(invalid), Detail::Full, false, None)),
     };
-    let (subcommand, root) = match parse(&arguments[1..]) {
-        Ok(parsed) => parsed,
-        Err(usage) => return Some(print(&Report::new(usage), detail, false, Some(USAGE))),
+    let Some((subcommand, root)) = parse(&arguments[1..]) else {
+        return Some(print(&usage(), detail, false, Some(USAGE)));
     };
     // Under the task, stderr goes into watchdog.log: the developer line is for a person only.
     let quiet = matches!(subcommand, Subcommand::RunOnce { from_task: true });
@@ -208,46 +208,28 @@ fn output_failed(error: &dyn fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// The subcommand and `--root`. A flag the subcommand does not take, a flag given twice and a
-/// stray word are refused by name (Workflow #382 A1-FLAG); any other usage error unnamed.
-fn parse(arguments: &[OsString]) -> Result<(Subcommand, PathBuf), Outcome> {
-    let usage = || Outcome::new(ActingctlCode::ActingctlUsageInvalid);
-    let mut subcommand = match arguments.first().and_then(|word| word.to_str()) {
-        Some("status") => Subcommand::Status,
-        Some("run-once") => Subcommand::RunOnce { from_task: false },
-        Some("install") => Subcommand::Install,
-        Some("uninstall") => Subcommand::Uninstall,
-        _ => return Err(usage()),
+fn parse(arguments: &[OsString]) -> Option<(Subcommand, PathBuf)> {
+    let mut subcommand = match arguments.first()?.to_str()? {
+        "status" => Subcommand::Status,
+        "run-once" => Subcommand::RunOnce { from_task: false },
+        "install" => Subcommand::Install,
+        "uninstall" => Subcommand::Uninstall,
+        _ => return None,
     };
     let mut root = None;
     let mut index = 1;
     while index < arguments.len() {
-        let word = arguments[index].to_str().ok_or_else(usage)?;
-        let repeated = || cli_line::usage_invalid(Some(word), ArgumentProblem::Repeated);
-        match (word, &mut subcommand) {
-            ("--root", _) => {
-                if root.is_some() {
-                    return Err(repeated());
-                }
+        match (arguments[index].to_str()?, &mut subcommand) {
+            ("--root", _) if root.is_none() => {
                 index += 1;
-                root = Some(PathBuf::from(arguments.get(index).ok_or_else(usage)?));
+                root = Some(PathBuf::from(arguments.get(index)?));
             }
-            ("--from-task", Subcommand::RunOnce { from_task }) => {
-                if *from_task {
-                    return Err(repeated());
-                }
-                *from_task = true;
-            }
-            _ => {
-                return Err(cli_line::usage_invalid(
-                    Some(word),
-                    ArgumentProblem::Unknown,
-                ));
-            }
+            ("--from-task", Subcommand::RunOnce { from_task }) if !*from_task => *from_task = true,
+            _ => return None,
         }
         index += 1;
     }
-    Ok((subcommand, root.ok_or_else(usage)?))
+    Some((subcommand, root?))
 }
 
 fn now_unix_ms() -> u64 {

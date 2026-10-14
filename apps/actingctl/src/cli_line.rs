@@ -12,7 +12,7 @@
 //! The outcome is full by default (class (b), §7.1); `ACTINGCOMMAND_DETAIL=codes` keeps only
 //! its registered names. An unknown value is a usage error.
 
-use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::codes::ActingctlCode;
 use actingcommand_contract::outcome::{Category, Detail, Outcome};
 use serde_json::{Map, Value};
 use std::io::{self, Write};
@@ -20,22 +20,6 @@ use std::process::ExitCode;
 
 /// The environment variable that switches actingctl's outcomes to codes only (§7.1).
 pub(crate) const DETAIL_VARIABLE: &str = "ACTINGCOMMAND_DETAIL";
-/// The longest command-line word a usage outcome names as its `argument` (the key table's name
-/// bound).
-const MAX_ARGUMENT_BYTES: usize = 256;
-
-/// `actingctl_usage_invalid` for one command-line word and what is wrong with it
-/// (`argument_problem`). The word is named as `argument` when it is one a name may hold (at most
-/// 256 bytes, no control character); another word is refused unnamed.
-pub(crate) fn usage_invalid(argument: Option<&str>, problem: ArgumentProblem) -> Outcome {
-    let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid).argument_problem(problem);
-    match argument.filter(|argument| {
-        argument.len() <= MAX_ARGUMENT_BYTES && !argument.chars().any(char::is_control)
-    }) {
-        Some(argument) => outcome.argument(argument),
-        None => outcome,
-    }
-}
 
 /// The detail `ACTINGCOMMAND_DETAIL` asks for: full when it is unset; `codes` or `full`
 /// otherwise; any other value is refused with `actingctl_usage_invalid` and the variable.

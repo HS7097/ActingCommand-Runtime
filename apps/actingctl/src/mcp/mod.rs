@@ -39,6 +39,8 @@ use tools::TierSet;
 const SERVE_USAGE: &str = "usage: actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]] [--detail codes|full] | actingctl mcp-serve --list-tools [--format json|markdown]";
 const CONFIG_USAGE: &str =
     "usage: actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]";
+/// The longest flag word a usage outcome names as its `argument` (the key table's name bound).
+const MAX_ARGUMENT_BYTES: usize = 256;
 
 /// Why `mcp-serve` or `mcp-config` ended without doing its work (Workflow #378 A5, model v2.2
 /// §7.3): one outcome, and for a usage error the usage line. Neither command prints an
@@ -76,8 +78,15 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
 /// `actingctl_usage_invalid` for one flag (`argument`, when it is a word a name may hold) and
 /// what is wrong with it (`argument_problem`), with the usage line for the developer line.
 fn usage_error(usage: &'static str, problem: ArgumentProblem, flag: Option<&str>) -> Ended {
+    let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid).argument_problem(problem);
+    let outcome = match flag
+        .filter(|flag| flag.len() <= MAX_ARGUMENT_BYTES && !flag.chars().any(char::is_control))
+    {
+        Some(flag) => outcome.argument(flag),
+        None => outcome,
+    };
     Ended {
-        outcome: crate::cli_line::usage_invalid(flag, problem),
+        outcome,
         usage: Some(usage),
     }
 }

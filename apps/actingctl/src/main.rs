@@ -56,7 +56,7 @@ use actingcommand_contract::{
     SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
-use codes::{ActingctlCode, ArgumentProblem};
+use codes::ActingctlCode;
 use instance_selector::SelectorMiss;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -964,27 +964,18 @@ impl Invocation {
         } else {
             1
         };
-        let takes = flags_of(command, emulator_action).ok_or(ActingctlError::Usage)?;
-        // Workflow #382 A1-FLAG: every word after the positional ones is a flag of this
-        // subcommand, each given once; anything else is refused by name, never ignored.
-        let mut given: Vec<&str> = Vec::new();
         while index < arguments.len() {
             let flag = arguments[index].to_str().ok_or(ActingctlError::Usage)?;
-            if !takes.contains(&flag) {
-                return Err(ActingctlError::argument(flag, ArgumentProblem::Unknown));
-            }
-            if given.contains(&flag) {
-                return Err(ActingctlError::argument(flag, ArgumentProblem::Repeated));
-            }
-            given.push(flag);
             match flag {
-                "--record-file" => {
+                "--record-file" if command == "agent-publish-facts" && record_file.is_none() => {
                     record_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                "--policy-file" => {
+                "--policy-file"
+                    if command == "agent-apply-resource-targets" && policy_file.is_none() =>
+                {
                     policy_file = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                "--action-json" => {
+                "--action-json" if command == "install-transition" && install_action.is_none() => {
                     let json = require_text(&arguments, &mut index)?;
                     if json.len() > 4096 {
                         return Err(ActingctlError::Usage);
@@ -994,21 +985,24 @@ impl Invocation {
                     action.validate().map_err(|_| ActingctlError::Usage)?;
                     install_action = Some(action);
                 }
-                "--wait" => {
+                "--wait"
+                    if matches!(command, "request-shutdown" | "install-transition")
+                        && shutdown_wait.is_none() =>
+                {
                     let seconds = require_u64(&arguments, &mut index)?;
                     if !(1..=MAX_SHUTDOWN_WAIT_SECONDS).contains(&seconds) {
                         return Err(ActingctlError::Usage);
                     }
                     shutdown_wait = Some(Duration::from_secs(seconds));
                 }
-                "--reason" => {
+                "--reason" if command == "pause" && pause_reason.is_none() => {
                     let reason = require_text(&arguments, &mut index)?;
                     pause_reason = Some(
                         actingcommand_contract::SchedulingPauseReason::new(reason)
                             .map_err(|_| ActingctlError::Usage)?,
                     );
                 }
-                "--drain-timeout-ms" => {
+                "--drain-timeout-ms" if command == "pause" && drain_timeout_ms.is_none() => {
                     let timeout = require_u64(&arguments, &mut index)?;
                     if !(actingcommand_contract::MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS
                         ..=actingcommand_contract::MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS)
@@ -1036,10 +1030,9 @@ impl Invocation {
                 "--package" => {
                     package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                // Two spellings of one value: the second excludes the first.
                 "--expected-sha256" | "--package-ref" => {
                     if expected_sha256.is_some() {
-                        return Err(ActingctlError::argument(flag, ArgumentProblem::Conflicting));
+                        return Err(ActingctlError::Usage);
                     }
                     expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
@@ -1048,14 +1041,13 @@ impl Invocation {
                 }
                 "--recovery-expected-sha256" | "--recovery-package-ref" => {
                     if recovery_expected_sha256.is_some() {
-                        return Err(ActingctlError::argument(flag, ArgumentProblem::Conflicting));
+                        return Err(ActingctlError::Usage);
                     }
                     recovery_expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
                 "--program" => program = true,
-                "--config" => config = true,
-                // Every flag of the table has its arm.
+                "--config" if command == "status" && !config => config = true,
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -1063,13 +1055,50 @@ impl Invocation {
         let state_root = state_root.ok_or(ActingctlError::Usage)?;
         let instance = instance.filter(|value: &String| !value.trim().is_empty());
         let command = match command {
-            "agent-publish-facts" => Command::AgentPublishFacts {
-                record_file: record_file.ok_or(ActingctlError::Usage)?,
-            },
-            "agent-apply-resource-targets" => Command::AgentApplyResourceTargets {
-                policy_file: policy_file.ok_or(ActingctlError::Usage)?,
-            },
+            "agent-publish-facts" => {
+                if arguments
+                    .iter()
+                    .skip(1)
+                    .filter_map(|argument| argument.to_str())
+                    .any(|argument| {
+                        argument.starts_with("--")
+                            && !matches!(argument, "--state-root" | "--record-file")
+                    })
+                {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::AgentPublishFacts {
+                    record_file: record_file.ok_or(ActingctlError::Usage)?,
+                }
+            }
+            "agent-apply-resource-targets" => {
+                if arguments
+                    .iter()
+                    .skip(1)
+                    .filter_map(|argument| argument.to_str())
+                    .any(|argument| {
+                        argument.starts_with("--")
+                            && !matches!(argument, "--state-root" | "--policy-file")
+                    })
+                {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::AgentApplyResourceTargets {
+                    policy_file: policy_file.ok_or(ActingctlError::Usage)?,
+                }
+            }
             "task-offset" => {
+                if arguments
+                    .iter()
+                    .skip(3)
+                    .filter_map(|argument| argument.to_str())
+                    .any(|argument| {
+                        argument.starts_with("--")
+                            && !matches!(argument, "--state-root" | "--instance")
+                    })
+                {
+                    return Err(ActingctlError::Usage);
+                }
                 let (task_id, offset_milli) = task_offset.ok_or(ActingctlError::Usage)?;
                 Command::TaskOffset {
                     task_id,
@@ -1242,57 +1271,6 @@ impl Command {
     }
 }
 
-/// Workflow #382 A1-FLAG: the flags a subcommand of [`Invocation::parse`] takes (`emulator` by
-/// its action), as its usage lists them; `None` for a word that is no such subcommand. Any other
-/// flag, a flag given twice and a word that is no flag are refused by name (Fail Loud: nothing
-/// is ignored silently).
-fn flags_of(command: &str, emulator_action: Option<&str>) -> Option<&'static [&'static str]> {
-    let flags: &'static [&'static str] = match command {
-        "agent-publish-facts" => &["--state-root", "--record-file"],
-        "agent-apply-resource-targets" => &["--state-root", "--policy-file"],
-        "config" | "monitor-status" | "selfcheck" => &["--state-root"],
-        "emulator" if emulator_action == Some("discover") => &["--state-root"],
-        "task-offset" | "observe" | "reset" | "monitor-clear" | "emulator" | "resume" => {
-            &["--state-root", "--instance"]
-        }
-        "request-shutdown" => &["--state-root", "--wait"],
-        "install-transition" => &["--state-root", "--action-json", "--wait"],
-        "status" => &["--state-root", "--config"],
-        "facts" => &["--state-root", "--program"],
-        "monitor-set" => &[
-            "--state-root",
-            "--instance",
-            "--interval-ms",
-            "--expect",
-            "--recover",
-        ],
-        "pause" => &[
-            "--state-root",
-            "--instance",
-            "--reason",
-            "--drain-timeout-ms",
-        ],
-        "stream" => &[
-            "--state-root",
-            "--instance",
-            "--max-frames",
-            "--interval-ms",
-        ],
-        "task-run" => &[
-            "--state-root",
-            "--instance",
-            "--package",
-            "--expected-sha256",
-            "--package-ref",
-            "--recovery-package",
-            "--recovery-expected-sha256",
-            "--recovery-package-ref",
-        ],
-        _ => return None,
-    };
-    Some(flags)
-}
-
 fn require_value(arguments: &[OsString], index: &mut usize) -> Result<OsString, ActingctlError> {
     *index += 1;
     arguments.get(*index).cloned().ok_or(ActingctlError::Usage)
@@ -1359,13 +1337,6 @@ fn foreign_data_error(error: &impl fmt::Display) -> Outcome {
 #[derive(Debug)]
 enum ActingctlError {
     Usage,
-    /// Workflow #382 A1-FLAG: a command-line word the subcommand refuses, and why (a flag it
-    /// does not take or a stray word: `unknown`; a flag given twice: `repeated`; the second
-    /// spelling of one value: `conflicting`).
-    Argument {
-        argument: String,
-        problem: ArgumentProblem,
-    },
     Runtime(actingcommand_runtime_client::RuntimeClientError),
     /// `task-run`: the package (or recovery package) path does not canonicalize.
     Package {
@@ -1403,22 +1374,12 @@ enum ActingctlError {
 }
 
 impl ActingctlError {
-    fn argument(argument: &str, problem: ArgumentProblem) -> Self {
-        Self::Argument {
-            argument: argument.to_owned(),
-            problem,
-        }
-    }
-
     /// This failure as one outcome (model §7.3): a Runtime client failure as the client gives
     /// it (the refused receipt's outcome on top), every other kind as actingctl's code with its
     /// values and its I/O or decode cause as a link.
     fn outcome(&self) -> Outcome {
         match self {
             Self::Usage => Outcome::new(ActingctlCode::ActingctlUsageInvalid),
-            Self::Argument { argument, problem } => {
-                cli_line::usage_invalid(Some(argument.as_str()), *problem)
-            }
             Self::Runtime(error) => error.outcome(),
             Self::Package { path, error } => {
                 Outcome::new(ActingctlCode::ActingctlPackageResolutionFailed)
@@ -1448,7 +1409,7 @@ impl ActingctlError {
 impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage | Self::Argument { .. } => formatter.write_str(USAGE),
+            Self::Usage => formatter.write_str(USAGE),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package { .. } => {
                 formatter.write_str("the contained task package cannot be resolved")

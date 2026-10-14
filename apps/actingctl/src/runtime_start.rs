@@ -32,7 +32,7 @@
 
 use crate::ActingctlError;
 use crate::cli_line;
-use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::codes::ActingctlCode;
 use crate::shutdown_wait;
 use crate::watchdog::{self, decide, io_failure, json_failure, observe, start};
 use actingcommand_contract::outcome::{Category, CauseRelation, IoOp, Outcome};
@@ -76,9 +76,9 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if let Err(invalid) = cli_line::detail() {
         return Some(cli_line::failure(&invalid, None));
     }
-    let parsed = match Arguments::parse(mode, &arguments[1..]) {
-        Ok(parsed) => parsed,
-        Err(usage) => return Some(cli_line::failure(&usage, Some(USAGE))),
+    let Some(parsed) = Arguments::parse(mode, &arguments[1..]) else {
+        let usage = Outcome::new(ActingctlCode::ActingctlUsageInvalid);
+        return Some(cli_line::failure(&usage, Some(USAGE)));
     };
     Some(match run(mode, &parsed) {
         Ok((report, outcome)) => match serde_json::to_value(&report) {
@@ -114,10 +114,7 @@ struct Arguments {
 }
 
 impl Arguments {
-    /// A flag the subcommand does not take, a flag given twice and a stray word are refused by
-    /// name (Workflow #382 A1-FLAG); any other usage error unnamed.
-    fn parse(mode: Mode, arguments: &[OsString]) -> Result<Self, Outcome> {
-        let usage = || Outcome::new(ActingctlCode::ActingctlUsageInvalid);
+    fn parse(mode: Mode, arguments: &[OsString]) -> Option<Self> {
         let mut root = None;
         let mut config = None;
         let mut state_root = None;
@@ -125,45 +122,28 @@ impl Arguments {
         let mut wait_idle = None;
         let mut index = 0;
         while index < arguments.len() {
-            let flag = arguments[index].to_str().ok_or_else(usage)?;
-            let given = match flag {
-                "--root" => root.is_some(),
-                "--config" => config.is_some(),
-                "--state-root" => state_root.is_some(),
-                "--ready-timeout-s" => ready_timeout.is_some(),
-                "--wait-idle" if mode == Mode::Restart => wait_idle.is_some(),
-                _ => {
-                    return Err(cli_line::usage_invalid(
-                        Some(flag),
-                        ArgumentProblem::Unknown,
-                    ));
-                }
-            };
-            if given {
-                return Err(cli_line::usage_invalid(
-                    Some(flag),
-                    ArgumentProblem::Repeated,
-                ));
-            }
+            let flag = arguments[index].to_str()?;
             index += 1;
-            let value = arguments.get(index).ok_or_else(usage)?;
-            match flag {
-                "--root" => root = Some(PathBuf::from(value)),
-                "--config" => config = Some(PathBuf::from(value)),
-                "--state-root" => state_root = Some(PathBuf::from(value)),
-                "--ready-timeout-s" => {
-                    ready_timeout = Some(seconds(value, 1..=MAX_WAIT_SECONDS).ok_or_else(usage)?);
-                }
-                "--wait-idle" => {
-                    wait_idle = Some(seconds(value, 0..=MAX_WAIT_SECONDS).ok_or_else(usage)?);
-                }
-                // Every flag taken above has its arm.
-                _ => return Err(usage()),
+            let value = arguments.get(index)?;
+            let slot_taken = match flag {
+                "--root" => root.replace(PathBuf::from(value)).is_some(),
+                "--config" => config.replace(PathBuf::from(value)).is_some(),
+                "--state-root" => state_root.replace(PathBuf::from(value)).is_some(),
+                "--ready-timeout-s" => ready_timeout
+                    .replace(seconds(value, 1..=MAX_WAIT_SECONDS)?)
+                    .is_some(),
+                "--wait-idle" if mode == Mode::Restart => wait_idle
+                    .replace(seconds(value, 0..=MAX_WAIT_SECONDS)?)
+                    .is_some(),
+                _ => return None,
+            };
+            if slot_taken {
+                return None;
             }
             index += 1;
         }
-        Ok(Self {
-            root: root.ok_or_else(usage)?,
+        Some(Self {
+            root: root?,
             config,
             state_root,
             ready_timeout: ready_timeout.unwrap_or(Duration::from_millis(decide::READY_TIMEOUT_MS)),
@@ -563,7 +543,7 @@ mod tests {
 
     fn parse(mode: Mode, arguments: &[&str]) -> Option<Arguments> {
         let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
-        Arguments::parse(mode, &arguments).ok()
+        Arguments::parse(mode, &arguments)
     }
 
     /// §2.1 and §4.11: each subcommand takes only its own flags, each once; the defaults are
