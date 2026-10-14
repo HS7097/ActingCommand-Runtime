@@ -4,19 +4,15 @@
 //! that no log covers (R5b). Test plan A-2 G3a, G3c and G3d read fixture state roots with fixed
 //! times; H-1 G2 reads the state root a real held start left (I7).
 
-#[allow(dead_code)]
-#[path = "../../../../tests/support/held_runtime.rs"]
-mod held_runtime;
-
 use super::decide::{self, Decision, Journal, Stage, StartProbes};
 use super::observe;
 use super::state::{Recorded, StartRecord, WatchdogState};
 use crate::codes::ActingctlCode;
+use crate::held_runtime::{HELD_SALT, HeldStart, NoInstances};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_runtime_host::{
     PreparationCheckpoint, PreparationTestAction, RuntimeHost, RuntimeHostConfig,
 };
-use held_runtime::{HELD_SALT, HeldStart, NoInstances};
 use serde_json::json;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
