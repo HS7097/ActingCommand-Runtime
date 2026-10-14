@@ -106,7 +106,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         .filter(|edge| outcome.matched && edge.from_page == outcome.page)
         .map(navigation_edge_json)
         .collect::<Vec<_>>();
-    let observation = observation::build(
+    let (observation, ocr_not_evaluated) = observation::build(
         &view,
         &evaluator,
         &loaded_scene.scene,
@@ -127,6 +127,13 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "actions": actions,
         "arbitration": isolated_offline_projection(),
     });
+    // Workflow #396 LAB-3: actions whose OCR target was not evaluated without an OCR model are
+    // named with the unavailable OCR state; observe does not fail for them.
+    if !ocr_not_evaluated.is_empty() {
+        let mut ocr = super::offline_ocr::status();
+        ocr["not_evaluated"] = json!(ocr_not_evaluated);
+        payload["ocr"] = ocr;
+    }
     if !evaluator.pack().target_consensus.is_empty() {
         payload["recognition_coverage"] = json!({"provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":"production_owner"});
     }

@@ -264,13 +264,21 @@ evaluate OCR targets with it.
 Without a usable OCR model OCR is unavailable: `lab_ocr_unavailable`, whose `caused_by` link says
 why (`lab_ocr_vision_unconfigured`, a configuration read or decode code,
 `vision_root_unavailable`, `vision_models_empty`, `lab_ocr_model_missing` or
-`lab_ocr_runtime_missing`). It is never skipped silently: a command that would evaluate an OCR
-target (directly or as a composite member, or on a page of the page set it detects) refuses with
-`lab_ocr_unavailable` (exit 3, `blocked_by: ["ocr_model"]`, `details.outcome` the outcome with
-the target as `target_id`) before evaluating anything; an OCR mark's self-test and `record stop`'s
-first decision report it as their reason; `capabilities` and `package dry-run` report the OCR
-state (`available`, `execution_provider: "cpu"`, `vision_root`, and `unavailable` with the
-outcome).
+`lab_ocr_runtime_missing`). It is never skipped silently, and it fails only a command whose
+purpose is to evaluate an OCR target:
+- `recognize`, `is-visible`, `observe --targets` and the guard target of `do`/`wait` on an OCR
+  target (directly or as a composite member), and `observe`, `detect-page` and `current-page` on a
+  page set with an OCR target, refuse with `lab_ocr_unavailable` (exit 3,
+  `blocked_by: ["ocr_model"]`, `details.outcome` the outcome with the target as `target_id`)
+  before evaluating anything;
+- an OCR mark's self-test and `record stop`'s first decision report it as their reason;
+- an `observe` action whose target is an OCR target is not evaluated, as before, and the output
+  names it in `ocr.not_evaluated`;
+- `package dry-run` keeps its decision and exit code; `capabilities`, `package dry-run` and that
+  `observe` output report the OCR state (`available`, `execution_provider: "cpu"`, `vision_root`,
+  and `unavailable` with the outcome).
+
+`package digest` and `package bundle` never load the provider.
 
 ## Steps, frames and remediation
 
