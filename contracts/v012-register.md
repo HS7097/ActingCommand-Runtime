@@ -619,6 +619,19 @@ the contract. No ledger record type or persisted member is added. host-metrics'
 Configuration keys (§5): the per-instance `start_emulator` row, parsed, checked and reported by
 S6a; S6c reads it.
 
+### 1.40 Wave 10 slice OUT-1 (#390, forced compromises O-03, O-04, O-05)
+
+OUT-1 writes no ledger record, wire shape or configuration key, and adds or retires no code.
+One resource file format rule is relaxed (O1-1). The catalog rule (a catalog references a
+subset of its package's declared outcomes, [scheduling/README.md](scheduling/README.md)
+"Runtime Boundary") and the policy input records of declared outcomes a successful run did
+not produce ("Settlement Outcome Records") are not persisted; `fact_snapshot_id` hashes the
+projected outcomes, so it follows them.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| O1-1 | task schema `0.8` zero-input fields task (`operations: []`): `scheduling_outcome.mappings` | relaxed rule (resource file format, not a ledger shape) | OUT-1 | resource side | one `fields_recorded` mapping whose terminal pages are the fields pages, and any other mappings; every mapping `no_designated_effect`; the target pages are every mapping's terminal pages, no page in two mappings ([ocr-fields.md](ocr-fields.md)); a run that ends on another mapping's page has no OCR observation and no fields report; the `package` interface revision is declared once by A8 |
+
 ### 1.45 Slice D1c-H (#387, Alice 10-14: one failure counts once toward direction ①)
 
 D1c-H changes what direction ① counts, which is memory only, and writes one existing optional

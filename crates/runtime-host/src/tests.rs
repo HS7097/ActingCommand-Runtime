@@ -143,6 +143,9 @@ mod gate_387_d1cf;
 mod gate_387_d1cg;
 // Workflow #389 MCP-4, register W2: the instance fact read records nothing.
 mod gate_389_mcp4;
+// Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): outcome subsets, unproduced
+// outcomes and zero-input packages with several outcomes.
+mod gate_390_out1;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
