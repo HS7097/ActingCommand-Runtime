@@ -344,6 +344,18 @@ not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h)
 `contained_task_navigation_recovery_exhausted` registered pending by D1c (runtime-host, error,
 `pack_logic_mismatch`) for NAV-5 to emit.
 
+### 1.21 Wave 6 slice REC-7 (#396, REC-M v1.2.1 §9)
+
+REC-7 brings and reads both rows; neither is a ledger shape, and no ledger record or persisted
+member changes ([resource-declarations.md](resource-declarations.md), section Task schema `0.9`
+template masks, `verify_templates` color checks and the threshold floor). The new location
+`target_match_exact` (the stage of a masked search past its limit) is a catalog entry, not a row.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RC1 | task schema `0.9` `anchors[]` and `verify_templates[]`: `mask` (`{"type": "range", "lower", "upper"}`) or `maskRange` (`[lower, upper]`); `verify_templates[].color_check`; recognition pack schema `0.7` template target `mask` (`type` `range` only) | new members (resource file format, not a ledger shape) | REC-7 | resource side | gray bounds 0..=255, `lower <= upper`; both source forms derive the same pack `mask` and pack schema `0.7`; pack schema `0.6` and task schemas before `0.9` refuse them (`UnconsumedField`); operations still refuse a mask |
+| RC2 | admission of a package with its bytes (Runtime, `actinglab package digest`, `package bundle`): a mask selects at least 16 template pixels, not all of one value under `ccoeff_normed`; a `ccorr_normed` threshold above 0 is at least the template's flat-field score in milli plus 50 | tightened rule (resource file format, not a ledger shape) | REC-7 | resource side | refusal `resource_declaration_invalid`, `InvalidValue` at the derived pack's `/targets/<i>/mask`, `/targets/<i>/threshold` or `/defaults/template_threshold`; packages admitted before may be refused, so the resource repositories are checked with `package bundle` before a build with REC-7 is deployed |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

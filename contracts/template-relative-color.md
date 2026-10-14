@@ -24,13 +24,15 @@ form. Its `anchor_target_id` must equal the containing template target's own ID:
 }
 ```
 
-Authoring anchors use the same `color_check` object, with the final `page/<anchor>`
-ID. The native parser retains the relative declaration and checks its types, positive
-dimensions and self-anchor binding.
+Authoring anchors and verify templates use the same `color_check` object: an anchor with
+the final `page/<anchor>` ID, a `verify_templates[]` entry (task schema `0.9`, Workflow #396
+REC-7) with its own ID. The native parser retains the relative declaration and checks its
+types, positive dimensions and self-anchor binding.
 
 An absolute or relative `color_check` may also carry `max_distance`, a finite number
 `>= 0`: that check's own color threshold. It is a pack schema `0.7` construct. Task schemas
-`0.6` through `0.9` accept it in `anchors[].color_check`, and the parser then writes
+`0.6` through `0.9` accept it in `anchors[].color_check` (and task schema `0.9` in
+`verify_templates[].color_check`), and the parser then writes
 `pack.json` at schema `0.7` (`selection-graph.md`, section Checks); older pack schemas
 refuse it at `/targets/<i>/color_check/max_distance`. Without it the check uses
 `defaults.color_max_distance`, as before. Existing page-to-template color propagation

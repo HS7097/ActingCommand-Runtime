@@ -988,6 +988,9 @@ impl AssetResolver for MemoryAssetResolver {
 pub enum ContainmentError {
     ResourceDeclaration {
         issue: actingcommand_contract::ResourceDeclarationIssue,
+        /// Developer text beside the declaration's location, for a refusal that has more to
+        /// say (Workflow #396 REC-7: the flat-field scores of templates below their floor).
+        detail: Option<String>,
     },
     SourceTree {
         code: Code,
@@ -1054,11 +1057,17 @@ pub enum ContainmentError {
 impl fmt::Display for ContainmentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ResourceDeclaration { issue } => write!(
-                f,
-                "resource declaration {} field {} is not consumable: {:?}",
-                issue.declaration_file, issue.field_path, issue.reason,
-            ),
+            Self::ResourceDeclaration { issue, detail } => {
+                write!(
+                    f,
+                    "resource declaration {} field {} is not consumable: {:?}",
+                    issue.declaration_file, issue.field_path, issue.reason,
+                )?;
+                match detail {
+                    Some(detail) => write!(f, "; {detail}"),
+                    None => Ok(()),
+                }
+            }
             Self::SourceTree { code } => write!(f, "fatal containment error: {code}"),
             Self::InvalidInstanceId => f.write_str("fatal containment error: instance id is empty"),
             Self::MissingTaskId => f.write_str("fatal containment error: task id is missing"),
@@ -1157,7 +1166,33 @@ fn located_declaration_error(
 ) -> ContainmentError {
     let mut issue = issue.clone();
     issue.declaration_file = path.to_owned();
-    ContainmentError::ResourceDeclaration { issue }
+    ContainmentError::ResourceDeclaration {
+        issue,
+        detail: None,
+    }
+}
+
+/// Workflow #396 REC-7: a refusal of the template admission that reads the pack's template
+/// bytes; a declaration refusal keeps its developer text (the flat-field scores).
+fn template_admission_error(
+    path: &str,
+    error: actingcommand_recognition_pack::RecognitionPackError,
+) -> ContainmentError {
+    match error.declaration_issue() {
+        Some(issue) => {
+            let mut issue = issue.clone();
+            issue.declaration_file = path.to_owned();
+            ContainmentError::ResourceDeclaration {
+                issue,
+                detail: Some(error.message().to_owned()),
+            }
+        }
+        None => ContainmentError::RecognitionPack {
+            path: path.to_owned(),
+            code: error.code(),
+            message: error.to_string(),
+        },
+    }
 }
 
 fn recognition_declaration_error(
@@ -1178,7 +1213,10 @@ fn declaration_error(path: &str, error: actingcommand_contract::LabError) -> Con
         return match serde_json::from_value::<actingcommand_contract::ResourceDeclarationIssue>(
             error.details.clone().unwrap_or(Value::Null),
         ) {
-            Ok(issue) => ContainmentError::ResourceDeclaration { issue },
+            Ok(issue) => ContainmentError::ResourceDeclaration {
+                issue,
+                detail: None,
+            },
             Err(cause) => ContainmentError::PackParse {
                 path: path.to_owned(),
                 message: format!("resource_declaration_diagnostic_invalid: {cause}; {error}"),
@@ -1223,6 +1261,10 @@ fn load_recognition_pipeline(
                     message: err.to_string(),
                 }
             })?;
+        // Workflow #396 REC-7: the admission rules that read the template bytes.
+        evaluator
+            .admit_template_assets()
+            .map_err(|err| template_admission_error(pack_path, err))?;
         return Ok((Some(evaluator), None));
     };
     let pages_json = decode_utf8_entry(entries, pages_path)?;
@@ -1234,6 +1276,10 @@ fn load_recognition_pipeline(
         resolver,
         vision_provider,
     )?;
+    // Workflow #396 REC-7: the admission rules that read the template bytes.
+    evaluator
+        .admit_template_assets()
+        .map_err(|err| template_admission_error(pack_path, err))?;
     validate_packaged_error_page_references(
         &metadata.operation_path,
         &metadata.operation,

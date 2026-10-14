@@ -54,6 +54,7 @@ fn search<'a>(
         search,
         template,
         metric,
+        mask: None,
         offset_x: 0,
         offset_y: 0,
     }
@@ -341,6 +342,7 @@ fn a_full_frame_single_template_search_prints_its_time() {
                 None,
                 MatchMetric::CrossCorrelationNormalized,
                 TemplateMatchTimingStage::Exact,
+                None,
                 &mut RegionSpectra::default(),
                 &SearchClock::new(move || now),
             )

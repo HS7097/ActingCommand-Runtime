@@ -887,19 +887,23 @@ impl OperationParser {
             for anchor in array_field(&bundle.data, "anchors") {
                 let anchor_id = required_string(anchor, "id")?;
                 let target_id = anchor_target_id(&anchor_id);
-                let source = self.enrich_template_source(anchor, &anchor_id)?;
+                let (source, mask) =
+                    split_template_mask(bundle, self.enrich_template_source(anchor, &anchor_id)?)?;
                 let template = required_string(&source, "template")?;
-                let target = with_unique(
-                    &source,
-                    pack_target(
+                let target = with_mask(
+                    mask,
+                    with_unique(
                         &source,
-                        &target_id,
-                        &template_resource_path(&self.root, &bundle.dir, &template)?,
-                        region_to_pack(required_field(&source, "region")?)?,
-                        template_threshold(&source)?,
-                        color_check_to_pack(source.get("color_check"), &target_id)?,
-                        None,
-                    )?,
+                        pack_target(
+                            &source,
+                            &target_id,
+                            &template_resource_path(&self.root, &bundle.dir, &template)?,
+                            region_to_pack(required_field(&source, "region")?)?,
+                            template_threshold(&source)?,
+                            color_check_to_pack(source.get("color_check"), &target_id)?,
+                            None,
+                        )?,
+                    ),
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
@@ -922,19 +926,27 @@ impl OperationParser {
             }
             for verify_template in array_field(&bundle.data, "verify_templates") {
                 let target_id = required_string(verify_template, "id")?;
-                let source = self.enrich_template_source(verify_template, &target_id)?;
+                let (source, mask) = split_template_mask(
+                    bundle,
+                    self.enrich_template_source(verify_template, &target_id)?,
+                )?;
                 let template = required_string(&source, "template")?;
-                let target = with_unique(
-                    &source,
-                    pack_target(
+                // Workflow #396 REC-7: a task schema 0.9 entry's `color_check`, as `anchors[]`
+                // takes it.
+                let target = with_mask(
+                    mask,
+                    with_unique(
                         &source,
-                        &target_id,
-                        &template_resource_path(&self.root, &bundle.dir, &template)?,
-                        region_to_pack(required_field(&source, "region")?)?,
-                        template_threshold(&source)?,
-                        None,
-                        None,
-                    )?,
+                        pack_target(
+                            &source,
+                            &target_id,
+                            &template_resource_path(&self.root, &bundle.dir, &template)?,
+                            region_to_pack(required_field(&source, "region")?)?,
+                            template_threshold(&source)?,
+                            color_check_to_pack(source.get("color_check"), &target_id)?,
+                            None,
+                        )?,
+                    ),
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
@@ -2397,6 +2409,59 @@ fn with_unique(source: &Value, mut target: Value) -> Value {
     target
 }
 
+/// Workflow #396 REC-7: a task schema `0.9` template entry's `mask` object or MAA `maskRange`
+/// pair becomes the pack's `{"type": "range", "lower", "upper"}` (pack schema `0.7`); the
+/// entry is returned without them. An older task keeps them, and `pack_target` refuses them.
+fn split_template_mask(bundle: &Bundle, source: Value) -> CliOutcome<(Value, Option<Value>)> {
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.9") {
+        return Ok((source, None));
+    }
+    let mut entry = match source {
+        Value::Object(entry) => entry,
+        other => return Ok((other, None)),
+    };
+    let declared = match (entry.remove("mask"), entry.remove("maskRange")) {
+        (None, None) => None,
+        (Some(declared), None) | (None, Some(declared)) => Some(declared),
+        (Some(_), Some(_)) => {
+            return Err(CliError::package_invalid(format!(
+                "{}: a template entry declares both mask and maskRange",
+                bundle.task_json_path().display()
+            )));
+        }
+    };
+    let mask = declared
+        .map(|declared| -> CliOutcome<Value> {
+            let (lower, upper) = match &declared {
+                Value::Array(range) if range.len() == 2 => (&range[0], &range[1]),
+                Value::Object(mask) => (
+                    mask.get("lower").unwrap_or(&Value::Null),
+                    mask.get("upper").unwrap_or(&Value::Null),
+                ),
+                _ => {
+                    return Err(CliError::package_invalid(
+                        "a template mask is {\"type\": \"range\", \"lower\", \"upper\"} or [lower, upper]",
+                    ));
+                }
+            };
+            Ok(json!({
+                "type": "range",
+                "lower": value_to_u8(lower, "template mask lower")?,
+                "upper": value_to_u8(upper, "template mask upper")?
+            }))
+        })
+        .transpose()?;
+    Ok((Value::Object(entry), mask))
+}
+
+/// Workflow #396 REC-7: the derived template target with its mask, when it declares one.
+fn with_mask(mask: Option<Value>, mut target: Value) -> Value {
+    if let (Some(mask), Some(object)) = (mask, target.as_object_mut()) {
+        object.insert("mask".to_string(), mask);
+    }
+    target
+}
+
 fn color_target(id: &str, region: Value, expected: Value, click: Option<Value>) -> Value {
     let mut target = ordered_map([
         ("type", Value::String("color".to_string())),
@@ -2796,6 +2861,7 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 || target.pointer("/color_check/max_distance").is_some()
                 || target.get("locate").is_some()
                 || target.get("unique").is_some()
+                || target.get("mask").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7
