@@ -56,7 +56,7 @@ fn handset_registration(
     .with_handset(handset)
 }
 
-fn bound(alias: &str, serial: &str) -> HandsetEndpoint {
+pub(super) fn bound(alias: &str, serial: &str) -> HandsetEndpoint {
     HandsetEndpoint::Bound(HandsetBinding::new(
         DeviceSerial::handset(serial, alias),
         BOUND_AT_UNIX_MS,
@@ -65,7 +65,7 @@ fn bound(alias: &str, serial: &str) -> HandsetEndpoint {
 }
 
 /// The registry's resolution of the handset `alias`.
-fn resolved_handset(
+pub(super) fn resolved_handset(
     alias: &str,
     instance_id: InstanceId,
     handset: HandsetEndpoint,
@@ -132,7 +132,7 @@ fn rd1b_t2_a_handset_binding_records_its_device_by_fingerprint_without_host_or_p
 
 /// The last `session.instance.available` publication of `instance_alias`: its value and its
 /// source snapshot.
-fn last_availability(events: &[PersistedEvent], instance_alias: &str) -> (bool, String) {
+pub(super) fn last_availability(events: &[PersistedEvent], instance_alias: &str) -> (bool, String) {
     events
         .iter()
         .filter_map(|event| match event.payload() {

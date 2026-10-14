@@ -292,6 +292,38 @@ the tiers rise strictly within (0, 1] (`tier1_ratio` above 0 and below `tier2_ra
 `write_retry_backoff_ms` lists exactly `write_attempts` waits; the tag lists hold non-empty texts
 without spaces or control characters. A ratio or a wait of the wrong type is `wrong_type`.
 
+## The `device_link` section (Workflow #398 RD-2)
+
+Model-398 v1.1 §4.6 and [v012-register.md](v012-register.md) §1.52: how the Runtime watches the
+wired link of a bound handset (one `adb track-devices` process per Runtime, only while a bound
+handset is configured) and restores it. Every key is read where it is used, so an instruction may
+change each while the Runtime runs: the watch's keys at its next restart, the others at the next
+link change, restore or timer. The values are starting points the real-device check may tune.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `device_link.watch.restart_backoff_ms` | list of milliseconds, the last one reused for every later restart | `[1000, 5000, 30000]` | yes |
+| `device_link.watch.restart_limit` | integer `1..=100` | `5` | yes |
+| `device_link.watch.restart_window_ms` | milliseconds, at least 1 | `600000` | yes |
+| `device_link.settle_ms` | milliseconds `0..=60000` | `3000` | yes |
+| `device_link.offline_action` | `wait` or `kick_once` | `wait` | yes |
+| `device_link.restore_retry_ms` | list of milliseconds, one per new preparation after a failed one | `[5000, 15000, 60000]` | yes |
+
+- A watch that ends is started again after its restart wait (`device_watch_restarted`); more
+  restarts than `watch.restart_limit` within `watch.restart_window_ms`, a watch that cannot
+  start, or an output of unknown shape is `device_watch_failed`: every handset is `unwatched`
+  and unavailable until a person's self-check of a handset starts the watch again.
+- A handset back at `device` for `settle_ms` gets its preparation on a self-check claim; a failed
+  one is tried again after each wait of `restore_retry_ms`, and when they are used up the Runtime
+  waits for the next link change or a person's self-check.
+- `kick_once` sends one `adb -s <serial> reconnect` per `offline` episode (only that transport);
+  `wait` sends nothing. No value makes the Runtime run `kill-server`, `reboot`, `usb` or `tcpip`.
+
+The section is checked whole at start, in `check-config` and after every instruction; a broken
+rule is `config_value_invalid` (`section_check`) for the key it concerns: both lists are
+non-empty and `watch.restart_window_ms` is at least the first restart wait. A wait that is no
+number of milliseconds is `wrong_type`.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |

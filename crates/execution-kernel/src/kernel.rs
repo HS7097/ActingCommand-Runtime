@@ -430,7 +430,10 @@ impl ExecutionKernel {
     /// Workflow #398 RD-2 (model-398 v1.1 §4.3): one reconnect of a bound handset's transport,
     /// driven on the provider directly, outside any session; the device error comes back
     /// untyped.
-    pub fn reconnect_handset(&self, instance_alias: &str) -> actingcommand_device::DeviceResult<()> {
+    pub fn reconnect_handset(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_device::DeviceResult<()> {
         self.provider.reconnect_handset(instance_alias)
     }
 

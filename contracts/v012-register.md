@@ -738,6 +738,34 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.52 Wave 12 slice RD-2 (#398 model-398 v1.1 §4, §10.1, §12; #387 ruling A9)
+
+RD-2 brings its own shapes and writes them. The link of a handset is watched by one
+`adb track-devices` process per Runtime, only while a bound handset is configured; the
+`device_link` section of `crates/runtime-config` (`src/device_link.rs`) is its configuration and
+[runtime-config.md](runtime-config.md), "The `device_link` section", that section's contract. No
+member carries a device serial: a handset is its label `handset:<alias>`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RD1 | `runtime.lifecycle_observed` phase `device_link_observed` `{outcome}` | new lifecycle phase | RD-2 | RD-2 | `outcome` is `device_link_waiting` (warning, values `device_label`, `device_link_state`; once per state a handset enters away from `device`), `device_link_restored` (info, `device_label`) under the handset's instance links, or `device_watch_restarted` (warning) / `device_watch_failed` (error, a spawn failure's OS text its `caused_by` link) with `device_watch_problem` under system links; normal commit sync |
+| RD2 | `device.link` (instance scope, string, `device_link_state`) | new runtime fact | RD-2 | RD-2 | `device`, `absent`, `offline`, `unauthorized`, `no_permissions`, `other`, `unwatched`; written for a bound handset only, when its link changes |
+| RD3 | `device.connected` of a handset | new producer of an existing runtime fact | RD-2 | RD-2 | `false` when the handset leaves `device` for a state adb reports; `true` when its first list finds it prepared at `device` and when a restore preparation passes |
+| RD4 | `session.instance.available` = `false` with `source_detector` `runtime.device-link`, `source_snapshot_id` `device_link:<state>` | the other link states under RB4's prefix | RD-2 | RD-2 | a handset away from `device` is unavailable whatever its self-check says; the link back at `device` and a passing preparation restore the seed, as a self-check withdrawal is restored |
+| RD5 | `device_link_lost` on a run's failure | new top code of an existing failure | RD-2 | RD-2 | a run whose device failure (backend open, backend operation or capture) met its handset away from `device`: values `device_label`, `device_link_state`; the device failure its `caused_by` link; the error's projection unchanged |
+| RD6 | the ladder's holding interruption `device_link_lost` (A9) | new interruption reason | RD-2 | RD-2 | a climbing ladder whose handset left `device` is interrupted: the rung fails with `recovery_ladder_interrupted` caused by `device_link_lost`, and `recovery_ladder_finished` `exhausted` is recorded at warning (§2.2b A8) |
+| RD7 | a self-check claim of the handset's queue (`ClaimKind::SelfCheck`, host claim work `device_link_restore`) | new use of an existing claim kind | RD-2 | RD-2 | the restore preparation after `device_link.settle_ms`; no new claim kind (model-398 §4.3) |
+| RD8 | `config.parameters.device_link` (6 rows) | new section of an existing fact family | RD-2 | RD-2 | the keys of §5's `device_link.*` row in model-398 §4.6's order; the two wait lists as canonical JSON text; every key settable |
+
+Codes (runtime-host): `device_link_lost` (error, `environment_fault`), `device_link_waiting`,
+`device_watch_restarted`, `device_link_reconnect_failed` (warning, `none`),
+`device_link_restored` (info, `none`), `device_watch_failed` (error, `none`); keys
+`device_link_state`, `device_watch_problem` and their vocabularies; seven `device_link_*`
+locations. `device_link_reconnect_failed` is not in model-398 §10.1: it records the failure of
+the one `adb reconnect` that `offline_action = kick_once` sends (Fail Loud), and the Runtime then
+waits as under `wait`. The defaults file adds `device_link_lost` to
+`recovery_ladder.exclude_codes` (coordinator ruling on model-398 §16 item 5).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -797,6 +825,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect` (per instance, only for an instance bound to a device; [instance-fact-store.md](instance-fact-store.md#display-facts)) | instance | yes (every instance key) | DA-A |
 | `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
 | `host.kept_folder_cleared` (re-check 10-14, §1.25) | workbench | no (`tag.reobserve_prefixes`) | 375-R5e-clear (U-3) |
+| `device.link` (per instance, a bound handset only; §1.52 RD2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-2 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).
@@ -830,6 +859,7 @@ when it takes effect.
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
+| `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 | PKG-S3; SR-3 |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,

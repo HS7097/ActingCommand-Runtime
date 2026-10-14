@@ -370,6 +370,18 @@ the backend self-check facts (source `device-proxy` or `capture`).
   Slice #316-P4 adds the second `adb_unreachable` invalidation point: a physical
   instance's first contained-task capture that fails while one ADB baseline
   probe fails too invalidates this key and `application.foreground` the same way.
+  Workflow #398 RD-2: for a bound handset the device-link watch writes it too:
+  `false` when the handset leaves `device` for a state adb reports, `true` when
+  the watch's first list finds it prepared at `device` and when its restore
+  preparation passes; each only when the value changes.
+- `device.link` (Workflow #398 RD-2, model-398 v1.1 §4.7) — instance scope,
+  `string`, a bound handset only: the state of its wired device link as the
+  `adb track-devices` watch reports it (`device`, `absent`, `offline`,
+  `unauthorized`, `no_permissions`, `other`) or `unwatched` while the watch is
+  failed. Recorded only when it changes, with source `runtime`. A handset back at
+  `device` gets its connection preparation on a self-check claim after
+  `device_link.settle_ms` (a new trigger of the preparation phase, cause: the
+  link was restored).
 - `application.foreground` (slice #316-B3) — instance scope, `string`: the
   package name Android reported as the resumed activity, read through ADB
   (`dumpsys activity activities`) by the foreground gate before every pointer

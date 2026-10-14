@@ -43,21 +43,31 @@ fn rd2_t1_frames_decode_into_whole_lists_in_one_read_or_across_reads() {
     assert_eq!(none.state_of(&handset_a), DeviceLinkState::Absent);
     // A list shows its states, never a serial.
     let shown = format!("{lists:?}");
-    assert!(!shown.contains(SERIAL_A) && !shown.contains(SERIAL_B), "{shown}");
+    assert!(
+        !shown.contains(SERIAL_A) && !shown.contains(SERIAL_B),
+        "{shown}"
+    );
 
     // A frame cut by the reads anywhere waits for its rest.
     let whole = frame(&format!("{SERIAL_B}\tdevice\n"));
     for cut in 1..whole.len() {
         let mut decoder = TrackDevicesDecoder::new();
         assert!(
-            decoder.push(&whole[..cut]).expect("a part frame").is_empty(),
+            decoder
+                .push(&whole[..cut])
+                .expect("a part frame")
+                .is_empty(),
             "cut {cut}"
         );
         let lists = decoder.push(&whole[cut..]).expect("the rest of the frame");
         let [list] = lists.as_slice() else {
             panic!("one list after cut {cut}: {lists:?}");
         };
-        assert_eq!(list.state_of(&handset_b), DeviceLinkState::Device, "cut {cut}");
+        assert_eq!(
+            list.state_of(&handset_b),
+            DeviceLinkState::Device,
+            "cut {cut}"
+        );
     }
     // A stand-in serial without a raw value is never listed.
     assert_eq!(
@@ -102,8 +112,14 @@ fn rd2_t1_an_output_of_unknown_shape_is_protocol_invalid() {
         ("length not hexadecimal", b"00g1x".to_vec()),
         ("length with a sign", b"+001x".to_vec()),
         ("line without a tab", frame(&format!("{SERIAL_A} device\n"))),
-        ("payload without its last newline", frame(&format!("{SERIAL_A}\tdevice"))),
-        ("state with a control character", frame(&format!("{SERIAL_A}\tdevice\r\n"))),
+        (
+            "payload without its last newline",
+            frame(&format!("{SERIAL_A}\tdevice")),
+        ),
+        (
+            "state with a control character",
+            frame(&format!("{SERIAL_A}\tdevice\r\n")),
+        ),
         ("empty serial", frame("\tdevice\n")),
         ("empty state", frame(&format!("{SERIAL_A}\t\n"))),
         ("payload not text", not_text),

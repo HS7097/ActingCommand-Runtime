@@ -151,9 +151,7 @@ fn rd2_t3_the_preparation_is_queued_only_after_the_settle_wait() {
         // Queued once; the preparation passed: restored, nothing holds the handset.
         assert_eq!(prepares(&machine.on_tick(1_000_000, &config)), 0);
         assert_eq!(
-            machine
-                .on_prepared(1_000_001, &config, handset, true)
-                .links,
+            machine.on_prepared(1_000_001, &config, handset, true).links,
             [LinkAction::Restored {
                 instance_id: handset
             }]
@@ -255,7 +253,11 @@ fn rd2_t8_the_watch_restarts_by_its_backoff_until_the_window_s_limit() {
         let mut now = 0;
         for restart in 0..limit {
             let ended = machine.on_watch_ended(now, &config, DeviceWatchProblem::Exited);
-            assert_eq!(ended, LinkActions::default(), "limit {limit} restart {restart}");
+            assert_eq!(
+                ended,
+                LinkActions::default(),
+                "limit {limit} restart {restart}"
+            );
             let wait = config.restart_backoff_ms(usize::try_from(restart).expect("index"));
             assert_eq!(
                 machine.on_tick(now + wait - 1, &config).watch,

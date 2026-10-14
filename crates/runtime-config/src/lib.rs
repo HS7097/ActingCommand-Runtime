@@ -86,6 +86,9 @@ pub fn annotate_settable(
     Ok(())
 }
 
+// Workflow #398 RD-2.
+#[cfg(test)]
+mod device_link_tests;
 #[cfg(test)]
 mod ladder_tests;
 // Workflow #383 AO-1.

@@ -157,14 +157,11 @@ fn parse_list(payload: &[u8]) -> Result<TrackedDevices, TrackDevicesProtocolInva
     if text.is_empty() {
         return Ok(TrackedDevices::default());
     }
-    let body = text
-        .strip_suffix('\n')
-        .ok_or(TrackDevicesProtocolInvalid)?;
+    let body = text.strip_suffix('\n').ok_or(TrackDevicesProtocolInvalid)?;
     let mut devices = Vec::new();
     for line in body.split('\n') {
         let (serial, state) = line.split_once('\t').ok_or(TrackDevicesProtocolInvalid)?;
-        let serial_valid =
-            !serial.is_empty() && serial.bytes().all(|byte| byte.is_ascii_graphic());
+        let serial_valid = !serial.is_empty() && serial.bytes().all(|byte| byte.is_ascii_graphic());
         let state_valid = !state.is_empty()
             && !state.starts_with(' ')
             && state

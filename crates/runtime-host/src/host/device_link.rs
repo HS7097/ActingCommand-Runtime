@@ -73,11 +73,18 @@ struct HandsetLink {
 enum Restore {
     Idle,
     /// `device` since `since_ms`: the preparation is queued once `settle_ms` passed.
-    Settling { since_ms: u64 },
+    Settling {
+        since_ms: u64,
+    },
     /// A preparation is queued or running; `attempt` failed ones came before it.
-    Preparing { attempt: usize },
+    Preparing {
+        attempt: usize,
+    },
     /// `attempt` preparations failed; the next is queued at `due_ms`.
-    Retrying { attempt: usize, due_ms: u64 },
+    Retrying {
+        attempt: usize,
+        due_ms: u64,
+    },
 }
 
 /// Where the watch stands.
@@ -241,9 +248,7 @@ impl LinkMachine {
             }
             if state == DeviceLinkState::Device {
                 handset.kicked = false;
-                if previous.is_none()
-                    && handset.waiting.is_none()
-                    && prepared.contains(instance_id)
+                if previous.is_none() && handset.waiting.is_none() && prepared.contains(instance_id)
                 {
                     handset.restore = Restore::Idle;
                     actions.links.push(LinkAction::Linked {
@@ -342,9 +347,7 @@ impl LinkMachine {
         if passed {
             handset.restore = Restore::Idle;
             handset.waiting = None;
-            actions
-                .links
-                .push(LinkAction::Restored { instance_id });
+            actions.links.push(LinkAction::Restored { instance_id });
             return actions;
         }
         handset.restore = match config.restore_retry_ms.get(attempt) {
@@ -616,7 +619,9 @@ pub(super) fn tick(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
 fn apply(shared: &Arc<HostShared>, actions: LinkActions) -> RuntimeHostResult<()> {
     match actions.watch {
         Some(WatchAction::Restart { problem }) => open_watch(shared, Some(problem))?,
-        Some(WatchAction::Failed { problem }) => shared.record_device_watch_failed(problem, None)?,
+        Some(WatchAction::Failed { problem }) => {
+            shared.record_device_watch_failed(problem, None)?
+        }
         None => {}
     }
     shared.apply_link_actions(&actions.links)
@@ -896,7 +901,11 @@ impl HostShared {
         Ok(())
     }
 
-    fn record_link_connected(&self, instance_id: InstanceId, connected: bool) -> RuntimeHostResult<()> {
+    fn record_link_connected(
+        &self,
+        instance_id: InstanceId,
+        connected: bool,
+    ) -> RuntimeHostResult<()> {
         self.record_device_link_fact(
             instance_id,
             DEVICE_CONNECTED_FACT_KEY,
@@ -1022,8 +1031,10 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-        let connection_id = ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE)
-            .map_err(|error| RuntimeHostError::scheduler(HostLocation::DeviceLinkRestore, &error))?;
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RuntimeHostError::scheduler(HostLocation::DeviceLinkRestore, &error)
+            })?;
         let lease_ttl_ms = lock(&self.scheduler, HostLocation::DeviceLinkRestore)?
             .config()
             .lease_ttl_ms;
