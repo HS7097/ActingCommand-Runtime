@@ -475,3 +475,16 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_383_ao2::ao2_n_a_fatal_record_is_drained_last_or_dumped_in_capture_order",
 ]
 incident = ["#383"]
+
+# Joint transaction with State work: an uncertain COMMIT never returns Ok, stops the writer and
+# carries the readback committed, not_committed or unknown, which a reopen confirms (Workflow #382
+# L-3 G5, LED-I1)
+[[gate]]
+key = "4"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_l3_g5::gate_l3_g5_a_commit_that_took_effect_reads_back_committed",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g5::gate_l3_g5_a_commit_that_did_not_take_effect_reads_back_not_committed",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g5::gate_l3_g5_a_readback_whose_work_cannot_tell_is_unknown",
+]
+incident = ["#381 A", "#382 L-3"]

@@ -3008,3 +3008,7 @@ mod gate_pkg_s2;
 // Workflow #383 AO-2 (ledger observer §7, §8, §10, §11.1).
 #[path = "tests/gate_383_ao2.rs"]
 mod gate_383_ao2;
+// Workflow #382 L-3 G5 (LED-I1): an uncertain COMMIT of a joint record stops the writer with its
+// readback classification.
+#[path = "tests/gate_l3_g5.rs"]
+mod gate_l3_g5;
