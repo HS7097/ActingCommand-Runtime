@@ -300,12 +300,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category. Workflow #378 A6a: the contract's, as the watchdog reads it from a start's terminal outcome (panic_unrecovered).",
-      "common_causes": "A defect that panics on every payload of one instance.",
-      "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
+      "description": "In-process recovery failed: a unit rebuilt after a caught panic panicked again before it finished one unit of work, or actingd's main thread panicked. actingd ends with this outcome, carrying the panic_caught links, and exits 1, so the watchdog restarts it; when every start in the watchdog's window ends this way, the watchdog decides panic_unrecovered.",
+      "common_causes": "A defect that panics on every attempt for one instance or one payload.",
+      "handling": "Let the watchdog restart the Runtime; report the panic_caught links with the build."
     },
     "outcome_relay_unregistered": {
       "category": "error",
@@ -463,12 +463,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime halted (Workflow #378 A6a, model section 2.3, M1a; was runtime_fatal): the Runtime error code a receipt projection carries for a condition that latched the host. A latched host answers every later request with an error condition under runtime_halted as its caused_by link, and with a fatal condition as itself.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime halted: a condition latched the host, which answers every later request without doing it. As a receipt's Runtime error code (runtime_code) it says the host is latched; a latched host answers with an error condition under runtime_halted as its caused_by link, and with a fatal condition as itself. A restart clears it.",
+      "common_causes": "A failure the host latches on, such as a lost ledger write or an internal invariant, and every request after it.",
+      "handling": "Read the caused_by link; restart the daemon (the watchdog restarts an error stop), and fix the condition first when it is external."
     },
     "owner_conflict": {
       "category": "error",
@@ -5700,12 +5700,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition origin.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An InstallTransition request names an origin other than the user through the UI or the CLI; only those may drive an install transition.",
+      "common_causes": "A client that sends the request with another actor or source.",
+      "handling": "Send install transitions from acsetup or actingctl."
     },
     "invalid_resource_authoring_origin": {
       "category": "error",
@@ -6135,12 +6135,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition receipt.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract.",
+      "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
+      "handling": "Use a client of the same release as the Runtime; report it with both builds."
     },
     "invalid_scheduling_pause_receipt": {
       "category": "error",
@@ -8415,12 +8415,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install root unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation step cannot resolve the install root's canonical path: the slot lock, the active selection or a selection check names a root the OS cannot open.",
+      "common_causes": "The install root was moved, renamed or deleted while a program runs from it, or the path is not accessible to the process.",
+      "handling": "Run the program from its installation, or restore the install root; reinstall when it is gone."
     },
     "install_slot_lock_metadata_failed": {
       "category": "error",
@@ -8435,12 +8435,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock metadata failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot lock file was opened and locked, but its metadata cannot be read.",
+      "common_causes": "An OS or file system error on the install volume.",
+      "handling": "Retry; check the install volume when it repeats."
     },
     "install_slot_lock_not_empty": {
       "category": "error",
@@ -8475,12 +8475,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot unlock failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Releasing a held slot lock explicitly failed; the handle closes anyway, so the slot is free once the process exits.",
+      "common_causes": "An OS error on unlock.",
+      "handling": "None is needed beyond letting the process end; report it when it repeats."
     },
     "install_environment_root_unavailable": {
       "category": "error",
@@ -8495,12 +8495,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment root unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The install root inherited through ACTINGCOMMAND_INSTALL_ROOT cannot be resolved.",
+      "common_causes": "A launcher that passes a root that was moved or does not exist.",
+      "handling": "Start the program through the installation's launcher, or unset the variables to read the active selection."
     },
     "install_environment_root_mismatch": {
       "category": "error",
@@ -8515,12 +8515,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment root mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The install root inherited through ACTINGCOMMAND_INSTALL_ROOT is not the root the program resolves for itself.",
+      "common_causes": "A program started with the environment of another installation.",
+      "handling": "Start the program from the installation the environment names, or clear the inherited variables."
     },
     "install_environment_selection_invalid": {
       "category": "error",
@@ -8535,12 +8535,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment selection invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection inherited through ACTINGCOMMAND_INSTALL_SELECTION is not valid Unicode text.",
+      "common_causes": "A launcher that passes a mangled selection.",
+      "handling": "Start the program through the installation's launcher, or clear the inherited variables."
     },
     "install_environment_incomplete": {
       "category": "error",
@@ -8555,12 +8555,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment incomplete.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Only one of ACTINGCOMMAND_INSTALL_ROOT and ACTINGCOMMAND_INSTALL_SELECTION is set; a program inherits both or neither.",
+      "common_causes": "A launcher or a shell that sets one variable, or a variable left over in the environment.",
+      "handling": "Set both variables (the installation's launcher does) or neither."
     },
     "install_selection_json_invalid": {
       "category": "error",
@@ -8595,12 +8595,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config path invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The --config path a running installed program was given cannot be made absolute.",
+      "common_causes": "An empty or malformed path argument.",
+      "handling": "Pass the path of the configuration the installation selects."
     },
     "install_config_unavailable": {
       "category": "error",
@@ -8635,12 +8635,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config selection mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A program running under an install selection was given a --config that is neither the configuration the selection names nor <install root>\\actingd.config.json, so it refuses rather than run another configuration than the installed one.",
+      "common_causes": "A start or a check that names a copy of the configuration or a configuration of another installation.",
+      "handling": "Pass the selected configuration's path (or <install root>\\actingd.config.json); change the configuration with acsetup --commit-config."
     },
     "install_input_unavailable": {
       "category": "error",
@@ -8715,12 +8715,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input read failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Reading an installation input (the selection, MEMBERS.json, the selected configuration or provider file) failed after it was opened.",
+      "common_causes": "The file is locked by another program, or an I/O error on the install volume.",
+      "handling": "Close the program holding the file and retry; check the volume when it repeats."
     },
     "install_input_size_invalid": {
       "category": "error",
@@ -8875,12 +8875,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install previous transition mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one transition_id.",
+      "common_causes": "An installer that mixes the identities of two transitions.",
+      "handling": "Start the held Runtime with the ticket of the transition that drained the previous one."
     },
     "invalid_install_transition_status": {
       "category": "error",
@@ -8895,12 +8895,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition status.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code spelling.",
+      "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
+      "handling": "Report it with the builds; use a client of the same release as the Runtime."
     },
     "invalid_install_timeout": {
       "category": "error",
@@ -8915,12 +8915,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install timeout.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition timeout is 0 or above 600000 ms.",
+      "common_causes": "A timeout written in seconds, or a caller of another release.",
+      "handling": "Pass timeout_ms from 1 to 600000."
     },
     "invalid_install_transition_id": {
       "category": "error",
@@ -8935,12 +8935,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition id.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'.",
+      "common_causes": "An installer of another release, or a hand-written action.",
+      "handling": "Use a transition id of 1 to 128 ASCII letters, digits, '-' or '_'."
     },
     "selection_record_too_large": {
       "category": "error",
@@ -15115,12 +15115,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The installation process check refused: install executable unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The installation check cannot resolve the running program's own executable path.",
+      "common_causes": "An OS error, or an executable deleted or renamed while it runs.",
+      "handling": "Start the program again from its installation; report the OS error when it repeats."
     },
     "install_process_slot_mismatch": {
       "category": "error",
@@ -15135,12 +15135,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The installation process check refused: install process slot mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The program runs from another slot (or another folder) than the one the active selection names, so it refuses to run with that selection's inputs.",
+      "common_causes": "A program of the unselected slot started after acsetup switched slots, or a shortcut that points into the old slot.",
+      "handling": "Start the program of the selected slot (the installation's launcher does)."
     },
     "instance_not_found": {
       "category": "error",
@@ -15355,12 +15355,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot lock file install/slot-<A|B>.lock exists but cannot be opened.",
+      "common_causes": "Access denied to the install folder, or a program that holds the lock file open exclusively.",
+      "handling": "Close the program holding the file, check the install folder's permissions, then retry."
     },
     "install_slot_in_use": {
       "category": "error",
@@ -15375,12 +15375,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot in use.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot lock is held by another process in a way that excludes this one: the installer holds the slot exclusively while it writes it, or programs run from the slot while the installer wants it.",
+      "common_causes": "acsetup preparing or replacing that slot, or a Runtime, console or tool still running from it.",
+      "handling": "Wait for the installer to finish, or stop the programs running from the slot, then retry."
     },
     "install_slot_lock_failed": {
       "category": "error",
@@ -15395,12 +15395,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The OS refused to lock the slot lock file install/slot-<A|B>.lock for a reason other than another holder.",
+      "common_causes": "A file system without lock support, or an OS error.",
+      "handling": "Keep the installation on a local NTFS volume; retry, and report the OS error when it repeats."
     },
     "application_effect_requires_assigned_application": {
       "category": "error",
@@ -16540,12 +16540,12 @@
       "layer": "contract",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A completed receipt of a InstallTransition request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
-      "common_causes": "The request succeeded.",
-      "handling": "Nothing to do; the result carries the answer."
+      "description": "The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind).",
+      "common_causes": "An install transition action the Runtime accepted.",
+      "handling": "None."
     },
     "request_status_completed": {
       "category": "success",
@@ -17440,10 +17440,10 @@
     "discover_instances": {
       "owner": "contract",
       "layer": "contract",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): discover instances."
+      "description": "The operation of an emulator instance discovery request (actingctl emulator discover, the console's discovery)."
     },
     "export_evidence": {
       "owner": "contract",
@@ -17704,10 +17704,10 @@
     "request_runtime_shutdown": {
       "owner": "contract",
       "layer": "contract",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): request runtime shutdown."
+      "description": "The operation of a Runtime shutdown request (actingctl request-shutdown, the console, the installer)."
     },
     "resume_agent_session": {
       "owner": "contract",
@@ -17792,10 +17792,10 @@
     "install_transition": {
       "owner": "contract",
       "layer": "contract",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): install transition."
+      "description": "The operation of an install transition: an InstallTransition request and the transition it drives (drain, held start, release, commit)."
     },
     "recover_owner_compaction": {
       "owner": "contract",
