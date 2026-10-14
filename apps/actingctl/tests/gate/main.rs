@@ -11,6 +11,8 @@ mod emulator_controller;
 mod held_runtime;
 
 mod emulator_restart;
+// Workflow #389 MCP-21: `actingctl emulator start|stop|restart --wait`.
+mod emulator_wait;
 // Workflow #382 A1-FLAG: flags a subcommand does not take, flags given twice, stray words.
 mod flag_refusals;
 mod install_transition;

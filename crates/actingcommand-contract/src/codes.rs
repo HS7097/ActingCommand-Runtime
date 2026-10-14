@@ -421,6 +421,11 @@ crate::outcome_codes! {
         TypeMismatch => "type_mismatch": error / none,
         UnsupportedSchemaVersion => "unsupported_schema_version": error / none,
         ValidationFailed => "validation_failed": error / none,
+        // Workflow #389 MCP-21 (MCP-0 command table v1.1 §4.22): a command's `--wait` ended
+        // before its request did; the request goes on in the Runtime. The contract's, because
+        // actingctl emits it before U-3 and actinglab after it (keys `operation`, `request_id`,
+        // `waited_ms`).
+        CommandWaitExpired => "command_wait_expired": error / none,
     }
 }
 

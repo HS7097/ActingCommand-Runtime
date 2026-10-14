@@ -126,8 +126,9 @@ impl Failure {
     }
 }
 
-/// An identifier as its text.
-fn id_text(id: &impl serde::Serialize) -> String {
+/// An identifier as its text (also the request and correlation ids of an expired `--wait`,
+/// Workflow #389 MCP-21).
+pub(crate) fn id_text(id: &impl serde::Serialize) -> String {
     match json!(id) {
         Value::String(text) => text,
         other => other.to_string(),

@@ -429,4 +429,6 @@ outcome_keys! {
     // ---- Workflow #383 SH-1: end ----
     // Workflow #389 MCP-14: an outcome code's name as a lookup was given it.
     code_name: name,
+    // Workflow #389 MCP-21: how long a command's `--wait` waited for its request.
+    waited_ms: duration_ms,
 }
