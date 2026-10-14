@@ -773,6 +773,128 @@ tests = [
 ]
 incident = ["#387"]
 
+# Test plan v2.2 E-5 G5: linear_steps admission refuses a malformed path and misplaced optional or application steps by reason; each step starts on the frame its page passed on and awaits only the next step's page; a declared intermediate page must be seen first; the post-input wait is the larger of post_delay_ms and the window minimum; an absent optional page is skipped after its settle; only a swallowed input is retried; an application entry starts from any screen and is never retried; only a page entry without a prerequisite falls back to return home, whose first step is awaited alone
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_admission_refuses_a_malformed_path",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_admission_refuses_misplaced_optional_and_application_steps",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_each_step_leaves_its_page_and_reaches_the_next",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_an_intermediate_page_must_be_seen_before_the_next_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_the_post_input_wait_is_the_larger_of_post_delay_and_the_window_minimum",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_an_optional_step_is_skipped_when_its_page_is_absent_and_run_when_present",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_an_application_entry_starts_from_any_screen_and_is_never_retried",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_only_a_page_entry_without_a_prerequisite_falls_back_to_return_home",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_the_first_step_after_return_home_and_without_a_fallback",
+]
+incident = ["#382 E-5"]
+
+# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the declared bindings; E-4 G4b: over the shared fixture set EXEC-I6, package bundle --maintenance admits what the Runtime admits and refuses each refused chain under the code the Runtime refuses its run with
+[[gate]]
+key = "12"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_takes_three_declared_layers_and_refuses_a_fourth",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_return_home_fallback_is_outside_the_three_declared_layers",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_only_a_linear_page_entry_without_a_prerequisite_selects_the_fallback",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_a_cycle",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_an_incompatible_prerequisite",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_more_than_1000_steps_in_total",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_an_unbound_or_misidentified_prerequisite",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_matches_every_indexed_identity",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_refuses_a_duplicate_role_or_a_missing_reference",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_declared_bindings",
+    "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_admits_the_fixture_set_the_runtime_admits",
+    "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_refuses_each_fixture_chain_with_the_runtimes_code",
+    "actingcommand-runtime-host::lib::tests::gate_e4::gate_e4_runtime_refuses_each_fixture_chain_with_the_bundles_code",
+]
+incident = ["#382 E-1", "#382 E-4"]
+
+# Test plan v2.2 E-1 G8: two error frames are similar at 250 changed cells per thousand and different at the next count, a cell changes above a difference of 6, frames of different sizes are different (size_changed) and an undecodable frame is png_invalid
+[[gate]]
+key = "13"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_exactly_250_per_mille_is_similar_and_one_cell_more_is_different",
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_a_cell_difference_of_6_is_unchanged_and_7_is_changed",
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_of_different_sizes_are_different",
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_an_undecodable_png_is_png_invalid",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G8: color_digest.v1 gives the contract's golden values, quantizes and encodes the ROI cells row-major, and refuses by the contract's six error codes
+[[gate]]
+key = "17"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_golden_values",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_grid_is_one_to_min_32_and_the_roi_per_axis",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_quantizes_the_roi_cells_and_encodes_them_row_major",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_algorithm_name_is_exact",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_region_outside_the_rule_is_refused",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_cells_outside_the_encoding_are_refused",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_exclude_cells_outside_the_rule_are_refused",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_different_grids_are_refused",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G9: the model folder listing lists the flat and nested layouts with the family defaults; a folder missing rec or keys, mixing layouts, holding cls, with a malformed or mismatched model.json or an illegal name is listed invalid with its reason and does not stop the listing
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_flat_layout_is_listed",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_nested_layout_is_listed",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_missing_rec_or_keys_is_invalid_and_does_not_block_the_listing",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_mixed_layout_is_invalid_and_does_not_block_the_listing",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_with_cls_is_invalid_and_does_not_block_the_listing",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_malformed_or_mismatched_model_json_is_invalid",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_illegal_name_is_invalid_and_does_not_block_the_listing",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G10: package bundle refuses an existing --out or <out>.part (package_bundle_out_exists) and leaves <out>.part named on failure; the business catalog compiles deterministically and refuses an unknown field, a duplicate row ID and an undeclared pool (package digest is not tested: M-PKG option 丙 retires it)
+[[gate]]
+key = "33"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_package_bundle_refuses_an_existing_out",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_package_bundle_refuses_an_existing_part_directory",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_package_bundle_failure_leaves_the_part_directory_and_names_it",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_output_is_deterministic",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_an_unknown_field",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_a_duplicate_row_id",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_an_undeclared_pool",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-5 G7: a single-frame select step chooses on its frame, confirms on a fresh frame of its page that passes its guard and projects to the same candidate set, records its decision once and taps once inside the chosen candidate's click rectangle; another page, another candidate set, a failed guard or an outcome other than selected taps nothing and is not retried
+[[gate]]
+key = "4"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_selected_candidate_is_confirmed_on_a_fresh_frame_and_tapped_inside_its_click",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_confirmation_frame_with_other_candidates_taps_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_confirmation_frame_of_another_page_taps_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_a_guard_that_fails_on_the_confirmation_frame_taps_nothing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_select::gate_select_an_outcome_other_than_selected_aborts_without_a_confirmation_or_a_retry",
+]
+incident = ["#382 E-5"]
+
+# Test plan v2.2 E-5 G6: record stop over a synthetic recording (EXEC-I5) generates the same bytes from the same recording, refuses a page that does not match its own frame with record_step_self_mismatch and leaves the recording active, and only warns when it clamps the step timeout
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_e5_record_stop::gate_record_stop_the_same_recording_generates_the_same_bytes",
+    "actingcommand-lab::lib::gate_e5_record_stop::gate_record_stop_refuses_a_page_that_does_not_match_its_own_frame",
+    "actingcommand-lab::lib::gate_e5_record_stop::gate_record_stop_a_clamped_step_timeout_is_a_warning_and_never_refuses",
+]
+incident = ["#382 E-5"]
+
 # Workflow #390 OUT-2 (FCM O-01, O-02, R-03, S-01): a scheduling outcome may name a designated effect set (1 to 8 members, each once, a constant cap from 1 to 1000 or a fact cap under a fact key, never with designated_operation); admission refuses a member that leaves its page without an operation once capped, and a fact cap (which may be 0) needs a mapping for a run without a designated effect; a run repeats each member up to its cap and then takes the page's next operation, ending when its page changes before the cap; a fact cap is the instance fact's integer, read once before the first step, and a missing, expired, non-integer or out-of-range fact or no fact snapshot ends the run before any input with contained_task_designated_effect_cap_unresolved
 [[gate]]
 key = "58"
