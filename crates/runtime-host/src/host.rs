@@ -2834,6 +2834,17 @@ impl RuntimeHost {
         })
     }
 
+    /// SHUT-FU (Workflow #378), test only: `observer` is called each time a shutdown request or
+    /// an install CommitShutdown starts to wait for lifecycle work in flight on other threads.
+    #[cfg(test)]
+    pub(crate) fn observe_shutdown_settle_for_test(
+        &self,
+        observer: Box<dyn Fn() + Send>,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ObserveShutdownSettleForTest)?
+            .observe_shutdown_settle_for_test(observer)
+    }
+
     #[cfg(test)]
     pub(crate) fn expire_all_queued_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireAllQueuedForTest)?
