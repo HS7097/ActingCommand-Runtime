@@ -124,6 +124,8 @@ mod gate_382_h4;
 mod gate_382_h5;
 // Workflow #378 A6a: the latch rule, `ledger_opened` and `owner_released`.
 mod gate_378_a6a;
+// Workflow #378 SHUT-FU: the install CommitShutdown lets lifecycle work in flight end first.
+mod gate_378_shutfu;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
