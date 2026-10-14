@@ -24,7 +24,8 @@ mod gate_l1;
 pub mod global;
 pub mod local_time;
 pub mod owner_journal;
-#[cfg(any(test, feature = "test-hooks"))]
+// Workflow #382 L-3 (LED-I5): test-only, so production carries no counting.
+#[cfg(test)]
 mod read_count;
 pub mod signatures;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -35,7 +36,7 @@ pub use codes::{LedgerCode, LedgerLocation};
 pub use fact::{ArtifactAvailability, LedgerArtifactReference, PersistedEvent};
 pub use global::*;
 // Workflow #382 L-3 (LED-I5): the read counters of the SQLite medium on the opening thread.
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(test)]
 pub use read_count::{LedgerReadCounter, LedgerReadCounts, LedgerTableReads};
 // Workflow #383 AO-1: the write faults of a state root, for tests in other crates.
 #[cfg(any(test, feature = "test-hooks"))]

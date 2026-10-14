@@ -3261,7 +3261,7 @@ fn read_rows_bound(
             })?);
         }
         // Workflow #382 L-3 (LED-I5): counts the row on this thread while a counter runs.
-        #[cfg(any(test, feature = "test-hooks"))]
+        #[cfg(test)]
         crate::read_count::row_read(sql, &values);
         result.push(values);
     }
@@ -3337,7 +3337,7 @@ where
     let budget = raw.budget;
     let bytes = raw.bytes;
     // Workflow #382 L-3 (LED-I5): counts the material files the verifier is asked to open.
-    #[cfg(any(test, feature = "test-hooks"))]
+    #[cfg(test)]
     let verifier = &mut crate::read_count::counting_material(verifier);
     let VerifiedSnapshotRecords {
         records,
@@ -3363,7 +3363,7 @@ where
     let budget = raw.budget;
     let bytes = raw.bytes;
     // Workflow #382 L-3 (LED-I5): counts the material files the verifier is asked to open.
-    #[cfg(any(test, feature = "test-hooks"))]
+    #[cfg(test)]
     let verifier = &mut crate::read_count::counting_material(verifier);
     let VerifiedSnapshotRecords {
         records,
