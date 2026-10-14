@@ -824,6 +824,7 @@ crate::outcome_codes! {
         InvalidAdbPort => "invalid_adb_port": error / none,
         InvalidAdbHost => "invalid_adb_host": error / none,
         InvalidInstanceBindingDiscovery => "invalid_instance_binding_discovery": error / none,
+        InvalidInstanceBindingDevice => "invalid_instance_binding_device": error / none,
         InvalidRuntimeFactRecordedAction => "invalid_runtime_fact_recorded_action": error / none,
         InvalidRuntimeFactInvalidatedAction => "invalid_runtime_fact_invalidated_action": error / none,
         InvalidRuntimeFactSnapshotAction => "invalid_runtime_fact_snapshot_action": error / none,

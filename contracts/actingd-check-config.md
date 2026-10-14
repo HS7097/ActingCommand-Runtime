@@ -198,7 +198,8 @@ revision.
 - `instances` lists the assembled registry in alias order. `mode` is
   `device_registry` or `fixture_simulation`. `binding` is `explicit` for a
   configured entry, whose `adb_host` and `adb_port` are the configured ADB
-  target of a device entry and `null` for a fixture entry, or
+  target of a device entry and `null` for a fixture entry and for a handset
+  (Workflow #398 RD-1b: addressed by its serial, see "Devices"), or
   `discovery_pending` for an instance bound by `instance_index` or
   `instance_name`, which echoes that key (the other key is `null`) and carries
   no ADB fields: the target is completed by one `MuMuManager` discovery inside
@@ -341,7 +342,10 @@ revision.
     exceed the 128-byte key bound), each `explicit` when the instance named
     the field; since Workflow #387 D1b the configuration mechanism resolves
     them (`instances[]` entry with the same `instance_id`); a field the
-    instance does not name takes the `recovery_ladder` section's value. They form
+    instance does not name takes the `recovery_ladder` section's value. Workflow #398
+    RD-1b adds `instance.<instance_id>.device_kind` (string, `emulator` or `handset`,
+    not settable) for an instance that names `device`, and nothing for one that does
+    not (see "Devices"). They form
     the section `instance`, which with every other section counts against its own
     256-parameter bound ([runtime-config.md](runtime-config.md)). Workflow #387
     D1c adds, before the per-instance keys, the sections the mechanism resolves:
@@ -388,7 +392,9 @@ revision.
   is off, in the order of "Environment overrides", and empty otherwise. A
   warning is not a failure: `status` stays `ok`. Workflow #373 NAV-6 adds one
   `<code>:<game>` per broken standard-pack game root, and the bare code when
-  the root itself cannot be listed (see "Standard packs").
+  the root itself cannot be listed (see "Standard packs"). Workflow #398 RD-1b
+  adds one `device_binding_unused:<alias>` per alias the private binding file
+  binds that no handset of the configuration has, in file order (see "Devices").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
@@ -413,7 +419,9 @@ revision.
 `governance_allowed_clients_invalid`, `config_manifest_value_out_of_range`, `config_manifest_invalid`,
 `config_manifest_incomplete`, `vision_provider_manifest_retired`,
 `vision_config_invalid`, the `prerequisite_package*` and `return_home_package*` codes
-of "Prerequisite packages", and after the typed assembly the install root's
+of "Prerequisite packages", the device codes `device_config_invalid`,
+`device_binding_file_invalid` and, after the typed assembly, `device_binding_missing`
+of "Devices", and after the typed assembly the install root's
 adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
 `validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
@@ -428,7 +436,8 @@ that order. The
 secret fingerprint salt is never printed.
 
 A `resource_package` failure, an `adb_install_missing` /
-`adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a
+`adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a device
+failure (stage `assemble`, see "Devices"), a
 `vision` failure and a `policy_state` failure (see "Catalog plan") also carry
 `error.detail`; no other failure does:
 
@@ -794,6 +803,35 @@ ignored variable is named both here and in the ledger. No
 never printed. When the flag is `true` nothing is ignored and `warnings` is
 empty; a bad injected value fails where it is used (for example
 `mumu_root_unresolved` below, or the backend open).
+
+## Devices
+
+Workflow #398 RD-1b ([device-binding.md](device-binding.md)). An instance entry's
+optional `device { kind, transport }` names the kind of device it drives:
+`emulator` (also when `device` is absent) or `handset`, a real phone on `usb`.
+Checked here exactly as at startup, at stage `assemble`:
+
+- the declaration (`device_config_invalid`, `error.detail` `{alias,
+  device_config_problem}`): a known `kind`; `transport` `usb` or absent on a
+  handset and absent on an emulator; on a handset no `serial`, `host`, `port`,
+  `connect`, `instance_index`, `instance_name` or `nemu_app_index`, only the
+  input backends `adb_shell_input`, `maatouch`, `minitouch` and the capture
+  backends `adb`, `scrcpy`, and an alias of at most 248 bytes; `scrcpy` on an
+  emulator is refused the same way (#402);
+- when a handset is configured, the private binding file
+  `<state root>\private\device-bindings.json`, read once and never written
+  (`device_binding_file_invalid`, `error.detail` `{path,
+  device_binding_problem}`);
+- after the typed assembly, each handset's binding (`device_binding_missing`,
+  `error.detail` `{alias}` of the first handset without one). A start does not
+  refuse it: it registers that handset unbound and unavailable and runs the
+  others.
+
+A handset is addressed by its bound serial: its `instances[]` entry has
+`binding` `explicit` and `adb_host` / `adb_port` `null`, and no serial is
+printed anywhere in the report. An alias the private file binds that no handset
+has is the warning `device_binding_unused:<alias>`. An emulator-only
+configuration reads no private file and reports what it reported before.
 
 ## Discovery-bound instances
 

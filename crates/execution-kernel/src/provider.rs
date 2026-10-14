@@ -1061,6 +1061,60 @@ impl DiscoveredInstanceBinding {
     }
 }
 
+/// Workflow #398 RD-1b (model-398 v1.1 §3.2, §3.4): the binding of a handset instance as the
+/// private binding file gave it: the device's serial (shown only as its label), when it was
+/// bound and by which channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HandsetBinding {
+    serial: actingcommand_device::DeviceSerial,
+    bound_at_unix_ms: u64,
+    bound_via: actingcommand_contract::DeviceBoundVia,
+}
+
+impl HandsetBinding {
+    pub fn new(
+        serial: actingcommand_device::DeviceSerial,
+        bound_at_unix_ms: u64,
+        bound_via: actingcommand_contract::DeviceBoundVia,
+    ) -> Self {
+        Self {
+            serial,
+            bound_at_unix_ms,
+            bound_via,
+        }
+    }
+
+    pub const fn serial(&self) -> &actingcommand_device::DeviceSerial {
+        &self.serial
+    }
+
+    pub const fn bound_at_unix_ms(&self) -> u64 {
+        self.bound_at_unix_ms
+    }
+
+    pub const fn bound_via(&self) -> actingcommand_contract::DeviceBoundVia {
+        self.bound_via
+    }
+}
+
+/// Workflow #398 RD-1b (model-398 v1.1 §3.1, §3.6): the device of a handset instance, bound or
+/// not yet bound. An unbound handset is registered and refuses every session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HandsetEndpoint {
+    Bound(HandsetBinding),
+    Unbound,
+}
+
+impl HandsetEndpoint {
+    /// The binding, `None` while the handset is unbound.
+    pub const fn binding(&self) -> Option<&HandsetBinding> {
+        match self {
+            Self::Bound(binding) => Some(binding),
+            Self::Unbound => None,
+        }
+    }
+}
+
 /// The structured ADB target a registered instance was configured with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedAdbEndpoint {
@@ -1068,6 +1122,7 @@ pub struct ResolvedAdbEndpoint {
     port: u16,
     serial_configured: bool,
     discovered: Option<DiscoveredInstanceBinding>,
+    handset: Option<HandsetEndpoint>,
 }
 
 impl ResolvedAdbEndpoint {
@@ -1077,7 +1132,19 @@ impl ResolvedAdbEndpoint {
             port,
             serial_configured,
             discovered: None,
+            handset: None,
         }
+    }
+
+    /// Workflow #398 RD-1b: marks the endpoint as a handset's, addressed by its serial.
+    pub fn with_handset(mut self, handset: HandsetEndpoint) -> Self {
+        self.handset = Some(handset);
+        self
+    }
+
+    /// Workflow #398 RD-1b: the handset behind the endpoint; `None` for an emulator.
+    pub const fn handset(&self) -> Option<&HandsetEndpoint> {
+        self.handset.as_ref()
     }
 
     pub fn with_discovered_binding(mut self, discovered: DiscoveredInstanceBinding) -> Self {

@@ -265,7 +265,8 @@ represents that instance from then on; older events keep the port they were reco
 The registry (`ExecutionBackendRegistry::control_instance`) serves discovery-bound entries only,
 using the `MuMuManager.exe` path carried on the `DiscoveredInstanceBinding`; an explicit entry
 refuses with `emulator_control_binding` (host code `emulator_control_unavailable`,
-`invalid_request`, `denied`), a fixture instance likewise, and a provider without a control
+`invalid_request`, `denied`), a handset (`device.kind` `handset`, Workflow #398 RD-1b,
+[device-binding.md](device-binding.md)) and a fixture instance likewise, and a provider without a control
 surface keeps the trait default `emulator_control_support`
 (`emulator_control_unsupported`). No device session is opened or touched by the registry path.
 

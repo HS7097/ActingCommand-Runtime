@@ -7,7 +7,7 @@
 //! Nothing here reads a file: durability is the per-record event, and the
 //! periodic snapshot set only shortens replay.
 
-use super::facts::BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX;
+use super::facts::{BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX, DEVICE_LINK_UNBOUND};
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::policy_host::PolicySettlement;
@@ -394,7 +394,12 @@ impl HostShared {
             let Some((instance_alias, _)) = self.gated_policy_instance(instance_id)? else {
                 return Ok(());
             };
-            if self.active_policy_instance_availability(&instance_alias)?.1 != Some(false) {
+            let (active, active_value) =
+                self.active_policy_instance_availability(&instance_alias)?;
+            if self.handset_unbound(instance_id)? {
+                return self.withdraw_unbound_handset(&instance_alias, active.as_ref());
+            }
+            if active_value != Some(false) {
                 self.publish_backend_selfcheck_unavailable(
                     &instance_alias,
                     BACKEND_SELFCHECK_UNCHECKED_CAUSE,
@@ -458,6 +463,11 @@ impl HostShared {
             return Ok(());
         };
         let (active, active_value) = self.active_policy_instance_availability(&instance_alias)?;
+        // Workflow #398 RD-1b: a handset without a bound device stays unavailable, under its
+        // device link's state, whatever its self-check says.
+        if self.handset_unbound(instance_id)? {
+            return self.withdraw_unbound_handset(&instance_alias, active.as_ref());
+        }
         // Workflow #403: a fenced instance stays unavailable whatever its self-check says,
         // until a passing preparation lifts the fence.
         if seed_available
@@ -580,6 +590,32 @@ impl HostShared {
         } else {
             None
         })
+    }
+
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.6): whether the registered instance is a handset
+    /// the private binding file binds no device to.
+    fn handset_unbound(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        Ok(lock(
+            &self.registered_instances,
+            HostLocation::ReadBackendSelfcheckInstance,
+        )?
+        .get(&instance_id)
+        .and_then(RegisteredInstance::bound_adb_endpoint)
+        .and_then(ResolvedAdbEndpoint::handset)
+        .is_some_and(|handset| handset.binding().is_none()))
+    }
+
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.6, §4.2): an unbound handset is unavailable with
+    /// the source `device_link:unbound`; published once, unless that withdrawal is in effect.
+    fn withdraw_unbound_handset(
+        &self,
+        instance_alias: &str,
+        active: Option<&FactRecord>,
+    ) -> RuntimeHostResult<()> {
+        if Self::withdrawn_for_device_link(active, DEVICE_LINK_UNBOUND) {
+            return Ok(());
+        }
+        self.publish_device_link_unavailable(instance_alias, DEVICE_LINK_UNBOUND)
     }
 
     /// The alias of a registered instance and whether its device connection is self-checked

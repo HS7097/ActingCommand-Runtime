@@ -24,10 +24,10 @@ use actingcommand_device::{
 pub use actingcommand_execution_kernel::{
     DeviceProcessPresence, DiscoveredInstanceBinding, EmulatorControlFailure,
     EmulatorControlOutcome, EmulatorControlResult, ExecutionBackendProvider,
-    ForegroundApplicationObservation, InstanceDiscoveryFailure, InstanceState, PendingAdbEndpoint,
-    ProviderDiscoveredInstance, ProviderInstanceDiscovery, RecognitionVisionProvider,
-    ResolvedAdbEndpoint, ResolvedExecutionInstance, ResolvedInstanceEndpoint, VisionFfiProvider,
-    VisionModelIdentity,
+    ForegroundApplicationObservation, HandsetBinding, HandsetEndpoint, InstanceDiscoveryFailure,
+    InstanceState, PendingAdbEndpoint, ProviderDiscoveredInstance, ProviderInstanceDiscovery,
+    RecognitionVisionProvider, ResolvedAdbEndpoint, ResolvedExecutionInstance,
+    ResolvedInstanceEndpoint, VisionFfiProvider, VisionModelIdentity,
 };
 #[cfg(feature = "fixture-backends")]
 pub use fixtures::FixtureInstanceSpec;
@@ -181,6 +181,8 @@ pub struct ExecutionBackendRegistration {
     endpoint_pending: bool,
     provider_profile: Option<EmulatorCapabilityProfile>,
     nemu_app_index: Option<NemuAppIndex>,
+    /// Workflow #398 RD-1b: the handset behind the targets; `None` for an emulator.
+    handset: Option<HandsetEndpoint>,
 }
 
 impl ExecutionBackendRegistration {
@@ -258,7 +260,26 @@ impl ExecutionBackendRegistration {
             endpoint_pending: false,
             provider_profile: None,
             nemu_app_index: None,
+            handset: None,
         })
+    }
+
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.1): marks the registration as a handset's. Its
+    /// targets are addressed by the bound serial; an unbound handset's targets carry the
+    /// unbound stand-in serial and the registry refuses every session on it.
+    pub fn with_handset(mut self, handset: HandsetEndpoint) -> Self {
+        self.handset = Some(handset);
+        self
+    }
+
+    /// The input backend's target (the capture target is the same, see [`Self::new`]).
+    pub const fn input_target(&self) -> &DeviceTarget {
+        &self.input.target
+    }
+
+    /// The capture backend's target.
+    pub const fn capture_target(&self) -> &DeviceTarget {
+        &self.capture.target
     }
 
     /// Marks the registration as bound through MuMu instance discovery.
@@ -346,9 +367,30 @@ struct EntryEndpoint {
 }
 
 impl EntryEndpoint {
-    /// The typed refusal of every session-opening path while the port is unknown.
+    /// Workflow #398 RD-1b: the handset behind the endpoint; `None` for an emulator.
+    fn handset(&self) -> Option<&HandsetEndpoint> {
+        self.state.bound().and_then(ResolvedAdbEndpoint::handset)
+    }
+
+    /// The typed refusal of every session-opening path while the port is unknown, and of a
+    /// handset the private binding file has no serial for (Workflow #398 RD-1b, model-398 §3.6):
+    /// no adb command runs against it.
     fn require_bound(&self, operation: impl Into<Location>) -> DeviceResult<()> {
         let operation: Location = operation.into();
+        if self.handset() == Some(&HandsetEndpoint::Unbound) {
+            return Err(DeviceError::fatal(
+                "device binding missing: the private binding file binds no device to this handset instance; bind one and restart",
+            )
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                HostLocation::DeviceEndpointUnbound,
+            )
+            .with_diagnostic_context(
+                "execution_backend_registry",
+                operation,
+                DeviceErrorSensitivity::Sensitive,
+            ));
+        }
         if self.state.is_pending() {
             return Err(DeviceError::fatal(
                 "adb endpoint pending: the discovered instance was stopped and has reported no ADB port; start it through emulator control first",
@@ -396,6 +438,9 @@ impl ExecutionBackendEntry {
                 );
                 if let Some(discovered) = discovered {
                     adb_endpoint = adb_endpoint.with_discovered_binding(discovered);
+                }
+                if let Some(handset) = registration.handset {
+                    adb_endpoint = adb_endpoint.with_handset(handset);
                 }
                 ResolvedInstanceEndpoint::Bound(adb_endpoint)
             }
@@ -592,15 +637,19 @@ impl ExecutionBackendEntry {
 
     /// The ADB baseline probe: the bound endpoint's `ensure_device` with a connect attempt
     /// allowed (a freshly started emulator answers `adb connect` a few seconds after the
-    /// vendor reports it running). No session is opened.
+    /// vendor reports it running). A handset on USB has no `adb connect` (Workflow #398 RD-1b,
+    /// model-398 §3.1): its probe never attempts one. No session is opened.
     fn probe_adb_baseline(&self) -> DeviceResult<()> {
-        let application_target = {
+        let (application_target, connect_allowed) = {
             let endpoint = self.endpoint();
             endpoint.require_bound(HostLocation::ProbeAdbBaseline)?;
-            endpoint.application_target.clone()
+            (
+                endpoint.application_target.clone(),
+                endpoint.handset().is_none(),
+            )
         };
         Adb::new(self.application_adb.clone())
-            .ensure_device(&application_target.adb_arg(), true)
+            .ensure_device(&application_target.adb_arg(), connect_allowed)
             .map(|_| ())
     }
 
@@ -609,13 +658,21 @@ impl ExecutionBackendEntry {
         deadline: std::time::Instant,
         stopped: &dyn Fn() -> bool,
     ) -> DeviceResult<()> {
-        let application_target = {
+        let (application_target, connect_allowed) = {
             let endpoint = self.endpoint();
             endpoint.require_bound(HostLocation::ProbeAdbBaseline)?;
-            endpoint.application_target.clone()
+            (
+                endpoint.application_target.clone(),
+                endpoint.handset().is_none(),
+            )
         };
         Adb::new(self.application_adb.clone())
-            .ensure_device_until(&application_target.adb_arg(), true, deadline, stopped)
+            .ensure_device_until(
+                &application_target.adb_arg(),
+                connect_allowed,
+                deadline,
+                stopped,
+            )
             .map(|_| ())
     }
 

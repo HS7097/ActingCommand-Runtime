@@ -84,6 +84,9 @@ pub enum FilePath {
     /// In the `instances[]` entry whose `instance_id` is the key's instance, under the key's
     /// member name.
     InstanceMember,
+    /// In the `instances[]` entry whose `instance_id` is the key's instance, at this dotted path:
+    /// a per-instance key whose manifest name differs from its member (Workflow #398 RD-1b).
+    InstanceMemberAt(&'static str),
     /// Nowhere: the file has no member for the key.
     Absent,
 }

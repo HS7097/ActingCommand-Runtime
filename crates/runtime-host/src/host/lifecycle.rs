@@ -589,19 +589,33 @@ pub(super) fn append_runtime_start_event(
 }
 
 /// The `runtime.instance_bound` payload of one registered instance: a pending discovery
-/// binding carries the discovered facts without host and port.
+/// binding carries the discovered facts without host and port. Workflow #398 RD-1b (model-398
+/// v1.1 §3.4): an instance addressed by its serial records no host and port, and a handset
+/// records its device, whose serial the sanitization keeps only as its fingerprint.
 pub(super) fn instance_bound_payload(instance: &RegisteredInstance) -> RuntimePayloadDraft {
     let endpoint = instance.bound_adb_endpoint();
     let discovered = instance
         .adb_endpoint
         .as_ref()
         .and_then(ResolvedInstanceEndpoint::discovered_binding);
+    let serial_configured = endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured);
+    let target = endpoint.filter(|_| !serial_configured);
+    let device = endpoint
+        .and_then(ResolvedAdbEndpoint::handset)
+        .map(|handset| match handset.binding() {
+            Some(binding) => actingcommand_contract::InstanceDeviceBindingDraft::handset(
+                binding.serial().adb_arg(),
+                binding.bound_at_unix_ms(),
+                binding.bound_via(),
+            ),
+            None => actingcommand_contract::InstanceDeviceBindingDraft::unbound_handset(),
+        });
     RuntimePayloadDraft::instance_bound(
         instance.instance_alias.clone(),
         instance.provenance,
-        endpoint.map(|endpoint| endpoint.host().to_owned()),
-        endpoint.map(ResolvedAdbEndpoint::port),
-        endpoint.is_some_and(ResolvedAdbEndpoint::serial_configured),
+        target.map(|endpoint| endpoint.host().to_owned()),
+        target.map(ResolvedAdbEndpoint::port),
+        serial_configured,
         if discovered.is_some() {
             InstanceBindingSource::Discovered
         } else {
@@ -610,6 +624,7 @@ pub(super) fn instance_bound_payload(instance: &RegisteredInstance) -> RuntimePa
         discovered.map(DiscoveredInstanceBinding::instance_index),
         discovered.map(|binding| binding.instance_name().to_owned()),
         discovered.map(|binding| binding.provider_version().to_owned()),
+        device,
         AuditInput::new(),
     )
 }

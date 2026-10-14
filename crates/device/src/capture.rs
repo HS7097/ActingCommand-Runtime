@@ -169,15 +169,21 @@ impl CaptureBackendChoice {
         }
     }
 
-    /// #398 R1 §5.1 (RD-3i): scrcpy is a third-party component for real devices only; every
-    /// other choice stays open to both kinds.
+    /// #398 R1 §5.1 (RD-3i): scrcpy is a third-party component for real devices only. R1 §3.1
+    /// (RD-1b): a handset has no Nemu IPC, and DroidCast is a third-party component no handset
+    /// may select; screencap and scrcpy remain. The automatic choices are refused elsewhere
+    /// (every instance names its backend).
     pub fn allowed_on(self, kind: DeviceKind) -> bool {
-        !matches!((self, kind), (Self::Scrcpy, DeviceKind::Emulator))
+        !matches!(
+            (self, kind),
+            (Self::Scrcpy, DeviceKind::Emulator)
+                | (Self::DroidcastRaw | Self::NemuIpc, DeviceKind::Handset)
+        )
     }
 }
 
-/// #398 R1 §3.1: the kind of device an instance drives. RD-1b adds the instance key
-/// `device.kind`; until then every configured instance is an emulator.
+/// #398 R1 §3.1: the kind of device an instance drives, the instance key `device.kind` (RD-1b);
+/// an instance without it is an emulator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
     Emulator,

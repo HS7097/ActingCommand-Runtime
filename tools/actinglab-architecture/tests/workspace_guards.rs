@@ -6851,3 +6851,76 @@ fn actinglab_glue_declarations_hold() {
             .join("\n")
     );
 }
+
+// Workflow #398 RD-1b, test row T10 (model-398 v1.1 §3.2, §12): the private binding file
+// `<state root>\private\device-bindings.json` holds the device serials, so it is read only by
+// the binding reader and never exported, archived or put into a diagnostic. Its path constants
+// and its reader are named only in the contract's `device_binding` module and actingd's binding
+// reader; the evidence export, the ledger maintenance archive, the kept-frame folders, the
+// forensic reads and the diagnostic paths name none of them.
+#[test]
+fn rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings() {
+    const NAMES: &[&str] = &[
+        "PRIVATE_DIRECTORY",
+        "DEVICE_BINDINGS_FILE",
+        "device_bindings_path",
+        "read_device_bindings",
+        "device-bindings.json",
+    ];
+    const READERS: &[&str] = &[
+        "crates/actingcommand-contract/src/device_binding.rs",
+        "apps/actingd/src/config/device_binding.rs",
+    ];
+    const NEVER_READING: &[&str] = &[
+        "crates/runtime-host/src/host/evidence_export.rs",
+        "crates/artifact-store/src/",
+        "crates/runtime-host/src/ledger_maintenance.rs",
+        "apps/actingd/src/ledger_maintenance.rs",
+        "crates/ledger-forensics/src/",
+        "apps/ledger-forensics/src/",
+        "crates/runtime-host/src/host/device_diagnostic.rs",
+        "crates/runtime-host/src/host/task_diagnostic.rs",
+        "crates/runtime-host/src/host/ppocr_diagnostic.rs",
+    ];
+    let sources = workspace_sources(&["crates", "apps", "providers", "tools"]);
+    let mut violations = Vec::new();
+    for (path, source) in &sources {
+        if READERS.contains(&path.as_str()) || path.starts_with("tools/actinglab-architecture/") {
+            continue;
+        }
+        for name in NAMES {
+            if source.contains(name) {
+                violations.push(format!("{path} names {name}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "the private binding file is named outside its reader:\n{}",
+        violations.join("\n")
+    );
+    for reader in READERS {
+        let (_, source) = sources
+            .iter()
+            .find(|(path, _)| path == reader)
+            .unwrap_or_else(|| panic!("the binding reader {reader} exists"));
+        assert!(
+            NAMES.iter().any(|name| source.contains(name)),
+            "{reader} reads the private binding file through its constants"
+        );
+    }
+    for place in NEVER_READING {
+        let named = sources
+            .iter()
+            .filter(|(path, _)| path.starts_with(place))
+            .collect::<Vec<_>>();
+        assert!(!named.is_empty(), "{place} exists");
+        for (path, source) in named {
+            assert!(
+                !source.contains("device_binding")
+                    && !NAMES.iter().any(|name| source.contains(name)),
+                "{path} reads the private binding file"
+            );
+        }
+    }
+}

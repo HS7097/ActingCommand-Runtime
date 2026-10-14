@@ -98,6 +98,9 @@ const LEGACY_REDACTED_MACHINE_PATH: &str = "[redacted]";
 pub enum SecretField {
     AccountIdentity,
     AuthenticationMaterial,
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.4): a handset's adb serial, recorded only as its
+    /// fingerprint.
+    DeviceSerial,
 }
 
 pub trait SecretFingerprinter {
@@ -1979,7 +1982,112 @@ pub struct RuntimeInstanceBindingPayload {
     discovered_instance_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_version: Option<String>,
+    /// Workflow #398 RD-1b (model-398 v1.1 §3.4): the device of a handset instance; absent for
+    /// an emulator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<RuntimeInstanceDeviceBinding>,
     audit: SanitizedAudit,
+}
+
+/// Workflow #398 RD-1b (model-398 v1.1 §3.4): the device a handset instance drives. The
+/// device's identity is the fingerprint of its serial (the ledger's salted SHA-256, field
+/// `device_serial`), never the serial itself; the fingerprint, the binding time and the channel
+/// that wrote the binding are present together, and absent while the private binding file has no
+/// binding for the instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeInstanceDeviceBinding {
+    kind: crate::InstanceDeviceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<Sha256Fingerprint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bound_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bound_via: Option<crate::DeviceBoundVia>,
+}
+
+impl RuntimeInstanceDeviceBinding {
+    pub const fn kind(&self) -> crate::InstanceDeviceKind {
+        self.kind
+    }
+
+    /// The device's identity: the fingerprint of its serial.
+    pub fn fingerprint(&self) -> Option<&Sha256Fingerprint> {
+        self.fingerprint.as_ref()
+    }
+
+    pub const fn bound_at_unix_ms(&self) -> Option<u64> {
+        self.bound_at_unix_ms
+    }
+
+    pub const fn bound_via(&self) -> Option<crate::DeviceBoundVia> {
+        self.bound_via
+    }
+}
+
+/// Workflow #398 RD-1b: the device of a handset instance as the Runtime holds it; sanitization
+/// keeps only the serial's fingerprint.
+pub struct InstanceDeviceBindingDraft {
+    kind: crate::InstanceDeviceKind,
+    bound: Option<(String, u64, crate::DeviceBoundVia)>,
+}
+
+impl InstanceDeviceBindingDraft {
+    /// A handset bound to the device `serial` at `bound_at_unix_ms`, by `bound_via`.
+    pub fn handset(
+        serial: impl Into<String>,
+        bound_at_unix_ms: u64,
+        bound_via: crate::DeviceBoundVia,
+    ) -> Self {
+        Self {
+            kind: crate::InstanceDeviceKind::Handset,
+            bound: Some((serial.into(), bound_at_unix_ms, bound_via)),
+        }
+    }
+
+    /// A handset the private binding file has no binding for.
+    pub const fn unbound_handset() -> Self {
+        Self {
+            kind: crate::InstanceDeviceKind::Handset,
+            bound: None,
+        }
+    }
+
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeInstanceDeviceBinding, SanitizationError> {
+        let Some((serial, bound_at_unix_ms, bound_via)) = self.bound else {
+            return Ok(RuntimeInstanceDeviceBinding {
+                kind: self.kind,
+                fingerprint: None,
+                bound_at_unix_ms: None,
+                bound_via: None,
+            });
+        };
+        let fingerprint = fingerprinter
+            .fingerprint(SecretField::DeviceSerial, &serial)
+            .map_err(|_| {
+                SanitizationError::new(SanitizationCode::FingerprinterFailed, "device_serial")
+            })?;
+        fingerprint.validate_for(&serial)?;
+        Ok(RuntimeInstanceDeviceBinding {
+            kind: self.kind,
+            fingerprint: Some(fingerprint),
+            bound_at_unix_ms: Some(bound_at_unix_ms),
+            bound_via: Some(bound_via),
+        })
+    }
+}
+
+impl fmt::Debug for InstanceDeviceBindingDraft {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InstanceDeviceBindingDraft")
+            .field("kind", &self.kind)
+            .field("bound", &self.bound.is_some())
+            .finish()
+    }
 }
 
 impl RuntimeInstanceBindingPayload {
@@ -2017,6 +2125,11 @@ impl RuntimeInstanceBindingPayload {
 
     pub fn provider_version(&self) -> Option<&str> {
         self.provider_version.as_deref()
+    }
+
+    /// Workflow #398 RD-1b: the device of a handset instance; `None` for an emulator.
+    pub fn device(&self) -> Option<&RuntimeInstanceDeviceBinding> {
+        self.device.as_ref()
     }
 }
 
@@ -7114,6 +7227,36 @@ fn validate_runtime_instance_binding(
             "binding_source",
         ));
     }
+    // Workflow #398 RD-1b (model-398 v1.1 §3.4): an instance addressed by its serial records no
+    // ADB host or port. A handset's device is bound explicitly, on a physical device, and records
+    // its fingerprint, binding time and channel together or none of them.
+    let device_consistent = payload.device.as_ref().is_none_or(|device| {
+        let bound = [
+            device.fingerprint.is_some(),
+            device.bound_at_unix_ms.is_some(),
+            device.bound_via.is_some(),
+        ];
+        device.kind == crate::InstanceDeviceKind::Handset
+            && payload.serial_configured
+            && payload.binding_source == InstanceBindingSource::Explicit
+            && payload.provenance == crate::ExecutionBackendProvenance::PhysicalDevice
+            && (bound.iter().all(|present| *present) || bound.iter().all(|present| !present))
+    });
+    if (payload.serial_configured && (payload.adb_host.is_some() || payload.adb_port.is_some()))
+        || !device_consistent
+    {
+        return Err(SanitizationError::new(
+            SanitizationCode::InvalidInstanceBindingDevice,
+            "device",
+        ));
+    }
+    if let Some(fingerprint) = payload
+        .device
+        .as_ref()
+        .and_then(RuntimeInstanceDeviceBinding::fingerprint)
+    {
+        fingerprint.validate_stored()?;
+    }
     Ok(())
 }
 
@@ -8244,6 +8387,7 @@ struct RuntimeInstanceBindingDraft {
     discovered_instance_index: Option<u16>,
     discovered_instance_name: Option<String>,
     provider_version: Option<String>,
+    device: Option<InstanceDeviceBindingDraft>,
     audit: AuditInput,
 }
 
@@ -8263,6 +8407,10 @@ impl RuntimeInstanceBindingDraft {
             discovered_instance_index: self.discovered_instance_index,
             discovered_instance_name: self.discovered_instance_name,
             provider_version: self.provider_version,
+            device: self
+                .device
+                .map(|device| device.sanitize(fingerprinter))
+                .transpose()?,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -8436,6 +8584,7 @@ impl RuntimePayloadDraft {
         discovered_instance_index: Option<u16>,
         discovered_instance_name: Option<String>,
         provider_version: Option<String>,
+        device: Option<InstanceDeviceBindingDraft>,
         audit: AuditInput,
     ) -> Self {
         Self(RuntimeDraftKind::InstanceBound(
@@ -8449,6 +8598,7 @@ impl RuntimePayloadDraft {
                 discovered_instance_index,
                 discovered_instance_name,
                 provider_version,
+                device,
                 audit,
             },
         ))

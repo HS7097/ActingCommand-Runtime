@@ -1545,6 +1545,14 @@
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     },
+    "device_config_problem": {
+      "type": "vocab:device_config_problem",
+      "description": "What is wrong with an instance's device declaration (Workflow #398 RD-1b)."
+    },
+    "device_binding_problem": {
+      "type": "vocab:device_binding_problem",
+      "description": "What is wrong with the private device-binding file (Workflow #398 RD-1b)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -4491,6 +4499,52 @@
         },
         "settings": {
           "description": "settings get of a screen-timeout setting."
+        }
+      }
+    },
+    "device_config_problem": {
+      "description": "What is wrong with an instance's device declaration (model-398 section 10.1).",
+      "tokens": {
+        "kind_unknown": {
+          "description": "device.kind is neither emulator nor handset."
+        },
+        "transport_unsupported": {
+          "description": "device.transport is not usb on a handset (tcp is reserved), or is named on an emulator."
+        },
+        "endpoint_with_handset": {
+          "description": "A handset names host, port or connect."
+        },
+        "serial_in_config": {
+          "description": "A handset names serial: its serial lives only in the private binding file."
+        },
+        "discovery_key_with_handset": {
+          "description": "A handset names instance_index, instance_name or nemu_app_index."
+        },
+        "backend_kind_unsupported": {
+          "description": "The instance selects a backend its device kind does not allow."
+        },
+        "alias_too_long": {
+          "description": "A handset's alias is longer than 248 bytes, so its label would not fit a name."
+        }
+      }
+    },
+    "device_binding_problem": {
+      "description": "What is wrong with the private device-binding file (model-398 section 10.1).",
+      "tokens": {
+        "unreadable": {
+          "description": "The file exists but cannot be read as a file."
+        },
+        "malformed": {
+          "description": "The file is not JSON of the file's shape and schema, is larger than its bound, or names an alias no instance could have."
+        },
+        "duplicate_alias": {
+          "description": "Two bindings name the same alias."
+        },
+        "duplicate_serial": {
+          "description": "Two bindings name the same serial: one device is bound to one instance only."
+        },
+        "serial_invalid": {
+          "description": "A serial is not 1 to 64 bytes of printable ASCII without white space."
         }
       }
     },

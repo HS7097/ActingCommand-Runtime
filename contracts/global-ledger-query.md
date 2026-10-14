@@ -103,7 +103,11 @@ emulator instance, so every `instance_id` ever bound to the same port through
 `ledger-forensics::instance_bindings` derives, at a snapshot, the latest binding
 per instance id and the port map (port to every instance id ever bound as
 HOST:PORT, in first-binding order); serial-configured instances and instances
-without a port stay out of the port map and are listed separately.
+without a port stay out of the port map and are listed separately. A device
+fingerprint is the identity of a handset (Workflow #398 RD-1b,
+[device-binding.md](device-binding.md)): `instance_bindings` also derives the
+device map, fingerprint to every instance id ever bound to it, in first-binding
+order, beside the port map, and each latest binding names its fingerprint.
 
 `EventQuery.exclude_event_types` excludes every event whose type is in the set,
 AND with every other condition (an empty set is no constraint and leaves the

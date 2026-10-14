@@ -50,7 +50,7 @@ One row per key ([v012-register.md](v012-register.md) §5 lists the sections):
 | Column | Meaning |
 |---|---|
 | `key` | as `config.parameters` names it; a per-instance key is `instance.<instance id>.<member>` |
-| `file_path` | where the file holds it: at the key, at another dotted path (none since Workflow #385 P-c made the pressure streaks keys of the `performance` section at their file members), in the `instances[]` entry with the same `instance_id`, or nowhere |
+| `file_path` | where the file holds it: at the key, at another dotted path (none since Workflow #385 P-c made the pressure streaks keys of the `performance` section at their file members), in the `instances[]` entry with the same `instance_id` (under the member's name, or at a dotted path in it: `device_kind` ← `device.kind`), or nowhere |
 | `type` | boolean, integer, milliseconds, string, decimal, list, object (decimal, list and object are reported as canonical JSON text) |
 | `range` | allowed values (schema, not a threshold) |
 | `default` | `file`, `none`, `section:<key>` or `code` (a key whose default no slice has moved yet) |
@@ -63,10 +63,13 @@ question 2: change it in the file, commit, restart) and the per-instance `stuck_
 `section:recovery_ladder.enabled` and `section:recovery_ladder.cooldown_secs` (D1c). D1c's rows:
 the `recovery_ladder` and `host_claims` sections below (all settable, default `file`) and
 `standard_packs.root` (Workflow #373 NAV-6, moved here: string, default `none`, not settable,
-read once at assembly). P-c's rows: the `performance` section below. A manifest key the table
-does not have fails the start (`config_key_unknown`). The manifest lists the exact keys in row
-order (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`), then each instance's
-per-instance keys together.
+read once at assembly). P-c's rows: the `performance` section below. Workflow #386 SR-1's rows:
+the `scheduling` section below. Workflow #398 RD-1b's row: the per-instance `device_kind` (string
+`emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
+at assembly; [device-binding.md](device-binding.md)), present only for an instance that names
+`device`. A manifest key the table does not have fails the start (`config_key_unknown`). The
+manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
+`performance`, `scheduling`), then each instance's per-instance keys together.
 
 ## The recovery ladder section (D1c)
 

@@ -520,3 +520,23 @@ tests = [
     "actingcommand-runtime-config::lib::scheduling_tests::sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect",
 ]
 incident = ["#386", "#405"]
+
+# A handset is bound to its device only by the private binding file: its targets use the bound serial and never adb connect, its binding records the device by fingerprint and no host or port, a broken file refuses the start, a missing binding fails check-config and leaves only that handset unavailable, device fields that do not fit are refused, fingerprints group a handset's instances beside the port map, emulator control refuses a handset, an emulator-only configuration is unchanged, and nothing that exports, archives or diagnoses reads the private file (Workflow #398 RD-1b)
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t1_a_bound_handset_targets_its_serial_and_never_connects",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1b::rd1b_t2_a_handset_binding_records_its_device_by_fingerprint_without_host_or_port",
+    "actingcommand-ledger::lib::global::tests::rd1b_t3_a_device_serial_fingerprint_follows_the_salt_and_never_is_the_serial",
+    "actingcommand-actingd::process::rd1b_t4_check_config_refuses_a_handset_without_a_binding",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1b::rd1b_t4_an_unbound_handset_is_unavailable_and_the_other_instance_runs",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t5_a_broken_private_binding_file_refuses_the_start",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t6_device_fields_that_do_not_fit_a_handset_are_refused",
+    "actingcommand-ledger-forensics::lib::bindings::tests::rd1b_t7_a_device_fingerprint_groups_its_instances_beside_the_port_map",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd1b::rd1b_t8_emulator_control_refuses_a_handset",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::device_binding::tests::rd1b_t9_an_emulator_only_configuration_assembles_and_binds_as_before",
+    "actingcommand-actingd::process::rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged",
+    "actingcommand-actinglab-architecture::workspace_guards::rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings",
+]
+incident = ["#398"]

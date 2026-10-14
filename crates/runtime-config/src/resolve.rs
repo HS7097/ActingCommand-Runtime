@@ -14,25 +14,30 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// The member of the configuration file a row's key names: at the key itself, at the row's
-/// other path, or in the `instances[]` entry of `instance` (a dotted member names a nested one,
-/// Workflow #405 `scheduling.random_delay.*`). A `null` member is absent.
+/// other path, or in the `instances[]` entry of `instance` (under the member's name, where a
+/// dotted member names a nested one, Workflow #405 `scheduling.random_delay.*`, or at the row's
+/// path in it). A `null` member is absent.
 pub fn file_value<'a>(
     row: &KeyRow,
     key: &str,
     instance: Option<&str>,
     file: &'a Value,
 ) -> Option<&'a Value> {
-    let found = match (row.file_path, row.name) {
-        (FilePath::Key, _) => member(file, key),
-        (FilePath::At(path), _) => member(file, path),
-        (FilePath::InstanceMember, KeyName::PerInstance(name)) => instance.and_then(|instance| {
+    let entry = || {
+        instance.and_then(|instance| {
             file.get("instances")?
                 .as_array()?
                 .iter()
                 .find(|entry| entry.get("instance_id").and_then(Value::as_str) == Some(instance))
-                .and_then(|entry| member(entry, name))
-        }),
-        (FilePath::InstanceMember, KeyName::Exact(_)) | (FilePath::Absent, _) => None,
+        })
+    };
+    let found = match (row.file_path, row.name) {
+        (FilePath::Key, _) => member(file, key),
+        (FilePath::At(path), _) => member(file, path),
+        (FilePath::InstanceMember, KeyName::PerInstance(name)) => member(entry()?, name),
+        (FilePath::InstanceMemberAt(path), KeyName::PerInstance(_)) => member(entry()?, path),
+        (FilePath::InstanceMember | FilePath::InstanceMemberAt(_), KeyName::Exact(_))
+        | (FilePath::Absent, _) => None,
     };
     found.filter(|value| !value.is_null())
 }
