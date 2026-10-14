@@ -701,13 +701,15 @@ impl HostShared {
     /// Workflow #398 RD-2 (model-398 v1.1 §4.4): a run's device failure `error`, met while
     /// the instance's handset is no longer `device`, as `device_link_lost` caused by it; `None`
     /// for any other failure or instance. Only a failure of the device itself (a backend that
-    /// would not open or operate, a capture that failed) is the link's.
+    /// would not open or operate, a capture that failed) is the link's, whether the device
+    /// layer called it fatal or not: an adb command against a handset that left fails fatal.
+    /// A failure whose resource close stayed unconfirmed keeps its own handling (Workflow #403).
     pub(super) fn device_link_lost(
         &self,
         instance_id: InstanceId,
         error: &RuntimeHostError,
     ) -> RuntimeHostResult<Option<RuntimeHostError>> {
-        if error.is_fatal()
+        if error.lifecycle.resource_quiescence == Some(ResourceQuiescence::Unconfirmed)
             || !matches!(
                 error.projection().code,
                 RuntimeErrorCode::BackendOperationFailed

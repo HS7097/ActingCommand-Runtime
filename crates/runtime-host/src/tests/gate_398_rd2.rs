@@ -315,7 +315,8 @@ fn rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restore
 // T4 (§4.4; spec §5, the condition is the result): a run whose device fails while its handset
 // is not `device` ends with `device_link_lost`, the handset's label and link state its values
 // and the device failure (a capture backend operation failure) its `caused_by` link; no input
-// reaches the device and nothing is fatal.
+// reaches the device. The capture fails as an adb command against a missing handset does, not
+// transient, and still only the run ends: the receipt is not fatal and the Runtime runs.
 #[test]
 fn rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lost() {
     let run = handset_host(None);
@@ -324,9 +325,6 @@ fn rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lo
     list(host, DeviceLinkState::Device);
     list(host, DeviceLinkState::Absent);
     run.state.fail_capture.store(true, Ordering::Release);
-    run.state
-        .transient_capture_failure
-        .store(true, Ordering::Release);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let failed = host
         .process_request_for_test(
@@ -344,6 +342,7 @@ fn rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lo
         .expect("the run's receipt");
 
     assert_eq!(failed.state(), RuntimeReceiptState::Failed, "{failed:?}");
+    assert!(!failed.error_projection().expect("the run's failure").fatal);
     let outcome = failed.outcome();
     assert_eq!(outcome.code().as_str(), HostCode::DeviceLinkLost.as_str());
     assert_eq!(outcome_str(outcome, "device_link_state"), Some("absent"));
