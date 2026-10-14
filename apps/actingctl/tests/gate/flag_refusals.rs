@@ -354,6 +354,51 @@ const CLIENT: &[Subcommand] = &[
         &["--state-root", ROOT],
         &["--limit", "5"],
     ),
+    // Workflow #389 MCP-21: `--wait` on an emulator control and on `task-run`, never on a
+    // status read.
+    result(
+        &[
+            "emulator",
+            "start",
+            "--state-root",
+            ROOT,
+            "--instance",
+            "neutral.instance",
+            "--wait",
+            "60",
+        ],
+        &["--package", "neutral-task.zip"],
+        &["--wait", "60"],
+    ),
+    result(
+        &[
+            "emulator",
+            "status",
+            "--state-root",
+            ROOT,
+            "--instance",
+            "neutral.instance",
+        ],
+        &["--wait", "60"],
+        &["--instance", "neutral.instance"],
+    ),
+    result(
+        &[
+            "task-run",
+            "--state-root",
+            ROOT,
+            "--instance",
+            "neutral.instance",
+            "--package",
+            "neutral-task.zip",
+            "--expected-sha256",
+            PACKAGE_REF,
+            "--wait",
+            "60",
+        ],
+        &["--interval-ms", "1000"],
+        &["--wait", "60"],
+    ),
     // Workflow #389 MCP-6: `run evidence` and its page flags.
     result(
         &[
