@@ -5390,10 +5390,23 @@ impl HostShared {
                 &|| self.fatal.is_shutdown_requested(),
             )
         {
+            // Workflow #387 D1c-G: the probe's own adb child or pipe left unconfirmed fences the
+            // instance (a startup run, a rung's startup run or a return-home run alike) and the
+            // run fails with the fence; only where no fence may take it is it the Runtime's fatal.
             if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::execution(HostLocation::RunStartupPackage, &error),
-                ));
+                let links =
+                    self.events
+                        .request_links(&validated, Some(resolved.instance_id()), None, None);
+                return Err(
+                    match self.settle_unconfirmed_adb(
+                        RuntimeHostError::execution(HostLocation::RunStartupPackage, &error),
+                        resolved.instance_id(),
+                        links,
+                    ) {
+                        Ok(fence) => RequestFailure::fence_without_terminal(fence),
+                        Err(fatal) => RequestFailure::poison_without_terminal(fatal),
+                    },
+                );
             }
             let mut host_error = RuntimeHostError::request(
                 pending.run.adb_not_ready_code(),

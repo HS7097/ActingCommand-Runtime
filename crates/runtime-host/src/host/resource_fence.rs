@@ -222,6 +222,26 @@ impl HostShared {
         Ok(UnconfirmedResources::Fenced(fence))
     }
 
+    /// Workflow #387 D1c-G: settles `error`, the failure of an ADB check of `instance_id`'s own
+    /// (the startup package's probe, the foreground gate's observation, the emulator control's
+    /// ADB wait, a ladder's ADB checks). An adb child or pipe it left unconfirmed belongs to that
+    /// instance: the instance is fenced and the check's work fails with the fence's non-fatal
+    /// failure (`Ok`). Where no fence may take it (no registered owner, a ledger failure, a
+    /// shutdown) the owner is retained and the Runtime marked fatal, as before (`Err`, the fatal
+    /// failure). A failure whose cleanup was confirmed is returned as it is (`Ok`).
+    pub(super) fn settle_unconfirmed_adb(
+        &self,
+        error: RuntimeHostError,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<RuntimeHostError> {
+        match self.settle_unconfirmed_resources(&error, Some(instance_id), links)? {
+            UnconfirmedResources::Confirmed => Ok(error),
+            UnconfirmedResources::Fenced(fence) => Ok(fence),
+            UnconfirmedResources::Retained => Err(error.into_fatal()),
+        }
+    }
+
     /// The whole-Runtime retention of unconfirmed resources that no single instance owns: the
     /// failure recorded, the owner retained and the Runtime marked fatal.
     fn retain_unconfirmed_owner(

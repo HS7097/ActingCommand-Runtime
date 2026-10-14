@@ -2135,23 +2135,17 @@ impl HostShared {
     /// own ADB check (the rung 2 entry probe, the readiness wait's boot check and probes) belongs
     /// to the instance the ladder climbs on: it fences that instance as every unconfirmed close
     /// of its own resources does (`settle_unconfirmed_resources`: one `instance_resources_fenced`
-    /// caused by `error`), and the rung fails with the fence's code; the ladder goes on. Only
-    /// what the contract keeps whole-Runtime (resources no registered instance owns, a ledger
-    /// failure, a shutdown) retains the owner and ends the Runtime: that fatal is returned.
+    /// caused by `error`, `settle_unconfirmed_adb`), and the rung fails with the fence's code;
+    /// the ladder goes on. Only what the contract keeps whole-Runtime (resources no registered
+    /// instance owns, a ledger failure, a shutdown) retains the owner and ends the Runtime: that
+    /// fatal is returned.
     fn fence_recovery_adb(
         &self,
         pending: &PendingRecoveryLadder,
         error: RuntimeHostError,
     ) -> RuntimeHostResult<&'static str> {
-        match self.settle_unconfirmed_resources(
-            &error,
-            Some(pending.instance_id),
-            pending.links.clone(),
-        )? {
-            super::resource_fence::UnconfirmedResources::Fenced(fence) => Ok(fence.code()),
-            super::resource_fence::UnconfirmedResources::Retained
-            | super::resource_fence::UnconfirmedResources::Confirmed => Err(error.into_fatal()),
-        }
+        self.settle_unconfirmed_adb(error, pending.instance_id, pending.links.clone())
+            .map(|fence| fence.code())
     }
 
     /// Workflow #369-2: force-stops the instance's assigned application as a host-minted

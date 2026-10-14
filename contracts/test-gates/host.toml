@@ -593,7 +593,7 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #387 D1c-G: an ADB child a ladder's own entry probe cannot confirm gone fences the ladder's instance (the rung fails with instance_resources_fenced before any stop, the instance waits for a person) and the other instance runs, with no Runtime fatal; a task frame without an extent ends only its run with contained_task_geometry_frame_extent_invalid and the other instance runs; a scheduled run whose vision provider fails ends with contained_task_vision_provider_failed (class 5) and its lease end starts no ladder
+# Workflow #387 D1c-G: an ADB child a ladder's own entry probe, a startup package's probe, the foreground gate's query or the emulator control's ADB wait cannot confirm gone fences that instance (a ladder's rung fails with instance_resources_fenced before any stop), the instance waits for a person and the other instance runs, with no Runtime fatal; a task frame without an extent ends only its run with contained_task_geometry_frame_extent_invalid and the other instance runs; a scheduled run whose vision provider fails ends with contained_task_vision_provider_failed (class 5) and its lease end starts no ladder
 [[gate]]
 key = "70"
 coverage = "Y"
@@ -601,5 +601,8 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_adb_cleanup_inside_a_ladder_fences_its_instance_and_the_other_runs",
     "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_a_frame_without_an_extent_ends_only_its_run_and_the_other_runs",
     "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_a_vision_provider_failure_in_a_scheduled_run_starts_no_ladder_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_startup_package_adb_probe_fences_its_instance_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_foreground_gate_adb_query_fences_its_instance_and_the_other_runs",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1cg::d1cg_an_unconfirmed_emulator_control_adb_wait_fences_its_instance_and_the_other_runs",
 ]
 incident = ["#387", "#403"]

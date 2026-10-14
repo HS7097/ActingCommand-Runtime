@@ -9,8 +9,11 @@
 // person, the Runtime is not fatal and the other instance runs. A task frame without an extent
 // ends only its run, with `contained_task_geometry_frame_extent_invalid`; the Runtime is not fatal
 // and the other instance runs. A scheduled run whose vision provider fails ends with the class-5
-// `contained_task_vision_provider_failed`, and its lease end starts no ladder. Every wait returns
-// as soon as what it waits for is recorded; the bound only stops a broken run.
+// `contained_task_vision_provider_failed`, and its lease end starts no ladder. The same fence
+// rule holds for the other ADB checks of one instance's own: the startup package's probe, the
+// foreground gate's query and the emulator control's ADB wait each fence their instance, the
+// instance waits for a person, the Runtime is not fatal and the other instance runs. Every wait
+// returns as soon as what it waits for is recorded; the bound only stops a broken run.
 
 use super::gate_403::{assert_fence, fence_records, status_fence};
 use super::instance_workers::{
@@ -21,7 +24,8 @@ use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::outcome::LadderClass;
 use actingcommand_contract::{
-    LeasePayload, RecoveryRung, RecoveryRungOutcome, RecoveryTriggerStage, RuntimeLifecyclePhase,
+    EmulatorInstanceAction, LeasePayload, RecoveryRung, RecoveryRungOutcome, RecoveryTriggerStage,
+    RuntimeLifecyclePhase, StartupPackageDisposition,
 };
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_execution_kernel::ExecutionKernelCode;
@@ -326,5 +330,195 @@ fn d1cg_a_vision_provider_failure_in_a_scheduled_run_starts_no_ladder_at_once() 
         "no ladder starts on the task stage"
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// The fenced instance (`POLICY_INSTANCE_ALIAS`) and the other one, on the fake provider.
+fn two_instances(
+    fenced: InstanceId,
+    state: &Arc<FakeState>,
+    other_state: &Arc<FakeState>,
+) -> Arc<FakeProvider> {
+    Arc::new(FakeProvider::from_entries([
+        (POLICY_INSTANCE_ALIAS.to_owned(), fenced, Arc::clone(state)),
+        (
+            OTHER_ALIAS.to_owned(),
+            instance_id(),
+            Arc::clone(other_state),
+        ),
+    ]))
+}
+
+// The fenced instance waits for a person behind a fence caused by `cause`, the other instance
+// has no fence and its direct run completes, and the Runtime is not fatal.
+fn assert_fenced_and_the_other_runs(
+    host: &RuntimeHost,
+    fenced: InstanceId,
+    cause: &str,
+    other_package: &(String, String),
+    connection: u64,
+) {
+    wait_until(WAIT, || {
+        status_fence(host, POLICY_INSTANCE_ALIAS).is_some_and(|fence| fence.awaiting_person)
+    });
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    let fences = fence_records(&events);
+    let Some((_, outcome)) = fences
+        .iter()
+        .find(|(record, _)| record.links().instance_id() == Some(&fenced))
+    else {
+        panic!("the fenced instance's fence record: {fences:#?}");
+    };
+    assert_fence(outcome, fenced, cause);
+    assert_eq!(status_fence(host, OTHER_ALIAS), None);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let other = host
+        .process_request_for_test(
+            &direct_run(OTHER_ALIAS, other_package),
+            ConnectionId::new(connection).expect("connection"),
+        )
+        .expect("the other instance's receipt");
+    assert_completes(&other);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+}
+
+// Follow-up site 1: the startup package's ADB probe. A startup run whose probe meets an adb child
+// it cannot confirm gone fences its instance before the run, so nothing is captured there; the
+// instance waits for a person (the fence's ladder meets the same probe at its application restart
+// entry), the Runtime is not fatal and the other instance's run completes.
+#[test]
+fn d1cg_an_unconfirmed_startup_package_adb_probe_fences_its_instance_and_the_other_runs() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let other_state = Arc::new(FakeState::default());
+    let package = super::gate_369s5::direct_run_package(&root, &state);
+    let other_package = super::gate_369s5::direct_run_package(&root, &other_state);
+    *state.adb_probe_error.lock().expect("adb probe error") = Some(unconfirmed_adb_probe());
+    let fenced = instance_id();
+    let startup = ContainedTaskRequest::new(package.0, package.1).expect("startup package");
+    let host = RuntimeHost::start(
+        config(&root).with_startup_packages(BTreeMap::from([(
+            POLICY_INSTANCE_ALIAS.to_owned(),
+            startup,
+        )])),
+        two_instances(fenced, &state, &other_state),
+    )
+    .expect("runtime host with two instances");
+
+    assert_eq!(
+        host.schedule_startup_package_for_test(POLICY_INSTANCE_ALIAS)
+            .expect("schedule the startup package"),
+        StartupPackageDisposition::Scheduled
+    );
+
+    assert_fenced_and_the_other_runs(
+        &host,
+        fenced,
+        ExecutionKernelCode::ApplicationAdbBaselineFailed.as_str(),
+        &other_package,
+        204,
+    );
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 0);
+    host.close().expect("close host");
+}
+
+// Follow-up site 2: the foreground gate's ADB query. A direct run's first tap meets a foreground
+// query whose adb child cannot be confirmed gone: the input is refused before it reaches the
+// device and the run fails, non-fatally, with `instance_resources_fenced`; the instance waits for
+// a person (manual work), the Runtime is not fatal and the other instance's run completes.
+#[test]
+fn d1cg_an_unconfirmed_foreground_gate_adb_query_fences_its_instance_and_the_other_runs() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let other_state = Arc::new(FakeState::default());
+    let package = super::gate_369s5::direct_run_package(&root, &state);
+    let other_package = super::gate_369s5::direct_run_package(&root, &other_state);
+    *state
+        .foreground_error_once
+        .lock()
+        .expect("one-shot foreground error") = Some(
+        DeviceError::fatal("synthetic foreground query left its child unconfirmed")
+            .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1),
+    );
+    let fenced = instance_id();
+    let host = RuntimeHost::start(config(&root), two_instances(fenced, &state, &other_state))
+        .expect("runtime host with two instances");
+
+    let failed = host
+        .process_request_for_test(
+            &direct_run(POLICY_INSTANCE_ALIAS, &package),
+            ConnectionId::new(205).expect("connection"),
+        )
+        .expect("the run's receipt");
+
+    assert!(
+        !failed.error_projection().expect("the run's failure").fatal,
+        "{failed:?}"
+    );
+    assert_eq!(
+        failed.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str()
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert_fenced_and_the_other_runs(
+        &host,
+        fenced,
+        HostCode::ApplicationForegroundUnknown.as_str(),
+        &other_package,
+        206,
+    );
+    host.close().expect("close host");
+}
+
+// Follow-up site 3: the emulator control's ADB wait. An `actingctl emulator start` whose ADB wait
+// meets an adb child it cannot confirm gone fails, non-fatally, with `instance_resources_fenced`;
+// the instance waits for a person (the fence's ladder meets the same wait after its own Start),
+// the Runtime is not fatal and the other instance's run completes.
+#[test]
+fn d1cg_an_unconfirmed_emulator_control_adb_wait_fences_its_instance_and_the_other_runs() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let other_state = Arc::new(FakeState::default());
+    let other_package = super::gate_369s5::direct_run_package(&root, &other_state);
+    *state.adb_probe_error.lock().expect("adb probe error") = Some(unconfirmed_adb_probe());
+    let fenced = instance_id();
+    let host = RuntimeHost::start(config(&root), two_instances(fenced, &state, &other_state))
+        .expect("runtime host with two instances");
+    bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, fenced, &state);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+
+    let failed = host
+        .process_request_for_test(
+            &runtime_request(
+                &ids,
+                RuntimeOperation::ControlEmulatorInstance {
+                    instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
+                    action: EmulatorInstanceAction::Start,
+                },
+            ),
+            ConnectionId::new(207).expect("connection"),
+        )
+        .expect("the emulator control's receipt");
+
+    assert_eq!(failed.state(), RuntimeReceiptState::Failed, "{failed:?}");
+    assert!(
+        !failed
+            .error_projection()
+            .expect("the control's failure")
+            .fatal
+    );
+    assert_eq!(
+        failed.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str()
+    );
+    assert_fenced_and_the_other_runs(
+        &host,
+        fenced,
+        ExecutionKernelCode::ApplicationAdbBaselineFailed.as_str(),
+        &other_package,
+        208,
+    );
     host.close().expect("close host");
 }

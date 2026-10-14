@@ -17,7 +17,10 @@
 //! `not_performed`) plus the `runtime.failed` record, receipt state `denied`, host codes
 //! `application_not_foreground` / `application_foreground_unknown` (`invalid_request`).
 //! An ADB failure whose child or pipe cleanup is unconfirmed invalidates the same facts and
-//! then poisons the host (`application_foreground_unknown`, `runtime_fatal`, Workflow #191 E3).
+//! then fences the instance (Workflow #387 D1c-G, `settle_unconfirmed_adb`): the input is refused
+//! as for any ADB failure and fails with `instance_resources_fenced`. Only where no fence may
+//! take it (no registered owner, a ledger failure, a shutdown) does it poison the host
+//! (`application_foreground_unknown`, `runtime_fatal`, Workflow #191 E3).
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
@@ -62,19 +65,40 @@ impl HostShared {
                 // The ADB baseline is gone; nothing device-bound is trusted from here on.
                 self.invalidate_adb_baseline(instance_id)
                     .map_err(RequestFailure::poison_without_terminal)?;
-                // Workflow #191 E3: an adb child or pipe reader left unconfirmed is a host
-                // fault (error.rs `execution`, as the startup package probe): the ADB facts are
-                // dropped as for any ADB failure, then the host is poisoned instead of refusing.
+                // Workflow #191 E3, #387 D1c-G: an adb child or pipe reader left unconfirmed
+                // belongs to this instance: the ADB facts are dropped as for any ADB failure,
+                // then the instance is fenced and the input, refused as for any ADB failure,
+                // fails with the fence. Only where no fence may take it is the host poisoned.
                 if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    let mut fatal = RuntimeHostError::fatal(
+                    let mut unconfirmed = RuntimeHostError::fatal(
                         HostCode::ApplicationForegroundUnknown,
                         GATE_OPERATION,
                         RuntimeErrorCode::RuntimeFatal,
                     )
                     .with_native_detail(format!("instance_alias={alias}; adb_failed={error}"));
-                    fatal.lifecycle.instance_id = Some(instance_id);
-                    fatal.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
-                    return Err(RequestFailure::poison_without_terminal(fatal));
+                    unconfirmed.lifecycle.instance_id = Some(instance_id);
+                    unconfirmed.lifecycle.resource_quiescence =
+                        Some(ResourceQuiescence::Unconfirmed);
+                    let mut links = self.events.request_links(
+                        request,
+                        Some(token.instance_id()),
+                        Some(token.lease_id()),
+                        None,
+                    );
+                    if let Some(run_links) = run_links {
+                        links = run_links.apply(links);
+                    }
+                    let fence = self
+                        .settle_unconfirmed_adb(unconfirmed, instance_id, links)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                    let refusal = gate_error(
+                        HostCode::ApplicationForegroundUnknown,
+                        instance_id,
+                        format!("instance_alias={alias}; adb_failed={error}"),
+                    );
+                    return Err(self
+                        .reject_input(request, token, action, run_links, refusal)?
+                        .fenced(fence));
                 }
                 let error = gate_error(
                     HostCode::ApplicationForegroundUnknown,
