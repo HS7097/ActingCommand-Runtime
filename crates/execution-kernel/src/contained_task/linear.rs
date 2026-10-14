@@ -601,6 +601,14 @@ impl TaskProgram {
             if operation.select.is_some() || operation.on_error.is_some() {
                 return Err(invalid("operation_effect", Some(operation)));
             }
+            // Workflow #390 EXEC-2: the observation window and the input recheck are page-graph
+            // declarations.
+            if operation.observation_window.is_some() {
+                return Err(invalid("observation_window", Some(operation)));
+            }
+            if operation.input_recheck.is_some() {
+                return Err(invalid("input_recheck", Some(operation)));
+            }
             let effect = match (&operation.click, &operation.application) {
                 (Some(_), None) => LinearEffect::Click,
                 (None, Some(application)) => LinearEffect::Application(application.action),

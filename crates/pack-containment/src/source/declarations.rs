@@ -17,6 +17,16 @@ use std::path::{Path, PathBuf};
 
 /// Members of one `checks` entry (`contracts/selection-graph.md`, section Checks).
 const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
+/// Workflow #390 EXEC-2: an operation's `observation_window`, by its `until`, with its required
+/// unsigned members.
+const OBSERVATION_WINDOW_MEMBERS: &[(&str, &[&str])] = &[
+    ("window_end", &["window_ms"]),
+    ("stable", &["window_ms", "frames"]),
+];
+/// Workflow #390 EXEC-2: an operation's `input_recheck`, by its `kind`, with its required unsigned
+/// members.
+const INPUT_RECHECK_MEMBERS: &[(&str, &[&str])] =
+    &[("fresh_frame", &[]), ("stable_frames", &["frames"])];
 
 struct Declaration<'a> {
     file: &'a Path,
@@ -394,6 +404,8 @@ impl Declaration<'_> {
                 "maa_task_id",
                 "transition",
                 "optional",
+                "observation_window",
+                "input_recheck",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -516,6 +528,12 @@ impl Declaration<'_> {
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "transition" if !value.is_null() => self.transition(value, &pointer)?,
                 "optional" if !value.is_null() => self.optional(value, &pointer)?,
+                "observation_window" if !value.is_null() => {
+                    self.tagged(value, &pointer, "until", OBSERVATION_WINDOW_MEMBERS)?;
+                }
+                "input_recheck" if !value.is_null() => {
+                    self.tagged(value, &pointer, "kind", INPUT_RECHECK_MEMBERS)?;
+                }
                 _ => {}
             }
         }
@@ -530,6 +548,46 @@ impl Declaration<'_> {
             self.required(object, pointer, "settle_ms")?,
             &child(pointer, "settle_ms"),
         )
+    }
+
+    /// Workflow #390 EXEC-2: an operation's `observation_window` or `input_recheck`, task schema
+    /// `0.9` only (`UnconsumedField` before it): an object whose `tag` names one of `variants`,
+    /// with that variant's unsigned members, all required, and nothing else. Runtime admission
+    /// checks the values.
+    fn tagged(
+        &self,
+        value: &Value,
+        pointer: &str,
+        tag: &str,
+        variants: &[(&str, &[&str])],
+    ) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = value
+            .as_object()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        let tag_pointer = child(pointer, tag);
+        let name = self
+            .required(object, pointer, tag)?
+            .as_str()
+            .ok_or_else(|| self.error(&tag_pointer, ResourceDeclarationReason::InvalidType))?;
+        let members = variants
+            .iter()
+            .find(|(variant, _)| *variant == name)
+            .map(|(_, members)| *members)
+            .ok_or_else(|| self.error(&tag_pointer, ResourceDeclarationReason::InvalidValue))?;
+        let allowed = std::iter::once(tag)
+            .chain(members.iter().copied())
+            .collect::<Vec<_>>();
+        let object = self.object(value, pointer, &allowed)?;
+        for member in members {
+            self.unsigned(
+                self.required(object, pointer, member)?,
+                &child(pointer, member),
+            )?;
+        }
+        Ok(())
     }
 
     /// An operation's intermediate state (Workflow #336, `linear_steps` only):
@@ -3300,6 +3358,106 @@ mod tests {
             );
             assert_eq!(issue["field_path"], pointer);
             assert_eq!(issue["reason"], "invalid_value");
+        }
+    }
+
+    /// Workflow #390 EXEC-2: task schema `0.9` declares an operation's `observation_window`
+    /// (`window_end` with `window_ms`, `stable` with `window_ms` and `frames`) and its
+    /// `input_recheck` (`fresh_frame`, `stable_frames` with `frames`); an older task schema
+    /// refuses both as unconsumed, and a member the variant does not have, a missing member, an
+    /// unknown variant or a member that is no unsigned integer is refused at its pointer.
+    #[test]
+    fn exec2_the_observation_window_and_the_input_recheck_declare_their_variants() {
+        let operation = |member: &str, value: Value| {
+            let mut operation = serde_json::json!({
+                "id": "open", "from": "home", "to": "terminal",
+                "click": {"kind": "point", "x": 1, "y": 0},
+                "unguarded_trusted_coordinate": true
+            });
+            operation[member] = value;
+            operation
+        };
+        let task = |schema| Declaration {
+            file: Path::new("tasks/task/task.json"),
+            schema: Some(schema),
+        };
+        for (member, value) in [
+            (
+                "observation_window",
+                serde_json::json!({"until": "window_end", "window_ms": 60_000}),
+            ),
+            (
+                "observation_window",
+                serde_json::json!({"until": "stable", "window_ms": 1_000, "frames": 3}),
+            ),
+            ("input_recheck", serde_json::json!({"kind": "fresh_frame"})),
+            (
+                "input_recheck",
+                serde_json::json!({"kind": "stable_frames", "frames": 3}),
+            ),
+        ] {
+            task("0.9")
+                .operation(&operation(member, value), "/operations/0", true)
+                .expect("task schema 0.9 declares it");
+        }
+        for (schema, member, value, pointer, refusal) in [
+            (
+                "0.8",
+                "observation_window",
+                serde_json::json!({"until": "window_end", "window_ms": 1_000}),
+                "/operations/0/observation_window",
+                "unconsumed_field",
+            ),
+            (
+                "0.8",
+                "input_recheck",
+                serde_json::json!({"kind": "fresh_frame"}),
+                "/operations/0/input_recheck",
+                "unconsumed_field",
+            ),
+            (
+                "0.9",
+                "observation_window",
+                serde_json::json!({"until": "window_end", "window_ms": 1_000, "frames": 3}),
+                "/operations/0/observation_window/frames",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                "observation_window",
+                serde_json::json!({"until": "stable", "window_ms": 1_000}),
+                "/operations/0/observation_window/frames",
+                "missing_field",
+            ),
+            (
+                "0.9",
+                "observation_window",
+                serde_json::json!({"until": "later", "window_ms": 1_000}),
+                "/operations/0/observation_window/until",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                "input_recheck",
+                serde_json::json!({"kind": "fresh_frame", "frames": 2}),
+                "/operations/0/input_recheck/frames",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                "input_recheck",
+                serde_json::json!({"kind": "stable_frames", "frames": "3"}),
+                "/operations/0/input_recheck/frames",
+                "invalid_type",
+            ),
+        ] {
+            let error = task(schema)
+                .operation(&operation(member, value), "/operations/0", true)
+                .expect_err("the declaration is refused");
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(issue["field_path"], pointer);
+            assert_eq!(issue["reason"], refusal);
         }
     }
 }

@@ -481,7 +481,8 @@ data files beside its package directories, one directory per game below the conf
 - **Shared interrupt pages** (§6). A run uses its server's feature package and the
   interrupts whose handlers name a package of its server. Each frame on which the running
   package's own expectation failed (its entry check's verdict, a page-graph frame no page of the
-  package matched, a frame of a wait for a step's, transition or `expect_after` page) is
+  package matched, a frame of a wait for a step's, transition or `expect_after` page, a frame of
+  an operation's observation window that shows none of its destinations) is
   evaluated against the interrupt pages the running package does not declare itself, in one
   scene evaluation of the feature package. One match is handled: the handler runs as a layer of
   the run (`EntryRecovery*` records with `role: interrupt_handler`), then the `then.run`

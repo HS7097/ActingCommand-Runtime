@@ -67,6 +67,7 @@ one operation is at fault; an existing check keeps its existing code.
 | `max_steps` declared in task and control, both equal to the operation count | `max_steps` |
 | no `error_pages`, `recovery`, `stability_termination`, `post_admission_ocr`; `stop_on_confirmation` is not `false` (Workflow #384 D2-S2: `resource_readings`, the reading marks, are admitted) | the field name |
 | each operation's effect is `click` or `application`; no `select` or `on_error` | `operation_effect` |
+| no operation declares an `observation_window` or an `input_recheck`, page-graph declarations (Workflow #390 EXEC-2, `resource-declarations.md`) | the field name |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
 | `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |

@@ -419,3 +419,68 @@ A select step's refusals name the task's `task.json` (`/operations/<i>/select/â€
 `/fields/<j>/name`, `/fields/<j>/value_type`, `/selection/required_count`). A select step is no
 navigation edge and no page operation; its primitive has `click: null`, its declared `guard`
 and the `select` object, and the sealed task keeps `select` and the declared guard.
+
+### Task schema `0.9` observation windows and input rechecks
+
+Workflow #390 EXEC-2 (forced-compromises mapping, rows E-05 and E-06). An operation of a
+page-graph task may declare an observation window, and a click may declare an input recheck.
+An older task schema refuses either with `UnconsumedField`; a `linear_steps` task refuses either
+at admission (`contained_task_linear_invalid`, `reason=observation_window` or
+`reason=input_recheck`, [Linear steps](linear-steps.md)). A task that declares neither runs as
+before.
+
+```json
+"observation_window": {"until": "window_end", "window_ms": 60000}
+"observation_window": {"until": "stable", "window_ms": 10000, "frames": 3}
+"input_recheck": {"kind": "fresh_frame"}
+"input_recheck": {"kind": "stable_frames", "frames": 3}
+```
+
+| Member | Declaration gate | Runtime admission (`contained_task_operation_invalid`) |
+| --- | --- | --- |
+| `observation_window` | `until` is `window_end` (members `until`, `window_ms`) or `stable` (members `until`, `window_ms`, `frames`); every member is required (`MissingField`), `window_ms` and `frames` are unsigned integers (`InvalidType`), another member is `UnknownField` and another `until` `InvalidValue` | `window_ms` from 1 to 60,000; `frames` from 2 to 32, and `frames - 1` confirmation intervals (`expect_after.interval_ms`, else the control capture interval) fit in `window_ms`; the operation declares a destination (`to` or `expect_after`) |
+| `input_recheck` | `kind` is `fresh_frame` (member `kind`) or `stable_frames` (members `kind`, `frames`), with the same refusals | the operation's effect is a click (not an `application` effect, not a select step, which confirms its candidate on a fresh frame already); `frames` from 2 to 32, and `frames - 1` control capture intervals fit in the control step timeout |
+
+The post-input delay keeps its bound of 5,000 ms.
+
+**Observation window.** When a destination of the operation passed after its input, the step
+does not finish at once: frames are taken one confirmation interval apart and evaluated as
+confirmation frames are. An error page fails the step as during the confirmation. A frame on
+which no destination passed (another page of the package, or none) is offered to the shared
+interrupt pages ([Package references](package-reference.md), "Shared interrupt pages"), and one
+that is handled extends the window by the time the handling took.
+
+- `window_end` watches the whole window for a late popup. A frame on which another destination
+  passes ends it at once: the step finishes on that page. Otherwise the window ends at its end on
+  a frame that shows a destination; when the latest frame shows none, frames go on up to the
+  operation's confirmation budget after the end, and the step is unconfirmed, as a confirmation
+  that timed out, when none passes.
+- `stable` ends on the frame that makes `frames` consecutive frames of one destination, the frame
+  of the arrival included: the step finishes on that page. A window that ends first ends the run
+  with `contained_task_observation_stability_unconfirmed` (`pack_operation_id`, and `timeout_ms`
+  the window); the input is never repeated.
+
+The step's `StepFinished` names the page it finished on, and the run goes on from that frame.
+
+**Input recheck.** It comes after the guard passed on the step's frame, before the action is
+drawn, the one sampling deadline check before the input and the effect intent (Workflow #386
+SR-1).
+
+- `fresh_frame`: one fresh frame is captured and recognized, and the guard is evaluated on it;
+  the input is drawn from and bound to that frame. A guard that does not pass there refuses the
+  input with `contained_task_guard_refused`, through the operation's failure decision as a
+  refusal on the step's frame does; a fresh frame on which no page of the package passes is
+  `contained_task_page_unknown`.
+- `stable_frames`: fresh frames are taken one control capture interval apart until the guard
+  passed on the step's page on `frames` consecutive frames, the step's frame included; a frame on
+  which it does not pass, or on which no page of the package passes, starts the count again. The
+  input is drawn from and bound to the last frame. When the control step timeout, counted from
+  the start of the wait, ends first, the input is refused with
+  `contained_task_input_stability_unconfirmed` (`pack_operation_id`, and `timeout_ms` the step
+  timeout), through the operation's failure decision.
+
+Each fresh frame is an observation before the input: it feeds no collector, and a sampling
+timeout of it takes the step's observe-only retries ([Business identity, consensus and catalog
+authoring](business-identity-consensus.md), "Observe-only retries"). The frames of a window and
+of a recheck are recorded as every capture, recognition and guard evaluation is; no record is
+added.

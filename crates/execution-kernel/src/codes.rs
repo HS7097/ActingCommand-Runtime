@@ -118,6 +118,10 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,
         ContainedTaskLinearApplicationUnconfirmed => "contained_task_linear_application_unconfirmed": error / pack_logic_mismatch,
+        // Workflow #390 EXEC-2: a declared stability wait ended before its frames held (keys
+        // `pack_operation_id`, `timeout_ms`).
+        ContainedTaskInputStabilityUnconfirmed => "contained_task_input_stability_unconfirmed": error / pack_logic_mismatch,
+        ContainedTaskObservationStabilityUnconfirmed => "contained_task_observation_stability_unconfirmed": error / pack_logic_mismatch,
         PageConfirmationFailed => "page_confirmation_failed": error / pack_logic_mismatch,
         /// Warning (Workflow #384 D2-S2): a reading mark gave no reading; the run goes on (keys
         /// `reading_id`, `fact_key`, `reading_problem`).

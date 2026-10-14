@@ -568,6 +568,23 @@ v0.12.0, so nothing written by a 0.12 build becomes unreadable.
 | L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
 | L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
 
+### 1.41 Wave 10 slice EXEC-2 (#390, forced-compromises mapping E-05, E-06)
+
+EXEC-2 brings the observation window and the input recheck of page-graph operations;
+[resource-declarations.md](resource-declarations.md), "Task schema `0.9` observation windows and
+input rechecks", is the contract. No new event type and no new member of a persisted record: the
+frames of a window or a recheck are recorded as every capture, recognition and guard evaluation
+is, with the existing timing boundaries (`PostconditionWait`, `PageRecognitionWait`), and a step
+finishes with the existing `StepFinished` on the page its window ended on. The kernel uses the
+runtime seams it has (`observation_now`, `step_pacing`, `shared_interrupt`); none is added. The
+codes
+`contained_task_input_stability_unconfirmed` and
+`contained_task_observation_stability_unconfirmed` (execution-kernel, error,
+`pack_logic_mismatch`) are catalog entries, not rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| EX1 | task schema `0.9` operation members `observation_window` (`{until: "window_end", window_ms}` or `{until: "stable", window_ms, frames}`) and `input_recheck` (`{kind: "fresh_frame"}` or `{kind: "stable_frames", frames}`) | new members (resource file format, not a ledger shape) | EXEC-2 | resource side | `window_ms` 1..=60000, `frames` 2..=32 (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); the `package` interface revision is declared once by A8 |
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

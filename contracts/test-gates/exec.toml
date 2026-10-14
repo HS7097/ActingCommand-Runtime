@@ -679,3 +679,20 @@ tests = [
     "actingcommand-lab::lib::ocr::tests::rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable",
 ]
 incident = ["#396"]
+
+# Workflow #390 EXEC-2 (FCM E-05, E-06): a page-graph operation's observation window (at most 60 s; the post-input delay keeps its bound) ends on a late popup that is a destination, watches to its end otherwise, offers a frame without a destination to the shared interrupt pages, and in stable mode ends once one destination held or fails with contained_task_observation_stability_unconfirmed; a click's recheck guards one fresh frame before the effect intent, or waits until the guard held on consecutive frames and otherwise refuses with contained_task_input_stability_unconfirmed, a recheck frame taking SR-1's observe-only retries; both are task schema 0.9 page-graph declarations
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_admission_bounds_the_window_at_60_s_and_keeps_the_post_delay_bound",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_linear_task_refuses_the_window_and_the_recheck",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_late_popup_inside_the_window_is_where_the_step_arrives",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_the_window_watches_to_its_end_and_hands_a_frame_without_a_page_to_the_interrupts",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_stable_window_ends_once_one_destination_held_and_fails_when_it_never_does",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_fresh_frame_recheck_guards_a_new_frame_before_the_intent",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_stable_frames_wait_for_consecutive_passing_frames_and_refuse_when_they_never_come",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec2::exec2_a_recheck_frame_whose_sampling_timed_out_takes_the_observe_only_retry",
+    "actingcommand-pack-containment::lib::source::declarations::tests::exec2_the_observation_window_and_the_input_recheck_declare_their_variants",
+]
+incident = ["#390"]
