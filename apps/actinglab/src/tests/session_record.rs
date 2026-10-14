@@ -3867,6 +3867,8 @@
         let png = test_record_frame_png(1, 1);
         fs::write(template_dir.join("HOME.png"), &png).unwrap();
         fs::write(&scene_path, &png).unwrap();
+        // Workflow #396 REC-7: a one-pixel ccorr_normed template is flat (its flat-field score
+        // is 1000 milli), so only a threshold of 0, a target that always passes, is admitted.
         write_json_file(
             &pack_path,
             &json!({
@@ -3881,7 +3883,7 @@
                     "id": "page/home",
                     "template_path": "operations/task/assets/HOME.png",
                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
-                    "threshold": 0.9
+                    "threshold": 0.0
                 }]
             }),
         )

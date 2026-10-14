@@ -196,6 +196,8 @@ pub(super) fn template_drift_resource_root() -> SemanticFixture {
         encode_png(1, 1, [255, 0, 0]),
     )
     .unwrap();
+    // Workflow #396 REC-7: a one-pixel ccorr_normed template is flat (its flat-field score is
+    // 1000 milli), so only a threshold of 0 is admitted; the best match still follows the pixel.
     fs::write(
         recognition.join("arknights.cn.pack.json"),
         r#"{
@@ -207,7 +209,7 @@ pub(super) fn template_drift_resource_root() -> SemanticFixture {
                     "id":"home_button",
                     "template_path":"recognition/home-button.png",
                     "region":{"x":0,"y":0,"width":3,"height":1},
-                    "threshold":0.9,
+                    "threshold":0.0,
                     "click":{"x":0,"y":0,"width":1,"height":1}
                 }
             ]

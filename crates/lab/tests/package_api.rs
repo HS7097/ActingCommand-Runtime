@@ -84,11 +84,13 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
             "goal": "external neutral fixture",
             "coordinate_space": {"width": 1280, "height": 720},
             "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
+            // Workflow #396 REC-7: the one-pixel ccorr_normed template is flat (its flat-field
+            // score is 1000 milli), so only a threshold of 0 is admitted.
             "anchors": [{
                 "id": "home",
                 "template": "assets/HOME.png",
                 "region": {"mode": "rect", "rect": {"x": 20, "y": 20, "width": 30, "height": 30}},
-                "threshold": 0.8,
+                "threshold": 0.0,
                 "color_check": null
             }],
             "entry_page": "home",

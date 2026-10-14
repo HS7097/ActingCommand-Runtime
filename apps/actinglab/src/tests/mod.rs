@@ -3029,11 +3029,13 @@ fn lab2_observe_projects_contained_page_elements() {
         encode_png(1, 1, [255, 0, 0]),
     )
     .unwrap();
+    // Workflow #396 REC-7: a one-pixel ccorr_normed template is flat (its flat-field score is
+    // 1000 milli), so only a threshold of 0, a target that always passes, is admitted.
     fs::write(&pack, serde_json::to_vec(&json!({
         "schema_version":"0.3", "coordinate_space":{"width":1,"height":1},
         "targets":[
             {"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-            {"type":"template","id":"visible","template_path":"anchor.png","region":{"x":0,"y":0,"width":1,"height":1},"threshold":0.8},
+            {"type":"template","id":"visible","template_path":"anchor.png","region":{"x":0,"y":0,"width":1,"height":1},"threshold":0.0},
             {"type":"color","id":"alternative","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
             {"type":"color","id":"optional","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
             {"type":"color","id":"forbidden","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
