@@ -940,6 +940,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     expected_stability_declaration: Option<StabilityTerminationDeclaration>,
     stability: Option<RuntimeContainedTaskStability>,
     expects_post_admission_ocr: bool,
+    /// Workflow #390 OUT-1 (FCM O-05): the package collects OCR fields, so a success that
+    /// passed no field page ends with no OCR observation and no fields report.
+    collects_ocr_fields: bool,
     post_admission_ocr_observations: u32,
     post_admission_ocr_comparison_recorded: bool,
     pub(super) current_recognition_id: Option<IssuedRecognitionId>,
@@ -4293,8 +4296,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     _ => true,
                 };
                 let post_admission_ocr_finalization_invalid = if self.expects_post_admission_ocr {
-                    self.post_admission_ocr_observations == 0
-                        || !self.post_admission_ocr_comparison_recorded
+                    // Workflow #390 OUT-1 (FCM O-05): a fields run that passed no field page
+                    // has neither an observation nor a report.
+                    let no_field_page = self.collects_ocr_fields
+                        && self.post_admission_ocr_observations == 0
+                        && !self.post_admission_ocr_comparison_recorded;
+                    !no_field_page
+                        && (self.post_admission_ocr_observations == 0
+                            || !self.post_admission_ocr_comparison_recorded)
                 } else {
                     self.post_admission_ocr_observations != 0
                         || self.post_admission_ocr_comparison_recorded
@@ -5726,7 +5735,9 @@ impl HostShared {
             .flat_map(|declaration| declaration.mappings())
             .map(|mapping| mapping.outcome_key().to_owned())
             .collect::<BTreeSet<_>>();
-        if !expected_outcome_keys.is_empty() && expected_outcome_keys != declared_outcome_keys {
+        // Workflow #390 OUT-1 (FCM O-03): the catalog may reference a subset of the outcomes the
+        // package declares; it is refused only for a key the package does not declare.
+        if !expected_outcome_keys.is_subset(&declared_outcome_keys) {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     HostCode::PolicyRunOutcomeDeclarationMismatch,
@@ -5861,6 +5872,7 @@ impl HostShared {
             expected_stability_declaration,
             stability: None,
             expects_post_admission_ocr,
+            collects_ocr_fields: prepared.has_ocr_fields(),
             post_admission_ocr_observations: 0,
             post_admission_ocr_comparison_recorded: false,
             current_recognition_id: None,

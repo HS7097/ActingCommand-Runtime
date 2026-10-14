@@ -568,6 +568,19 @@ v0.12.0, so nothing written by a 0.12 build becomes unreadable.
 | L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
 | L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
 
+### 1.40 Wave 10 slice OUT-1 (#390, forced compromises O-03, O-04, O-05)
+
+OUT-1 writes no ledger record, wire shape or configuration key, and adds or retires no code.
+One resource file format rule is relaxed (O1-1). The catalog rule (a catalog references a
+subset of its package's declared outcomes, [scheduling/README.md](scheduling/README.md)
+"Runtime Boundary") and the policy input records of declared outcomes a successful run did
+not produce ("Settlement Outcome Records") are not persisted; `fact_snapshot_id` hashes the
+projected outcomes, so it follows them.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| O1-1 | task schema `0.8` zero-input fields task (`operations: []`): `scheduling_outcome.mappings` | relaxed rule (resource file format, not a ledger shape) | OUT-1 | resource side | one `fields_recorded` mapping whose terminal pages are the fields pages, and any other mappings; every mapping `no_designated_effect`; the target pages are every mapping's terminal pages, no page in two mappings ([ocr-fields.md](ocr-fields.md)); a run that ends on another mapping's page has no OCR observation and no fields report; the `package` interface revision is declared once by A8 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
