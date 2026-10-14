@@ -40,9 +40,9 @@ mod provider;
 mod provider_startup;
 // Workflow #384 D2-S2.
 mod recognition_binding;
-// Workflow #384 D2-S3.
 mod recovery_read;
 mod recovery_timing;
+// Workflow #384 D2-S3.
 mod resource_adjustment;
 mod strategy;
 mod suspension_report;
