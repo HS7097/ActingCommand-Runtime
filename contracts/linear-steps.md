@@ -119,14 +119,18 @@ frames; its click rectangle and input reference come from the current frame.
 Preparation sums the worst provider calls and declared sample waits for each legal candidate
 set against its applicable entry, transition, arrival or retry budget, capped by the task budget.
 Each guard's provider calls are checked against its step/task budget, as on the page-graph path.
-Preparation refuses `recognition_sample_budget_insufficient` before
-execution when they do not fit. Each wait establishes its absolute deadline once and passes it
+Preparation refuses `recognition_sample_budget_invalid` (`required_ms`, `limit_ms`, and
+`pack_operation_id` for an operation's wait) before execution when they do not fit. Each wait establishes its absolute deadline once and passes it
 through every observation, sample and backend call. Optional settling retains its declared
 extension from the first skip-target observation. Guard evaluation uses the deadline fixed at
 the dispatched step's start. Captures, backend evaluations and sample waits consume these
 budgets and retain their typed records and timing. Sample exhaustion, expired budgets,
-cancellation or changed geometry end the observation before any following input. Undeclared
-paths retain their single-frame behavior.
+cancellation or changed geometry end the observation before any following input. An observation
+whose sampling runs past its window is first made again in a new window, without any input, as
+often as the step's pacing allows (Workflow #386 SR-1, "Observe-only retries" in
+[business-identity-consensus.md](business-identity-consensus.md)); the guard's sampling deadline
+is checked once, before the effect intent. Undeclared paths retain their single-frame
+behavior.
 
 **Steps.** The first step waits for its page for `step_timeout_ms` at the control capture
 interval; when it does not pass, the task fails with `contained_task_linear_entry_unmatched`.

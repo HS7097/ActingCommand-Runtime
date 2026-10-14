@@ -14,7 +14,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// The member of the configuration file a row's key names: at the key itself, at the row's
-/// other path, or in the `instances[]` entry of `instance`. A `null` member is absent.
+/// other path, or in the `instances[]` entry of `instance` (a dotted member names a nested one,
+/// Workflow #405 `scheduling.random_delay.*`). A `null` member is absent.
 pub fn file_value<'a>(
     row: &KeyRow,
     key: &str,
@@ -28,8 +29,8 @@ pub fn file_value<'a>(
             file.get("instances")?
                 .as_array()?
                 .iter()
-                .find(|entry| entry.get("instance_id").and_then(Value::as_str) == Some(instance))?
-                .get(name)
+                .find(|entry| entry.get("instance_id").and_then(Value::as_str) == Some(instance))
+                .and_then(|entry| member(entry, name))
         }),
         (FilePath::InstanceMember, KeyName::Exact(_)) | (FilePath::Absent, _) => None,
     };

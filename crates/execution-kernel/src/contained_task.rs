@@ -2,7 +2,7 @@
 
 //! Runtime-owned admission and execution for contained semantic task packages.
 
-use crate::codes::ExecutionKernelCode;
+use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{
     ExecutionBundleError, ExternallyVerifiedBundle, InputFrameContext, ObservedFrame, RunDirective,
     RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
@@ -10,7 +10,7 @@ use crate::{
     select_run_operation,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     ApplicationLifecycleAction, EffectiveOperationTiming, EffectiveTaskTiming,
     EffectiveTimingSource, EffectiveTimingValue, InputAction, InputSamplingEvidence,
@@ -25,6 +25,7 @@ use actingcommand_contract::{
     TaskTimingScope, TaskTimingStage, ocr_confidence_milli, validate_resource_readings,
     validate_task_phases,
 };
+use sample_retry::SampleRetries;
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
     EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, validate_entry_page_set,
@@ -49,6 +50,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 mod linear;
+// Workflow #386 SR-1.
+mod sample_retry;
 mod selection;
 // Workflow #396 REC-1.
 #[cfg(test)]
@@ -57,6 +60,9 @@ mod text_locate_tests;
 mod timing;
 #[cfg(test)]
 mod unique_tests;
+// Workflow #386 SR-1.
+#[cfg(test)]
+mod gate_386_sr1;
 pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -172,6 +178,10 @@ pub struct ContainedTaskError {
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
+    /// Workflow #386 SR-1: the failure's outcome with the values its code declares, when the
+    /// kernel attached them (a sampling timeout's `attempts`, `timeout_ms` and `stage`; a
+    /// sampling budget's `required_ms` with `remaining_ms` or `limit_ms`).
+    values: Option<Box<Outcome>>,
 }
 
 impl ContainedTaskError {
@@ -187,6 +197,7 @@ impl ContainedTaskError {
             timing_check_position: None,
             declaration_issue: None,
             ppocr_diagnostics: Vec::new(),
+            values: None,
         }
     }
 
@@ -198,6 +209,34 @@ impl ContainedTaskError {
             timing_check_position: None,
             declaration_issue: None,
             ppocr_diagnostics: Vec::new(),
+            values: None,
+        }
+    }
+
+    /// Workflow #386 SR-1: a failure of `code` whose outcome carries the values `values` adds to
+    /// it.
+    fn valued(code: Code, values: impl FnOnce(Outcome) -> Outcome) -> Self {
+        Self::new(code).with_values(values(Outcome::new(code)))
+    }
+
+    /// Workflow #386 SR-1: the failure with `outcome` (its own code with the values it declares)
+    /// as its outcome.
+    fn with_values(mut self, outcome: Outcome) -> Self {
+        self.values = Some(Box::new(outcome));
+        self
+    }
+
+    /// Workflow #386 SR-1: whether the kernel attached the values the code declares.
+    pub fn has_values(&self) -> bool {
+        self.values.is_some()
+    }
+
+    /// The failure as an outcome: its code with the values the kernel attached (Workflow #386
+    /// SR-1), otherwise its code alone.
+    pub fn outcome(&self) -> Outcome {
+        match &self.values {
+            Some(outcome) => outcome.as_ref().clone(),
+            None => self.code.outcome(),
         }
     }
 
@@ -259,6 +298,38 @@ impl ContainedTaskError {
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
         self.declaration_issue.as_deref()
     }
+}
+
+/// Workflow #386 SR-1 (scheduling model §2.3): a running observation with less time left
+/// (`remaining`) than its recognition needs (`required_ms`); `code` is
+/// `recognition_sample_budget_insufficient` or `candidate_sample_budget_insufficient`.
+fn sample_budget_insufficient(
+    code: ExecutionKernelCode,
+    required_ms: u64,
+    remaining: Duration,
+) -> ContainedTaskError {
+    ContainedTaskError::valued(code.code(), |outcome| {
+        outcome.required_ms(required_ms).remaining_ms(remaining)
+    })
+}
+
+/// Workflow #386 SR-1 (scheduling model §2.4 item 1): admission refuses a task whose declared
+/// sampling (`required_ms`) exceeds the smaller of its step and task timeouts (`limit_ms`);
+/// `operation` names the operation when one operation exceeds it. `error` is the refusal of
+/// `recognition_sample_budget_invalid` with its developer detail.
+fn sample_budget_invalid(
+    error: ContainedTaskError,
+    required_ms: u64,
+    limit_ms: u64,
+    operation: Option<&str>,
+) -> ContainedTaskError {
+    let outcome = Outcome::new(ExecutionKernelCode::RecognitionSampleBudgetInvalid)
+        .required_ms(required_ms)
+        .limit_ms(limit_ms);
+    error.with_values(match operation {
+        Some(operation) => outcome.pack_operation_id(operation),
+        None => outcome,
+    })
 }
 
 impl fmt::Display for ContainedTaskError {
@@ -1879,6 +1950,27 @@ pub struct SharedInterruptFrame<'a> {
     pub own_pages: &'a [&'a str],
 }
 
+/// Workflow #386 SR-1 (scheduling model v1.4.2 §2.1 item 4; performance model §5.6): what the
+/// runtime hands the kernel at the start of each step, the `step_pacing()` seam. The kernel reads
+/// no configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StepPacing {
+    /// How often an observation whose sampling timed out is observed again, never repeating an
+    /// input: the configured base (`scheduling.recognition.sample_timeout_retries`) plus the
+    /// pacing curve's extra retries (none until performance slice P-k, which also adds the
+    /// step's pacing factor here; until then every window is unscaled).
+    pub sample_timeout_retries: u32,
+}
+
+impl StepPacing {
+    pub const fn new(sample_timeout_retries: u32) -> Self {
+        Self {
+            sample_timeout_retries,
+        }
+    }
+}
+
 /// Runtime boundary used by the semantic engine for device effects and durable facts.
 pub trait ContainedTaskRuntime {
     type Error;
@@ -1971,10 +2063,35 @@ pub trait ContainedTaskRuntime {
         Ok(())
     }
 
-    /// A finite sampler needs the production cancellation/lease checkpoint. Consumers that
-    /// cannot provide it explicitly refuse multi-sample execution.
-    fn candidate_sampling_checkpoint(&mut self) -> Result<bool, Self::Error> {
-        Ok(false)
+    /// Workflow #386 SR-1 (scheduling model §2.2): whether this runtime takes the multi-frame
+    /// samples of target consensus and candidate layouts. A runtime that does not (offline
+    /// simulation, fixtures) keeps single-frame waits and refuses sampled execution with
+    /// `recognition_sampling_runtime_unsupported` / `candidate_sampling_runtime_unsupported`.
+    fn sampling_supported(&self) -> bool {
+        false
+    }
+
+    /// The production cancellation checkpoint between samples and waits: an error when the run
+    /// was cancelled (its deadline, the client, an operator pause), under the runtime's own
+    /// code. Workflow #386 SR-1: it no longer says whether sampling may go on
+    /// ([`Self::sampling_supported`] does), so a lost permission cannot be written at all.
+    fn candidate_sampling_checkpoint(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the pacing of the step that starts
+    /// now. A runtime without the scheduling configuration gives no observe-only retry.
+    fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
+        Ok(StepPacing::default())
+    }
+
+    /// Workflow #386 SR-1 (scheduling model §2.1 items 2–3): the monotonic instant an
+    /// observation's window is opened at and its sampling deadline is compared with.
+    /// Production runtimes keep the monotonic clock; a test runtime scripts it. It is the narrow
+    /// form of test plan E-3's clock seam, which performance slice P-k widens to every kernel
+    /// timer.
+    fn observation_now(&mut self) -> Instant {
+        Instant::now()
     }
 
     fn record_candidate_evaluation(
@@ -2258,24 +2375,35 @@ impl PreparedContainedTask {
             program
                 .validate_linear(&control, &detector)?
                 .validate_sampling_budget(&program, &control, &evaluator, &detector)?;
-        } else if !evaluator.pack().target_consensus.is_empty()
-            && selection::page_recognition_budget_ms(&evaluator, &detector, None)? > admission_limit
-        {
-            return Err(ContainedTaskError::new(
-                ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
-            ));
+        } else if !evaluator.pack().target_consensus.is_empty() {
+            let required_ms = selection::page_recognition_budget_ms(&evaluator, &detector, None)?;
+            if required_ms > admission_limit {
+                return Err(sample_budget_invalid(
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::RecognitionSampleBudgetInvalid.code(),
+                    ),
+                    required_ms,
+                    admission_limit,
+                    None,
+                ));
+            }
         }
         for operation in &program.operations {
             if let Some(required_ms) =
                 selection::sampling_budget_ms(operation, &evaluator, &detector)?
                 && required_ms > admission_limit
             {
-                return Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
-                    format!(
-                        "operation={} requires {required_ms}ms across page/candidate/guard calls and waits; limit={admission_limit}ms",
-                        operation.id
+                return Err(sample_budget_invalid(
+                    ContainedTaskError::with_detail(
+                        ExecutionKernelCode::RecognitionSampleBudgetInvalid.code(),
+                        format!(
+                            "operation={} requires {required_ms}ms across page/candidate/guard calls and waits; limit={admission_limit}ms",
+                            operation.id
+                        ),
                     ),
+                    required_ms,
+                    admission_limit,
+                    Some(operation.id.as_str()),
                 ));
             }
         }
@@ -2542,6 +2670,15 @@ impl PreparedContainedTask {
         };
         let mut timing = window(started);
         if !self.evaluator.pack().target_consensus.is_empty() {
+            // Workflow #386 SR-1 (scheduling model §2.1): a consensus verdict whose sampling
+            // timed out is observed again in a new window.
+            let mut retries = SampleRetries::new(
+                runtime
+                    .step_pacing()
+                    .map_err(ContainedTaskRunError::operation::<R>)?,
+                ExecutionKernelLocation::ObservationEntry,
+            );
+            timing = window(runtime.observation_now());
             loop {
                 let scene = match self.capture_frame_scene(
                     runtime,
@@ -2550,14 +2687,19 @@ impl PreparedContainedTask {
                     timing,
                     Some(PageCandidates::Exclusive(&pages)),
                     Some(timing.deadline()),
-                )? {
-                    Ok(observation) => return Ok(Some(observation.page_label)),
-                    Err(scene) => scene,
+                ) {
+                    Ok(Ok(observation)) => return Ok(Some(observation.page_label)),
+                    Ok(Err(scene)) => scene,
+                    Err(failure) => {
+                        retries.retry(failure, budget)?;
+                        timing = window(runtime.observation_now());
+                        continue;
+                    }
                 };
                 if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
                     return Ok(None);
                 }
-                timing = window(Instant::now());
+                timing = window(runtime.observation_now());
             }
         }
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
@@ -2587,12 +2729,14 @@ impl PreparedContainedTask {
                 }
                 return Ok(None);
             }
-            if !runtime
-                .candidate_sampling_checkpoint()
-                .map_err(ContainedTaskRunError::operation::<R>)?
-            {
+            // Workflow #386 SR-1 (scheduling model §2.2): a runtime without sampling keeps the
+            // single frame; the checkpoint itself only answers cancellation.
+            if !runtime.sampling_supported() {
                 return Ok(None);
             }
+            runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = Instant::now();
@@ -2620,26 +2764,35 @@ impl PreparedContainedTask {
         let page = self
             .linear_entry_page()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let window = Duration::from_millis(
+            self.control
+                .step_timeout()
+                .milliseconds
+                .min(self.control.task_timeout().milliseconds),
+        );
+        // Workflow #386 SR-1 (scheduling model §2.1): an observation whose sampling timed out is
+        // made again in a new window.
+        let mut retries = SampleRetries::new(
+            runtime
+                .step_pacing()
+                .map_err(ContainedTaskRunError::operation::<R>)?,
+            ExecutionKernelLocation::ObservationEntry,
+        );
         loop {
-            let started = Instant::now();
+            let started = runtime.observation_now();
             let timing = ContainedTaskTimingContext::new(
                 started,
-                started
-                    + Duration::from_millis(
-                        self.control
-                            .step_timeout()
-                            .milliseconds
-                            .min(self.control.task_timeout().milliseconds),
-                    ),
+                started + window,
                 actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
             );
-            match self.recognize_entry_frame(runtime, page, timing)? {
-                EntryFrame::Matched(_) => return Ok(true),
-                EntryFrame::Unmatched(scene) => {
+            match self.recognize_entry_frame(runtime, page, timing) {
+                Ok(EntryFrame::Matched(_)) => return Ok(true),
+                Ok(EntryFrame::Unmatched(scene)) => {
                     if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
                         return Ok(false);
                     }
                 }
+                Err(failure) => retries.retry(failure, window)?,
             }
         }
     }
@@ -2664,7 +2817,17 @@ impl PreparedContainedTask {
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let mut started = Instant::now();
-        let mut timing = ContainedTaskTimingContext::new(started, started + budget, origin);
+        // Workflow #386 SR-1 (scheduling model §2.1): the observation window opens on the
+        // observation clock; a sampling timeout is observed again in a new window.
+        let mut retries = SampleRetries::new(
+            runtime
+                .step_pacing()
+                .map_err(ContainedTaskRunError::operation::<R>)?,
+            ExecutionKernelLocation::ObservationEntry,
+        );
+        let mut window_started = runtime.observation_now();
+        let mut timing =
+            ContainedTaskTimingContext::new(window_started, window_started + budget, origin);
         loop {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
@@ -2681,20 +2844,36 @@ impl PreparedContainedTask {
                     succeeded: matched.is_ok(),
                 });
             }
-            let scene = match matched? {
-                EntryFrame::Matched(_) => {
+            let scene = match matched {
+                Ok(EntryFrame::Matched(_)) => {
                     return Ok(LinearEntryAwait {
                         timing,
                         unmatched: None,
                     });
                 }
-                EntryFrame::Unmatched(scene) => scene,
+                Ok(EntryFrame::Unmatched(scene)) => scene,
+                Err(failure) => {
+                    retries.retry(failure, budget)?;
+                    started = Instant::now();
+                    window_started = runtime.observation_now();
+                    timing = ContainedTaskTimingContext::new(
+                        window_started,
+                        window_started + budget,
+                        origin,
+                    );
+                    continue;
+                }
             };
             // Workflow #373 NAV-6 (§6.2): the wait's budget is paused while a shared interrupt
             // page is handled.
             if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
                 started += paused;
-                timing = ContainedTaskTimingContext::new(started, started + budget, origin);
+                window_started += paused;
+                timing = ContainedTaskTimingContext::new(
+                    window_started,
+                    window_started + budget,
+                    origin,
+                );
                 continue;
             }
             let elapsed = started.elapsed();
@@ -3145,6 +3324,11 @@ impl PreparedContainedTask {
             )
             .into());
         }
+        // Workflow #386 SR-1 (scheduling model §2.1 item 4): the pacing of the run's first
+        // observations; every step takes its own at its start.
+        let mut pacing = runtime
+            .step_pacing()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
         if self.control.execution_mode == linear::LINEAR_STEPS {
             // Workflow #336: the admitted step plan, resolved again from the admitted program.
             let plan = self
@@ -3158,6 +3342,7 @@ impl PreparedContainedTask {
                     step_timeout,
                     capture_interval,
                     timing: observation_timing,
+                    pacing,
                 },
             );
         }
@@ -3166,10 +3351,13 @@ impl PreparedContainedTask {
                 && operation.application.is_some()
                 && self.control.execution_mode != "recognize_only"
         });
-        let entry_timing = if self.evaluator.pack().target_consensus.is_empty() {
-            observation_timing
-        } else {
-            observation_timing.with_deadline(Instant::now() + step_timeout)
+        let consensus = !self.evaluator.pack().target_consensus.is_empty();
+        let entry_timing = |now: Instant| {
+            if consensus {
+                observation_timing.with_deadline(now + step_timeout)
+            } else {
+                observation_timing
+            }
         };
         let required_entry = self
             .entry_page
@@ -3182,10 +3370,20 @@ impl PreparedContainedTask {
                 &required_entry.pages,
                 step_timeout.min(task_timeout),
                 capture_interval,
-                entry_timing,
+                observation_timing,
+                pacing,
             )?)
         } else if initial_application.is_some() {
-            self.capture_page(runtime, ocr_collector, None, entry_timing)?
+            // Workflow #386 SR-1: an entry observation whose sampling timed out is made again
+            // in a new window.
+            let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
+            loop {
+                let timing = entry_timing(runtime.observation_now());
+                match self.capture_page(runtime, ocr_collector, None, timing) {
+                    Ok(observed) => break observed,
+                    Err(failure) => retries.retry(failure, step_timeout)?,
+                }
+            }
         } else {
             Some(self.capture_until_page(
                 runtime,
@@ -3193,6 +3391,7 @@ impl PreparedContainedTask {
                 step_timeout,
                 capture_interval,
                 observation_timing,
+                (pacing, ExecutionKernelLocation::ObservationPageWait),
             )?)
         };
         if Instant::now() >= task_deadline {
@@ -3300,6 +3499,7 @@ impl PreparedContainedTask {
                         step_timeout,
                         capture_interval,
                         observation_timing,
+                        (pacing, ExecutionKernelLocation::ObservationPageWait),
                     )?);
                     machine
                         .observe_page(
@@ -3331,15 +3531,20 @@ impl PreparedContainedTask {
                         self.program.defaults,
                         self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
                     )?;
+                    // Workflow #386 SR-1 (scheduling model §2.1 item 4): the step's pacing, taken
+                    // once at its start.
+                    pacing = runtime
+                        .step_pacing()
+                        .map_err(ContainedTaskRunError::operation::<R>)?;
                     let mut attempt = 1;
-                    loop {
+                    'attempt: loop {
                         if started.elapsed() >= task_timeout {
                             return Err(self
                                 .task_timeout_error(TaskTimingStage::Dispatch, task_deadline, None)
                                 .into());
                         }
-                        let step_timing =
-                            observation_timing.with_deadline(Instant::now() + step_timeout);
+                        let mut step_timing = observation_timing
+                            .with_deadline(runtime.observation_now() + step_timeout);
                         let sampling_budget = selection::sampling_budget_ms(
                             operation,
                             &self.evaluator,
@@ -3380,100 +3585,156 @@ impl PreparedContainedTask {
                                 }
                             }
                         } else {
-                            let observation = observation.as_ref().ok_or_else(|| {
-                                ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
-                            })?;
-                            // A select step (Workflow #308) chooses its candidate and confirms
-                            // it on a fresh frame, whose input context then binds the tap; a
-                            // click is guarded on the step's own frame.
-                            let pre_input = if operation.select.is_some() {
-                                self.select_attempt(
-                                    runtime,
-                                    operation,
-                                    observation,
-                                    step_index,
-                                    step_timing,
-                                )
-                                .map(|selected| (selected.guard.clone(), None, Some(selected)))
-                            } else {
-                                operation
-                                    .guard_outcome(
-                                        &self.control,
-                                        observation,
-                                        &self.evaluator,
-                                        runtime,
-                                        Some(step_timing),
+                            // Workflow #386 SR-1 (scheduling model §2.1 items 1-3): an observation
+                            // before the input (the guard's frame, a selection's frames) whose
+                            // sampling timed out is made again in a new window: the step's frame
+                            // is captured, sampled and recognized again, then guarded or selected
+                            // again. No input is repeated, `StepStarted` is not written again, the
+                            // pack's attempt count stays, and the retry comes before the pack's
+                            // own failure decision. The one sampling deadline check before the
+                            // input precedes the effect intent.
+                            let mut retries = SampleRetries::new(
+                                pacing,
+                                ExecutionKernelLocation::ObservationBeforeInput,
+                            );
+                            let (guard, action, sampling, input_context) = loop {
+                                let observed = observation.as_ref().ok_or_else(|| {
+                                    ContainedTaskError::new(
+                                        SharedCode::ContainedTaskPageUnknown.code(),
                                     )
-                                    .map(|(guard, target)| (guard, target, None))
-                            };
-                            let (guard, target, selected) = match pre_input {
-                                Ok(outcome) => outcome,
-                                Err(ContainedTaskRunError::Task(error)) => {
-                                    let Some(policy) = retry_policy.as_ref() else {
-                                        return Err(error.into());
-                                    };
-                                    match operation.failure_decision(
-                                        policy,
-                                        attempt,
-                                        error.code(),
-                                        Some(observation.page_label.clone()),
-                                        RunFailureStage::PreExecutionGuard,
-                                    )? {
-                                        RunOperationFailureDecision::RequestRecovery(trigger) => {
-                                            machine.operation_needs_recovery(trigger).map_err(
-                                                |_| {
-                                                    ContainedTaskError::new(
-                                                        SharedCode::ContainedTaskStateInvalid
-                                                            .code(),
-                                                    )
-                                                },
-                                            )?;
-                                            break;
-                                        }
-                                        RunOperationFailureDecision::Fail(_) => {
-                                            return Err(error.into());
-                                        }
-                                        RunOperationFailureDecision::Retry { .. } => {
-                                            return Err(ContainedTaskError::new(
-                                                SharedCode::ContainedTaskStateInvalid.code(),
-                                            )
-                                            .into());
+                                })?;
+                                // A select step (Workflow #308) chooses its candidate and
+                                // confirms it on a fresh frame, whose input context then binds
+                                // the tap; a click is guarded on the step's own frame.
+                                let pre_input = if operation.select.is_some() {
+                                    self.select_attempt(
+                                        runtime,
+                                        operation,
+                                        observed,
+                                        step_index,
+                                        step_timing,
+                                        (&retries, step_timeout),
+                                    )
+                                    .map(|selected| (selected.guard.clone(), None, Some(selected)))
+                                } else {
+                                    operation
+                                        .guard_outcome(
+                                            &self.control,
+                                            observed,
+                                            &self.evaluator,
+                                            runtime,
+                                            Some(step_timing),
+                                        )
+                                        .map(|(guard, target)| (guard, target, None))
+                                };
+                                let (guard, target, selected) = match pre_input {
+                                    Ok(outcome) => outcome,
+                                    Err(failure) => {
+                                        let timed_out = sample_retry::is_timeout(&failure);
+                                        match retries.retry(failure, step_timeout) {
+                                            Ok(()) => {
+                                                let (again, timing) = self.observe_before_input(
+                                                    runtime,
+                                                    observation_timing,
+                                                    step_timeout,
+                                                    &mut retries,
+                                                )?;
+                                                observation = Some(again);
+                                                step_timing = timing;
+                                                continue;
+                                            }
+                                            // Spent retries end the run with the timeout (§2.1
+                                            // item 6), not through the pack's failure decision.
+                                            Err(failure) if timed_out => return Err(failure),
+                                            Err(ContainedTaskRunError::Task(error)) => {
+                                                let Some(policy) = retry_policy.as_ref() else {
+                                                    return Err(error.into());
+                                                };
+                                                match operation.failure_decision(
+                                                    policy,
+                                                    attempt,
+                                                    error.code(),
+                                                    Some(observed.page_label.clone()),
+                                                    RunFailureStage::PreExecutionGuard,
+                                                )? {
+                                                    RunOperationFailureDecision::RequestRecovery(
+                                                        trigger,
+                                                    ) => {
+                                                        machine
+                                                            .operation_needs_recovery(trigger)
+                                                            .map_err(|_| {
+                                                                ContainedTaskError::new(
+                                                                    SharedCode::ContainedTaskStateInvalid
+                                                                        .code(),
+                                                                )
+                                                            })?;
+                                                        break 'attempt;
+                                                    }
+                                                    RunOperationFailureDecision::Fail(_) => {
+                                                        return Err(error.into());
+                                                    }
+                                                    RunOperationFailureDecision::Retry { .. } => {
+                                                        return Err(ContainedTaskError::new(
+                                                            SharedCode::ContainedTaskStateInvalid
+                                                                .code(),
+                                                        )
+                                                        .into());
+                                                    }
+                                                }
+                                            }
+                                            Err(error) => return Err(error),
                                         }
                                     }
-                                }
-                                Err(error) => return Err(error),
-                            };
-                            let action_seed = runtime
-                                .action_seed(step_index, &operation_id)
-                                .map_err(ContainedTaskRunError::operation::<R>)?;
-                            let (action, sampling, input_context) = match selected {
-                                Some(selected) => {
-                                    let (action, sampling) = selected
-                                        .input_action(&self.control.resolution, action_seed)?;
-                                    (action, sampling, selected.frame.input_context)
-                                }
-                                None => {
-                                    let click = operation.click.as_ref().ok_or_else(|| {
-                                        ContainedTaskError::new(
-                                            ExecutionKernelCode::ContainedTaskOperationInvalid
-                                                .code(),
-                                        )
-                                    })?;
-                                    let (action, sampling) = click.input_action(
-                                        &self.control.resolution,
-                                        target.as_ref(),
-                                        action_seed,
+                                };
+                                let action_seed = runtime
+                                    .action_seed(step_index, &operation_id)
+                                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                                let (action, sampling, input_context) = match selected {
+                                    Some(selected) => {
+                                        let (action, sampling) = selected
+                                            .input_action(&self.control.resolution, action_seed)?;
+                                        (action, sampling, selected.frame.input_context)
+                                    }
+                                    None => {
+                                        let click = operation.click.as_ref().ok_or_else(|| {
+                                            ContainedTaskError::new(
+                                                ExecutionKernelCode::ContainedTaskOperationInvalid
+                                                    .code(),
+                                            )
+                                        })?;
+                                        let (action, sampling) = click.input_action(
+                                            &self.control.resolution,
+                                            target.as_ref(),
+                                            action_seed,
+                                        )?;
+                                        (action, sampling, observed.input_context.clone())
+                                    }
+                                };
+                                // The one sampling deadline check before the input (§2.1 item
+                                // 3): a timeout here is the observation's, and is retried.
+                                if sampling_budget.is_some()
+                                    && runtime.observation_now() >= step_timing.deadline()
+                                {
+                                    let timeout = ContainedTaskError::new(
+                                        ExecutionKernelCode::RecognitionSampleDeadlineExceeded
+                                            .code(),
+                                    );
+                                    retries.retry(
+                                        ContainedTaskRunError::<R::Error>::Task(timeout),
+                                        step_timeout,
                                     )?;
-                                    (action, sampling, observation.input_context.clone())
+                                    let (again, timing) = self.observe_before_input(
+                                        runtime,
+                                        observation_timing,
+                                        step_timeout,
+                                        &mut retries,
+                                    )?;
+                                    observation = Some(again);
+                                    step_timing = timing;
+                                    continue;
                                 }
+                                break (guard, action, sampling, input_context);
                             };
-                            if sampling_budget.is_some() && Instant::now() >= step_timing.deadline()
-                            {
-                                return Err(ContainedTaskError::new(
-                                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
-                                )
-                                .into());
-                            }
                             runtime
                                 .record(ContainedTaskTrace::EffectIntent {
                                     step_index,
@@ -3491,13 +3752,6 @@ impl PreparedContainedTask {
                                         None,
                                     )
                                     .into());
-                            }
-                            if sampling_budget.is_some() && Instant::now() >= step_timing.deadline()
-                            {
-                                return Err(ContainedTaskError::new(
-                                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
-                                )
-                                .into());
                             }
                             runtime
                                 .input(action, input_context)
@@ -3550,6 +3804,7 @@ impl PreparedContainedTask {
                                 step_timeout,
                                 capture_interval,
                                 observation_timing,
+                                (pacing, ExecutionKernelLocation::ObservationAfterInput),
                             )?);
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
@@ -3589,6 +3844,7 @@ impl PreparedContainedTask {
                             confirmation_timeout,
                             confirmation_interval,
                             observation_timing,
+                            pacing,
                         )?;
                         let (failed_observation, hit_error_page, timing_failure) = match resolution
                         {
@@ -3691,6 +3947,7 @@ impl PreparedContainedTask {
                                     confirmation_timeout,
                                     confirmation_interval,
                                     observation_timing,
+                                    pacing,
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = Some(reached);
@@ -4152,6 +4409,9 @@ impl PreparedContainedTask {
         }
     }
 
+    /// A wait for any page of the package, up to `timeout`. Workflow #386 SR-1 (scheduling model
+    /// §2.1): an observation whose sampling timed out is made again in a new window of
+    /// `timeout`, as `retries` (the step's pacing and which observation this is) allows.
     fn capture_until_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -4159,22 +4419,33 @@ impl PreparedContainedTask {
         timeout: Duration,
         interval: Duration,
         timing: ContainedTaskTimingContext,
+        retries: (StepPacing, ExecutionKernelLocation),
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let base_timing = timing;
+        let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = Instant::now();
+        let mut window_started = runtime.observation_now();
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
             } else {
-                base_timing.with_deadline(started + timeout)
+                base_timing.with_deadline(window_started + timeout)
             };
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
                     .into());
             }
-            let observation = self.capture_page_scene(runtime, ocr_collector, None, timing)?;
+            let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
+                Ok(observation) => observation,
+                Err(failure) => {
+                    retries.retry(failure, timeout)?;
+                    started = Instant::now();
+                    window_started = runtime.observation_now();
+                    continue;
+                }
+            };
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::PageRecognition, task_deadline, None)
@@ -4189,6 +4460,7 @@ impl PreparedContainedTask {
             // while one is handled.
             if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
                 started += paused;
+                window_started += paused;
                 continue;
             }
             if started.elapsed() >= timeout {
@@ -4226,8 +4498,13 @@ impl PreparedContainedTask {
     /// interval, until the required page matches or `budget` (`min(step_timeout,
     /// task_timeout)`) is spent, and records the entry once: matched, or unmatched with the last
     /// frame. A pack with target consensus keeps its single consensus verdict, and a runtime
-    /// without the production checkpoint (offline simulation, fixtures) keeps the single-frame
-    /// check; the checkpoint is also asked before every further frame.
+    /// without sampling (offline simulation, fixtures) keeps the single-frame check; the
+    /// cancellation checkpoint is asked before every further frame.
+    ///
+    /// Workflow #386 SR-1 (scheduling model §2.1, §2.2): `waits` is "no consensus and the runtime
+    /// samples"; a consensus verdict whose sampling timed out is observed again in a new window
+    /// of `budget` (within the task's `timing`), as the run's `pacing` allows.
+    #[allow(clippy::too_many_arguments)]
     fn await_ordinary_home_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -4236,38 +4513,52 @@ impl PreparedContainedTask {
         budget: Duration,
         interval: Duration,
         timing: ContainedTaskTimingContext,
+        pacing: StepPacing,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let unmatched =
             || ContainedTaskError::new(SharedCode::ContainedTaskHomeEntryNotMatched.code());
-        let waits = self.evaluator.pack().target_consensus.is_empty()
-            && runtime
-                .candidate_sampling_checkpoint()
-                .map_err(ContainedTaskRunError::operation::<R>)?;
-        let mut deadline = (Instant::now() + budget).min(timing.deadline());
+        let consensus = !self.evaluator.pack().target_consensus.is_empty();
+        let waits = !consensus && runtime.sampling_supported();
+        let entry_window = |now: Instant| {
+            if consensus {
+                timing.with_deadline(now + budget)
+            } else {
+                timing
+            }
+        };
+        let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
+        let mut window = entry_window(runtime.observation_now());
+        let mut deadline = (Instant::now() + budget).min(window.deadline());
         loop {
             let scene = match self.capture_page_scene(
                 runtime,
                 ocr_collector,
                 Some(RequiredEntry { pages, waits }),
-                timing,
-            )? {
-                Ok(observation) => return Ok(observation),
-                Err(scene) => scene,
+                window,
+            ) {
+                Ok(Ok(observation)) => return Ok(observation),
+                Ok(Err(scene)) => scene,
+                Err(failure) => {
+                    retries.retry(failure, budget)?;
+                    window = entry_window(runtime.observation_now());
+                    continue;
+                }
             };
             if !waits {
                 return Err(unmatched().into());
             }
             let now = Instant::now();
             let expired = now >= deadline;
-            if expired
-                || !runtime
+            if !expired {
+                runtime
                     .candidate_sampling_checkpoint()
-                    .map_err(ContainedTaskRunError::operation::<R>)?
-            {
+                    .map_err(ContainedTaskRunError::operation::<R>)?;
+            }
+            if expired {
                 // Workflow #373 NAV-6 (§4.4, §6.1 point 1): the entry's verdict is unmatched; its
                 // last frame is offered to the shared interrupt pages, and after a handled one
                 // the entry check starts again.
-                if expired && self.offer_shared_interrupt(runtime, &scene)?.is_some() {
+                if self.offer_shared_interrupt(runtime, &scene)?.is_some() {
                     deadline = (Instant::now() + budget).min(timing.deadline());
                     continue;
                 }
@@ -4286,11 +4577,39 @@ impl PreparedContainedTask {
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
                 identity,
-                context: timing,
+                context: window,
                 started: wait_started,
                 ended: Instant::now(),
                 succeeded: true,
             });
+        }
+    }
+
+    /// Workflow #386 SR-1 (scheduling model §2.1 items 1-2): the observation before a step's
+    /// input made again in a new window of `window` within the task's `timing`: a fresh frame,
+    /// its samples and its recognition, feeding no collector. A frame without a page of the
+    /// package is `contained_task_page_unknown`, as a step without an observation is; a
+    /// sampling timeout uses up another of `retries`.
+    fn observe_before_input<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        timing: ContainedTaskTimingContext,
+        window: Duration,
+        retries: &mut SampleRetries,
+    ) -> Result<(PageObservation, ContainedTaskTimingContext), ContainedTaskRunError<R::Error>>
+    {
+        loop {
+            let step_timing = timing.with_deadline(runtime.observation_now() + window);
+            match self.capture_frame_scene(runtime, None, None, step_timing, None, None) {
+                Ok(Ok(observation)) => return Ok((observation, step_timing)),
+                Ok(Err(_)) => {
+                    return Err(ContainedTaskError::new(
+                        SharedCode::ContainedTaskPageUnknown.code(),
+                    )
+                    .into());
+                }
+                Err(failure) => retries.retry(failure, window)?,
+            }
         }
     }
 
@@ -4379,29 +4698,36 @@ impl PreparedContainedTask {
             let mut sample_scenes = Vec::new();
             let mut sample_geometry: Option<Option<InputFrameContext>> = None;
             if sampled {
-                if !runtime
-                    .candidate_sampling_checkpoint()
-                    .map_err(ContainedTaskRunError::operation::<R>)?
-                {
+                // Workflow #386 SR-1 (scheduling model §2.2): whether the runtime samples is its
+                // own answer; the checkpoint only answers cancellation.
+                if !runtime.sampling_supported() {
                     return Err(ContainedTaskError::new(
                         ExecutionKernelCode::RecognitionSamplingRuntimeUnsupported.code(),
                     )
                     .into());
                 }
-                if Instant::now() >= sample_deadline
-                    || Duration::from_millis(selection::page_recognition_budget_ms(
-                        &self.evaluator,
-                        &self.detector,
-                        candidates,
-                    )?) > sample_deadline.saturating_duration_since(Instant::now())
-                {
-                    return Err(ContainedTaskError::new(
-                        ExecutionKernelCode::RecognitionSampleBudgetInsufficient.code(),
+                runtime
+                    .candidate_sampling_checkpoint()
+                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                // Workflow #386 SR-1 (§2.3): too little time left for this recognition ends the
+                // run before any capture, with what it needs and what is left.
+                let required_ms = selection::page_recognition_budget_ms(
+                    &self.evaluator,
+                    &self.detector,
+                    candidates,
+                )?;
+                let remaining =
+                    sample_deadline.saturating_duration_since(runtime.observation_now());
+                if remaining.is_zero() || Duration::from_millis(required_ms) > remaining {
+                    return Err(sample_budget_insufficient(
+                        ExecutionKernelCode::RecognitionSampleBudgetInsufficient,
+                        required_ms,
+                        remaining,
                     )
                     .into());
                 }
                 for _ in 1..self.evaluator.target_sample_frames() {
-                    if Instant::now() >= sample_deadline {
+                    if runtime.observation_now() >= sample_deadline {
                         return Err(ContainedTaskError::new(
                             ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
@@ -4436,7 +4762,9 @@ impl PreparedContainedTask {
                     sample_scenes.push(scene_from_frame(&sample)?);
                     let interval =
                         Duration::from_millis(self.evaluator.target_sample_interval_ms());
-                    if interval >= sample_deadline.saturating_duration_since(Instant::now()) {
+                    if interval
+                        >= sample_deadline.saturating_duration_since(runtime.observation_now())
+                    {
                         return Err(ContainedTaskError::new(
                             ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
@@ -4454,19 +4782,20 @@ impl PreparedContainedTask {
                         ended: Instant::now(),
                         succeeded: true,
                     });
-                    if !runtime
+                    // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code;
+                    // only the deadline is compared here.
+                    runtime
                         .candidate_sampling_checkpoint()
-                        .map_err(ContainedTaskRunError::operation::<R>)?
-                        || Instant::now() >= sample_deadline
-                    {
+                        .map_err(ContainedTaskRunError::operation::<R>)?;
+                    if runtime.observation_now() >= sample_deadline {
                         return Err(ContainedTaskError::new(
-                            ExecutionKernelCode::RecognitionSampleDeadlineOrPermissionLost.code(),
+                            ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                         )
                         .into());
                     }
                 }
             }
-            if sampled && Instant::now() >= sample_deadline {
+            if sampled && runtime.observation_now() >= sample_deadline {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                 )
@@ -4522,7 +4851,7 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             let evaluation_started = Instant::now();
-            if sampled && evaluation_started >= sample_deadline {
+            if sampled && runtime.observation_now() >= sample_deadline {
                 return Err(ContainedTaskError::new(
                     ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
                 )
@@ -4530,6 +4859,9 @@ impl PreparedContainedTask {
             }
             let budget_before = timing.budget_at(evaluation_started);
             let mut recording_error = None;
+            // Workflow #386 SR-1 (§2.1): a sample recognition that ran past the deadline is the
+            // observation's sampling timeout, not a recognition failure.
+            let mut deadline_passed = false;
             let mut sampled_duration = Duration::ZERO;
             let results = {
                 let mut recorder =
@@ -4559,7 +4891,8 @@ impl PreparedContainedTask {
                             );
                         }
                         sampled_duration += started.elapsed();
-                        if Instant::now() >= sample_deadline {
+                        if runtime.observation_now() >= sample_deadline {
+                            deadline_passed = true;
                             return Err(
                                 actingcommand_recognition_pack::RecognitionPackError::fatal(
                                     "recognition sample deadline exceeded",
@@ -4610,6 +4943,12 @@ impl PreparedContainedTask {
             runtime
                 .record_page_evaluations("page", &results, Some(evaluation_timing))
                 .map_err(ContainedTaskRunError::Boundary)?;
+            if deadline_passed {
+                return Err(ContainedTaskError::new(
+                    ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                )
+                .into());
+            }
             let ppocr_diagnostics = match &results {
                 Ok(outcomes) => outcomes
                     .iter()
@@ -4633,16 +4972,18 @@ impl PreparedContainedTask {
                     )
                     .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })?;
-            if sampled
-                && (!runtime
+            if sampled {
+                // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code;
+                // past the deadline the observation's sampling timed out.
+                runtime
                     .candidate_sampling_checkpoint()
-                    .map_err(ContainedTaskRunError::operation::<R>)?
-                    || Instant::now() >= sample_deadline)
-            {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::RecognitionSampleDeadlineOrPermissionLost.code(),
-                )
-                .into());
+                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                if runtime.observation_now() >= sample_deadline {
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                    )
+                    .into());
+                }
             }
             let matched_pages = evaluations
                 .iter()
@@ -4754,6 +5095,10 @@ impl PreparedContainedTask {
         result
     }
 
+    /// The wait for the step's destination after its input. Workflow #386 SR-1 (scheduling model
+    /// §2.1 item 1): an observation whose sampling timed out is made again in a new window of
+    /// `timeout`, as the step's `pacing` allows; the input is never repeated.
+    #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -4762,16 +5107,20 @@ impl PreparedContainedTask {
         timeout: Duration,
         interval: Duration,
         timing: ContainedTaskTimingContext,
+        pacing: StepPacing,
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let base_timing = timing;
+        let mut retries =
+            SampleRetries::new(pacing, ExecutionKernelLocation::ObservationAfterInput);
         let mut started = Instant::now();
+        let mut window_started = runtime.observation_now();
         let mut last_observation = None;
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
             } else {
-                base_timing.with_deadline(started + timeout)
+                base_timing.with_deadline(window_started + timeout)
             };
             if Instant::now() >= task_deadline {
                 return Err(self
@@ -4779,7 +5128,15 @@ impl PreparedContainedTask {
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
-            let observation = self.capture_page_scene(runtime, ocr_collector, None, timing)?;
+            let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
+                Ok(observation) => observation,
+                Err(failure) => {
+                    retries.retry(failure, timeout)?;
+                    started = Instant::now();
+                    window_started = runtime.observation_now();
+                    continue;
+                }
+            };
             if Instant::now() >= task_deadline {
                 return Err(self
                     .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
@@ -4821,6 +5178,7 @@ impl PreparedContainedTask {
             };
             if let Some(paused) = paused {
                 started += paused;
+                window_started += paused;
                 continue;
             }
             if started.elapsed() >= timeout {
@@ -7344,17 +7702,22 @@ impl TaskOperation {
                 .unwrap_or(original)
         });
         let mut recording_error = None;
+        // Workflow #386 SR-1 (scheduling model §2.1): a sample recognition that ran past the
+        // deadline is the observation's sampling timeout, not a guard evaluation failure.
+        let mut deadline_passed = false;
         let result = {
-            if let Some((_, deadline)) = sampling
-                && (!runtime
+            // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code; past
+            // the deadline the observation's sampling timed out.
+            if let Some((_, deadline)) = sampling {
+                runtime
                     .candidate_sampling_checkpoint()
-                    .map_err(ContainedTaskRunError::operation::<R>)?
-                    || Instant::now() >= deadline)
-            {
-                return Err(ContainedTaskError::new(
-                    ExecutionKernelCode::RecognitionSampleDeadlineOrPermissionLost.code(),
-                )
-                .into());
+                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                if runtime.observation_now() >= deadline {
+                    return Err(ContainedTaskError::new(
+                        ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                    )
+                    .into());
+                }
             }
             let mut recorder = |target: &str,
                                 result: &actingcommand_recognition_pack::RecognitionPackResult<
@@ -7382,7 +7745,8 @@ impl TaskOperation {
                         "recognition sample recording failed",
                     ));
                 }
-                if Instant::now() >= deadline {
+                if runtime.observation_now() >= deadline {
+                    deadline_passed = true;
                     return Err(actingcommand_recognition_pack::RecognitionPackError::fatal(
                         "recognition sample deadline exceeded",
                     ));
@@ -7418,6 +7782,12 @@ impl TaskOperation {
                 ContainedTaskGuardEvaluation::Evaluated,
             )
             .map_err(ContainedTaskRunError::Boundary)?;
+        if deadline_passed {
+            return Err(ContainedTaskError::new(
+                ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+            )
+            .into());
+        }
         let target = result.map_err(|error| {
             // Workflow #396 REC-1: a text read that refused to conclude names its code as
             // the `cause=` token until the kernel's errors carry `caused_by` links.
@@ -9054,6 +9424,7 @@ mod post_admission_ocr_tests {
                                 deadline,
                                 actingcommand_contract::TaskTimingBudgetOrigin::Task,
                             ),
+                            StepPacing::default(),
                         )
                         .unwrap(),
                         PostconditionResolution::Reached(_)

@@ -74,5 +74,49 @@
   },
   "host_claims": {
     "renewal_slack_ms": 1000
+  },
+  "scheduling": {
+    "recognition": {
+      "sample_timeout_retries": 2
+    },
+    "rerun": {
+      "condition_codes": [
+        "recognition_sample_budget_insufficient",
+        "candidate_sample_budget_insufficient",
+        "recognition_sample_deadline_exceeded",
+        "candidate_sample_deadline_exceeded",
+        "blackout_run_stopped",
+        "cost_commit_time_insufficient"
+      ],
+      "max_per_occurrence": 2,
+      "resume_stage": "s2",
+      "resume_settle_ms": 60000,
+      "promote": true,
+      "refund_counts": true,
+      "expires": "window_end"
+    },
+    "cost_commit": {
+      "promote": true,
+      "max_stage": "s2",
+      "margin_ms": 60000
+    },
+    "blackout": {
+      "host": [],
+      "quiet_margin_ms": 60000,
+      "hard_quiet_ms": 0,
+      "stop_in_flight_at_start": true
+    },
+    "feature_lock": {
+      "locked_valid_for_ms": 86400000,
+      "codes": ["contained_task_feature_locked"]
+    },
+    "not_run": {
+      "diagnose_rows": 10
+    },
+    "random_delay": {
+      "enabled": false,
+      "min_ms": 60000,
+      "max_ms": 3600000
+    }
   }
 }

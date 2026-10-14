@@ -143,6 +143,55 @@ deviation 5); the file member and its meaning are unchanged, and `config.paramet
 reports it as the file writes it when the file names it. Changing it needs a commit and a
 restart.
 
+## The `scheduling` section (Workflow #386 SR-1)
+
+Frozen scheduling model v1.4.2 §9 and [v012-register.md](v012-register.md) §5: every key is
+parsed, checked and defaulted from v0.12.0 on, all settable, default `file`; the Runtime reads
+`scheduling.recognition.sample_timeout_retries` at each step of a contained run (the kernel's
+`step_pacing()`), the others take effect with the 0.12.x slices that read them. Their meaning is
+in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
+[cost-commit.md](cost-commit.md) (`cost_commit`) and [scheduling-blackout.md](scheduling-blackout.md)
+(`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes
+that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows` (the most rows
+`ac_diagnose` lists under `not_run`) by SR-6b.
+
+| Key | Type | Default (`actingd.defaults.json`) |
+|---|---|---|
+| `scheduling.recognition.sample_timeout_retries` | integer `0..=4294967295` | `2` |
+| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's codes the catalog lists |
+| `scheduling.rerun.max_per_occurrence` | integer `0..=4294967295` | `2` |
+| `scheduling.rerun.resume_stage` | `s0`…`s4` (vocabulary `pacing_stage`) | `s2` |
+| `scheduling.rerun.resume_settle_ms` | milliseconds | `60000` |
+| `scheduling.rerun.promote`, `.refund_counts` | boolean | `true`, `true` |
+| `scheduling.rerun.expires` | `window_end` | `window_end` |
+| `scheduling.cost_commit.promote` | boolean | `true` |
+| `scheduling.cost_commit.max_stage` | `s0`…`s4` | `s2` |
+| `scheduling.cost_commit.margin_ms` | milliseconds | `60000` |
+| `scheduling.blackout.host` | list of host blackout entries | `[]` |
+| `scheduling.blackout.quiet_margin_ms`, `.hard_quiet_ms` | milliseconds | `60000`, `0` |
+| `scheduling.blackout.stop_in_flight_at_start` | boolean | `true` |
+| `scheduling.feature_lock.locked_valid_for_ms` | milliseconds | `86400000` |
+| `scheduling.feature_lock.codes` | list of codes, as `rerun.condition_codes` | `["contained_task_feature_locked"]` |
+| `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
+| `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
+| `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |
+
+The section is checked whole at start, in `check-config` and after every instruction: a code
+list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
+one `code_retired`; a host blackout entry that breaks a rule of
+[scheduling-blackout.md](scheduling-blackout.md) refuses a start and `check-config` with
+`blackout_config_invalid` (`field`, and `blackout_id` when the entry has a usable id: one to 256
+bytes, no control character) and an instruction with `config_value_invalid` (`section_check`);
+`random_delay.min_ms` above `random_delay.max_ms` is `config_value_invalid` (`section_check`) for
+`min_ms`.
+
+**Per instance (Workflow #405).** `instance.<instance id>.scheduling.random_delay.enabled`,
+`.min_ms` and `.max_ms`, in the file the entry's `scheduling.random_delay` member, settable,
+default `section:scheduling.random_delay.<member>`. The pair in effect (each side the
+instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_value_invalid`
+(`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
+against the other. No slice reads them before #405.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
@@ -213,7 +262,7 @@ Owner `runtime-config`: `config_key_unknown`, `config_key_not_settable`, `config
 `config_override_superseded`, `config_override_base_changed`, `config_override_dropped`,
 `recovery_ladder_config_invalid` and `recovery_ladder_code_unclassified` (D1c emits them), and
 `blackout_config_invalid` (registered by SR-0; host blackout entries are parsed in this crate,
-so the code moved here; SR-4a emits it). Owner `runtime-host`:
+so the code moved here; SR-1 emits it at start and in `check-config`). Owner `runtime-host`:
 `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`,
 `host_config_overrides_fact_clock_overflow`, `host_config_value_type_invalid`. Owner `contract`:
 `invalid_configure_settings`. Vocabulary `config_value_problem` (source

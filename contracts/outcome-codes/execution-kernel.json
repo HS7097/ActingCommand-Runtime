@@ -2181,11 +2181,13 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Recognition sampling lost its deadline or its runtime permission.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "replaced_by": "recognition_sample_deadline_exceeded",
+      "description": "Retired (Workflow #386 SR-1). Recognition sampling ran past its deadline, or the runtime's sampling checkpoint answered that sampling may not go on. A running task never loses its permission while it holds its lease, and the checkpoint now only reports a cancellation under the cancellation's own code (contained_task_deadline_exceeded, contained_task_cancelled, contained_task_paused); a sampling deadline is recognition_sample_deadline_exceeded, after the observation's observe-only retries.",
+      "common_causes": "A slow sampling under host load; never a lost permission.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "recognition_sample_geometry_changed": {
       "category": "error",
@@ -3623,6 +3625,38 @@
     }
   },
   "locations": {
+    "observation_entry": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: the observation of a task's entry page (the home entry, a linear task's first page, an entry before an application step) whose sampling timed out."
+    },
+    "observation_before_input": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: the observation before a step's input (the guard's frame, a selection's frames) whose sampling timed out."
+    },
+    "observation_after_input": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: the observation that waits for a step's destination after its input (or a linear task's intermediate or retry-decision page) whose sampling timed out."
+    },
+    "observation_page_wait": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: a wait for any page of the package outside a step (the run's first page, a wait between steps) whose sampling timed out."
+    },
     "load_observation_resources": {
       "owner": "execution-kernel",
       "layer": "kernel",

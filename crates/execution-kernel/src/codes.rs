@@ -129,7 +129,6 @@ actingcommand_contract::outcome_codes! {
         RecognitionSamplingRuntimeUnsupported => "recognition_sampling_runtime_unsupported": error / none,
         RecognitionSampleBudgetInsufficient => "recognition_sample_budget_insufficient": error / budget_or_permission,
         RecognitionSampleDeadlineExceeded => "recognition_sample_deadline_exceeded": error / budget_or_permission,
-        RecognitionSampleDeadlineOrPermissionLost => "recognition_sample_deadline_or_permission_lost": error / budget_or_permission,
         RecognitionSampleGeometryChanged => "recognition_sample_geometry_changed": error / environment_fault,
         CandidateSamplingRuntimeUnsupported => "candidate_sampling_runtime_unsupported": error / none,
         CandidateSampleBudgetInsufficient => "candidate_sample_budget_insufficient": error / budget_or_permission,
@@ -204,10 +203,13 @@ actingcommand_contract::outcome_codes! {
         // Workflow #386 SR-0 (scheduling rules): registered ahead of the slices that emit them
         // (`contracts/scheduling-blackout.md`, `contracts/policy-suspension.md`,
         // `contracts/cost-commit.md`). The fragment also carries SR-0's texts and values for
-        // the four sampling codes above, which SR-1 emits in their registered form. Begin.
+        // the four sampling codes above, which SR-1 emits in their registered form (SR-1 retired
+        // `recognition_sample_deadline_or_permission_lost`, replaced by
+        // `recognition_sample_deadline_exceeded`). Begin.
         /// Error. Admission refused a task whose declared sampling exceeds the smaller of its
         /// step and task timeouts (keys `required_ms`, `limit_ms`, and `pack_operation_id`
-        /// when one operation exceeds it; SR-1).
+        /// when one operation exceeds it; SR-1 emits it in place of the running
+        /// `recognition_sample_budget_insufficient`).
         RecognitionSampleBudgetInvalid => "recognition_sample_budget_invalid": error / budget_or_permission,
         /// Warning. A run recognised a page its task declares as the sign of a locked feature
         /// and stopped there, with no input (keys `fact_key`, `page_id`; SR-5b).
@@ -237,8 +239,9 @@ actingcommand_contract::outcome_codes! {
 }
 
 actingcommand_contract::outcome_locations! {
-    /// The kernel's locations: the stages of an online page observation, and the stage of the
-    /// provider default's emulator control refusal (Workflow #378 A2-P).
+    /// The kernel's locations: the stages of an online page observation, the stage of the
+    /// provider default's emulator control refusal (Workflow #378 A2-P), and the observation a
+    /// sampling timeout ended (Workflow #386 SR-1).
     pub enum ExecutionKernelLocation {
         // Online page observation stages (`OnlineObservationError::stage`, evidence rows).
         LoadObservationResources => "load_observation_resources",
@@ -250,5 +253,11 @@ actingcommand_contract::outcome_locations! {
         EvaluatePageTarget => "evaluate_page_target",
         EvaluateRequestedTarget => "evaluate_requested_target",
         EmulatorControlSupport => "emulator_control_support",
+        // Workflow #386 SR-1: the observation whose sampling timed out (the `stage` of
+        // `recognition_sample_deadline_exceeded` and `candidate_sample_deadline_exceeded`).
+        ObservationEntry => "observation_entry",
+        ObservationBeforeInput => "observation_before_input",
+        ObservationAfterInput => "observation_after_input",
+        ObservationPageWait => "observation_page_wait",
     }
 }

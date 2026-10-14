@@ -35,8 +35,9 @@ actingcommand_contract::outcome_codes! {
         /// it as class `none`; once per process and code (key `raw_code`, the spelling; D1c).
         RecoveryLadderCodeUnclassified => "recovery_ladder_code_unclassified": warning / none,
         /// Error. A host blackout entry of the configuration breaks a rule (keys `field`, and
-        /// `blackout_id` when the entry has one; registered by SR-0, parsed in this crate by
-        /// SR-4a, which emits it).
+        /// `blackout_id` when the entry has one; registered by SR-0). Workflow #386 SR-1 parses
+        /// the entries in this crate and refuses a start and check-config with it; through an
+        /// instruction the same entries are `config_value_invalid`.
         BlackoutConfigInvalid => "blackout_config_invalid": error / none,
     }
 }

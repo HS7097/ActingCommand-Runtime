@@ -11,7 +11,8 @@
 //! - The configuration in effect: the file layer ⊕ instruction values, changed by
 //!   `ConfigureSettings` (all changes or none) and restored at start (§5.6, §5.7, §12 question 3).
 //! - The sections (D1c): `recovery_ladder` (§3, §4, §7), `host_claims` (§4.3) and
-//!   `standard_packs` (Workflow #373 NAV-6, moved here).
+//!   `standard_packs` (Workflow #373 NAV-6, moved here); `scheduling` (Workflow #386 SR-1, with
+//!   Workflow #405's random delay).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -26,6 +27,7 @@ mod host_claims;
 mod instance;
 pub mod recovery_ladder;
 mod resolve;
+pub mod scheduling;
 mod standard_packs;
 mod table;
 mod value;
@@ -48,6 +50,10 @@ pub use recovery_ladder::{
     RungConfig, TriggerItem, TriggerVerdict, ladder_class_of,
 };
 pub use resolve::{file_value, member, render_parameters};
+pub use scheduling::{
+    BlackoutConfig, CostCommitConfig, FeatureLockConfig, HostBlackout, InstanceSchedulingFile,
+    PacingStage, RandomDelay, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+};
 pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
 pub use table::{
     DefaultSource, FilePath, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, NotSettable, Settable,
@@ -71,5 +77,8 @@ pub fn annotate_settable(
 
 #[cfg(test)]
 mod ladder_tests;
+// Workflow #386 SR-1.
+#[cfg(test)]
+mod scheduling_tests;
 #[cfg(test)]
 mod tests;

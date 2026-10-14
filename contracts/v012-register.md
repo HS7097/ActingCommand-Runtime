@@ -344,6 +344,27 @@ not 190 000; no `perf_hold` item (its code `perf_hold_expired` arrives with P-h)
 `contained_task_navigation_recovery_exhausted` registered pending by D1c (runtime-host, error,
 `pack_logic_mismatch`) for NAV-5 to emit.
 
+### 1.23 Wave 6 slice SR-1 (#386 SCHED §2.1, §2.2, §2.4, §9; #405 random delay)
+
+SR-1 brings its own shapes and writes them; [runtime-config.md](runtime-config.md), "The
+`scheduling` section", and [business-identity-consensus.md](business-identity-consensus.md),
+"Observe-only retries", are the contract. No new event type and no new member of a persisted
+record: the sampling codes carry their registered values (spec §10, values not structure).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SQ1 | `config.parameters.scheduling` (21 rows: §5's 17 keys, `recognition.sample_timeout_retries` and `random_delay.{enabled, min_ms, max_ms}`); `config.parameters.instance` + `instance.<id>.scheduling.random_delay.{enabled, min_ms, max_ms}` (3 rows per instance) | new section of an existing fact family; new rows | SR-1 | SR-1 | lists as canonical JSON text; every key settable; a per-instance random-delay key defaults to `section:scheduling.random_delay.<member>` |
+| SQ2 | the outcomes of `recognition_sample_deadline_exceeded` and `candidate_sample_deadline_exceeded` carry `attempts`, `timeout_ms`, `stage`; `recognition_sample_budget_insufficient` / `candidate_sample_budget_insufficient` carry `required_ms`, `remaining_ms`; `recognition_sample_budget_invalid` carries `required_ms`, `limit_ms`, `pack_operation_id?` | registered values on the `task.failed` terminal, the run's receipt and an admission refusal | SR-1 | SR-1 | `stage` is one of the kernel's new locations `observation_entry`, `observation_before_input`, `observation_after_input`, `observation_page_wait` |
+| SQ3 | `blackout_config_invalid` at start and in `check-config`, with `field` (a JSON pointer into the configuration) and `blackout_id?` | existing code (SR-0), first emitted | SR-1 | SR-1 | through an instruction the same entries are `config_value_invalid` (`section_check`) |
+| SQ4 | `recognition_sample_deadline_or_permission_lost` | code retired, `replaced_by` `recognition_sample_deadline_exceeded` | SR-1 | — | the kernel's checkpoint returns `Result<(), E>`; `sampling_supported()` says whether a runtime samples |
+
+Configuration keys (§5): the `scheduling.recognition.*` row and the five sections of the next
+row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's random delay
+(§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14). Deviation from §5's
+defaults: `scheduling.rerun.condition_codes` lists the six of SCHED §9's eight codes the catalog
+lists; `perf_run_yielded` and `perf_hold_expired` join it with the performance slices that
+register them (a code list entry must be a listed, active code).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -424,8 +445,9 @@ when it takes effect.
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c | P-k, P-s, P-h (0.12.x) |
 | `performance.calibration.*` | PERF §10.4 (18 keys) | PERF §10.4 | P-c | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | P-c | P-c |
-| `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 | SR-1 (v0.12.0) |
-| `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
+| `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
+| `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
+| `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 | D2-S4 (v0.12.0) |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 | D2-S2 |
@@ -452,13 +474,13 @@ when it takes effect.
 | `ledger_observer.*` | 21 |
 | `recovery_ladder.*`, `host_claims.*` | 16 |
 | `performance.*`, `execution.defaults.*` | about 100 (some replace today's `performance_monitor.*` / `performance_control.*` rows) |
-| `scheduling.*` (recognition, rerun, cost_commit, blackout, feature_lock, not_run, pack_admission, fact_refresh, suspension) | 29 |
+| `scheduling.*` (recognition, rerun, cost_commit, blackout, feature_lock, not_run, pack_admission, fact_refresh, suspension, random_delay) | 32 |
 | Lab options | 2 |
-| per instance: `recognition_package`, `start_emulator` | 2 per instance |
-| **total** | **about 223 + 4 per instance** (three instances ≈ 235; five ≈ 243) |
+| per instance: `recognition_package`, `start_emulator`, `scheduling.random_delay.*` (#405) | 5 per instance |
+| **total** | **about 226 + 7 per instance** (three instances ≈ 247; five ≈ 261) |
 
-The total stays under 256 for up to eight instances (255 rows), with little room left; a ninth
-instance passes it. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
+The total stayed under 256 for up to eight instances (255 rows) before #405's three per-instance
+keys (SR-1, §1.23); with them it passes 256 at five instances. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
 becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
 from D1b on, and each section fact holds at most 256 rows.
 

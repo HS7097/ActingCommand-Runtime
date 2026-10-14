@@ -580,3 +580,20 @@ tests = [
     "actingcommand-device::lib::tests::gate_398_rd5a::rd5b_t8_every_command_the_checks_can_send_is_on_the_whitelist",
 ]
 incident = ["#398"]
+
+# Workflow #386 SR-1: an observation whose sampling timed out is made again in a new window and never repeats an input; spent retries end with the timeout and its attempts; no time for another window ends with the budget code; the sampling deadline is checked before the intent only; a cancellation keeps its own code and permission-lost is retired; admission refuses unfittable sampling as budget_invalid; a runtime without sampling keeps its single frame
+[[gate]]
+key = "45"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t1_a_timed_out_observation_is_made_again_in_a_new_window",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t1_spent_retries_end_the_run_with_the_timeout_and_its_attempts",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t2_a_retry_never_repeats_an_input_or_a_step_start",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t2b_the_sampling_deadline_is_checked_before_the_intent_only",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t2c_a_candidate_sampling_timeout_is_observed_again_by_the_same_rule",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t3_no_time_for_another_window_ends_with_the_budget_code",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t4_a_cancellation_ends_the_run_under_its_own_code_and_permission_lost_is_retired",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t5_admission_refuses_sampling_beyond_the_timeouts_as_budget_invalid",
+    "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t33_a_runtime_without_sampling_keeps_the_single_frame_and_refuses_sampling",
+]
+incident = ["#386"]
