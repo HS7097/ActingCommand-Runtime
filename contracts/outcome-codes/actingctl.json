@@ -14,12 +14,12 @@
         "range_max": "optional",
         "variable": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl was given arguments its usage does not allow.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. argument and argument_problem name the argument and the rule when one argument is at fault, range_min and range_max the allowed range, and variable an invalid ACTINGCOMMAND_DETAIL. Exit 1.",
+      "common_causes": "A misspelt command or option, or a caller written for another release.",
+      "handling": "Correct the command line; actingctl without arguments prints its usage."
     },
     "actingctl_package_resolution_failed": {
       "category": "error",
@@ -61,12 +61,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl could not write its JSON output.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl could not write its JSON output line: serialising the result failed or stdout could not be written. Exit 1.",
+      "common_causes": "stdout closed early by the caller (a broken pipe), or a defect in the result's serialisation.",
+      "handling": "Keep the reader of actingctl's stdout open until it exits; report it when it repeats."
     },
     "resource_targets_file_invalid": {
       "category": "error",
@@ -141,12 +141,12 @@
         "owner_closed": "optional",
         "process_alive": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "request-shutdown --wait: the accepted owner epoch did not close and exit in time.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl request-shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. pid and owner_epoch name the owner; owner_closed and process_alive are what the wait last saw, and a failed process probe is the caused_by link. Exit 1.",
+      "common_causes": "Work in flight that takes longer than the wait to drain, a Runtime that hangs while closing, or a wait set too short.",
+      "handling": "Run actingctl status to see whether the Runtime still answers; wait longer, or check the Runtime's log for what holds it."
     },
     "shutdown_wait_journal_unreadable": {
       "category": "error",
@@ -159,12 +159,12 @@
         "line": "optional",
         "limit_bytes": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "request-shutdown --wait: the owner journal cannot be read.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or the OS error is the caused_by link. Exit 1.",
+      "common_causes": "A journal written by another release, a damaged journal file, or a state root the process may not read.",
+      "handling": "Check the state root the configuration names and its owner journal; run actingctl status to see the Runtime's state."
     },
     "arguments_invalid": {
       "category": "error",
@@ -549,7 +549,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_stop_run: no run of this server has the handle.",
+      "description": "ac_stop_run: no run of this server has the handle; actingctl run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id given (run_state not_found).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1730,6 +1730,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "run_evidence_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was printed, read from the run's ledger events, as ac_run_evidence answers it (Workflow #389 MCP-6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "start_runtime_already_running": {
       "category": "error",
       "ladder_class": "none",
@@ -1814,12 +1828,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown: the Runtime accepted the shutdown request.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl request-shutdown: the Runtime accepted the shutdown request; the result carries its receipt. Exit 0. Without --wait, actingctl does not wait for the process to end.",
+      "common_causes": "A shutdown request to a running Runtime.",
+      "handling": "None; pass --wait to wait for the owner to close and the process to exit."
     },
     "runtime_shutdown_completed": {
       "category": "success",
@@ -1828,12 +1842,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown --wait: the Runtime accepted the shutdown, closed its owner record and its process exited.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl request-shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the receipt and the shutdown observation. Exit 0.",
+      "common_causes": "A shutdown of a running Runtime that finished in time.",
+      "handling": "None."
     },
     "install_transition_reported": {
       "category": "success",
@@ -1845,12 +1859,12 @@
         "transition_id": "required",
         "phase": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime answered the transition action; phase is the phase it reports (a commit receipt reports none).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl install-transition: the Runtime answered the transition action. transition_id names the transition and phase the phase the Runtime reports (draining, drained, held, preparing or released); a commit's receipt, the accepted shutdown, reports no phase. Exit 0.",
+      "common_causes": "An install-transition action the Runtime accepted.",
+      "handling": "None; the installer continues with the next action for the reported phase."
     },
     "install_transition_failed": {
       "category": "error",
@@ -1862,12 +1876,12 @@
         "transition_id": "required",
         "phase": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime reports the transition in phase failed; the transition's failure code is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. transition_id names the transition; the transition's failure code is the caused_by link. Exit 1.",
+      "common_causes": "A held or released start that timed out (held_timeout, release_timeout), whose preparation failed, or that a latched failure stopped.",
+      "handling": "Read the caused_by link and the Runtime's log; the installer ends the transition and starts the previous Runtime again."
     },
     "install_transition_aborted": {
       "category": "error",
@@ -1879,12 +1893,12 @@
         "transition_id": "required",
         "phase": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime reports the transition in phase aborted; the transition's failure code, when it has one, is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. transition_id names the transition; the failure code, when the transition has one (drain_timeout), is the caused_by link. Exit 1.",
+      "common_causes": "A drain that did not finish before its deadline, or an Abort action.",
+      "handling": "Wait until running work finishes, or give the drain a longer timeout, then begin a new transition."
     },
     "instance_reset_done": {
       "category": "success",
@@ -1921,12 +1935,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl status: the Runtime reported its status.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl status: the Runtime answered its status, which the result carries. Exit 0.",
+      "common_causes": "A status read of a running Runtime.",
+      "handling": "None."
     },
     "runtime_config_reported": {
       "category": "success",
@@ -2049,12 +2063,12 @@
       "values": {
         "count": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl emulator discover: the Runtime listed the emulator's instances; count is how many.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl emulator discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. Exit 0.",
+      "common_causes": "A discovery of a running Runtime with an emulator provider.",
+      "handling": "None."
     },
     "runtime_scheduling_paused": {
       "category": "success",

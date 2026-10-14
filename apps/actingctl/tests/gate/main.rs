@@ -13,9 +13,13 @@ mod held_runtime;
 // Workflow #382 A-1: usage errors before any connection, and refused requests' exits.
 mod cli_grammar;
 mod emulator_restart;
+// Workflow #389 MCP-21: `actingctl emulator start|stop|restart --wait`.
+mod emulator_wait;
 // Workflow #382 A1-FLAG: flags a subcommand does not take, flags given twice, stray words.
 mod flag_refusals;
 mod install_transition;
+// Workflow #389 MCP-13a: `ac_app` is an operator tool.
+mod mcp_app;
 // Workflow #389 MCP-14: `actingctl codes` ↔ `ac_outcome_code`.
 mod mcp_codes_parity;
 // Workflow #389 MCP-7: `actingctl diagnose` ↔ `ac_diagnose`.
@@ -29,6 +33,8 @@ mod mcp_observe_parity;
 // Workflow #389 MCP-8: `actingctl overview` ↔ `ac_overview`.
 mod mcp_overview_parity;
 mod mcp_packs;
+// Workflow #389 MCP-6: `actingctl run evidence` ↔ `ac_run_evidence`.
+mod mcp_run_evidence_parity;
 mod mcp_runs_parity;
 mod mcp_shell;
 

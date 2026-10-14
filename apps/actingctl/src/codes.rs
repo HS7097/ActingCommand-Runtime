@@ -126,6 +126,9 @@ actingcommand_contract::outcome_codes! {
         OutcomeCodeUnknown => "outcome_code_unknown": error / none,
         OutcomeCatalogUnreadable => "outcome_catalog_unreadable": error / none,
         // ---- end of MCP-14
+        // ---- Workflow #389 MCP-6: `run evidence` / `ac_run_evidence` (command table §4.7).
+        RunEvidenceReported => "run_evidence_reported": success / none,
+        // ---- end of MCP-6
         // ---- Workflow #378 A5 (begin): the CLI's success codes (model §7.3), the MCP
         // transport and Lab codes, and the watchdog's report v2 and launcher codes (§7.5).
         AgentFactsPublished => "agent_facts_published": success / none,

@@ -177,7 +177,7 @@ lazily (section Task schema `0.9` value tests); the match is the one a full eval
 
 | Backend | Declared in | A target passes when |
 | --- | --- | --- |
-| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches); with a mask, only the template pixels it selects are scored (section Task schema `0.9` template masks) |
+| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches); with a mask, only the template pixels it selects are scored (section Task schema `0.9` template masks); with `scales`, the template is searched resampled by each declared factor (section Task schema `0.9` multi-scale templates) |
 | Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
@@ -424,6 +424,60 @@ A select step's refusals name the task's `task.json` (`/operations/<i>/select/โ€
 navigation edge and no page operation; its primitive has `click: null`, its declared `guard`
 and the `select` object, and the sealed task keeps `select` and the declared guard.
 
+### Task schema `0.9` multi-scale templates
+
+Workflow #396 REC-5 (REC-M v1.2.1 ยง7). Task schema `0.9` accepts
+`"scales": {"factors_milli": [...]}` on `anchors[]` and `verify_templates[]` entries; an older
+task schema refuses it with `UnconsumedField`, and operations do not take it. It passes to the
+derived template target as declared, and a source that uses it derives pack schema `0.7`; a
+source that does not derives every document byte for byte as before. In the recognition pack,
+schema `0.7` template targets accept it; an older pack schema refuses it with `UnconsumedField`
+at `/targets/<i>/scales`. `factors_milli` is required (`MissingField`), an array (`InvalidType`)
+of 1 to 4 integers (`InvalidType` for another value), each from 500 to 2000 and none repeated
+(`InvalidValue` at `/targets/<i>/scales/factors_milli/<k>`; at the array for another count).
+There is no default and the factors are the package's: a factor describes the interface's own
+zoom in the package's base coordinates, never a device resolution, and the frame is converted
+to the base coordinates before any template is resampled.
+
+```json
+{"id": "icon/a", "template": "assets/a.png", "region": {"x": 0, "y": 80, "width": 1280, "height": 560},
+ "threshold": 0.88, "scales": {"factors_milli": [1000, 750]}}
+```
+
+The template's gray image is resampled to `round(width * f / 1000)` by
+`round(height * f / 1000)` pixels (rounded half up) for each factor `f` with the resampling
+primitive of `actingcommand-recognition` (`resample`: an axis that shrinks averages areas, an
+axis that grows or keeps its length interpolates linearly between pixel centres; 16.16
+fixed-point weights; each value rounded half up; the same bytes on every host; Workflow #392
+converts frames with the same primitive). Every resampled template is scored over the target's
+region on the exact score map (section Task schema `0.9` unique matches), with the region's
+transforms shared by every factor and one five-second search limit for all of them. The highest
+score wins; an equal score keeps the earlier factor in the list, then the earlier `(y, x)`
+position. Only `[1000]` scores like a target without `scales` wherever that target is already
+scored exactly (`ccoeff_normed` on a region below the coarse-search size, a relative color, a
+mask or `unique`); a `ccorr_normed` target is then scored exactly as the direct scorer scores
+it, as a target that declares `unique` is.
+
+The match's box is the resampled template's, and the factor it hit at scales the package
+lengths that hang on the match, each `(|v| * f + 500) div 1000` with the sign of `v`, a width or
+height at least 1: a relative color region (`template-relative-color.md`), a
+`template_relative` OCR region whose anchor declares `scales` (`ocr-fields.md`) and a click
+`offset` (a `target` click takes the resampled box itself). With `unique`, a position at
+another factor whose box does not intersect the best one is a second place like any other. A
+mask applies to each resampled template's gray values. The evaluation and the task diagnostic
+target row carry the factor as the template's `scale_milli`; a target without `scales` carries
+none.
+
+A target that declares `scales` is refused when the evaluator is built as a `target_consensus`
+target (each frame would take its own factor), as a `repeated_anchor` anchor or as a candidate
+layout feature read at an offset (both search the template as declared), and template-region
+batch evaluation refuses it too. Where a package is admitted with its bytes, every resampled
+template keeps at least 4 pixels a side (`TEMPLATE_SCALED_MIN_SIDE`, a contract constant) and
+fits its region (its rectangle, or the coordinate space for `full_frame`), with
+`resource_declaration_invalid` (`InvalidValue`) at `/targets/<i>/scales/factors_milli/<k>`
+otherwise; the mask minimum and the `ccorr_normed` threshold floor (section Task schema `0.9`
+template masks) hold for each resampled template, whose floor refusal names its `scale_milli`.
+
 ### Task schema `0.9` observation windows and input rechecks
 
 Workflow #390 EXEC-2 (forced-compromises mapping, rows E-05 and E-06). An operation of a
@@ -488,3 +542,65 @@ timeout of it takes the step's observe-only retries ([Business identity, consens
 authoring](business-identity-consensus.md), "Observe-only retries"). The frames of a window and
 of a recheck are recorded as every capture, recognition and guard evaluation is; no record is
 added.
+
+### Task schema `0.9` designated effect sets
+
+Workflow #390 OUT-2 (forced-compromises mapping, rows O-01, O-02, R-03 and S-01). A page-graph
+task's `scheduling_outcome` may name a designated effect set in `designated_effects` instead of
+the one `designated_operation`. Each member is an operation of the task whose effect is a
+designated effect, with an explicit cap on how often it may complete in one run. A loop over a
+counted business step (collect one item, come back, collect the next) declares its step a member
+and leaves the loop through the page's next operation once the cap is reached; the cap, not
+`max_steps`, bounds the loop. An older task schema refuses the member with `UnconsumedField`.
+
+```json
+"scheduling_outcome": {
+  "designated_effects": [
+    {"operation_id": "collect", "max_repeats": 5},
+    {"operation_id": "start", "max_repeats": {"fact_key": "session.example.start.remaining"}},
+    {"operation_id": "confirm"}
+  ],
+  "mappings": [...]
+}
+```
+
+| Rule | Refusal |
+| --- | --- |
+| 1 to 8 members; each `operation_id` names one operation of the task, at most once in the set | `contained_task_outcome_declaration_invalid` |
+| `max_repeats` is absent (once), a constant from 1 to 1,000, or `{"fact_key": <instance fact key>}` | `contained_task_outcome_declaration_invalid` |
+| `designated_effects` and `designated_operation` are not both declared | `contained_task_outcome_declaration_invalid` |
+| the set is a task schema `0.9` declaration (declaration gate: `UnconsumedField`) | `contained_task_outcome_declaration_invalid` |
+| in a phased route, no member is retryable | `contained_task_phases_invalid` |
+
+**Selection.** A member that completed as often as its cap is not selected again: the page's
+operations are chosen as before (the first whose `from` names the page, then the first from
+`any`, within the stage of a phased route), without the capped members. The static reachability
+check follows each path with the members that completed on it: wherever a member may have
+reached its cap (a fact cap may be 0; a constant cap after the member completed), the page's next
+operation is followed too, and a page left without one refuses the task
+(`contained_task_outcome_declaration_incomplete`; in a phased route
+`task_phases_unreachable`). A member may be reached again after its effect; the one
+`designated_operation` still may not.
+
+**Fact caps** (FCM S-01: the decision layer writes the fact, the package reads it). The caps are
+read once, before the run's first step, from the instance's ledger-pinned fact snapshot (the one a
+select step reads): the record of the key must be an unexpired integer from 0 to 1,000. A cap of 0
+means the member does not run. Otherwise the run ends before any input with
+`contained_task_designated_effect_cap_unresolved` (`pack_operation_id`, `fact_key`; with
+`unknown_reason` `fact_missing`, `fact_expired`, `fact_not_scalar` or `type_mismatch`, or with
+`count` and `limit_count` for an integer out of range; neither when the Runtime has no fact
+snapshot for the run).
+
+**Outcome.** The mapping condition `designated_effect_completed` holds when any member completed,
+`no_designated_effect` when none did. The terminal's scheduling disposition records the set's run
+as `{"kind": "designated_effects", "effects": [{"operation_label", "count", "max_repeats"}]}`: one
+tally per member in declaration order, `count` the times its effect completed (0 when it did not)
+and `max_repeats` the cap the run held it to, so a run that did a step n times and one that found
+nothing to do are told apart in the ledger. A member that completed more often than its cap, or
+twice in one step, fails the run's outcome with `contained_task_outcome_designated_effect_duplicate`.
+The policy inputs are unchanged: a catalog reads the mapped outcome key; the counts stay in the
+ledger.
+
+Wherever another rule names a package's designated operation (a recognition package, a
+prerequisite package, a `linear_steps` task, a zero-input fields task), a designated effect set is
+refused the same way, with the same reason token (`designated_operation`).

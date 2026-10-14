@@ -60,7 +60,7 @@ fn words(values: &[&str]) -> Vec<String> {
 fn parsed_as(invocation: Invocation, expected: &Parsed) -> bool {
     let Invocation {
         instance,
-        shutdown_wait,
+        wait: invocation_wait,
         command,
         ..
     } = invocation;
@@ -86,7 +86,7 @@ fn parsed_as(invocation: Invocation, expected: &Parsed) -> bool {
             instance_alias == *alias && instance.is_none()
         }
         (Command::InstallTransition { action }, Parsed::InstallTransition(expected, wait)) => {
-            action == *expected && shutdown_wait == *wait
+            action == *expected && invocation_wait == *wait
         }
         (Command::MonitorSet { policy }, Parsed::MonitorSet(interval_ms, page, recovery)) => {
             instance.as_deref() == Some(ALIAS)

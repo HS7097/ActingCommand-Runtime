@@ -57,14 +57,18 @@ mod diagnose;
 mod overview;
 // ---- Workflow #389 MCP-8 (end) ----
 
-use actingcommand_contract::codes::{ContractCode, SharedCode};
+// ---- Workflow #389 MCP-6 (begin): `run evidence` (MCP `ac_run_evidence`).
+mod run_evidence;
+// ---- Workflow #389 MCP-6 (end) ----
+
+use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
-    EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord, FactScope,
-    InstallTransitionAction, InstallTransitionPhase, MAX_CONFIG_SETTING_CHANGES,
-    RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState, RuntimeResult, SanitizationError,
-    SchedulingPauseScope,
+    CorrelationId, EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord,
+    FactScope, InstallTransitionAction, InstallTransitionPhase, MAX_CONFIG_SETTING_CHANGES,
+    RequestId, RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+    SanitizationError, SchedulingPauseScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use codes::{ActingctlCode, ArgumentProblem};
@@ -77,6 +81,8 @@ use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
@@ -85,8 +91,9 @@ const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config se
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
 const RESULT_MEMBER: &str = "result";
-/// Upper bound for `request-shutdown --wait <seconds>`.
-const MAX_SHUTDOWN_WAIT_SECONDS: u64 = 3600;
+/// Upper bound for `--wait <seconds>` (`request-shutdown`, `install-transition`; Workflow #389
+/// MCP-21: `emulator start|stop|restart` and `task-run`).
+const MAX_WAIT_SECONDS: u64 = 3600;
 /// `source_detector` of the priority offsets `task-offset` publishes.
 const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
 /// `pause` defaults (Workflow #191 ps1): the reason code and the instance drain timeout.
@@ -184,6 +191,12 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-8 (end) ----
+    // ---- Workflow #389 MCP-6 (begin): `run evidence` takes `--request-id` or `--run-id` and
+    // leaves before `Invocation::parse`; its flags are `flags_of`'s. ----
+    if let Some(exit) = run_evidence::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-6 (end) ----
     match run(arguments, detail) {
         Ok(Done {
             members,
@@ -283,10 +296,10 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
     let Invocation {
         state_root,
         instance,
-        shutdown_wait,
+        wait,
         command,
     } = Invocation::parse(arguments)?;
-    let success = command.success(shutdown_wait.is_some());
+    let success = command.success(wait.is_some());
     let observation = match &command {
         Command::AgentPublishFacts { record_file } => Some(read_fact_observation(record_file)?),
         _ => None,
@@ -414,7 +427,7 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         Command::RequestShutdown => {
             let receipt = client.request_shutdown().map_err(ActingctlError::Runtime)?;
             let mut result = members([member("receipt", &receipt)?]);
-            if let Some(wait) = shutdown_wait {
+            if let Some(wait) = wait {
                 // request_shutdown verified that the accepted receipt names exactly this target.
                 let target = client.runtime_info().shutdown_target();
                 // Close the connection so the waiting CLI leaves nothing for the Runtime to drain.
@@ -439,7 +452,7 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 .install_transition(action)
                 .map_err(ActingctlError::Runtime)?;
             let mut result = members([member("receipt", &receipt)?]);
-            if let Some(wait) = shutdown_wait {
+            if let Some(wait) = wait {
                 let target = client.runtime_info().shutdown_target();
                 drop(client);
                 let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
@@ -507,12 +520,36 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 .ok_or_else(|| ActingctlError::InstanceUnknown(alias.to_owned()))?;
             reported(instance, success)
         }
-        Command::EmulatorControl { action } => reported(
-            &client
-                .control_emulator_instance(instance()?, action)
-                .map_err(ActingctlError::Runtime)?,
-            success,
-        ),
+        Command::EmulatorControl { action } => {
+            let alias = instance()?.to_owned();
+            let Some(wait) = wait else {
+                return reported(
+                    &client
+                        .control_emulator_instance(&alias, action)
+                        .map_err(ActingctlError::Runtime)?,
+                    success,
+                );
+            };
+            // Workflow #389 MCP-21: the interaction's correlation names the request before its
+            // receipt; the client mints the request id only as it writes it.
+            let interaction = client
+                .begin_interaction()
+                .map_err(ActingctlError::Runtime)?;
+            let correlation_id = interaction.correlation_id();
+            match wait_at_most(wait, move || {
+                interaction.control_emulator_instance(&alias, action)
+            }) {
+                Waited::Done(result) => {
+                    reported(&result.map_err(ActingctlError::Runtime)?, success)
+                }
+                Waited::Expired => Ok(wait_expired(
+                    ContractLocation::ControlEmulatorInstance,
+                    wait,
+                    None,
+                    correlation_id,
+                )),
+            }
+        }
         Command::EmulatorDiscover => {
             let discovery = client
                 .discover_instances()
@@ -588,9 +625,32 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             };
             let request =
                 task_run_request(package.display().to_string(), expected_sha256, recovery)?;
-            let output = client
-                .run_contained_task(instance()?, request)
-                .map_err(ActingctlError::Runtime)?;
+            let output = match wait {
+                None => client
+                    .run_contained_task(instance()?, request)
+                    .map_err(ActingctlError::Runtime)?,
+                // Workflow #389 MCP-21: the prepared request names its request_id before it is
+                // written; not done within `--wait`, the run goes on in the Runtime.
+                Some(wait) => {
+                    let prepared = client
+                        .prepare_contained_task(instance()?, request)
+                        .map_err(ActingctlError::Runtime)?;
+                    let request_id = prepared.request_id();
+                    let correlation_id = prepared.correlation_id();
+                    let submitter = client.clone();
+                    match wait_at_most(wait, move || submitter.submit_prepared(prepared)) {
+                        Waited::Done(output) => output.map_err(ActingctlError::Runtime)?,
+                        Waited::Expired => {
+                            return Ok(wait_expired(
+                                ContractLocation::RunContainedTask,
+                                wait,
+                                Some(request_id),
+                                Some(correlation_id),
+                            ));
+                        }
+                    }
+                }
+            };
             // A run that ended failed may still come back with its receipt and events (a
             // committed failure with its official OCR fields): the receipt's own outcome is the
             // top, and the line exits non-zero.
@@ -615,6 +675,72 @@ fn reported(result: &impl Serialize, success: ActingctlCode) -> Result<Done, Act
         result_members(result, RESULT_MEMBER)?,
         Outcome::new(success),
     ))
+}
+
+/// Workflow #389 MCP-21: how a `--wait` ended.
+enum Waited<T> {
+    /// The request ended within the wait, with this.
+    Done(T),
+    /// The wait ended first.
+    Expired,
+}
+
+/// Runs `request` on a thread of its own and waits for it at most `wait` (Workflow #389 MCP-21).
+/// A request that has not ended by then goes on in the Runtime: the Runtime serves it on its
+/// own connection thread whether its client still waits or not, and this process stops waiting.
+/// A request thread that panicked panics here too.
+fn wait_at_most<T: Send + 'static>(
+    wait: Duration,
+    request: impl FnOnce() -> T + Send + 'static,
+) -> Waited<T> {
+    let (sender, receiver) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        // The receiver is gone only when the wait already ended.
+        let _ = sender.send(request());
+    });
+    match receiver.recv_timeout(wait) {
+        Ok(done) => Waited::Done(done),
+        Err(RecvTimeoutError::Timeout) => Waited::Expired,
+        Err(RecvTimeoutError::Disconnected) => match worker.join() {
+            Err(panic) => std::panic::resume_unwind(panic),
+            // A thread that ended sent its result first, which `recv_timeout` takes before it
+            // sees the channel closed.
+            Ok(()) => unreachable!("a request thread ended without its result"),
+        },
+    }
+}
+
+/// Workflow #389 MCP-21 (MCP-0 command table v1.1 §4.22, D11 as verified): the line of a
+/// `--wait` that ended before its request did, `{request_id?, correlation_id?, state:
+/// "in_progress"}` with `command_wait_expired` (`operation`, `request_id` when this command
+/// knows it, `waited_ms`). The request goes on in the Runtime; the line exits 1.
+fn wait_expired(
+    operation: ContractLocation,
+    wait: Duration,
+    request_id: Option<RequestId>,
+    correlation_id: Option<CorrelationId>,
+) -> Done {
+    let mut members = Map::new();
+    let mut outcome = Outcome::new(SharedCode::CommandWaitExpired)
+        .operation(operation)
+        .waited_ms(wait);
+    if let Some(request_id) = request_id {
+        let text = run_evidence::id_text(&request_id);
+        outcome = outcome.request_id(text.as_str());
+        members.insert("request_id".to_owned(), Value::String(text));
+    }
+    if let Some(correlation_id) = correlation_id {
+        members.insert(
+            "correlation_id".to_owned(),
+            Value::String(run_evidence::id_text(&correlation_id)),
+        );
+    }
+    members.insert("state".to_owned(), Value::String("in_progress".to_owned()));
+    Done {
+        members,
+        outcome,
+        refused: true,
+    }
 }
 
 /// Workflow #389 MCP-4: the line of `facts` and `status --config`, the `ac_facts` result of the
@@ -845,7 +971,8 @@ fn task_run_request(
 struct Invocation {
     state_root: PathBuf,
     instance: Option<String>,
-    shutdown_wait: Option<Duration>,
+    /// `--wait <seconds>`.
+    wait: Option<Duration>,
     command: Command,
 }
 
@@ -963,7 +1090,7 @@ impl Invocation {
         let mut key_prefix = None;
         let mut record_file = None;
         let mut policy_file = None;
-        let mut shutdown_wait = None;
+        let mut wait = None;
         let mut install_action = None;
         let mut pause_reason = None;
         let mut drain_timeout_ms = None;
@@ -1037,10 +1164,10 @@ impl Invocation {
                 }
                 "--wait" => {
                     let seconds = require_u64(&arguments, &mut index)?;
-                    if !(1..=MAX_SHUTDOWN_WAIT_SECONDS).contains(&seconds) {
+                    if !(1..=MAX_WAIT_SECONDS).contains(&seconds) {
                         return Err(ActingctlError::Usage);
                     }
-                    shutdown_wait = Some(Duration::from_secs(seconds));
+                    wait = Some(Duration::from_secs(seconds));
                 }
                 "--reason" => {
                     let reason = require_text(&arguments, &mut index)?;
@@ -1112,8 +1239,8 @@ impl Invocation {
                     }
                     key_prefix = Some(prefix);
                 }
-                // Every flag of the table has its arm (`codes`, whose flags `code_lookup`
-                // parses, never comes here).
+                // Every flag of the table has its arm (`codes` and `run evidence`, whose flags
+                // `code_lookup` and `run_evidence` parse, never come here).
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -1137,7 +1264,7 @@ impl Invocation {
             "request-shutdown" => Command::RequestShutdown,
             "install-transition" => {
                 let action = install_action.ok_or(ActingctlError::Usage)?;
-                if shutdown_wait.is_some()
+                if wait.is_some()
                     && !matches!(
                         action,
                         actingcommand_contract::InstallTransitionAction::CommitShutdown { .. }
@@ -1239,7 +1366,7 @@ impl Invocation {
         Ok(Self {
             state_root,
             instance,
-            shutdown_wait,
+            wait,
             command,
         })
     }
@@ -1306,19 +1433,31 @@ impl Command {
     }
 }
 
-/// Workflow #382 A1-FLAG: the flags a subcommand of [`Invocation::parse`] takes (`emulator` by
-/// its action), as its usage lists them; `None` for a word that is no such subcommand. Any other
-/// flag, a flag given twice and a word that is no flag are refused by name (Fail Loud: nothing
-/// is ignored silently). The offline `codes` leaves before `Invocation::parse` and reads its
-/// flags here (Workflow #389 MCP-14).
-fn flags_of(command: &str, emulator_action: Option<&str>) -> Option<&'static [&'static str]> {
+/// Workflow #382 A1-FLAG: the flags a subcommand of [`Invocation::parse`] takes (`emulator` and
+/// `run` by their action), as its usage lists them; `None` for a word that is no such subcommand.
+/// Any other flag, a flag given twice and a word that is no flag are refused by name (Fail Loud:
+/// nothing is ignored silently). The offline `codes` leaves before `Invocation::parse` and reads
+/// its flags here (Workflow #389 MCP-14), as `run evidence` does (Workflow #389 MCP-6).
+fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static str]> {
     let flags: &'static [&'static str] = match command {
         // Workflow #389 MCP-14: the list flags of `codes`; its code is a positional word.
         "codes" => &["--prefix", "--owner", "--limit", "--cursor"],
+        // Workflow #389 MCP-6: `run evidence`, by request_id or run_id, a page of steps.
+        "run" if action == Some(run_evidence::ACTION) => &[
+            "--state-root",
+            "--request-id",
+            "--run-id",
+            "--from-step",
+            "--limit",
+        ],
         "agent-publish-facts" => &["--state-root", "--record-file"],
         "agent-apply-resource-targets" => &["--state-root", "--policy-file"],
         "config" | "monitor-status" | "selfcheck" => &["--state-root"],
-        "emulator" if emulator_action == Some("discover") => &["--state-root"],
+        "emulator" if action == Some("discover") => &["--state-root"],
+        // Workflow #389 MCP-21: an emulator control may bound its wait.
+        "emulator" if matches!(action, Some("start" | "stop" | "restart")) => {
+            &["--state-root", "--instance", "--wait"]
+        }
         "task-offset" | "observe" | "reset" | "monitor-clear" | "emulator" | "resume" => {
             &["--state-root", "--instance"]
         }
@@ -1354,6 +1493,8 @@ fn flags_of(command: &str, emulator_action: Option<&str>) -> Option<&'static [&'
             "--recovery-package",
             "--recovery-expected-sha256",
             "--recovery-package-ref",
+            // Workflow #389 MCP-21.
+            "--wait",
         ],
         _ => return None,
     };
@@ -1882,9 +2023,7 @@ mod tests {
                 .collect();
             let invocation =
                 Invocation::parse(arguments).unwrap_or_else(|error| panic!("{words:?}: {error}"));
-            let success = invocation
-                .command
-                .success(invocation.shutdown_wait.is_some());
+            let success = invocation.command.success(invocation.wait.is_some());
             assert_eq!(
                 (success.as_str(), success.category()),
                 (expected, Category::Success),
@@ -1989,5 +2128,119 @@ mod tests {
                 "{error:?}"
             );
         }
+    }
+
+    // Workflow #389 MCP-21 (MCP-0 command table v1.1 §4.22): `--wait <s>` (1-3600) is taken by
+    // `emulator start|stop|restart` and by `task-run`. A wait that ended before its request is
+    // `command_wait_expired` (error) with the request's operation, its request_id and the time
+    // waited, beside `{request_id, correlation_id, state: in_progress}`, and the line exits
+    // non-zero.
+    #[test]
+    fn mcp21_wait_bounds_an_emulator_control_or_a_task_run_and_its_expiry_names_the_request() {
+        let package_ref = "0".repeat(64);
+        let words_of = |words: &[&str]| -> Vec<OsString> {
+            words
+                .iter()
+                .chain(&["--state-root", "state"])
+                .map(|word| OsString::from(*word))
+                .collect()
+        };
+        for words in [
+            &[
+                "emulator",
+                "start",
+                "--instance",
+                "neutral.instance",
+                "--wait",
+                "1",
+            ][..],
+            &[
+                "emulator",
+                "stop",
+                "--instance",
+                "neutral.instance",
+                "--wait",
+                "60",
+            ],
+            &[
+                "emulator",
+                "restart",
+                "--instance",
+                "neutral.instance",
+                "--wait",
+                "3600",
+            ],
+            &[
+                "task-run",
+                "--instance",
+                "neutral.instance",
+                "--package",
+                "neutral-task.zip",
+                "--expected-sha256",
+                package_ref.as_str(),
+                "--wait",
+                "60",
+            ],
+        ] {
+            let invocation = Invocation::parse(words_of(words))
+                .unwrap_or_else(|error| panic!("{words:?}: {error}"));
+            assert!(invocation.wait.is_some(), "{words:?}");
+        }
+        for seconds in ["0", "3601"] {
+            assert!(
+                Invocation::parse(words_of(&[
+                    "emulator",
+                    "start",
+                    "--instance",
+                    "neutral.instance",
+                    "--wait",
+                    seconds,
+                ]))
+                .is_err(),
+                "--wait {seconds}"
+            );
+        }
+
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = *issuer.mint_request_id().expect("request id").transport();
+        let correlation_id = *issuer
+            .mint_correlation_id()
+            .expect("correlation id")
+            .transport();
+        let expired = wait_expired(
+            ContractLocation::RunContainedTask,
+            Duration::from_secs(60),
+            Some(request_id),
+            Some(correlation_id),
+        );
+        assert!(expired.refused, "an expired wait exits non-zero");
+        let outcome = &expired.outcome;
+        assert_eq!(
+            (outcome.code().as_str(), outcome.category()),
+            ("command_wait_expired", Category::Error)
+        );
+        assert_eq!(
+            (
+                outcome.values().get("operation"),
+                outcome.values().get("request_id"),
+                outcome.values().get("waited_ms"),
+            ),
+            (
+                Some(&serde_json::json!(
+                    ContractLocation::RunContainedTask.location().as_str()
+                )),
+                Some(&serde_json::json!(request_id)),
+                Some(&serde_json::json!(60_000)),
+            ),
+            "{outcome}"
+        );
+        assert_eq!(
+            Value::Object(expired.members.clone()),
+            serde_json::json!({
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "state": "in_progress",
+            })
+        );
     }
 }

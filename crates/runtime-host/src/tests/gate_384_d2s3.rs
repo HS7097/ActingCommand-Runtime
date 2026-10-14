@@ -566,6 +566,7 @@ fn reading(value: u64) -> ResourceReadingValue {
         declaration: ResourceReadingDeclaration {
             id: "k1".to_owned(),
             fact_key: "resource.k1".to_owned(),
+            capacity_fact_key: None,
             page_id: "home".to_owned(),
             target_id: "count/balance".to_owned(),
             trim: actingcommand_contract::OcrFieldTrim::WhitespaceV1,
@@ -577,6 +578,7 @@ fn reading(value: u64) -> ResourceReadingValue {
             minimum_confidence_milli: 900,
             valid_for_ms: 60_000,
         },
+        fact_key: "resource.k1".to_owned(),
         value,
         confidence_milli: 990,
     }

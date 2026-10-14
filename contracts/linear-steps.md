@@ -77,7 +77,7 @@ one operation is at fault; an existing check keeps its existing code.
 | a `page` transition's `timeout_ms` is in `1..=1800000` | `transition_timeout` |
 | a `page` transition's `interval_ms` is in `1..=5000` | `transition_interval` |
 | a `window` has `0 <= min_ms <= max_ms`, `1 <= max_ms <= 1800000`, and `min_ms` below the task timeout | `transition_window` |
-| a `scheduling_outcome`, when declared, has no designated operation | `designated_operation` |
+| a `scheduling_outcome`, when declared, has no designated operation and no designated effect set (Workflow #390 OUT-2) | `designated_operation` |
 | every terminal page of that outcome is the target page | `terminal_page` |
 | the application rules of "Application steps" below | `application_retry`, `any_from`, `any_requires_application`, `input_after_application_stop`, `application_without_home` |
 | an application entry declares no `prerequisite_package_id` ("Prerequisite packages" below) | `prerequisite_with_application_entry` |

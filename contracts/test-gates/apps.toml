@@ -258,7 +258,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -271,6 +271,9 @@ tests = [
     "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_codes_parity::gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
+    "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
 ]
 incident = ["#389"]
 
@@ -419,3 +422,41 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_check_config_refuses_each_vision_root_with_the_model_folder_reports_code",
 ]
 incident = ["#382 A-1 G15"]
+
+# actingctl run evidence and ac_run_evidence refuse a request without exactly one of request_id and run_id, a malformed one and a page out of its range, naming the argument, and answer run_unknown with the request_id given for a run nobody has; ac_run_evidence cuts a page over the output budget to its first whole steps, truncated, and next_step reads on from the first step not answered (Workflow #389 MCP-6)
+[[gate]]
+key = "51"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code",
+    "actingcommand-actingctl::bin:actingctl::mcp::run_evidence::tests::a_page_over_the_output_budget_is_cut_to_whole_steps_with_truncated_and_next_step",
+]
+incident = ["#389 MCP-6"]
+
+# ac_app is an operator tool before U-3: a server without the operator tier neither lists it nor runs it (tier_not_enabled, mcp_blocker server_tier); with it, ac_app is listed destructive and not read-only, refuses an action actinglab session app does not have and a call without its instance (arguments_invalid), and answers lab_tool_unavailable (mcp_blocker install_root) when it knows no installation (Workflow #389 MCP-13a)
+[[gate]]
+key = "52"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_app::gate_ac_app_is_an_operator_tool_that_refuses_what_session_app_does_not_take",
+]
+incident = ["#389 MCP-13a"]
+
+# actingctl emulator start|stop|restart and task-run take --wait <s> (1-3600); a wait that ends before its request prints {request_id?, correlation_id, state: in_progress} with command_wait_expired (operation, request_id when known, waited_ms) and exits 1, while the Runtime goes on with the request after the CLI has gone (Workflow #389 MCP-21)
+[[gate]]
+key = "53"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::tests::mcp21_wait_bounds_an_emulator_control_or_a_task_run_and_its_expiry_names_the_request",
+    "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_wait_that_ends_first_exits_1_with_command_wait_expired_and_the_control_goes_on",
+]
+incident = ["#389 MCP-21"]
+
+# A MuMu resolution reason, as provider startup records it and check-config notes it, carries the context its resolving step recorded as values: what was counted, how many and whether exactly, the resolver rung, and how the adb, the MuMu folder and the capture DLL were configured (Workflow #378 A7; key after the wave 12 reservations apps 50 to 53)
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
+]
+incident = ["#378 A7"]

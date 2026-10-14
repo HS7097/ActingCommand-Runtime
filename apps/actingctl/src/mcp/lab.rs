@@ -439,6 +439,36 @@ static RECORD_STATUS: LabCommand = LabCommand {
     keeps_binding: false,
 };
 
+// ---- Workflow #389 MCP-13a (begin): ac_app, actinglab `session app` (MCP-0 command table v1.1
+// §4.14), operator before U-3 and option two after it (FCM:116). ----
+
+/// The actions of actinglab `session app` (`session_management.rs`); `force-stop` is the same
+/// action as `stop`.
+pub(super) const APP_ACTIONS: [&str; 4] = ["launch", "restart", "stop", "force-stop"];
+
+/// `session app <action> --instance <alias>`, never with `--record` (no recording step).
+static APP: LabCommand = LabCommand {
+    words: &["session", "app"],
+    flags: &[
+        flag(
+            "action",
+            "",
+            Kind::Positional,
+            "launch, restart, stop or force-stop (the same action as stop).",
+        ),
+        flag(
+            "instance",
+            "--instance",
+            Kind::Text,
+            "actinglab --instance: the Runtime instance alias whose application is controlled.",
+        ),
+    ],
+    required: &["action", "instance"],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+};
+// ---- Workflow #389 MCP-13a (end) ----
+
 /// The input schema of `command`: one property per flag, nothing else.
 fn input_schema(command: &LabCommand) -> Value {
     let mut properties = Map::new();
@@ -1025,6 +1055,17 @@ pub(super) fn record_status(
     author(context, arguments, &RECORD_STATUS, "ac_record_status")
 }
 
+/// ac_app (Workflow #389 MCP-13a): actinglab `session app <action> --instance <alias>`, its data
+/// verbatim. An action that is none of `APP_ACTIONS` is refused before actinglab runs.
+pub(super) fn app(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
+    let line = command_line(&APP, arguments)?;
+    let action = line.get(APP.words.len()).map(String::as_str);
+    if !action.is_some_and(|action| APP_ACTIONS.contains(&action)) {
+        return Err(invalid_argument("action", ArgumentProblem::NotRecognised));
+    }
+    author(context, arguments, &APP, "ac_app")
+}
+
 // ---------------------------------------------------------------- checks
 
 /// ac_pack_check: `package digest`, then `package preflight` with the given reference or,
@@ -1472,9 +1513,18 @@ pub(super) fn record_status_input() -> Value {
     input_schema(&RECORD_STATUS)
 }
 
+/// ac_app's input: `action` names one of `APP_ACTIONS`.
+pub(super) fn app_input() -> Value {
+    let mut schema = input_schema(&APP);
+    schema["properties"]["action"]["enum"] = json!(APP_ACTIONS);
+    schema
+}
+
 // Test-only: Workflow #382 MCP-T1 (test plan A-5a), the Lab overflow rule gate; Workflow #378
 // A5, how an actinglab exit becomes an answer.
 #[cfg(test)]
 mod tests {
     mod gate_mcpt1;
+    // Workflow #389 MCP-13a: ac_app runs actinglab `session app` with the same arguments.
+    mod gate_mcp13a;
 }
