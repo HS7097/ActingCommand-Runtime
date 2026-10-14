@@ -1673,7 +1673,7 @@ impl LedgerSubscription {
         self.replay.clear();
         while self.live.try_recv().is_ok() {}
         self.liveness.take();
-        self.terminal_error = Some(error.clone());
+        // one-off (red proof 2, L-3 G8): a terminal report is not latched.
         error
     }
 }
