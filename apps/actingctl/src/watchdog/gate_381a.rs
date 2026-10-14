@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #381 A: the watchdog after a held start stopped (R5′) and after a later formal close
-//! that no log covers (R5b). Test plan A-2 G3a, G3c and G3d read fixture state roots with fixed
-//! times; H-1 G2 reads the state root a real held start left (I7).
+// Workflow #381 A: the watchdog after a held start stopped (R5′) and after a later formal close
+// that no log covers (R5b). Test plan A-2 G3a, G3c and G3d read fixture state roots with fixed
+// times; H-1 G2 reads the state root a real held start left (I7). Workflow #378 A6a: the logs
+// hold actingd's daemon lines, and the last `OUTCOME` line, the terminal outcome, decides by its
+// category (it was the FATAL line's top code).
 
 use super::decide::{self, Decision, Journal, Stage, StartProbes};
 use super::observe;
 use super::state::{Recorded, StartRecord, WatchdogState};
 use crate::codes::ActingctlCode;
 use crate::held_runtime::{HELD_SALT, HeldStart, NoInstances};
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_runtime_host::{
     PreparationCheckpoint, PreparationTestAction, RuntimeHost, RuntimeHostConfig,
 };
@@ -21,13 +23,54 @@ use std::time::{Duration, UNIX_EPOCH};
 use tempfile::TempDir;
 
 const T0: u64 = 1_800_000_000_000;
-const STOPPED: &str =
-    "FATAL actingd: runtime host error install_startup_stopped during install_transition";
-const STOPPED_WITH_CAUSE: &str = "FATAL actingd: runtime host error install_startup_stopped during install_transition cause=ledger_failure cause_operation=append_runtime_event";
-const HELD_TIMEOUT: &str =
-    "FATAL actingd: runtime host error held_timeout during install_transition";
-const RELEASE_TIMEOUT: &str =
-    "FATAL actingd: runtime host error release_timeout during install_transition";
+
+/// actingd's daemon lines of one outcome: its developer line and its `OUTCOME actingd:` line.
+fn daemon_lines(level: &str, envelope: &serde_json::Value) -> String {
+    format!(
+        "{level} actingd: {}\nOUTCOME actingd: {envelope}\n",
+        envelope["code"].as_str().expect("the envelope's code")
+    )
+}
+
+/// An envelope of `code` and `category` with `values`.
+fn envelope(code: &str, category: &str, values: serde_json::Value) -> serde_json::Value {
+    json!({
+        "schema_version": "actingcommand.outcome.v1",
+        "code": code,
+        "category": category,
+        "values": values,
+    })
+}
+
+/// The log of a start that opened its ledger and stopped by `condition` (its last daemon
+/// lines: `runtime_stopped`, then the condition).
+fn stopped_by(condition: &serde_json::Value) -> String {
+    let level = match condition["category"].as_str() {
+        Some("fatal") => "FATAL",
+        _ => "ERROR",
+    };
+    format!(
+        "{}{}{}",
+        daemon_lines("INFO", &envelope("ledger_opened", "info", json!({}))),
+        daemon_lines("INFO", &envelope("runtime_stopped", "info", json!({}))),
+        daemon_lines(level, condition)
+    )
+}
+
+/// A held start stopped by a latched failure: `install_startup_stopped`, the latched failure as
+/// its `caused_by` link when `latched`.
+fn held_stop(code: &str, latched: bool) -> String {
+    let mut condition = envelope(code, "error", json!({"operation": "install_transition"}));
+    if latched {
+        condition["causes"] = json!([{
+            "code": "ledger_failure",
+            "category": "error",
+            "relation": "caused_by",
+            "values": {"operation": "append_runtime_event"},
+        }]);
+    }
+    stopped_by(&condition)
+}
 
 /// A state root and a log directory with fixed modification times.
 struct Fixture {
@@ -94,19 +137,15 @@ impl Fixture {
     }
 
     fn observed(&self) -> decide::Observed {
-        observe::observe_owner(&self.state, std::slice::from_ref(&self.logs))
+        observe::observe_owner(&self.state, std::slice::from_ref(&self.logs), None)
             .unwrap_or_else(|failure| panic!("observe: {failure}"))
     }
 
-    /// One owner whose start stopped: its journal closed, then its FATAL line.
-    fn stopped_owner(line: &str) -> Self {
+    /// One owner whose start stopped: its journal closed, then its log's last daemon lines.
+    fn stopped_owner(log: &str) -> Self {
         let fixture = Self::new();
         fixture.journal(&[("epoch_held", T0, Some(T0 + 10_000))]);
-        fixture.log(
-            "actingd-1.log",
-            &format!("actingd ledger_open total_ms=1\n{line}\n"),
-            T0 + 10_050,
-        );
+        fixture.log("actingd-1.log", log, T0 + 10_050);
         fixture
     }
 }
@@ -136,31 +175,53 @@ fn decision(observed: &decide::Observed, state: &WatchdogState) -> Decision {
     }
 }
 
-/// G3a (R5′): the registered top codes of a stopped held start lead to a start through rows
-/// 7a-7f, with or without a cause; a configuration FATAL still holds; an exhausted budget still
-/// stops the start.
+/// G3a (R5′): a stopped held start leads to a start through rows 7a-7f, with or without a
+/// cause; a fatal terminal outcome (a damaged installation) still holds, and (#672 review M1) an
+/// accepted shutdown of a held start, a requested stop whose terminal outcome is
+/// `runtime_stopped`, is never started again; an exhausted budget still stops the start.
 #[test]
 fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
     let fresh = WatchdogState::default();
-    for line in [STOPPED, STOPPED_WITH_CAUSE, HELD_TIMEOUT, RELEASE_TIMEOUT] {
-        assert_eq!(
-            decision(&Fixture::stopped_owner(line).observed(), &fresh),
-            Decision::Start,
-            "{line}"
-        );
-    }
-    // A configuration FATAL, and (#672 review M1) an accepted shutdown of a held start, a
-    // formal stop, still hold.
-    for line in [
-        "FATAL actingd: adb_install_missing",
-        "FATAL actingd: runtime host error install_startup_shut_down during install_transition",
+    for log in [
+        held_stop("install_startup_stopped", false),
+        held_stop("install_startup_stopped", true),
+        held_stop("held_timeout", false),
+        held_stop("release_timeout", false),
     ] {
         assert_eq!(
-            decision(&Fixture::stopped_owner(line).observed(), &fresh).code(),
-            ActingctlCode::WatchdogFatalHold,
-            "{line}"
+            decision(&Fixture::stopped_owner(&log).observed(), &fresh),
+            Decision::Start,
+            "{log}"
         );
     }
+    let damaged = stopped_by(&envelope("adb_install_missing", "fatal", json!({})));
+    assert_eq!(
+        decision(&Fixture::stopped_owner(&damaged).observed(), &fresh).code(),
+        ActingctlCode::WatchdogFatalHold.code(),
+        "{damaged}"
+    );
+    let shut_down = daemon_lines(
+        "INFO",
+        &json!({
+            "schema_version": "actingcommand.outcome.v1",
+            "code": "runtime_stopped",
+            "category": "info",
+            "values": {},
+            "causes": [{
+                "code": "install_startup_shut_down",
+                "category": "error",
+                "relation": "caused_by",
+                "values": {"operation": "install_transition"},
+            }],
+        }),
+    );
+    assert_eq!(
+        decision(&Fixture::stopped_owner(&shut_down).observed(), &fresh),
+        Decision::FormalClose {
+            owner_epoch: "epoch_held".to_owned()
+        },
+        "{shut_down}"
+    );
     let exhausted = WatchdogState {
         starts: (1..=3)
             .map(|minute| StartRecord {
@@ -173,51 +234,72 @@ fn gate_a_stopped_held_start_is_started_again_and_other_fatals_still_hold() {
     };
     assert_eq!(
         decision(
-            &Fixture::stopped_owner(STOPPED_WITH_CAUSE).observed(),
+            &Fixture::stopped_owner(&held_stop("install_startup_stopped", true)).observed(),
             &exhausted
         )
         .code(),
-        ActingctlCode::WatchdogBudgetExhausted
+        ActingctlCode::WatchdogBudgetExhausted.code()
     );
 }
 
-/// G3c: every FATAL line format classes by its registered top code alone: the three codes of a
-/// stopped held start are restartable; any other FATAL, an install operation included, holds.
+/// G3c (Workflow #378 A6a, model section 7.5): the terminal outcome classes by its category
+/// alone, whatever its code, operation or causes: an error considers a start (a stopped held
+/// start, a lost start race, a refused start), a fatal one holds, acforward's included; the
+/// last `OUTCOME` line counts, not an earlier one; a log without one leaves the journal rows to
+/// decide.
 #[test]
 fn gate_fatal_line_formats_class_by_the_registered_top_code_only() {
-    let start_due = ActingctlCode::WatchdogStartDue;
-    let fatal_hold = ActingctlCode::WatchdogFatalHold;
+    let start_due = ActingctlCode::WatchdogStartDue.code();
+    let fatal_hold = ActingctlCode::WatchdogFatalHold.code();
+    let formal_close = ActingctlCode::WatchdogFormalClose.code();
+    let fatal_then_stopped = format!(
+        "{}{}",
+        daemon_lines(
+            "FATAL",
+            &envelope("ledger_write_failed", "fatal", json!({}))
+        ),
+        daemon_lines("INFO", &envelope("runtime_stopped", "info", json!({})))
+    );
     let rows = [
-        (STOPPED, start_due),
-        (STOPPED_WITH_CAUSE, start_due),
-        (HELD_TIMEOUT, start_due),
-        (RELEASE_TIMEOUT, start_due),
+        (held_stop("install_startup_stopped", true), start_due),
+        (held_stop("held_timeout", false), start_due),
         (
-            "FATAL actingd: runtime host error install_preparation_not_authorized during install_transition",
+            stopped_by(&envelope(
+                "owner_conflict",
+                "error",
+                json!({"operation": "acquire_owner_file"}),
+            )),
+            start_due,
+        ),
+        (
+            stopped_by(&envelope("usage_invalid", "error", json!({}))),
+            start_due,
+        ),
+        (
+            stopped_by(&envelope("ledger_write_failed", "fatal", json!({}))),
             fatal_hold,
         ),
         (
-            "FATAL actingd: runtime host error ledger_failure during append_runtime_event",
+            stopped_by(&envelope("adb_install_mismatch", "fatal", json!({}))),
             fatal_hold,
         ),
         (
-            "FATAL actingd: runtime host error agent_ledger_failure during recover_agent_dispatcher",
+            format!(
+                "OUTCOME acforward: {}\n",
+                envelope("acforward_runtime_missing", "fatal", json!({}))
+            ),
             fatal_hold,
         ),
-        ("FATAL actingd: usage_invalid", fatal_hold),
-        (
-            "FATAL actingd: resource_package_invalid: C:\\packages\\missing.zip",
-            fatal_hold,
-        ),
-        ("FATAL acforward: Cannot run C:\\root\\runtime", fatal_hold),
+        (fatal_then_stopped, formal_close),
+        ("FATAL actingd: usage_invalid\n".to_owned(), formal_close),
     ];
-    for (line, class) in rows {
-        let observed = Fixture::stopped_owner(line).observed();
+    for (log, class) in rows {
+        let observed = Fixture::stopped_owner(&log).observed();
         let decided = match decide::decide_observed(&observed, &WatchdogState::default()) {
             Stage::Decided(decision) => decision.code(),
             Stage::ConsiderStart => Decision::Start.code(),
         };
-        assert_eq!(decided, class, "{line}");
+        assert_eq!(decided, class, "{log}");
     }
 }
 
@@ -234,7 +316,7 @@ fn gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner() {
     stopped.journal(&owners);
     stopped.log(
         "actingd-1.log",
-        &format!("actingd ledger_open total_ms=1\n{STOPPED_WITH_CAUSE}\n"),
+        &held_stop("install_startup_stopped", true),
         T0 + 10_050,
     );
     assert_eq!(
@@ -246,7 +328,11 @@ fn gate_an_unlogged_formal_close_looks_back_to_the_last_logged_owner() {
     formal.journal(&owners);
     formal.log(
         "actingd-1.log",
-        "actingd ledger_open total_ms=1\nactingd shutdown accepted\n",
+        &format!(
+            "{}{}",
+            daemon_lines("INFO", &envelope("ledger_opened", "info", json!({}))),
+            daemon_lines("INFO", &envelope("runtime_stopped", "info", json!({})))
+        ),
         T0 + 10_050,
     );
     assert_eq!(
@@ -275,15 +361,23 @@ fn gate_the_state_root_of_a_stopped_held_start_leads_the_watchdog_to_a_start() {
     });
     let stopped = start.finish().err().expect("the held start stops");
     drop(installer);
-    // actingd's last act: its FATAL line, in the log its starter gave it.
+    // actingd's last act: `runtime_stopped` and the stop's daemon lines, in the log its starter
+    // gave it (Workflow #378 A6a).
     let fatal_log = logs.join("actingd-held.log");
+    let condition = stopped.daemon_outcome();
     fs::write(
         &fatal_log,
-        format!("FATAL actingd: {}\n", stopped.complete_message()),
+        format!(
+            "{}ERROR actingd: {} {}\nOUTCOME actingd: {}\n",
+            daemon_lines("INFO", &envelope("runtime_stopped", "info", json!({}))),
+            condition.code(),
+            stopped.complete_message(),
+            serde_json::to_string(&condition.envelope(Detail::Full)).expect("the envelope"),
+        ),
     )
-    .expect("write the FATAL log");
+    .expect("write the stop's log");
     let read_root = || {
-        observe::observe_owner(&state, std::slice::from_ref(&logs))
+        observe::observe_owner(&state, std::slice::from_ref(&logs), None)
             .unwrap_or_else(|failure| panic!("observe: {failure}"))
     };
     assert_eq!(

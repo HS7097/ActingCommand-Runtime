@@ -211,7 +211,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::RuntimeInstanceIdentityMismatch,
                     ContractLocation::QueueLease,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -306,7 +306,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::QueuedRequestIdentityMismatch,
                         ContractLocation::QueueLease,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ),
                 ));
             }
@@ -373,7 +373,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::QueuedRequestCollision,
                     ContractLocation::QueueLease,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -515,7 +515,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::ExpiredQueueContextMissing,
                         ContractLocation::PollQueuedLease,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
                 let event = self.finish_queue_expiry(&context)?;
@@ -661,7 +661,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::QueueGrantTerminalMissing,
                     HostLocation::RecoverQueuedLeaseGrant,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })
     }
@@ -704,7 +704,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::PreemptionActiveLeaseMissing,
                     HostLocation::RecordSchedulerPreemption,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         if !active.preempt_requested() {
@@ -712,7 +712,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PreemptionStateMismatch,
                     HostLocation::RecordSchedulerPreemption,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -833,7 +833,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::QueuedRequestContextMissing,
                     HostLocation::ReadQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         if context.connection_id != queued.connection_id() {
@@ -841,7 +841,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::QueuedRequestConnectionMismatch,
                     HostLocation::ReadQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -850,7 +850,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::QueuedRequestInstanceMismatch,
                     HostLocation::ReadQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -867,7 +867,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::QueuedRequestInstanceMismatch,
                     HostLocation::RemoveQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -885,7 +885,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::QueuedRequestContextMissing,
                     HostLocation::RemoveQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         if context.connection_id != connection_id {
@@ -893,7 +893,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::QueuedRequestConnectionMismatch,
                     HostLocation::RemoveQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -909,7 +909,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::QueuedRequestContextInvalid,
                 HostLocation::RecordQueuedRequestTerminal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let links =
@@ -976,7 +976,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::LeaseTransferContextMissing,
                     HostLocation::PrepareLeaseTransfer,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         if context.connection_id != to_connection_id
@@ -986,7 +986,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::LeaseTransferContextMismatch,
                     HostLocation::PrepareLeaseTransfer,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -994,7 +994,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::LeaseTransferRequestInvalid,
                 HostLocation::PrepareLeaseTransfer,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let action_id = self
@@ -1046,7 +1046,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::LeaseTransferCommitFailedAfterDurableFact,
                     HostLocation::CommitLeaseTransfer,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
                 Some(terminal(&transferred)),
             )
@@ -1056,7 +1056,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::LeaseTransferTokenMismatchAfterDurableFact,
                     HostLocation::CommitLeaseTransfer,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
                 Some(terminal(&transferred)),
             ));
@@ -1206,7 +1206,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::RuntimeInstanceIdentityMismatch,
                     ContractLocation::AcquireLease,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -1452,14 +1452,14 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::LeaseTerminalEventMissing,
                     HostLocation::RecoverIdempotentLeaseRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             )),
             _ => Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
                     HostCode::LeaseTerminalEventDuplicated,
                     HostLocation::RecoverIdempotentLeaseRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             )),
         }
@@ -1475,7 +1475,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::RequestTerminalEventMissing,
                     HostLocation::RecoverIdempotentRuntimeRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })
     }
@@ -1506,7 +1506,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::RequestTerminalEventDuplicated,
                     HostLocation::RecoverIdempotentRuntimeRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             )),
         }
@@ -1829,7 +1829,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::ActiveLeaseInstanceMissing,
                 HostLocation::ReadInstanceRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })
     }
@@ -1889,7 +1889,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PreemptedTransferRemainedDestructive,
                     HostLocation::PreparePreemptedTransfer,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             )),
         }
@@ -2120,7 +2120,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::RecoveryLadderClaimRequestInvalid,
                 HostLocation::HandOffToLadder,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let claim_connection =
@@ -2240,7 +2240,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::QueuedRequestContextInvalid,
                 HostLocation::HandOffToClaim,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let resolved = self.validated_instance(request, token, connection_id)?;
@@ -2381,7 +2381,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::ActiveLeaseInstanceMissing,
                 HostLocation::CleanupRuntimeConnection,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(None)
@@ -2475,7 +2475,7 @@ impl HostShared {
                     return Err(RuntimeHostError::fatal(
                         HostCode::CleanupTransferRemainedDestructive,
                         HostLocation::PrepareCleanupTransfer,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ));
                 }
                 TransferPreparation::NoCandidate => {}
@@ -2576,7 +2576,7 @@ impl HostShared {
                                 error: ActionFailure::poison(RuntimeHostError::fatal(
                                     HostCode::SchedulerCleanupStateMismatch,
                                     HostLocation::CleanupRuntimeLease,
-                                    RuntimeErrorCode::RuntimeFatal,
+                                    RuntimeErrorCode::RuntimeHalted,
                                 )),
                                 effect: EffectDisposition::Indeterminate,
                             },
@@ -2731,7 +2731,7 @@ impl HostShared {
                     return Err(RuntimeHostError::fatal(
                         crate::codes::test_spellings::TestCode::TestLeaseExpiryTerminalNotUnique,
                         crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ));
                 }
             };
@@ -2769,14 +2769,14 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryTerminalMissing,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         if self.active_lease_token_for_test(token)?.is_some() {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenCleanupIncomplete,
                 crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         let mut checkpoints = lock(
@@ -2790,7 +2790,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointDuplicate,
                 crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if checkpoints
@@ -2800,7 +2800,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointInconsistent,
                 crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         checkpoints.push(LeaseExpiryTestCheckpoint {
@@ -2830,14 +2830,14 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointDuplicate,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             if checkpoint.token != *token {
                 return Err(RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryTokenIdentityMismatch,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             checkpoint.clone()
@@ -2848,14 +2848,14 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointMissing,
                     crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         if durable_terminal != checkpoint.terminal {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestLeaseExpiryCheckpointInconsistent,
                 crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if self
@@ -2865,7 +2865,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 crate::codes::test_spellings::TestCode::TestLeaseExpiryTerminalTokenStillActive,
                 crate::codes::test_spellings::TestLocation::ExpireLeaseOnceForTest,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(Some(checkpoint.terminal))
@@ -3050,7 +3050,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::RuntimeInstanceIdentityMismatch,
                     HostLocation::ResolveRuntimeInstance,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -3515,7 +3515,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::QueuedRequestContextInvalid,
                 HostLocation::PumpInstanceQueue,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         self.append_scheduler_admitted(&validated, &context.instance, None)
@@ -3743,7 +3743,7 @@ impl HostShared {
             RuntimeHostError::relayed_fatal(
                 error.code(),
                 HostLocation::PumpInstanceQueue.as_str(),
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         };
         if self.fatal.mark(error).is_err() {
@@ -3762,7 +3762,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::QueuedRequestContextMissing,
                     HostLocation::ReadQueuedRequest,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })
     }
@@ -3784,7 +3784,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::QueuedRequestContextInvalid,
                 HostLocation::RequestHostClaim,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let resolved = self.resolve_instance(claim.instance_alias)?;
@@ -4000,7 +4000,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::ActiveLeaseInstanceMissing,
                 HostLocation::RenewHeldLease,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let order_lock = self.queue_order_lock(token.instance_id())?;

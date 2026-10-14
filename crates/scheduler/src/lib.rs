@@ -421,7 +421,7 @@ impl SchedulerError {
             | Self::InvalidConnection
             | Self::IdentifierIssuance
             | Self::ExpiryOverflow => {
-                RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeFatal, true)
+                RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeHalted, true)
             }
             Self::Busy {
                 holder_id,
@@ -474,7 +474,7 @@ impl SchedulerError {
                 RuntimeErrorProjection::new(RuntimeErrorCode::InvalidRequest, false)
             }
             Self::QueueSequenceOverflow | Self::StepSequenceOverflow => {
-                RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeFatal, true)
+                RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeHalted, true)
             }
             Self::TransferNotSafe | Self::DestructiveStateMismatch | Self::ResourceCloseOnly => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::TransferNotSafe, false)

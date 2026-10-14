@@ -17,7 +17,8 @@
 //! `adb_install_missing` or `adb_install_mismatch`; there is no fallback to another adb.
 
 use crate::codes::ActingdCode;
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::{Code, FileState, IoOp, Outcome, RawSource, Record};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -92,7 +93,7 @@ impl InstalledAdb {
     fn verify(&self) -> Vec<Finding> {
         let pinned = match pinned_binaries() {
             Ok(pinned) => pinned,
-            Err(reason) => return vec![Finding::PinUnreadable(reason)],
+            Err(unreadable) => return vec![Finding::PinUnreadable(unreadable)],
         };
         pinned
             .into_iter()
@@ -102,9 +103,15 @@ impl InstalledAdb {
                     .split('/')
                     .fold(self.root.join("tools"), |path, part| path.join(part));
                 match fs::read(&path) {
+                    // Workflow #378 A6a: the OS error is the finding's `foreign_os_error` link.
                     Err(error) => Some(Finding::Missing {
+                        state: if error.kind() == std::io::ErrorKind::NotFound {
+                            FileState::Missing
+                        } else {
+                            FileState::Unreadable
+                        },
+                        cause: Outcome::from_io_error(&error, IoOp::Read).path(&path),
                         path,
-                        error: error.to_string(),
                     }),
                     Ok(bytes) => {
                         let actual = format!("{:x}", Sha256::digest(bytes));
@@ -225,6 +232,7 @@ pub(crate) fn require(
         } else {
             ActingdCode::AdbInstallMismatch.code()
         },
+        tools_dir: installed.root.join("tools"),
         adb: installed.adb.clone(),
         users: requirement.users.clone(),
         findings,
@@ -233,40 +241,50 @@ pub(crate) fn require(
 
 /// One distributed binary that is not as pinned.
 enum Finding {
-    /// The file cannot be read (absent, quarantined, not a file).
-    Missing { path: PathBuf, error: String },
+    /// The file cannot be read (absent, quarantined, not a file): `missing` when it is absent,
+    /// else `unreadable`, with the OS error.
+    Missing {
+        path: PathBuf,
+        state: FileState,
+        cause: Outcome,
+    },
     Mismatch {
         path: PathBuf,
         expected: String,
         actual: String,
     },
-    /// The pin compiled into this build cannot be read, so no file can be confirmed.
-    PinUnreadable(String),
+    /// The pin compiled into this build cannot be read, so no file can be confirmed:
+    /// `adb_install_pin_invalid`.
+    PinUnreadable(Outcome),
 }
 
 impl Finding {
-    fn detail(&self) -> serde_json::Value {
+    /// Workflow #378 A6a: the file as a `files` record (`path`, `state`, and the two SHA-256
+    /// of a mismatch); an unreadable pin names no file.
+    fn record(&self) -> Option<Record> {
         match self {
-            Self::Missing { path, error } => serde_json::json!({
-                "path": path.to_string_lossy(),
-                "state": "missing",
-                "error": error,
-            }),
+            Self::Missing { path, state, .. } => Some(Record::new().path(path).state(*state)),
             Self::Mismatch {
                 path,
                 expected,
                 actual,
-            } => serde_json::json!({
-                "path": path.to_string_lossy(),
-                "state": "sha256_mismatch",
-                "expected_sha256": expected,
-                "actual_sha256": actual,
-            }),
-            Self::PinUnreadable(reason) => serde_json::json!({
-                "path": null,
-                "state": "sha256_mismatch",
-                "error": format!("the platform-tools pin of this build is unreadable: {reason}"),
-            }),
+            } => Some(
+                Record::new()
+                    .path(path)
+                    .state(FileState::Sha256Mismatch)
+                    .expected_sha256(format!("sha256:{expected}"))
+                    .actual_sha256(format!("sha256:{actual}")),
+            ),
+            Self::PinUnreadable(_) => None,
+        }
+    }
+
+    /// The failure behind the finding: the OS error of an unreadable file, or the unreadable
+    /// pin.
+    fn cause(&self) -> Option<&Outcome> {
+        match self {
+            Self::Missing { cause, .. } | Self::PinUnreadable(cause) => Some(cause),
+            Self::Mismatch { .. } => None,
         }
     }
 }
@@ -274,8 +292,8 @@ impl Finding {
 impl fmt::Display for Finding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Missing { path, error } => {
-                write!(formatter, "missing {:?} ({error})", path.to_string_lossy())
+            Self::Missing { path, cause, .. } => {
+                write!(formatter, "missing {:?} ({cause})", path.to_string_lossy())
             }
             Self::Mismatch {
                 path,
@@ -286,9 +304,9 @@ impl fmt::Display for Finding {
                 "{:?} sha256 expected {expected}, actual {actual}",
                 path.to_string_lossy()
             ),
-            Self::PinUnreadable(reason) => write!(
+            Self::PinUnreadable(unreadable) => write!(
                 formatter,
-                "the platform-tools pin of this build is unreadable: {reason}"
+                "the platform-tools pin of this build is unreadable: {unreadable}"
             ),
         }
     }
@@ -298,6 +316,8 @@ impl fmt::Display for Finding {
 /// that is not as pinned.
 pub(crate) struct AdbInstallRejection {
     code: Code,
+    /// `<root>\tools`, which acsetup reinstalls.
+    tools_dir: PathBuf,
     adb: PathBuf,
     users: Vec<String>,
     findings: Vec<Finding>,
@@ -308,13 +328,29 @@ impl AdbInstallRejection {
         self.code
     }
 
-    pub(crate) fn detail(&self) -> serde_json::Value {
-        serde_json::json!({
-            "adb_path": self.adb.to_string_lossy(),
-            "instances": self.users,
-            "files": self.findings.iter().map(Finding::detail).collect::<Vec<_>>(),
-            "remedy": REMEDY,
-        })
+    /// Workflow #378 A6a (model section 7.4): the refusal with the adb (`adb_path`), the
+    /// instances that use it (`aliases`), the Tools folder (`tools_dir`) and each file that is
+    /// not as pinned (`files`); each file's OS error, or an unreadable pin, is a `caused_by`
+    /// link. What to do is the code's catalog `handling`; the developer line names it too.
+    pub(crate) fn outcome(&self) -> Outcome {
+        let files = self
+            .findings
+            .iter()
+            .filter_map(Finding::record)
+            .collect::<Vec<_>>();
+        let outcome = Outcome::new(self.code)
+            .adb_path(&self.adb)
+            .aliases(&self.users)
+            .tools_dir(&self.tools_dir);
+        let outcome = if files.is_empty() {
+            outcome
+        } else {
+            outcome.files(files)
+        };
+        self.findings
+            .iter()
+            .filter_map(Finding::cause)
+            .fold(outcome, |outcome, cause| outcome.caused_by(cause.clone()))
     }
 }
 
@@ -354,17 +390,25 @@ struct PinnedFile {
 }
 
 /// The distributed binaries (`.exe`, `.dll`) of the one pin component that carries
-/// `distributed_files`, which must include the adb itself.
-fn pinned_binaries() -> Result<Vec<PinnedFile>, String> {
-    let pin = serde_json::from_str::<ToolSourcesPin>(TOOL_SOURCES_PIN)
-        .map_err(|error| format!("decode failed: {error}"))?;
+/// `distributed_files`, which must include the adb itself. A pin that breaks this is
+/// `adb_install_pin_invalid` (Workflow #378 A6a), with the decoder's text as its
+/// `foreign_data_error` link when it does not decode.
+fn pinned_binaries() -> Result<Vec<PinnedFile>, Outcome> {
+    let invalid = || Outcome::new(ActingdCode::AdbInstallPinInvalid);
+    let pin = serde_json::from_str::<ToolSourcesPin>(TOOL_SOURCES_PIN).map_err(|error| {
+        invalid().caused_by(
+            Outcome::new(ContractCode::ForeignDataError)
+                .raw_source(RawSource::Json)
+                .raw_text(error.to_string()),
+        )
+    })?;
     let mut carriers = pin
         .components
         .into_values()
         .filter_map(|component| component.distributed_files);
     let files = match (carriers.next(), carriers.next()) {
         (Some(files), None) => files,
-        _ => return Err("exactly one component must carry distributed_files".to_owned()),
+        _ => return Err(invalid()),
     };
     let binaries = files
         .into_iter()
@@ -385,13 +429,10 @@ fn pinned_binaries() -> Result<Vec<PinnedFile>, String> {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     }) {
-        return Err(format!(
-            "distributed file {:?} is not well formed",
-            file.path
-        ));
+        return Err(invalid().path(&file.path));
     }
     if !binaries.iter().any(|file| file.path == PINNED_ADB) {
-        return Err(format!("distributed_files do not list {PINNED_ADB}"));
+        return Err(invalid());
     }
     Ok(binaries)
 }

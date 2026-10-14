@@ -31,12 +31,14 @@ impl HostShared {
         mut timing: Option<&mut ConnectionTiming>,
         material: Option<MaterialReadContext>,
     ) -> RuntimeHostResult<RuntimeReceipt> {
-        if let Some(error) = self.fatal.current()? {
-            return runtime_error_receipt(
+        // Workflow #378 A6a (model section 2.3): a latched host answers every later request by
+        // the latching condition, under `runtime_halted` unless the condition is fatal.
+        if let Some(error) = self.fatal.answer()? {
+            return runtime_failure_receipt(
                 request,
                 RuntimeReceiptState::Failed,
                 None,
-                error.projection().clone(),
+                error.receipt_outcome(),
             );
         }
         let validated = match request.validate() {
@@ -728,7 +730,7 @@ mod request_failure_tests {
         let escalated = original.replace_with_poison(RuntimeHostError::fatal(
             crate::codes::test_spellings::TestCode::LeaseCleanupFailed,
             crate::codes::HostLocation::ReleaseFailedPolicyRun,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
 
         assert_eq!(escalated.error.code(), "lease_cleanup_failed");
@@ -931,7 +933,7 @@ pub(super) fn connection_boundary(
             Some(RuntimeHostError::fatal(
                 HostCode::RuntimeConnectionPanicked,
                 HostLocation::ServeRuntimeConnection,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         }
     };
@@ -1253,7 +1255,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PolicyTaskRequestOriginMismatch,
                     HostLocation::AppendScheduledRequestLifecycle,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -1440,7 +1442,7 @@ pub(super) fn policy_id_error(operation: impl Into<Location>) -> RuntimeHostErro
     RuntimeHostError::fatal(
         HostCode::PolicyIdentifierIssueFailed,
         operation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -1448,7 +1450,7 @@ pub(super) fn policy_contract_error(operation: impl Into<Location>) -> RuntimeHo
     RuntimeHostError::fatal(
         HostCode::PolicyRuntimeContractInvalid,
         operation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -1463,7 +1465,7 @@ pub(super) fn policy_admission_fatal(
     code: impl Into<Code>,
     operation: impl Into<Location>,
 ) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 pub(super) fn critical_execution_error<E>(error: &CriticalExecutionError<E>) -> RuntimeHostError {
@@ -1475,7 +1477,7 @@ pub(super) fn critical_execution_error<E>(error: &CriticalExecutionError<E>) -> 
         CriticalExecutionError::Action { .. } => RuntimeHostError::fatal(
             HostCode::CriticalActionMappingInvalid,
             HostLocation::MapCriticalResult,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ),
     }
 }
@@ -1484,7 +1486,7 @@ pub(super) fn critical_plan_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::CriticalEventPlanInvalid,
         HostLocation::BuildCriticalEvent,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -1506,7 +1508,7 @@ pub(super) fn receipt_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::RuntimeReceiptBuildFailed,
         HostLocation::BuildRuntimeReceipt,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 

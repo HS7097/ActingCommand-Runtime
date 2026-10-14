@@ -203,7 +203,7 @@ impl HostShared {
                         RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                             HostCode::RuntimeDebugContextMissingAfterTerminal,
                             ContractLocation::RecordRuntimeDebugEvent,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         ))
                     })?;
                 context.terminal_outcome = Some(outcome);
@@ -236,7 +236,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::ClientActionReplayPayloadMismatch,
                         ContractLocation::RecordClientAction,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ),
                 ));
             };
@@ -296,7 +296,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::ClientFactReplayAmbiguous,
                         HostLocation::QueryClientFactReplay,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ),
                 ));
             }

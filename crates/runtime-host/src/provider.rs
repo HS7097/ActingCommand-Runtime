@@ -207,14 +207,14 @@ impl ExecutionBackendRegistration {
             return Err(RuntimeHostError::fatal(
                 HostCode::ExecutionBackendSelectionNotExplicit,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if input.target.adb_arg() != capture.target.adb_arg() {
             return Err(RuntimeHostError::fatal(
                 HostCode::ExecutionBackendTargetMismatch,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if input.requested == TouchBackendChoice::NemuIpc
@@ -223,7 +223,7 @@ impl ExecutionBackendRegistration {
             return Err(RuntimeHostError::fatal(
                 HostCode::NemuInputRequiresPairedCapture,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         let milliseconds = |duration: Duration| {
@@ -231,7 +231,7 @@ impl ExecutionBackendRegistration {
                 RuntimeHostError::fatal(
                     HostCode::ExecutionConfigurationTimeoutOverflow,
                     HostLocation::BuildExecutionBackendRegistry,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })
         };
@@ -314,14 +314,14 @@ impl ExecutionBackendRegistration {
             return Err(RuntimeHostError::fatal(
                 SharedCode::NemuAppIndexRequiresPairedInput,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         NemuApplicationTarget::new(&self.application_id, app_index).map_err(|error| {
             RuntimeHostError::fatal(
                 HostCode::NemuApplicationIdentityInvalid,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
             .with_native_detail(error.to_string())
         })?;
@@ -720,7 +720,7 @@ impl ExecutionBackendRegistry {
             return Err(RuntimeHostError::fatal(
                 HostCode::EmptyExecutionBackendRegistry,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(registry)
@@ -769,14 +769,14 @@ impl ExecutionBackendRegistry {
             return Err(RuntimeHostError::fatal(
                 HostCode::NemuAppIndexMissing,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if self.entries.contains_key(&alias) {
             return Err(RuntimeHostError::fatal(
                 HostCode::DuplicateInstanceAlias,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if self
@@ -787,7 +787,7 @@ impl ExecutionBackendRegistry {
             return Err(RuntimeHostError::fatal(
                 HostCode::DuplicateInstanceId,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         let entry = match mode {
@@ -827,7 +827,7 @@ fn capability_profile(
         RuntimeHostError::fatal(
             HostCode::ExecutionCapabilityProfileInvalid,
             HostLocation::BuildExecutionBackendRegistry,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     };
     let evidence = EmulatorCapability::ALL.into_iter().map(|capability| {
@@ -917,7 +917,7 @@ fn merge_capability_profile(
             RuntimeHostError::fatal(
                 HostCode::ExecutionCapabilityProfileMergeInvalid,
                 HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })
 }
@@ -1385,7 +1385,7 @@ fn validate_alias(alias: &str) -> RuntimeHostResult<()> {
         return Err(RuntimeHostError::fatal(
             SharedCode::InvalidInstanceAlias,
             HostLocation::BuildExecutionBackendRegistry,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
     }
     Ok(())
@@ -1399,7 +1399,7 @@ fn validate_application_id(application_id: &str) -> RuntimeHostResult<()> {
         return Err(RuntimeHostError::fatal(
             HostCode::InvalidApplicationIdentity,
             HostLocation::BuildExecutionBackendRegistry,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
     }
     Ok(())

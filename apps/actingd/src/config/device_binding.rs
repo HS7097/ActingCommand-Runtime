@@ -16,7 +16,7 @@
 
 use super::InstanceConfig;
 use crate::codes::{ActingdCode, DeviceConfigProblem};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     DeviceBindingProblem, MAX_HANDSET_ALIAS_BYTES, device_bindings_path, read_device_bindings,
 };
@@ -81,17 +81,18 @@ impl DeviceRefusal {
         }
     }
 
-    pub(crate) fn detail(&self) -> serde_json::Value {
+    /// Workflow #378 A6a (model section 7.4): the refusal with the instance or the file it
+    /// names and why, as `check-config` and a start report it.
+    pub(crate) fn outcome(&self) -> Outcome {
+        let outcome = Outcome::new(self.code());
         match self {
-            Self::Config(refused) => serde_json::json!({
-                "alias": refused.alias,
-                "device_config_problem": refused.problem.as_str(),
-            }),
-            Self::BindingFile(refused) => serde_json::json!({
-                "path": refused.path.to_string_lossy(),
-                "device_binding_problem": refused.problem.as_str(),
-            }),
-            Self::Missing(alias) => serde_json::json!({ "alias": alias }),
+            Self::Config(refused) => outcome
+                .alias(&refused.alias)
+                .device_config_problem(refused.problem),
+            Self::BindingFile(refused) => outcome
+                .path(&refused.path)
+                .device_binding_problem(refused.problem),
+            Self::Missing(alias) => outcome.alias(alias),
         }
     }
 }
@@ -398,8 +399,10 @@ mod tests {
                 ActingdCode::DeviceBindingFileInvalid.code(),
                 "{problem}"
             );
+            // Workflow #378 A6a: the refusal's outcome names the file and why (it was v1's
+            // `error.detail`).
             assert_eq!(
-                refused.detail(),
+                serde_json::Value::Object(refused.outcome().values().clone()),
                 json!({
                     "path": device_bindings_path(root.path()).to_string_lossy(),
                     "device_binding_problem": problem.as_str(),
@@ -480,7 +483,7 @@ mod tests {
             let config = config(root.path(), instance);
             let refused = config.device_refusal().expect("a device refusal");
             assert_eq!(
-                refused.detail(),
+                serde_json::Value::Object(refused.outcome().values().clone()),
                 json!({"alias": alias, "device_config_problem": problem.as_str()}),
                 "{member}"
             );

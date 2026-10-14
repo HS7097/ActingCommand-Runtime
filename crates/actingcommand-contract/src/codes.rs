@@ -23,6 +23,10 @@ crate::outcome_codes! {
         ForeignHttpError => "foreign_http_error": error / none,
         ForeignOtherError => "foreign_other_error": error / none,
         PanicCaught => "panic_caught": warning / none,
+        /// Workflow #378 A6a (model section 2.4): the watchdog's restart budget ran out and
+        /// every start in its window ended in `runtime_restart_required`. Only the watchdog
+        /// decides it; no in-process boundary emits it.
+        PanicUnrecovered => "panic_unrecovered": fatal / none,
         // Workflow #378 A3 (ledger revision 3): a relayed spelling the embedded catalog does not
         // list; the record keeps the spelling as `raw_code` instead of inventing a code.
         OutcomeRelayUnregistered => "outcome_relay_unregistered": error / none,
@@ -42,8 +46,11 @@ crate::outcome_codes! {
         InvalidRequest => "invalid_request": error / none,
         #[serde(rename = "runtime_unavailable")]
         RuntimeUnavailable => "runtime_unavailable": error / none,
-        #[serde(rename = "runtime_fatal")]
-        RuntimeFatal => "runtime_fatal": error / none,
+        /// Workflow #378 A6a (model section 2.3, M1a): the Runtime halted (was `runtime_fatal`).
+        /// A latched host answers a later request with an error condition under it as the
+        /// `caused_by` link; a fatal condition answers as itself.
+        #[serde(rename = "runtime_halted")]
+        RuntimeHalted => "runtime_halted": error / none,
         #[serde(rename = "owner_conflict")]
         OwnerConflict => "owner_conflict": error / none,
         #[serde(rename = "protocol_invalid")]
@@ -232,6 +239,11 @@ crate::outcome_codes! {
     /// once, here. The owners' other emission sites switch to these constants when their A2 part
     /// converts them.
     pub enum SharedCode {
+        /// Error. An instance worker panicked again before it finished one payload after its
+        /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it. Workflow
+        /// #378 A6a: the runtime host emits it and the watchdog reads it from a start's terminal
+        /// outcome (`panic_unrecovered`), so it is the contract's (it was the runtime host's).
+        RuntimeRestartRequired => "runtime_restart_required": error / none,
         AgentDispatcherConfigInvalid => "agent_dispatcher_config_invalid": error / none,
         AgentResponseSessionMismatch => "agent_response_session_mismatch": error / none,
         AgentSessionNotActive => "agent_session_not_active": error / none,

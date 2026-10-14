@@ -321,3 +321,17 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::l5b_a_configuration_naming_a_retired_failed_run_key_is_refused_as_unknown",
 ]
 incident = ["#382 L-5b"]
+
+# actingd speaks outcomes: each daemon outcome is a developer line and one `OUTCOME actingd:` line, at the level and the exit code of its category; a start refusal is appended to the fallback log only when nobody keeps stderr, with install_root; every subcommand exit is one report line with its outcome; the watchdog decides by the terminal outcome's category, ignores another root's fallback-log line, and escalates a run-out budget to panic_unrecovered only when every start ended in runtime_restart_required (Workflow #378 A6a)
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_each_outcome_is_one_developer_line_and_one_outcome_line_by_its_category",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_a_start_refusal_goes_to_the_fallback_log_only_when_stderr_is_not_kept",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a6a::a6a_every_subcommand_exit_is_one_report_line_with_its_outcome",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_the_terminal_outcome_decides_by_its_category",
+    "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::a6a_a_run_out_budget_escalates_only_after_restarts_required",
+    "actingcommand-actingctl::bin:actingctl::watchdog::observe::tests::a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root",
+]
+incident = ["#378 A6a"]

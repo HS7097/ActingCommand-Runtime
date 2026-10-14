@@ -617,7 +617,7 @@ fn validate_record(
 }
 
 fn monitor_error(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 fn monitor_ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
@@ -1031,7 +1031,7 @@ mod tests {
             registry.apply(&event).unwrap();
         }
         let stale = registry
-            .prepare_failure(&replacement_probe, 20, 25, RuntimeErrorCode::RuntimeFatal)
+            .prepare_failure(&replacement_probe, 20, 25, RuntimeErrorCode::RuntimeHalted)
             .unwrap();
         assert!(!stale.changed);
         let RuntimeStateFact::MonitorChanged { change, .. } = stale.fact else {

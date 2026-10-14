@@ -3204,7 +3204,7 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
                 detail(),
                 RuntimeLifecycleFailureDraft::new(epoch, "runtime_host", failure.clone())
                     .with_raw_os_error(Some(5))
-                    .with_runtime_code(Some(crate::RuntimeErrorCode::RuntimeFatal)),
+                    .with_runtime_code(Some(crate::RuntimeErrorCode::RuntimeHalted)),
                 AuditInput::new(),
             )
             .into(),
@@ -3683,7 +3683,7 @@ fn revision_3_lifecycle_failure_links_its_os_error_and_keeps_the_runtime_code() 
     // Acceptance CL-M3: the receipt's Runtime code is the outcome's value `runtime_code`.
     assert_eq!(
         outcome.value("runtime_code"),
-        Some(&serde_json::json!("runtime_fatal"))
+        Some(&serde_json::json!("runtime_halted"))
     );
     let [os_error] = outcome.causes() else {
         panic!("the OS error link")

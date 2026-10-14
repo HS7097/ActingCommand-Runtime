@@ -99,7 +99,7 @@ fn manual_claim(kind: ClaimKind) -> bool {
 /// an operation or a capture), never the whole Runtime's.
 fn fenced_projection_code(error: &RuntimeHostError) -> RuntimeErrorCode {
     match error.projection().code {
-        RuntimeErrorCode::RuntimeFatal | RuntimeErrorCode::LedgerFailure => {
+        RuntimeErrorCode::RuntimeHalted | RuntimeErrorCode::LedgerFailure => {
             RuntimeErrorCode::BackendOperationFailed
         }
         code => code,

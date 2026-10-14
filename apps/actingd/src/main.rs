@@ -17,7 +17,7 @@ mod suspended;
 #[allow(dead_code)]
 #[path = "../../../tests/support/c4_runtime.rs"]
 mod c4_support;
-// Test-only: Workflow #381 A, the FATAL line of a stopped held start (test plan A-2 G3b).
+// Test-only: Workflow #381 A, the last daemon lines of a stopped held start (test plan A-2 G3b).
 #[cfg(test)]
 mod gate_381a;
 // Test-only: Workflow #397 MON-1, a receipt-header timeout of the policy monitor's own request.
@@ -29,9 +29,14 @@ mod gate_a2a;
 // Test-only: Workflow #383 AO-7, the policy monitor wakes the driver from host notifications.
 #[cfg(test)]
 mod gate_383;
+// Test-only: Workflow #378 A6a, daemon lines, the fallback log and the subcommand reports.
+#[cfg(test)]
+mod gate_a6a;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Detail, Location, Outcome};
+use actingcommand_contract::outcome::{
+    Category, CauseRelation, Code, Detail, IoOp, Location, Outcome,
+};
 use actingcommand_contract::{
     EventActor, EventSource, GovernanceIdentityCard, PolicyExecutionEventData, RunId,
     RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt, SchedulingOutcomeProjection,
@@ -52,7 +57,7 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -63,98 +68,387 @@ const POLICY_EVENT_WAIT_MS: u64 = 250;
 const MAX_POLICY_CYCLE_DURATION: Duration = Duration::from_secs(10 * 60);
 
 fn main() -> ExitCode {
-    match run(env::args_os().skip(1).collect()) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("{}", fatal_line(&error));
-            ExitCode::FAILURE
+    let arguments: Vec<std::ffi::OsString> = env::args_os().skip(1).collect();
+    let installed = |purpose| {
+        actingcommand_contract::process_installation_for(purpose)
+            .map(|_| ())
+            .map_err(|error| ActingdError::config(error.code()))
+    };
+    let candidate = actingcommand_contract::InstallConfigPurpose::CandidateCheck;
+    let running = actingcommand_contract::InstallConfigPurpose::Running;
+    let subcommand = arguments
+        .first()
+        .and_then(|argument| argument.to_str())
+        .map(str::to_owned);
+    let category = match subcommand.as_deref() {
+        Some("check-config") => subcommand_report(
+            check_config::SCHEMA_VERSION,
+            ActingdCode::CheckConfigReportEncodeFailed,
+            installed(candidate).and_then(|()| check_config::run(arguments)),
+        ),
+        Some("ledger-maintenance") => {
+            let purpose = if arguments
+                .get(1)
+                .is_some_and(|argument| argument == "verify")
+            {
+                candidate
+            } else {
+                running
+            };
+            subcommand_report(
+                ledger_maintenance::SCHEMA_VERSION,
+                ActingdCode::MaintenanceReceiptEncodeFailed,
+                installed(purpose).and_then(|()| ledger_maintenance::run(arguments)),
+            )
         }
-    }
-}
-
-/// The developer line actingd prints as its last act when it fails; the watchdog reads it.
-fn fatal_line(error: &ActingdError) -> String {
-    format!("FATAL actingd: {error}")
+        Some("unlock-owner") => subcommand_report(
+            owner_unlock::SCHEMA_VERSION,
+            ActingdCode::UnlockOwnerReportEncodeFailed,
+            installed(running).and_then(|()| owner_unlock::run(arguments)),
+        ),
+        Some("suspended") => subcommand_report(
+            suspended::SCHEMA_VERSION,
+            ActingdCode::SuspendedReportEncodeFailed,
+            installed(running).and_then(|()| suspended::run(arguments)),
+        ),
+        _ => run_daemon(arguments),
+    };
+    ExitCode::from(category.exit_code())
 }
 
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1, §9.2 step 4): the daemon's side of
-/// the ledger's write path. A write that was read back, retried and committed is a warning line;
-/// the stop after the ledger wrote its dump (or could not) is the fatal line, and the process
-/// ends with exit code 2, a fatal outcome's (`outcome-code-writing-spec.md` §9). The watchdog
-/// does not restart a fatal stop; a person repairs the disk or file, and the next start imports
-/// the dump.
+/// the ledger's write path. A write that was read back, retried and committed is a warning
+/// daemon line; the stop after the ledger wrote its dump (or could not) is `runtime_stopped`
+/// and the stopping condition as the last daemon line (Workflow #378 A6a, model section 7.5),
+/// and the process exits by that condition's category: 2, as `ledger_write_failed` and
+/// `ledger_dump_failed` are fatal (model section 7.6). The watchdog does not restart a fatal
+/// stop; a person repairs the disk or file, and the next start imports the dump.
 struct DaemonLedgerFailure;
 
 impl LedgerFailureSink for DaemonLedgerFailure {
     fn write_retried(&self, outcome: &Outcome) {
-        write_daemon_outcome("WARN", outcome);
+        write_stderr(&daemon_lines(outcome, None));
     }
 
     fn stop(&self, outcome: &Outcome) {
-        write_daemon_outcome("FATAL", outcome);
-        std::process::exit(2);
+        let stopped = Outcome::new(ActingdCode::RuntimeStopped);
+        write_stderr(&format!(
+            "{}{}",
+            daemon_lines(&stopped, None),
+            daemon_lines(outcome, None)
+        ));
+        std::process::exit(i32::from(outcome.category().exit_code()));
     }
 }
 
-/// The developer line `<level> actingd: <code>` and the `OUTCOME actingd:` line of `outcome`, on
-/// stderr in one write (`outcome-code-writing-spec.md` §9).
-fn write_daemon_outcome(level: &str, outcome: &Outcome) {
-    let spelling = outcome.code().as_str();
-    let lines = match serde_json::to_string(&outcome.envelope(Detail::Full)) {
-        Ok(envelope) => format!("{level} actingd: {spelling}\nOUTCOME actingd: {envelope}\n"),
-        Err(_) => format!("{level} actingd: {spelling}\n"),
+/// The developer-line level of a category (model section 7.4): `INFO` for a success or an info.
+const fn level(category: Category) -> &'static str {
+    match category {
+        Category::Success | Category::Info => "INFO",
+        Category::Warning => "WARN",
+        Category::Error => "ERROR",
+        Category::Fatal => "FATAL",
+    }
+}
+
+/// The developer line `<LEVEL> actingd: <code> <text>` of an outcome (model section 7.4): the
+/// text is `developer`, else the outcome's values; it is kept on one line.
+fn developer_line(outcome: &Outcome, developer: Option<&str>) -> String {
+    let line = match developer {
+        Some(text) => format!(
+            "{} actingd: {} {text}",
+            level(outcome.category()),
+            outcome.code()
+        ),
+        None => format!("{} actingd: {outcome}", level(outcome.category())),
     };
-    // stderr is the last place to report to; a failed write there has nowhere else to go.
+    format!("{}\n", line.replace(['\r', '\n'], " "))
+}
+
+/// actingd's daemon lines of one outcome (model section 7.4): its developer line, then
+/// `OUTCOME actingd: <envelope>` with the full envelope. Written together in one write.
+fn daemon_lines(outcome: &Outcome, developer: Option<&str>) -> String {
+    let developer = developer_line(outcome, developer);
+    match serde_json::to_string(&outcome.envelope(Detail::Full)) {
+        Ok(envelope) => format!("{developer}OUTCOME actingd: {envelope}\n"),
+        Err(_) => developer,
+    }
+}
+
+/// Writes `text` to stderr in one write: stderr is the last place actingd reports to, so a
+/// failed write there has nowhere else to go.
+fn write_stderr(text: &str) {
     let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(lines.as_bytes());
+    let _ = stderr.write_all(text.as_bytes());
     let _ = stderr.flush();
 }
 
-fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
-    let candidate = arguments
-        .first()
-        .is_some_and(|argument| argument == "check-config")
-        || (arguments
-            .first()
-            .is_some_and(|argument| argument == "ledger-maintenance")
-            && arguments
-                .get(1)
-                .is_some_and(|argument| argument == "verify"));
-    let purpose = if candidate {
-        actingcommand_contract::InstallConfigPurpose::CandidateCheck
+/// A subcommand's result when it succeeded (Workflow #378 A6a, model section 7.4): its success
+/// outcome and the data members of its report.
+#[derive(Debug)]
+struct Reported {
+    outcome: Outcome,
+    data: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Reported {
+    fn new(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            data: serde_json::Map::new(),
+        }
+    }
+
+    fn with(mut self, member: &str, value: serde_json::Value) -> Self {
+        self.data.insert(member.to_owned(), value);
+        self
+    }
+}
+
+/// The detail of a subcommand report (model section 7.1, class b): full, or only the registered
+/// names with `ACTINGCOMMAND_DETAIL=codes`.
+fn report_detail() -> Detail {
+    if env::var_os("ACTINGCOMMAND_DETAIL").is_some_and(|value| value == "codes") {
+        Detail::Codes
     } else {
-        actingcommand_contract::InstallConfigPurpose::Running
+        Detail::Full
+    }
+}
+
+/// Prints a subcommand's one stdout report line (Workflow #378 A6a, model section 7.4), then the
+/// developer line on stderr of an outcome that is a warning, an error or fatal. Returns the
+/// category the process exits by (model section 7.6).
+fn subcommand_report(
+    schema_version: &'static str,
+    encode_failed: ActingdCode,
+    result: Result<Reported, ActingdError>,
+) -> Category {
+    let (outcome, developer, line) =
+        report_line(schema_version, encode_failed, result, report_detail());
+    let mut stdout = std::io::stdout().lock();
+    let printed = writeln!(stdout, "{line}").and_then(|()| stdout.flush());
+    drop(stdout);
+    if !matches!(outcome.category(), Category::Success | Category::Info) {
+        write_stderr(&developer_line(&outcome, developer.as_deref()));
+    }
+    match printed {
+        Ok(()) => outcome.category(),
+        // The report is the interface; one that was not printed is the subcommand's failure.
+        Err(_) => {
+            let failed = Outcome::new(encode_failed);
+            write_stderr(&developer_line(&failed, None));
+            failed.category()
+        }
+    }
+}
+
+/// A subcommand's report line `{schema_version, outcome, …data}` for every exit, usage and
+/// refusals included, with its outcome and developer text. A report that cannot be encoded is
+/// reported as `encode_failed` instead, with the outcome as its link.
+fn report_line(
+    schema_version: &'static str,
+    encode_failed: ActingdCode,
+    result: Result<Reported, ActingdError>,
+    detail: Detail,
+) -> (Outcome, Option<String>, String) {
+    let (outcome, data, developer) = match result {
+        Ok(Reported { outcome, data }) => (outcome, data, None),
+        Err(error) => (
+            error.outcome(),
+            error.report_data(),
+            Some(error.to_string()),
+        ),
     };
-    actingcommand_contract::process_installation_for(purpose)
-        .map_err(|error| ActingdError::config(error.code()))?;
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "ledger-maintenance")
-    {
-        return ledger_maintenance::run(arguments);
+    let encode = |outcome: &Outcome, data: serde_json::Map<String, serde_json::Value>| {
+        let mut report = serde_json::Map::new();
+        report.insert(
+            "schema_version".to_owned(),
+            serde_json::Value::String(schema_version.to_owned()),
+        );
+        report.insert(
+            "outcome".to_owned(),
+            serde_json::to_value(outcome.envelope(detail)).ok()?,
+        );
+        report.extend(data);
+        serde_json::to_string(&serde_json::Value::Object(report)).ok()
+    };
+    match encode(&outcome, data) {
+        Some(line) => (outcome, developer, line),
+        None => {
+            let failed = Outcome::new(encode_failed).joined(CauseRelation::CausedBy, outcome);
+            let line = encode(&failed, serde_json::Map::new()).unwrap_or_default();
+            (failed, None, line)
+        }
     }
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "check-config")
-    {
-        return check_config::run(arguments);
+}
+
+/// The daemon (Workflow #378 A6a, model sections 7.4-7.6, 8.2): a refusal before the Runtime
+/// host starts is written by the start-refusal writer; once it started, each lifecycle outcome
+/// is a daemon line, and the last one is the terminal outcome: `runtime_stopped` on a requested
+/// stop, else `runtime_stopped` followed by the stopping condition. The process exits by the
+/// terminal outcome's category.
+fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
+    let installation = match actingcommand_contract::process_installation_for(
+        actingcommand_contract::InstallConfigPurpose::Running,
+    ) {
+        Ok(installation) => installation,
+        Err(error) => return start_refused(&ActingdError::config(error.code()), None),
+    };
+    let install_root = installation.map(actingcommand_contract::InstalledProcess::root);
+    let (host, policy) = match start_daemon(arguments) {
+        Ok(started) => started,
+        // An accepted shutdown of a held start is a requested stop, which the watchdog never
+        // restarts (`contracts/runtime-watchdog.md`, rows 5 and 6): its terminal outcome is
+        // `runtime_stopped`, with the shutdown as its link.
+        Err(error)
+            if error
+                .code
+                .is(actingcommand_runtime_host::HostCode::InstallStartupShutDown) =>
+        {
+            let stopped = Outcome::new(ActingdCode::RuntimeStopped)
+                .joined(CauseRelation::CausedBy, error.outcome());
+            write_stderr(&daemon_lines(&stopped, Some(&error.to_string())));
+            return stopped.category();
+        }
+        Err(error) => return start_refused(&error, install_root),
+    };
+    let mut lines = daemon_lines(host.ledger_opened(), None);
+    // Slice #315-B2c-2: the same decision the Ledger records as a lifecycle observation.
+    if let Some(released) = host.owner_released_by_exit() {
+        lines.push_str(&daemon_lines(
+            &released.outcome(),
+            Some(&released.to_string()),
+        ));
     }
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "unlock-owner")
-    {
-        return owner_unlock::run(arguments);
+    // Workflow #361 B1: each scheduling pause the start restored or dropped.
+    for pause in host.scheduling_pause_restore() {
+        lines.push_str(&daemon_lines(pause, None));
     }
-    if arguments
-        .first()
-        .is_some_and(|argument| argument == "suspended")
-    {
-        return suspended::run(arguments);
+    write_stderr(&lines);
+    let stopped = Outcome::new(ActingdCode::RuntimeStopped);
+    match serve(host, policy) {
+        Ok(()) => {
+            write_stderr(&daemon_lines(&stopped, None));
+            stopped.category()
+        }
+        Err(error) => {
+            let condition = error.outcome();
+            write_stderr(&format!(
+                "{}{}",
+                daemon_lines(&stopped, None),
+                daemon_lines(&condition, Some(&error.to_string()))
+            ));
+            condition.category()
+        }
     }
+}
+
+/// Model section 8.2 (F8, H1, N4): a start refusal before the ledger opens is the refusal's
+/// daemon lines on stderr, with `install_root` once actingd resolved its installation. When
+/// stderr is a console or absent, nobody keeps it, so the same lines are appended to the
+/// fallback log `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log` too, which every root's
+/// watchdog scans. A failed append is one more developer line on stderr; the exit still
+/// follows the refusal's category. No ledger is opened for a refusal.
+fn start_refused(error: &ActingdError, install_root: Option<&Path>) -> Category {
+    let mut stderr = std::io::stderr();
+    let now_unix_ms = system_unix_ms().unwrap_or_default();
+    write_start_refusal(
+        error,
+        install_root,
+        &mut stderr,
+        stderr_unkept(),
+        fallback_log_directory().as_deref(),
+        now_unix_ms,
+    )
+}
+
+/// [`start_refused`] with its sinks: `stderr`, whether nobody keeps it (`unkept`), the fallback
+/// log directory (`None` when `LOCALAPPDATA` is not set) and the time that names the log.
+fn write_start_refusal(
+    error: &ActingdError,
+    install_root: Option<&Path>,
+    stderr: &mut dyn Write,
+    unkept: bool,
+    fallback_directory: Option<&Path>,
+    now_unix_ms: u64,
+) -> Category {
+    let outcome = error.outcome();
+    let outcome = match install_root {
+        Some(root) => outcome.install_root(root),
+        None => outcome,
+    };
+    let lines = daemon_lines(&outcome, Some(&error.to_string()));
+    let _ = stderr.write_all(lines.as_bytes());
+    if unkept && let Err(failed) = append_fallback_log(fallback_directory, now_unix_ms, &lines) {
+        let _ = stderr.write_all(developer_line(&failed, None).as_bytes());
+    }
+    let _ = stderr.flush();
+    outcome.category()
+}
+
+/// Whether nobody keeps actingd's stderr (model section 8.2, H1): there is no stderr handle, or
+/// it is a console. A file or a pipe is kept by its starter. std's console check stands in for
+/// `GetFileType` returning `FILE_TYPE_CHAR`, as actingd forbids unsafe code.
+fn stderr_unkept() -> bool {
+    let stderr = std::io::stderr();
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        if stderr.as_raw_handle().is_null() {
+            return true;
+        }
+    }
+    std::io::IsTerminal::is_terminal(&stderr)
+}
+
+/// `%LOCALAPPDATA%\ActingCommand\logs`, the console's log directory, which every root's watchdog
+/// scans; `None` when `LOCALAPPDATA` is not set.
+fn fallback_log_directory() -> Option<PathBuf> {
+    env::var_os("LOCALAPPDATA")
+        .filter(|directory| !directory.is_empty())
+        .map(|directory| PathBuf::from(directory).join("ActingCommand").join("logs"))
+}
+
+/// Appends `lines` to `<directory>\actingd-<now_unix_ms>.log`, creating the directory; the
+/// failure is `actingd_fallback_log_failed` with the OS error as its link.
+fn append_fallback_log(
+    directory: Option<&Path>,
+    now_unix_ms: u64,
+    lines: &str,
+) -> Result<PathBuf, Outcome> {
+    let failed = || Outcome::new(ActingdCode::FallbackLogFailed);
+    let Some(directory) = directory else {
+        return Err(failed().variable("LOCALAPPDATA"));
+    };
+    std::fs::create_dir_all(directory).map_err(|error| {
+        failed()
+            .path(directory)
+            .caused_by(Outcome::from_io_error(&error, IoOp::CreateDir))
+    })?;
+    let path = directory.join(format!("actingd-{now_unix_ms}.log"));
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(lines.as_bytes()))
+        .map_err(|error| {
+            failed()
+                .path(&path)
+                .caused_by(Outcome::from_io_error(&error, IoOp::Write))
+        })?;
+    Ok(path)
+}
+
+/// Everything before the Runtime host runs, and its start: the arguments, the configuration,
+/// the install root's adb, the resource packages and the recognition bindings, as
+/// `check-config` checks them. A refusal here is a start refusal (model section 8.2).
+fn start_daemon(
+    arguments: Vec<std::ffi::OsString>,
+) -> Result<(RuntimeHost, Option<PolicyBootstrap>), ActingdError> {
     let (arguments, install_held) = parse_install_held_arguments(arguments)?;
     let config_path = parse_arguments(arguments)?;
     let file = config::load(&config_path).map_err(ActingdError::config)?;
-    // Workflow #398 RD-1b: a device refusal names its instance or file on the developer line.
+    // Workflow #398 RD-1b: a device refusal names its instance or file in its outcome.
     let device_refusal = file.device_refusal();
     let RuntimeAssembly {
         host,
@@ -164,21 +458,24 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         recognition_packages,
         adb_requirement,
         ..
-    } = file.assemble().map_err(|code| {
-        let error = ActingdError::config(code);
+    } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         match device_refusal.filter(|refused| refused.code() == code) {
-            Some(refused) => error.with_detail(refused.to_string()),
-            None => error,
+            Some(refused) => {
+                ActingdError::refused(code, refused.outcome()).with_detail(refused.to_string())
+            }
+            None => ActingdError::refused(code, refusal),
         }
     })?;
     // Workflow #337: the install root's adb check of `check-config`, before any side effect.
     config::ac_adb::require(&adb_requirement).map_err(|rejection| {
-        ActingdError::config(rejection.code()).with_detail(rejection.to_string())
+        ActingdError::refused(rejection.code(), rejection.outcome())
+            .with_detail(rejection.to_string())
     })?;
     // The same resource package admission as `check-config`, before any side effect.
     let resource_packages =
         config::validate_resource_packages(&resource_packages).map_err(|rejection| {
-            ActingdError::config(rejection.code).with_detail(rejection.to_string())
+            ActingdError::refused(rejection.code, rejection.outcome())
+                .with_detail(rejection.to_string())
         })?;
     let host = host.with_resource_packages(resource_packages);
     // Workflow #383 AO-1: the ledger's retried writes and its fatal stop after a dump; the
@@ -206,14 +503,12 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let host =
         RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
             .map_err(ActingdError::runtime)?;
-    // Slice #315-B2c-2: the same decision the Ledger records as a lifecycle observation.
-    if let Some(released) = host.owner_released_by_exit() {
-        println!("actingd {released}");
-    }
-    // Workflow #361 B1: each scheduling pause the start restored or dropped.
-    for line in host.scheduling_pause_restore() {
-        println!("actingd {line}");
-    }
+    Ok((host, policy))
+}
+
+/// The started Runtime until it stops: the policy's initial cycle, `runtime_ready`, then the
+/// monitor. `Ok` once a requested stop closed the host, else the condition that stopped it.
+fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), ActingdError> {
     let initial_policy_cycle = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
@@ -242,12 +537,16 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
             );
         }
     };
-    println!(
-        "actingd ready pid={} host={} port={}",
-        host.runtime_info().pid(),
-        host.runtime_info().host(),
-        host.runtime_info().port()
-    );
+    let info = host.runtime_info();
+    write_stderr(&daemon_lines(
+        &Outcome::new(ActingdCode::RuntimeReady).pid(info.pid()),
+        Some(&format!(
+            "pid={} host={} port={}",
+            info.pid(),
+            info.host(),
+            info.port()
+        )),
+    ));
     match (policy, initial_policy_cycle) {
         (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
         (None, None) => monitor(host),
@@ -1591,25 +1890,6 @@ impl ErrorCode {
     }
 }
 
-/// The token a stage prints as in actingd's FATAL line and in the check-config and unlock-owner
-/// v1 reports: the stage's own spelling, except where an older token is printed in its place
-/// (decision D12). A6a's outcome lines and check-config v2 replace these texts.
-fn v1_stage_token(stage: Location) -> &'static str {
-    [
-        (ActingdLocation::ConfigLoad, "load"),
-        (ActingdLocation::ConfigAssemble, "assemble"),
-        (ActingdLocation::ConfigVision, "vision"),
-        (ActingdLocation::ConfigValidate, "validate"),
-        (ActingdLocation::PolicyCloseoutDriver, "driver"),
-        (ActingdLocation::PolicyCloseoutMonitor, "monitor"),
-        (ActingdLocation::PolicyCloseoutShutdown, "shutdown"),
-        (ActingdLocation::PolicyCloseoutHostClose, "close"),
-    ]
-    .into_iter()
-    .find_map(|(location, token)| (location.location() == stage).then_some(token))
-    .unwrap_or(stage.as_str())
-}
-
 #[derive(Debug)]
 struct ActingdError {
     code: ErrorCode,
@@ -1619,15 +1899,48 @@ struct ActingdError {
     runtime: Option<Box<RuntimeHostError>>,
     client: Option<Box<RuntimeClientError>>,
     maintenance: Option<Box<actingcommand_runtime_host::LedgerMaintenanceFailure>>,
-    /// What a configuration code refers to, such as the refused resource package path.
-    detail: Option<Box<str>>,
+    /// What the error carries beside its code for its reader, in one box so that the error stays
+    /// small.
+    extras: Option<Box<ErrorExtras>>,
     recorded: std::sync::atomic::AtomicBool,
 }
 
+/// What an [`ActingdError`] carries beside its code.
+#[derive(Debug, Default)]
+struct ErrorExtras {
+    /// Workflow #378 A6a: the refusal as an outcome, when the refusing check names what it
+    /// refused (its values and links).
+    refusal: Option<Outcome>,
+    /// Developer text about what the error refers to, such as the refused resource package
+    /// path; only the developer line shows it.
+    detail: Option<String>,
+    /// Workflow #378 A6a: the data members a subcommand's failure report carries beside its
+    /// outcome (`journal_appended`, `activated`).
+    report: serde_json::Map<String, serde_json::Value>,
+}
+
 impl ActingdError {
+    fn extras(&mut self) -> &mut ErrorExtras {
+        self.extras.get_or_insert_with(Default::default)
+    }
+
     fn with_detail(mut self, detail: String) -> Self {
-        self.detail = Some(detail.into_boxed_str());
+        self.extras().detail = Some(detail);
         self
+    }
+
+    /// This error with a data member of the subcommand's failure report.
+    fn with_report(mut self, member: &str, value: serde_json::Value) -> Self {
+        self.extras().report.insert(member.to_owned(), value);
+        self
+    }
+
+    /// The data members of the subcommand's failure report.
+    fn report_data(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.extras
+            .as_ref()
+            .map(|extras| extras.report.clone())
+            .unwrap_or_default()
     }
 
     fn with_recording_result(mut self, recorded: Result<(), Self>) -> Self {
@@ -1687,13 +2000,20 @@ impl ActingdError {
             runtime: None,
             client: None,
             maintenance: None,
-            detail: None,
+            extras: None,
             recorded: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     fn config(code: impl Into<Code>) -> Self {
         Self::coded(ErrorCode::Registered(code.into()))
+    }
+
+    /// Workflow #378 A6a: a refusal of `code` whose outcome names what was refused.
+    fn refused(code: impl Into<Code>, refusal: Outcome) -> Self {
+        let mut result = Self::config(code);
+        result.extras().refusal = Some(refusal);
+        result
     }
 
     fn process(code: impl Into<Code>) -> Self {
@@ -1713,12 +2033,54 @@ impl ActingdError {
         result.client = Some(Box::new(error));
         result
     }
+
+    /// Workflow #378 A6a (model sections 7.4, 7.5): the error as an outcome: the terminal
+    /// outcome of a daemon it stops, a start refusal, or a subcommand's failure. It is the
+    /// wrapped failure's own outcome (the Runtime host's, the client's, ledger maintenance's, or
+    /// the refusal's with its values), else the code, with the stage actingd names; each
+    /// secondary failure is a `secondary` link and a failure to record it a `recording` link,
+    /// and a fatal one tops the outcome when the error's own is not, so a fatal link always
+    /// sits under a fatal top.
+    fn outcome(&self) -> Outcome {
+        let own = if let Some(error) = &self.runtime {
+            error.daemon_outcome()
+        } else if let Some(error) = &self.client {
+            error.outcome()
+        } else if let Some(error) = &self.maintenance {
+            error.outcome().clone()
+        } else if let Some(refusal) = self
+            .extras
+            .as_ref()
+            .and_then(|extras| extras.refusal.as_ref())
+        {
+            refusal.clone()
+        } else {
+            match self.code {
+                ErrorCode::Registered(code) => Outcome::new(code),
+                ErrorCode::Host { host_code } => Outcome::relayed(host_code),
+            }
+        };
+        // The stage actingd names (a check-config stage, a policy or close-out stage) is where
+        // the error arose for actingd's reader, so it is the outcome's `stage`.
+        let own = match self.stage {
+            Some(stage) => own.stage(stage),
+            None => own,
+        };
+        let own = self.secondary.iter().flatten().fold(own, |top, secondary| {
+            top.joined(CauseRelation::Secondary, secondary.outcome())
+        });
+        match &self.recording_failure {
+            Some(failure) => own.joined(CauseRelation::Recording, failure.outcome()),
+            None => own,
+        }
+    }
 }
 
+/// Developer text only (model section 7.4): the developer line shows it after the code.
 impl fmt::Display for ActingdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(stage) = self.stage {
-            write!(formatter, "{}: ", v1_stage_token(stage))?;
+            write!(formatter, "{stage}: ")?;
         }
         if let Some(error) = &self.maintenance {
             error.fmt(formatter)?;
@@ -1726,10 +2088,20 @@ impl fmt::Display for ActingdError {
             formatter.write_str(&error.complete_message())?;
         } else if let Some(error) = &self.client {
             error.fmt(formatter)?;
+        } else if let Some(refusal) = self
+            .extras
+            .as_ref()
+            .and_then(|extras| extras.refusal.as_ref())
+        {
+            write!(formatter, "{refusal}")?;
         } else {
             formatter.write_str(self.code.as_str())?;
         }
-        if let Some(detail) = &self.detail {
+        if let Some(detail) = self
+            .extras
+            .as_ref()
+            .and_then(|extras| extras.detail.as_ref())
+        {
             write!(formatter, ": {detail}")?;
         }
         for secondary in self.secondary.iter().flatten() {

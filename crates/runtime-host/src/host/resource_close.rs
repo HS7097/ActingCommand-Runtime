@@ -186,7 +186,7 @@ impl HostShared {
             let mut error = RuntimeHostError::fatal(
                 HostCode::FencedStepNotReclaimed,
                 HostLocation::FinishDestructiveInput,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             );
             error.lifecycle.resource_quiescence = Some(ResourceQuiescence::Unconfirmed);
             // A fenced write still in flight is not one instance's state the host can fence:
@@ -447,7 +447,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::ResourceCloseInstanceMissing,
                 HostLocation::AcquireResourceCloseLease,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let request_id = self
@@ -1005,7 +1005,7 @@ impl HostShared {
                                     RuntimeHostError::fatal(
                                         HostCode::ConnectionPreparationCooldownOverflow,
                                         HostLocation::PrepareInstanceConnection,
-                                        RuntimeErrorCode::RuntimeFatal,
+                                        RuntimeErrorCode::RuntimeHalted,
                                     )
                                 })?,
                         )

@@ -53,6 +53,7 @@ mod manifest;
 #[cfg(test)]
 pub(crate) use manifest::env_overrides_subsystem;
 mod provider_startup;
+pub(crate) use provider_startup::device_failure_outcome;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -946,13 +947,14 @@ pub(super) struct ResourcePackageRejection {
 }
 
 impl ResourcePackageRejection {
-    pub(super) fn detail(&self) -> serde_json::Value {
-        serde_json::json!({
-            "alias": self.alias,
-            "path": self.path.to_string_lossy(),
-            "loader_code": self.loader.as_ref().map(|(code, _)| code),
-            "loader_message": self.loader.as_ref().map(|(_, message)| message),
-        })
+    /// Workflow #378 A6a (model section 7.4): the refusal with its `alias` and `path`, and the
+    /// package loader's code as its `caused_by` link; the loader's message is developer text.
+    pub(super) fn outcome(&self) -> Outcome {
+        let outcome = Outcome::new(self.code).alias(&self.alias).path(&self.path);
+        match &self.loader {
+            Some((code, _)) => outcome.caused_by(Outcome::relayed(code)),
+            None => outcome,
+        }
     }
 }
 
@@ -1193,7 +1195,29 @@ impl ActingdConfigFile {
         ))
     }
 
+    /// Workflow #378 A6a: [`Self::assemble`] with its refusal as an outcome: the code, with the
+    /// values that name what was refused when the refusing check gives them (a runtime-config
+    /// key's `config_key` and why, Workflow #385 P-c and #387 D1c). A start and `check-config`
+    /// report it.
+    pub(super) fn assemble_or_refusal(self) -> Result<RuntimeAssembly, (Code, Outcome)> {
+        let mut refused = None;
+        self.assemble_noting(&mut refused).map_err(|code| {
+            let outcome = match refused {
+                Some(outcome) if outcome.is(code) => outcome,
+                _ => Outcome::new(code),
+            };
+            (code, outcome)
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn assemble(self) -> Result<RuntimeAssembly, Code> {
+        self.assemble_noting(&mut None)
+    }
+
+    /// Assembles the configuration; a refusal whose check gives values notes its outcome in
+    /// `refused` (Workflow #378 A6a).
+    fn assemble_noting(self, refused: &mut Option<Outcome>) -> Result<RuntimeAssembly, Code> {
         if self.governance_capability_retired {
             return Err(ActingdCode::GovernanceCapabilityRetired.code());
         }
@@ -1473,7 +1497,10 @@ impl ActingdConfigFile {
             &file_layer,
             &|_| None,
         )
-        .map_err(|failure| failure.failure_code().code())?;
+        .map_err(|failure| {
+            *refused = Some(failure.outcome());
+            failure.failure_code().code()
+        })?;
         // Each instance's stuck-recovery settings as the file layer resolves them: its own
         // members, or the `recovery_ladder` section's (M387 §5.5 `section:`). The Runtime reads
         // the values in effect; check-config reports these.
@@ -1539,7 +1566,10 @@ impl ActingdConfigFile {
                     actingcommand_runtime_host::recovery_ladder_device_bounds(),
                 ))
             })
-            .map_err(|failure| failure.failure_code().code())?;
+            .map_err(|failure| {
+                *refused = Some(failure.outcome());
+                failure.failure_code().code()
+            })?;
         host = host.with_config_manifest(manifest.clone());
         if let Some(selection) = &config_selection {
             host = host.with_config_selection(selection.clone());
@@ -1615,19 +1645,6 @@ pub(super) fn env_override_warnings(ignored: &[&str]) -> Vec<Outcome> {
         .iter()
         .map(|variable| Outcome::new(ActingdCode::EnvOverrideIgnored).variable(*variable))
         .collect()
-}
-
-/// The text one env-override warning has in `check-config`'s v1 `warnings`,
-/// `env_override_ignored:<VAR>`: the one boundary of that text, which A6a replaces with the
-/// outcome itself. Since ledger revision 3 the startup record carries the warnings as `note`
-/// links of the `env_overrides` subsystem's outcome, and its `config.subsystems` row names the
-/// variables under `ignored_variables` (never silent).
-pub(super) fn env_override_warning_v1(warning: &Outcome) -> String {
-    let variable = warning
-        .value("variable")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    format!("{}:{variable}", warning.code())
 }
 
 /// Workflow #318 (cfg3): the environment fallbacks `assemble` injects. Allowed, every

@@ -577,7 +577,7 @@ fn read_failure(
                 error.operation(),
                 RuntimeErrorProjection::new(
                     if error.is_fatal() {
-                        RuntimeErrorCode::RuntimeFatal
+                        RuntimeErrorCode::RuntimeHalted
                     } else {
                         RuntimeErrorCode::InvalidRequest
                     },
@@ -591,7 +591,7 @@ fn read_failure(
             None,
             code.as_str(),
             ForensicsLocation::ReadLedgerMaterial.as_str(),
-            RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeFatal, true),
+            RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeHalted, true),
             "material source identity changed".to_owned(),
         ),
         ReadError::Request(error) => (

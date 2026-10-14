@@ -51,6 +51,15 @@ pub struct PriorOwnerReleasedByExit {
 }
 
 impl PriorOwnerReleasedByExit {
+    /// Workflow #378 A6a (model section 7.4): `owner_released` (info), the daemon line of this
+    /// decision: the previous owner's `owner_pid` and the time it started as `at_unix_ms`. Its
+    /// last disposition is on the developer line and in the ledger's lifecycle record.
+    pub fn outcome(self) -> actingcommand_contract::outcome::Outcome {
+        actingcommand_contract::outcome::Outcome::new(crate::codes::HostCode::OwnerReleased)
+            .owner_pid(self.pid)
+            .at_unix_ms(self.started_at_unix_ms)
+    }
+
     pub(crate) fn phase(self) -> actingcommand_contract::RuntimeLifecyclePhase {
         actingcommand_contract::RuntimeLifecyclePhase::PriorEpochOwnerReleasedByExit {
             pid: self.pid,
@@ -96,16 +105,27 @@ fn release_exited_owner(
     else {
         return Ok(None);
     };
-    let probe = match actingcommand_host_metrics::probe_process(record.pid) {
+    // Workflow #378 A6a (model section 7.4): the refusal carries the recorded `owner_pid` and
+    // what the probe found (`owner_probe_state`); a probe that cannot decide has its reason as
+    // the `caused_by` link. The text stays the developer line's.
+    let (probe, state, reason) = match actingcommand_host_metrics::probe_process(record.pid) {
         ProcessProbe::Running { created_at_unix_ms }
             if created_at_unix_ms
                 <= record
                     .started_at_unix_ms
                     .saturating_add(PID_REUSE_TOLERANCE_MS) =>
         {
-            format!("pid {} alive", record.pid)
+            (
+                format!("pid {} alive", record.pid),
+                crate::codes::OwnerProbeState::Running,
+                None,
+            )
         }
-        ProcessProbe::Unknown(reason) => format!("probe unknown: {reason}"),
+        ProcessProbe::Unknown(reason) => (
+            format!("probe unknown: {reason}"),
+            crate::codes::OwnerProbeState::Unknown,
+            Some(reason),
+        ),
         ProcessProbe::NotRunning | ProcessProbe::Running { .. } => {
             return Ok(Some(PriorOwnerReleasedByExit {
                 pid: record.pid,
@@ -118,7 +138,11 @@ fn release_exited_owner(
         HostCode::OwnerResourceUnconfirmed,
         HostLocation::AcquireOwnerFile,
         RuntimeErrorCode::OwnerConflict,
-    );
+    )
+    .with_outcome_values(|outcome| outcome.owner_pid(record.pid).owner_probe_state(state));
+    if let Some(reason) = reason {
+        refused = refused.with_caused_by(actingcommand_contract::outcome::Outcome::new(reason));
+    }
     refused.lifecycle.owner_probe = Some(probe);
     Err(refused)
 }
@@ -155,7 +179,7 @@ impl OwnerGuard {
                 RuntimeHostError::fatal(
                     HostCode::OwnerFileOpenFailed,
                     HostLocation::OpenOwnerFile,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         try_lock_owner_file(
@@ -173,7 +197,7 @@ impl OwnerGuard {
                 RuntimeHostError::fatal(
                     HostCode::OwnerEpochIssueFailed,
                     HostLocation::AcquireOwnerFile,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?
             .transport();
@@ -191,7 +215,7 @@ impl OwnerGuard {
                 RuntimeHostError::fatal(
                     HostCode::OwnerRevisionOverflow,
                     HostLocation::AcquireOwnerFile,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         let record = OwnerRecord {
@@ -245,7 +269,7 @@ impl OwnerGuard {
             RuntimeHostError::fatal(
                 HostCode::OwnerRevisionOverflow,
                 HostLocation::UpdateOwnerFile,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         record.active_instances = active_instances;
@@ -263,7 +287,7 @@ impl OwnerGuard {
             return Err(RuntimeHostError::fatal(
                 HostCode::OwnerResourceUnconfirmed,
                 HostLocation::UpdateOwnerResourceDisposition,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         if self.record.resource_disposition == Some(disposition) {
@@ -274,7 +298,7 @@ impl OwnerGuard {
             RuntimeHostError::fatal(
                 HostCode::OwnerRevisionOverflow,
                 HostLocation::UpdateOwnerResourceDisposition,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         record.resource_disposition = Some(disposition);
@@ -291,7 +315,7 @@ impl OwnerGuard {
             RuntimeHostError::fatal(
                 HostCode::OwnerFileMissing,
                 HostLocation::RetainUnconfirmedOwnerFile,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let file = Box::leak(Box::new(file));
@@ -303,7 +327,7 @@ impl OwnerGuard {
                 RuntimeHostError::fatal(
                     HostCode::OwnerRevisionOverflow,
                     HostLocation::UpdateOwnerResourceDisposition,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             record.resource_disposition = Some(OwnerResourceDisposition::Unconfirmed);
@@ -339,7 +363,7 @@ impl OwnerGuard {
                 return Err(RuntimeHostError::fatal(
                     HostCode::OwnerResourceUnconfirmed,
                     HostLocation::CloseOwnerFile,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             let mut record = self.record.clone();
@@ -347,7 +371,7 @@ impl OwnerGuard {
                 RuntimeHostError::fatal(
                     HostCode::OwnerRevisionOverflow,
                     HostLocation::CloseOwnerFile,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             record.active = false;
@@ -362,7 +386,7 @@ impl OwnerGuard {
                     RuntimeHostError::fatal(
                         HostCode::OwnerUnlockFailed,
                         HostLocation::CloseOwnerFile,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
             self.closed = true;
@@ -409,7 +433,7 @@ impl OwnerGuard {
     fn compact(&mut self) -> RuntimeHostResult<()> {
         const OPERATION: ContractLocation = ContractLocation::CompactOwnerFile;
         let fatal =
-            |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
+            |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeHalted);
         let file = self
             .file
             .as_mut()
@@ -458,7 +482,7 @@ impl OwnerGuard {
                 RuntimeHostError::fatal(
                     HostCode::OwnerFileMissing,
                     operation,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })
     }
@@ -498,7 +522,7 @@ pub(crate) fn unlock_retained_owner(
             return Err(RuntimeHostError::fatal(
                 HostCode::OwnerFileOpenFailed,
                 HostLocation::OpenOwnerFile,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
     };
@@ -522,7 +546,7 @@ pub(crate) fn unlock_retained_owner(
         RuntimeHostError::fatal(
             HostCode::OwnerRevisionOverflow,
             OPERATION,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     record.resource_disposition = Some(OwnerResourceDisposition::ConfirmedClosed);
@@ -548,7 +572,7 @@ impl Drop for OwnerGuard {
 }
 
 fn owner_journal_error(error: OwnerJournalError) -> RuntimeHostError {
-    RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(error.code, error.operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal> {
@@ -561,7 +585,7 @@ fn read_owner_journal(file: &mut File) -> RuntimeHostResult<RuntimeOwnerJournal>
 fn recover_compaction(state_root: &Path, file: &mut File) -> RuntimeHostResult<()> {
     const OPERATION: ContractLocation = ContractLocation::RecoverOwnerCompaction;
     let fatal =
-        |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeFatal);
+        |code: Code| RuntimeHostError::fatal(code, OPERATION, RuntimeErrorCode::RuntimeHalted);
     let side_path = state_root.join(OWNER_COMPACTION_FILE_NAME);
     let mut side = Vec::new();
     match File::open(&side_path).and_then(|side_file| {
@@ -630,7 +654,7 @@ fn try_lock_owner_file(
         std::fs::TryLockError::Error(_) => RuntimeHostError::fatal(
             HostCode::OwnerLockFailed,
             operation,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ),
     })
 }
@@ -644,7 +668,7 @@ fn encode_record(record: &OwnerRecord) -> RuntimeHostResult<Vec<u8>> {
         RuntimeHostError::fatal(
             HostCode::OwnerRecordEncodeFailed,
             HostLocation::WriteOwnerFile,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     encoded.push(b'\n');
@@ -656,21 +680,21 @@ fn write_record(file: &mut File, encoded: &[u8]) -> RuntimeHostResult<()> {
         RuntimeHostError::fatal(
             SharedCode::OwnerSeekFailed,
             HostLocation::WriteOwnerFile,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     file.write_all(encoded).map_err(|_| {
         RuntimeHostError::fatal(
             HostCode::OwnerWriteFailed,
             HostLocation::WriteOwnerFile,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     file.sync_data().map_err(|_| {
         RuntimeHostError::fatal(
             HostCode::OwnerSyncFailed,
             HostLocation::WriteOwnerFile,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }
@@ -808,6 +832,17 @@ mod tests {
         assert_eq!(
             stale_error.lifecycle.owner_probe,
             Some(format!("pid {} alive", process::id()))
+        );
+        // Workflow #378 A6a (model section 7.4; host gate 65): the refusal's outcome carries the
+        // recorded owner's pid and what the probe found.
+        let refused = stale_error.outcome();
+        assert_eq!(
+            refused.value("owner_pid"),
+            Some(&serde_json::json!(process::id()))
+        );
+        assert_eq!(
+            refused.value("owner_probe_state"),
+            Some(&serde_json::json!("running"))
         );
 
         // A creation time far from the recorded start is a reused pid: the previous owner is

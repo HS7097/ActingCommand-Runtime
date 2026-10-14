@@ -280,14 +280,14 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PolicyRunRecoveryIdentityInvalid,
                     OPERATION,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let validated = request.validate().map_err(|_| {
                 RuntimeHostError::fatal(
                     HostCode::PolicyRunRecoveryIdentityInvalid,
                     OPERATION,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let run_links = |action_id| {
@@ -502,14 +502,14 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::PolicyRunRecoveryIdentityInvalid,
                 OPERATION,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let validated = request.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::PolicyRunRecoveryIdentityInvalid,
                 OPERATION,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         self.append_event_raw(
@@ -764,14 +764,14 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::PolicyRunReceiptInvalid,
                 HostLocation::CompleteScheduledPolicyRun,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let terminal = receipt.terminal().ok_or_else(|| {
             RuntimeHostError::fatal(
                 HostCode::PolicyRunReceiptTerminalMissing,
                 HostLocation::CompleteScheduledPolicyRun,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let Some(RuntimeResult::ContainedTaskCompleted {
@@ -784,7 +784,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunReceiptResultInvalid,
                 HostLocation::CompleteScheduledPolicyRun,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         if receipt.state() != RuntimeReceiptState::Completed
@@ -796,7 +796,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunReceiptIdentityMismatch,
                 HostLocation::CompleteScheduledPolicyRun,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         self.validate_scheduled_policy_terminal(
@@ -840,7 +840,7 @@ impl HostShared {
                     return Err(RuntimeHostError::fatal(
                         HostCode::PolicyRecomputePositionRegressed,
                         HostLocation::CompleteScheduledPolicyRun,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ));
                 }
                 SchedulingOutcomeProjection::new(
@@ -851,7 +851,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::PolicyRecomputeProjectionInvalid,
                         HostLocation::CompleteScheduledPolicyRun,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })
             })
@@ -894,7 +894,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::PolicyOutcomeIdentityInvalid,
                 HostLocation::ReadScheduledPolicyOutcome,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let terminal_events = self
@@ -921,14 +921,14 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyOutcomeTerminalNotUnique,
                 HostLocation::ReadScheduledPolicyOutcome,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal_event.payload() else {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyOutcomeTerminalInvalid,
                 HostLocation::ReadScheduledPolicyOutcome,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         if matches!(
@@ -941,7 +941,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunTerminalDispositionMissing,
                 HostLocation::ReadScheduledPolicyOutcome,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         validate_policy_run_admission_request(
@@ -988,7 +988,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyOutcomeProjectionMismatch,
                 HostLocation::ReadScheduledPolicyOutcome,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(Some(projection))
@@ -1087,7 +1087,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunFailureStateInvalid,
                 HostLocation::CompleteScheduledPolicyFailure,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         self.ensure_scheduled_policy_lease_released(context)?;
@@ -1126,7 +1126,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PolicyRunRequestInvalid,
                     HostLocation::ReleaseFailedPolicyRun,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
@@ -1146,7 +1146,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunReleaseMissing,
                 HostLocation::CompleteScheduledPolicyFailure,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(())
@@ -1194,7 +1194,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyRunFailureTerminalConflict,
                     HostLocation::CompleteScheduledPolicyFailure,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
         };
@@ -1202,7 +1202,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunFailureTerminalInvalid,
                 HostLocation::CompleteScheduledPolicyFailure,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         let TaskSemanticFact::TerminalCommitted {
@@ -1215,7 +1215,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunFailureTerminalInvalid,
                 HostLocation::CompleteScheduledPolicyFailure,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         if failure.terminal.is_none_or(|terminal| {
@@ -1225,7 +1225,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunFailureTerminalMismatch,
                 HostLocation::CompleteScheduledPolicyFailure,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         // Ledger revision 3 (model section 8.1): the class comes from the terminal through the
@@ -1285,7 +1285,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunReceiptTerminalMismatch,
                 HostLocation::ValidateScheduledPolicyTerminal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         };
         // The terminal of a run settled from its receipt carries no failure outcome.
@@ -1310,7 +1310,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunReceiptTerminalMismatch,
                 HostLocation::ValidateScheduledPolicyTerminal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         let release_events = self
@@ -1327,7 +1327,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::PolicyRunReleaseMissing,
                 HostLocation::ValidateScheduledPolicyTerminal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(())
@@ -1377,7 +1377,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyRunDecisionMismatch,
                     HostLocation::RecordPolicyDispatchOutcome,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             let replay = lock(self.policy()?, HostLocation::ReplayPolicyDispatchOutcome)?
@@ -1414,14 +1414,14 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PolicyDispatchClockMissing,
                     HostLocation::RecordPolicyDispatchOutcome,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             if clock.admitted_at_unix_ms != admitted_at_unix_ms {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyDispatchClockIdentityConflict,
                     HostLocation::RecordPolicyDispatchOutcome,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             let runtime_ms = match clock.started_at_monotonic_ms {
@@ -1434,7 +1434,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::PolicyDispatchClockRegressed,
                     HostLocation::RecordPolicyDispatchOutcome,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let observed_at_unix_ms =
@@ -1442,7 +1442,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::PolicyExecutionTimeOverflow,
                         HostLocation::RecordPolicyDispatchOutcome,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
             let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
@@ -1628,7 +1628,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::PolicyRunRequestInvalid,
                 HostLocation::BuildPolicyRunEventLinks,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let action_id = self.events.action_id()?;

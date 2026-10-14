@@ -295,8 +295,9 @@ fn wait_ready(
     }
 }
 
-/// The log's FATAL line, else its last non-empty line: developer text for the start's failure
-/// line in `watchdog.log` and on stderr, never an interface value.
+/// The log's terminal outcome (Workflow #378 A6a: it was the FATAL line), else its last
+/// non-empty line: developer text for the start's failure line in `watchdog.log` and on stderr,
+/// never an interface value.
 pub(crate) fn last_log_line(log: &Path) -> String {
     let mut tail = Vec::new();
     let read = File::open(log).and_then(|mut file| {
@@ -308,7 +309,8 @@ pub(crate) fn last_log_line(log: &Path) -> String {
         return format!("log unreadable: {error}");
     }
     let tail = String::from_utf8_lossy(&tail);
-    observe::fatal_line(&tail)
+    observe::terminal_outcome(&tail, None)
+        .map(|outcome| outcome.to_string())
         .or_else(|| {
             tail.lines()
                 .rev()

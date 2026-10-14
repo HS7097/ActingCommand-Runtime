@@ -592,3 +592,16 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# A latched host answers a later request by its condition (runtime_halted over an error condition, a fatal condition as itself); a start reports its ledger open as ledger_opened and a released previous owner as owner_released; catalog_activation_not_newer names both generations; owner_resource_unconfirmed carries the previous owner's pid and probe state (Workflow #378 A6a)
+[[gate]]
+key = "65"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_378_a6a::a6a_a_latched_host_answers_a_later_request_by_its_condition",
+    "actingcommand-runtime-host::lib::tests::gate_378_a6a::a6a_a_start_reports_its_ledger_open_as_ledger_opened",
+    "actingcommand-runtime-host::lib::tests::gate_378_a6a::a6a_a_released_previous_owner_is_owner_released_with_its_pid",
+    "actingcommand-runtime-host::lib::catalog_plan::tests::a6a_catalog_activation_not_newer_names_both_generations",
+    "actingcommand-runtime-host::lib::owner::tests::owner_protocol_unconfirmed_blocks_automatic_takeover",
+]
+incident = ["#378 A6a"]

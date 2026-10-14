@@ -143,7 +143,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "count": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -286,26 +287,6 @@
       "description": "A stuck-recovery ladder found, at a holding check, that it no longer holds its instance's key. It cancels its continuation, records the current rung failed with this reason and finishes exhausted at warning, without an error point.",
       "common_causes": "In practice only a stopping host; otherwise a step that overran its own bound so the key lapsed.",
       "handling": "Nothing to repair: the instance is handed on, and the next trigger starts a new ladder."
-    },
-    "runtime_restart_required": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.11.6",
-      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
-      "common_causes": "A defect that panics on every payload of one instance.",
-      "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
     },
     "release_timeout": {
       "category": "error",
@@ -2275,7 +2256,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "active_catalog_id": "optional",
+        "active_catalog_version": "optional",
+        "active_catalog_hash": "optional",
+        "configured_catalog_id": "optional",
+        "configured_catalog_version": "optional",
+        "configured_catalog_hash": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -9650,6 +9637,169 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_opened": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "event_count": "required",
+        "artifact_count": "required",
+        "artifact_bytes": "required",
+        "worker_count": "required",
+        "sql_read_ms": "required",
+        "verify_ms": "required",
+        "material_ms": "required",
+        "restore_ms": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start opened its ledger (Workflow #378 A6a, model section 7.4, N1): the open's phases (events read, artifacts and their bytes checked, workers, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ledger_open_measured": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "event_count": "required",
+        "artifact_count": "required",
+        "artifact_bytes": "required",
+        "worker_count": "required",
+        "sql_read_ms": "required",
+        "verify_ms": "required",
+        "material_ms": "required",
+        "restore_ms": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure (Workflow #378 A6a, N1).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "owner_released": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "owner_pid": "required",
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start released the previous owner, whose process had exited although its last journal record declared resources in use or unconfirmed (slice #315-B2c-2): owner_pid is its process and at_unix_ms when it started. actingd writes it as a daemon line (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scheduling_pause_restored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional",
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start restored a scheduling pause (Workflow #361 B1): an instance's with its alias, the global one without; at_unix_ms is since when it holds. actingd writes it as a daemon line (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scheduling_pause_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start dropped an instance's scheduling pause because the instance is not registered (Workflow #361 B1). actingd writes it as a daemon line (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "suspended_frame_missing": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended compares no error frames of a pair: a run of the pair recorded none (the comparison's outcome; Workflow #378 A6a, was the text frame_missing).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "suspended_frame_unreadable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended could not read a recorded error frame of a pair; the artifact store's failure is the caused_by link (Workflow #378 A6a, was the text artifact_unreadable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "observation_evidence_encode_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -10081,7 +10231,9 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "owner_pid": "optional",
+        "owner_probe_state": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -18839,7 +18991,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "state_root": "optional"
       },
       "review": "pending",
       "status": "active",

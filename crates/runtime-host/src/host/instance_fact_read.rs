@@ -109,7 +109,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::FactSnapshotInvalid,
                 HostLocation::ReadInstanceFactSnapshot,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         Ok(view)

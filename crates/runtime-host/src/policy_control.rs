@@ -1080,7 +1080,7 @@ fn request(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHost
 }
 
 fn fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 #[cfg(test)]

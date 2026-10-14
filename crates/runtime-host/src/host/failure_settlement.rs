@@ -432,7 +432,7 @@ fn recorded_failure_input(
         return Err(RuntimeHostError::fatal(
             HostCode::PolicyExecutionIdentityConflict,
             HostLocation::ReplayPolicyFailureIdentity,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
     }
     Ok(PolicyExecutionInput::Failed {

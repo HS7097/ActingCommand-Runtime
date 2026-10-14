@@ -21,7 +21,7 @@ fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
     assert!(failed.result().is_none());
     let error = failed.error_projection().expect("fatal artifact error");
     assert!(error.fatal);
-    assert_eq!(error.code, RuntimeErrorCode::RuntimeFatal);
+    assert_eq!(error.code, RuntimeErrorCode::RuntimeHalted);
     assert_eq!(
         host.fatal_error()
             .expect("runtime fatal state")

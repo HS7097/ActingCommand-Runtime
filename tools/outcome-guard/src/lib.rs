@@ -188,18 +188,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays a ledger error's code, which can be a runtime host transaction work code; it takes Code once the ledger and host channels are retyped together after the A2 train",
     ),
     bridge(
-        "crates/runtime-database/src/maintenance.rs",
-        "MaintenanceWarning.code",
-        &[Check::G2],
-        "A6a: a ledger-maintenance warning (backup manifest and report); A6a gives ledger-maintenance its outcome",
-    ),
-    bridge(
-        "crates/runtime-database/src/maintenance.rs",
-        "MaintenanceWarning.operation",
-        &[Check::G2],
-        "A6a: a ledger-maintenance warning (backup manifest and report); A6a gives ledger-maintenance its outcome",
-    ),
-    bridge(
         "crates/artifact-store/src/error.rs",
         "ArtifactStoreError.code",
         &[Check::G2],
@@ -560,54 +548,6 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: the runtime host's code inside an actingd error (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
     ),
     bridge(
-        "apps/actingd/src/check_config.rs",
-        "run",
-        &[Check::G3],
-        "A6a: check-config v1 JSON key; check-config v2 replaces it",
-    ),
-    bridge(
-        "apps/actingd/src/check_config.rs",
-        "mumu_root_report",
-        &[Check::G3, Check::G5],
-        "A6a: check-config v1 mumu_root_unresolved, with the provider native failure family <category>.<stage> and its fallback device_error (decision D6); A6a removes it",
-    ),
-    bridge(
-        "apps/actingd/src/check_config.rs",
-        "summarize",
-        &[Check::G5],
-        "A6a: check-config v1's instance key resource_package equals the check-config stage of that spelling (decision D12); A6a rewrites this v1 report builder for check-config v2 and removes the entry",
-    ),
-    bridge(
-        "apps/actingd/src/config.rs",
-        "ResourcePackageRejection::detail",
-        &[Check::G3],
-        "A6a: check-config v1 JSON key loader_code; check-config v2 makes the loader code a link",
-    ),
-    bridge(
-        "apps/actingd/src/config/ac_adb.rs",
-        "pinned_binaries",
-        &[Check::G2],
-        "A6a: prose about the embedded pin, reported only through check-config v1 and the FATAL line",
-    ),
-    bridge(
-        "apps/actingd/src/owner_unlock.rs",
-        "failed",
-        &[Check::G3],
-        "A6a: unlock-owner v1 JSON key; A6a's outcome replaces error {code, stage}",
-    ),
-    bridge(
-        "apps/actingd/src/suspended.rs",
-        "run",
-        &[Check::G3],
-        "A6a: suspended v1 JSON key; A6a's outcome replaces code and operation",
-    ),
-    bridge(
-        "apps/actingctl/src/watchdog/decide.rs",
-        "fatal_stage",
-        &[Check::G5],
-        "A6a: the FATAL-line scan for the runtime host's restartable stop codes; A6a's terminal-outcome scan replaces it",
-    ),
-    bridge(
         "apps/vision-provider-check/src/main.rs",
         "InvalidModelReport.reason",
         &[Check::G2],
@@ -776,34 +716,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "A2b/A2c merge follow-up: relays the ledger's or the artifact store's code as a spelling (GlobalLedgerError::code, ArtifactStoreError::code), which carry the runtime host's own codes back; the relay goes when the host and ledger channels take Code together after the A2 train",
     ),
     bridge(
-        "crates/runtime-host/src/ledger_maintenance.rs",
-        "LedgerMaintenanceFailure.code",
-        &[Check::G2],
-        "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
-    ),
-    bridge(
-        "crates/runtime-host/src/ledger_maintenance.rs",
-        "LedgerMaintenanceFailure.operation",
-        &[Check::G2],
-        "A6a: a ledger-maintenance failure in actingd's ledger-maintenance JSON report, beside the report's MaintenanceWarning; it carries the ledger's and the runtime database's codes and operations as strings, and A6a gives ledger-maintenance its outcome",
-    ),
-    bridge(
         "crates/runtime-host/src/provider_startup.rs",
         "ProviderStartup::failed",
         &[Check::G2],
         "A2b/A2c merge follow-up: carries a runtime host error's code (RuntimeHostError::code, which still relays ledger, state, artifact-store and kernel spellings until the host and ledger channels take Code together after the A2 train); then it becomes a Code",
-    ),
-    bridge(
-        "crates/runtime-host/src/suspension_report.rs",
-        "Snapshot::frames",
-        &[Check::G3],
-        "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
-    ),
-    bridge(
-        "crates/runtime-host/src/suspension_report.rs",
-        "suspension_report",
-        &[Check::G3],
-        "A6a: actingd suspended v1 JSON keys (a pair's failure codes and a frame's unavailable reason); the report's outcome form replaces them",
     ),
     // End of the A2b bridges.
     AllowEntry {

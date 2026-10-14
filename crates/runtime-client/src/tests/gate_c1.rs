@@ -50,7 +50,7 @@ fn r6_class(code: RuntimeErrorCode) -> RuntimeClientErrorClass {
         | RuntimeErrorCode::ContainedTaskCancelled
         | RuntimeErrorCode::ContainedTaskPaused => Device,
         RuntimeErrorCode::RuntimeUnavailable
-        | RuntimeErrorCode::RuntimeFatal
+        | RuntimeErrorCode::RuntimeHalted
         | RuntimeErrorCode::OwnerConflict
         | RuntimeErrorCode::StaleOwnerEpoch
         | RuntimeErrorCode::LedgerFailure
@@ -67,7 +67,7 @@ fn gate_every_runtime_error_code_has_its_r6_disposition() {
         RuntimeErrorCode::RuntimeOwnerMismatch,
         RuntimeErrorCode::InvalidRequest,
         RuntimeErrorCode::RuntimeUnavailable,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
         RuntimeErrorCode::OwnerConflict,
         RuntimeErrorCode::ProtocolInvalid,
         RuntimeErrorCode::InstanceUnknown,

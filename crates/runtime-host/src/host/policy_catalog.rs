@@ -10,7 +10,7 @@ use actingcommand_contract::codes::SharedCode;
 
 impl HostShared {
     pub(super) fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
-        if let Some(error) = self.fatal.current()? {
+        if let Some(error) = self.fatal.answer()? {
             return Err(error);
         }
         Ok(lock(self.policy()?, HostLocation::ReadActivePolicyCatalog)?.active_generation())
@@ -35,7 +35,7 @@ impl HostShared {
     ) -> RuntimeHostResult<CatalogTransitionPlan> {
         let (generation, active, lineage) = {
             let policy = lock(self.policy()?, HostLocation::PlanPolicyCatalogTransition)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             let catalog = policy.stage(sources)?;
@@ -66,7 +66,7 @@ impl HostShared {
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, active) = {
             let policy = lock(self.policy()?, HostLocation::ApplyPolicyCatalogTransition)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             (
@@ -85,7 +85,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::CatalogPlanGenerationMismatch,
                 HostLocation::ApplyPolicyCatalogTransition,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         match plan.kind {
@@ -116,7 +116,7 @@ impl HostShared {
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
             let policy = lock(self.policy()?, HostLocation::StagePolicyCatalog)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             let catalog = policy.stage(sources)?;
@@ -158,7 +158,7 @@ impl HostShared {
     ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous, lineage) = {
             let policy = lock(self.policy()?, HostLocation::LoadPolicyCatalogRollback)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             let previous = policy.active_generation().ok_or_else(|| {
@@ -234,7 +234,7 @@ impl HostShared {
             let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
                 .map_err(|_| critical_plan_error())?;
             let mut policy = lock(self.policy()?, HostLocation::SwitchActivePolicyCatalog)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             let intent = self
@@ -276,7 +276,7 @@ impl HostShared {
                         RuntimeHostError::relayed_fatal(
                             rejection.code,
                             rejection.operation,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     } else {
                         RuntimeHostError::relayed_request(

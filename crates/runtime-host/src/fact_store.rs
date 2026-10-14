@@ -267,7 +267,7 @@ pub(crate) fn fact_transaction_error(
             RuntimeHostError::relayed_fatal(
                 work.code,
                 work.operation,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         } else {
             RuntimeHostError::relayed_request(
@@ -1795,7 +1795,7 @@ fn fact_request(code: impl Into<Code>, operation: impl Into<Location>) -> Runtim
 }
 
 fn fact_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 #[cfg(test)]

@@ -2251,7 +2251,7 @@ fn pipeline_metrics() -> Vec<PerformanceMetric> {
 }
 
 fn performance_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }
 
 fn ledger_commit_window(

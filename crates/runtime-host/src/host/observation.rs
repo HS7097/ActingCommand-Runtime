@@ -69,7 +69,7 @@ fn runtime_capture_backend(
         CaptureBackendName::FixtureSimulation => Err(RuntimeHostError::fatal(
             HostCode::FixtureCaptureOutsideSimulationScope,
             HostLocation::MapRuntimeCaptureBackend,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )),
         CaptureBackendName::AdbScreencap => Ok(RuntimeCaptureBackend::AdbScreencap),
         CaptureBackendName::AdbScreencapEncode => Ok(RuntimeCaptureBackend::AdbScreencapEncode),
@@ -162,14 +162,14 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::CaptureSequenceResultInvalid,
                 ContractLocation::CaptureSequence,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let terminal_event = last_terminal.ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::CaptureSequenceTerminalMissing,
                 ContractLocation::CaptureSequence,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         Ok(OperationSuccess {
@@ -514,7 +514,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::ReadonlyObservationInvalid,
                 ContractLocation::ObserveReadonly,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         self.append_capture_completed(
@@ -617,7 +617,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::ReadonlyCapabilityIssueFailed,
                     HostLocation::IssueReadonlyCapability,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })
     }

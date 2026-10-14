@@ -1557,7 +1557,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::RuntimeInstanceRegistryIncomplete,
                 HostLocation::RebindInstanceEndpoint,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         self.execution()?

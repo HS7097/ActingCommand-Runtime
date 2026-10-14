@@ -42,7 +42,7 @@ impl RuntimeClock for SystemRuntimeClock {
             RuntimeHostError::fatal(
                 HostCode::MonotonicClockOverflow,
                 HostLocation::ReadRuntimeClock,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         Ok(RuntimeClockSample {
@@ -59,7 +59,7 @@ pub(crate) fn unix_ms_now() -> RuntimeHostResult<u64> {
             RuntimeHostError::fatal(
                 SharedCode::SystemClockInvalid,
                 HostLocation::ReadSystemClock,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?
         .as_millis();
@@ -67,7 +67,7 @@ pub(crate) fn unix_ms_now() -> RuntimeHostResult<u64> {
         RuntimeHostError::fatal(
             HostCode::SystemClockOverflow,
             HostLocation::ReadSystemClock,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }

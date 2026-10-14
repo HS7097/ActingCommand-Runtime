@@ -601,7 +601,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
                 .expect("restore original artifact evidence");
         }
         let expected_code = if fail_report {
-            RuntimeErrorCode::RuntimeFatal
+            RuntimeErrorCode::RuntimeHalted
         } else if capture {
             RuntimeErrorCode::CaptureFailed
         } else {

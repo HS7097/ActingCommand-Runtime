@@ -254,19 +254,25 @@ fn watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close() 
         "watchdog_budget_exhausted",
     );
 
-    // A FATAL newer than the journal holds before every start row.
+    // A fatal terminal outcome newer than the journal holds before every start row (Workflow
+    // #378 A6a: the log's last `OUTCOME actingd:` line; it was the FATAL line).
     let fatal = fixture.root.join("actingd-1.log");
-    fs::write(&fatal, "FATAL actingd: config: bind_port_invalid\n").expect("write FATAL log");
+    fs::write(
+        &fatal,
+        concat!(
+            "FATAL actingd: adb_install_missing\n",
+            r#"OUTCOME actingd: {"schema_version":"actingcommand.outcome.v1","code":"adb_install_missing","category":"fatal","values":{}}"#,
+            "\n"
+        ),
+    )
+    .expect("write the fatal log");
     let report = assert_decision(fixture.watchdog(&["run-once"]), 2, "watchdog_fatal_hold");
-    assert_eq!(
-        report["fatal"]["line"],
-        "FATAL actingd: config: bind_port_invalid"
-    );
+    assert_eq!(report["terminal"]["outcome"]["code"], "adb_install_missing");
     File::options()
         .write(true)
         .open(&fatal)
         .and_then(|file| file.set_modified(SystemTime::now() - Duration::from_secs(3600)))
-        .expect("age the FATAL log");
+        .expect("age the fatal log");
 
     // A formal start clears the exhaustion; after a formal close the watchdog stays down.
     // The killed owner's runtime-info is still there, so readiness is the watchdog's own

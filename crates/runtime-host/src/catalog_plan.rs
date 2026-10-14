@@ -209,20 +209,21 @@ pub(crate) fn decide_catalog_transition(
         return Ok(CatalogTransitionPlanKind::Forward);
     }
     match expects_active {
-        // Review P6: the refusal names the explicit transition that would apply instead.
-        None => Err(refused(HostCode::CatalogActivationNotNewer).with_native_detail(format!(
-            "active catalog {} v{} ({}); configured catalog {} v{} ({}) is not a higher version \
-             of the active catalog id; to switch the catalog id or roll back to a generation \
-             that was active, set policy.catalog_transition {{\"kind\":\"replace\",\
-             \"expected_active_catalog_hash\":\"{}\"}}",
-            active.catalog_id(),
-            active.catalog_version(),
-            active.catalog_hash(),
-            configured.catalog_id(),
-            configured.catalog_version(),
-            configured.catalog_hash(),
-            active.catalog_hash(),
-        ))),
+        // Review P6: the refusal names both generations, so the explicit `replace` transition
+        // that would apply instead (expecting the active hash) can be written from it. Workflow
+        // #378 A6a (model section 7.4): they are its `active_` and `configured_` values, and
+        // what to do is the code's catalog `handling`.
+        None => Err(
+            refused(HostCode::CatalogActivationNotNewer).with_outcome_values(|outcome| {
+                outcome
+                    .active_catalog_id(active.catalog_id())
+                    .active_catalog_version(active.catalog_version())
+                    .active_catalog_hash(active.catalog_hash())
+                    .configured_catalog_id(configured.catalog_id())
+                    .configured_catalog_version(configured.catalog_version())
+                    .configured_catalog_hash(configured.catalog_hash())
+            }),
+        ),
         Some(false) => Err(refused(HostCode::CatalogTransitionExpectationMismatch)),
         Some(true) if lineage.contains(configured.catalog_hash()) => {
             Ok(CatalogTransitionPlanKind::Rollback)
@@ -482,5 +483,44 @@ mod tests {
         assert!(!superseded(&unknown));
         let unknown_older = generation("fixture.lineage-c", 2, 'a');
         assert!(superseded(&unknown_older));
+    }
+
+    // Workflow #378 A6a (model section 7.4; host gate 65): `catalog_activation_not_newer` names
+    // both generations as its `active_` and `configured_` values (it was a remedy sentence), so
+    // check-config and the start report what the explicit `replace` transition would expect.
+    #[test]
+    fn a6a_catalog_activation_not_newer_names_both_generations() {
+        let current = generation("fixture.lineage-a", 12, 'c');
+        let other = generation("fixture.lineage-b", 1, 'e');
+        let mut lineage = CatalogLineage::default();
+        lineage.record(
+            current.catalog_id(),
+            current.catalog_version(),
+            current.catalog_hash(),
+        );
+        let refused = decide_catalog_transition(Some(&current), &lineage, &other, None)
+            .expect_err("another catalog id needs replace");
+        let outcome = refused.outcome();
+        assert_eq!(outcome.code().as_str(), "catalog_activation_not_newer");
+        for (key, value) in [
+            ("active_catalog_id", serde_json::json!("fixture.lineage-a")),
+            ("active_catalog_version", serde_json::json!(12)),
+            (
+                "active_catalog_hash",
+                serde_json::json!(current.catalog_hash()),
+            ),
+            (
+                "configured_catalog_id",
+                serde_json::json!("fixture.lineage-b"),
+            ),
+            ("configured_catalog_version", serde_json::json!(1)),
+            (
+                "configured_catalog_hash",
+                serde_json::json!(other.catalog_hash()),
+            ),
+        ] {
+            assert_eq!(outcome.value(key), Some(&value), "{key}");
+        }
+        assert_eq!(refused.native_detail(), None);
     }
 }

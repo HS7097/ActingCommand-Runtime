@@ -308,5 +308,5 @@ fn manifest_request(code: impl Into<Code>, operation: impl Into<Location>) -> Ru
 }
 
 fn manifest_fatal(code: impl Into<Code>, operation: impl Into<Location>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeHalted)
 }

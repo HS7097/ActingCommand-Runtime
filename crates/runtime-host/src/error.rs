@@ -2,7 +2,7 @@
 
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
-use actingcommand_contract::outcome::{Code, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome};
 use actingcommand_contract::{
     CleanupCauseDraft, DiagnosticDetailDraft, InstanceId, ResourceQuiescence, RuntimeErrorCode,
     RuntimeErrorProjection,
@@ -125,6 +125,9 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) latched_cause: Option<(&'static str, &'static str)>,
     /// The failure behind this error (ledger revision 3): the `caused_by` link of its outcome.
     pub(crate) caused_by: Option<Outcome>,
+    /// Workflow #378 A6a: facts measured before the failure, the `note` links of its outcome
+    /// (a failed ledger open's `ledger_open_measured`, model section 7.4 N1).
+    notes: Vec<Outcome>,
     /// The error's outcome with the values its code declares, when its producer attached them
     /// ([`RuntimeHostError::with_outcome_values`]); otherwise the outcome is its code and
     /// operation alone.
@@ -166,6 +169,7 @@ impl PartialEq for RuntimeHostError {
             && self.lifecycle.owner_probe == other.lifecycle.owner_probe
             && self.lifecycle.latched_cause == other.lifecycle.latched_cause
             && self.lifecycle.caused_by == other.lifecycle.caused_by
+            && self.lifecycle.notes == other.lifecycle.notes
             && self.lifecycle.outcome_values == other.lifecycle.outcome_values
     }
 }
@@ -316,10 +320,24 @@ impl RuntimeHostError {
             .outcome_values
             .clone()
             .unwrap_or_else(|| self.code_outcome());
-        match &self.lifecycle.caused_by {
+        let outcome = match &self.lifecycle.caused_by {
             Some(cause) => outcome.caused_by(cause.clone()),
             None => outcome,
-        }
+        };
+        self.lifecycle
+            .notes
+            .iter()
+            .cloned()
+            .fold(outcome, |outcome, note| {
+                outcome.link(CauseRelation::Note, note)
+            })
+    }
+
+    /// This error with a fact measured before it failed as a `note` link of its outcome
+    /// (Workflow #378 A6a).
+    pub(crate) fn with_note(mut self, note: Outcome) -> Self {
+        self.lifecycle.notes.push(note);
+        self
     }
 
     /// The outcome a record of this failure carries as its own (`capture.failed`,
@@ -390,7 +408,7 @@ impl RuntimeHostError {
             Self::relayed_fatal(
                 error.code(),
                 error.operation(),
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         } else {
             Self::relayed_request(
@@ -433,6 +451,55 @@ impl RuntimeHostError {
     /// `outcome_relay_unregistered` with its `raw_code`.
     pub(crate) fn receipt_outcome(&self) -> Outcome {
         self.projection.with_receipt_values(self.outcome())
+    }
+
+    /// Workflow #378 A6a (model section 2.3, M1a): how a latched host answers a later request.
+    /// A fatal condition answers as itself, so the fatal-link rule holds; an error condition
+    /// answers as `runtime_halted`, with the condition as its `caused_by` link and the
+    /// condition's projection (its Runtime error code and the halt) kept.
+    pub(crate) fn latched_answer(self) -> Self {
+        let condition = self.outcome();
+        if condition.holds_fatal() {
+            return self;
+        }
+        Self::with_projection(
+            RuntimeErrorCode::RuntimeHalted,
+            HostLocation::ReadRuntimeFatal,
+            self.projection.as_ref().clone(),
+        )
+        .with_caused_by(condition)
+    }
+
+    /// Workflow #378 A6a (model section 7.4): the error as actingd's daemon line and terminal
+    /// outcome carry it. It is the outcome its record carries ([`Self::record_outcome`]: the
+    /// code, its values and operation, the failure behind it and the native text as a foreign
+    /// link), with the stage it arose in and each joined original error (B7) as a link of its
+    /// relation. A joined error with a fatal outcome under a top that is not fatal tops the
+    /// outcome instead, so a fatal link always sits under a fatal top.
+    pub fn daemon_outcome(&self) -> Outcome {
+        let Some(complete) = &self.lifecycle.complete_failure else {
+            return self.staged_record_outcome();
+        };
+        complete.secondary.iter().fold(
+            complete.primary.staged_record_outcome(),
+            |top, (relation, error)| {
+                let relation = match relation {
+                    RuntimeFailureRelation::AdmissionRecord => CauseRelation::AdmissionRecord,
+                    RuntimeFailureRelation::DiagnosticArchive => CauseRelation::DiagnosticArchive,
+                    RuntimeFailureRelation::LifecycleRecord => CauseRelation::LifecycleRecord,
+                };
+                top.joined(relation, error.staged_record_outcome())
+            },
+        )
+    }
+
+    /// [`Self::record_outcome`] with the lifecycle stage the failure arose in.
+    fn staged_record_outcome(&self) -> Outcome {
+        let outcome = self.record_outcome();
+        match self.lifecycle.failure_stage {
+            Some(stage) if outcome.value("stage").is_none() => outcome.stage(stage),
+            _ => outcome,
+        }
     }
 
     /// This refusal naming the lease it refused (Workflow #378 A4): `lease_expired` and
@@ -649,7 +716,7 @@ impl RuntimeHostError {
                 RuntimeErrorCode::RecognitionFailed
             }
             "monitor_observation_failed" => RuntimeErrorCode::RecognitionFailed,
-            _ => RuntimeErrorCode::RuntimeFatal,
+            _ => RuntimeErrorCode::RuntimeHalted,
         };
         let runtime_error = Self {
             code: HostErrorCode::Registered(error.code()),
@@ -717,7 +784,7 @@ impl RuntimeHostError {
             Self::relayed_fatal(
                 error.code(),
                 error.operation(),
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         } else {
             Self::relayed_request(
@@ -886,14 +953,14 @@ impl FatalState {
             return Err(RuntimeHostError::fatal(
                 HostCode::NonfatalErrorMarkedFatal,
                 HostLocation::MarkRuntimeFatal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         let mut current = self.inner.lock().map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::FatalStatePoisoned,
                 HostLocation::MarkRuntimeFatal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         if current.is_none() {
@@ -903,12 +970,18 @@ impl FatalState {
         Ok(())
     }
 
+    /// The latched condition as the host answers a later request with it (Workflow #378 A6a,
+    /// model section 2.3): [`RuntimeHostError::latched_answer`].
+    pub(crate) fn answer(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
+        Ok(self.current()?.map(RuntimeHostError::latched_answer))
+    }
+
     pub(crate) fn current(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
         self.inner.lock().map(|value| value.clone()).map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::FatalStatePoisoned,
                 HostLocation::ReadRuntimeFatal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })
     }

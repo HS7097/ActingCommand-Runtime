@@ -57,8 +57,16 @@ impl CatalogIndex {
 /// settlement in v0.12.1 lists them per code): the location keys (`operation`, `stage`,
 /// `boundary`), which say where a result arose, which every result may say (spec section 6),
 /// and `runtime_code`, the Runtime error code a receipt projects, which a `runtime.failed`
-/// record's outcome carries whatever the failure's code (M378 section 8.1).
-const CONTEXT_KEYS: [&str; 4] = ["operation", "stage", "boundary", "runtime_code"];
+/// record's outcome carries whatever the failure's code (M378 section 8.1). Workflow #378 A6a
+/// adds `install_root`: an actingd start refusal names the installation it was refused in on
+/// its daemon and fallback-log lines, whatever the refusal's code (M378 section 8.2, N4).
+const CONTEXT_KEYS: [&str; 5] = [
+    "operation",
+    "stage",
+    "boundary",
+    "runtime_code",
+    "install_root",
+];
 
 /// The category of a registered code in the catalog this build embeds.
 pub(crate) fn code_category(spelling: &str) -> Option<Category> {

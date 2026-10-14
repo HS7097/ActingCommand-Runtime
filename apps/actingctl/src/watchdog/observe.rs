@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Read-only observation for one tick: the A/B installation, the selected configuration's
-//! state root, the owner lock and journal, runtime-info, FATAL logs, acsetup's writer lock and
+//! state root, the owner lock and journal, runtime-info, the logs' terminal outcomes, acsetup's
+//! writer lock and
 //! the Runtime processes under the root. Nothing here writes, and the owner journal is never
 //! locked.
 
-use super::decide::{Fatal, Journal, LiveOwner, Observed, OwnerLock, OwnerRecord, RuntimeProcess};
+use super::decide::{
+    Journal, LiveOwner, Observed, OwnerLock, OwnerRecord, RuntimeProcess, Terminal,
+};
+use super::state::WatchdogState;
 use super::{io_failure, json_failure, powershell};
 use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_contract::outcome::{IoOp, Outcome, OutcomeEnvelope, RawSource};
 use actingcommand_contract::{
     EventActor, EventSource, InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE,
 };
@@ -27,7 +31,7 @@ const OWNER_SCHEMA_V2: &str = "actingcommand.runtime-owner.v2";
 const OWNER_CHECKPOINT_SCHEMA: &str = "actingcommand.runtime-owner-checkpoint.v1";
 /// acsetup holds this file exclusively for every installation or configuration write.
 const WRITER_LOCK: &str = "install/writer.lock";
-/// The tail of a candidate log that is searched for a FATAL line.
+/// The tail of a candidate log that is searched for its terminal outcome.
 const LOG_TAIL_BYTES: u64 = 64 * 1024;
 /// Workflow #381 A R5b: how many owners before the last one a formal close without a log looks
 /// back over (an installer's chained installs leave a few maintenance owners in between).
@@ -278,12 +282,13 @@ fn owner_line(value: &Value) -> Result<OwnerRecord, Outcome> {
 
 /// Workflow #381 A R5b: among the `LOOKBACK_OWNERS` owners before the last one, the newest whose
 /// epoch a candidate log covers (modified from its start to its close plus the clock slack; an
-/// owner without a close ends where the next one starts), and the FATAL line of the newest such
-/// log, if it holds one.
-fn earlier_owner_fatal(
+/// owner without a close ends where the next one starts), and the terminal outcome of the
+/// newest such log, if it holds one (Workflow #378 A6a: it was the FATAL line).
+fn earlier_owner_terminal(
     log_directories: &[PathBuf],
     owners: &[OwnerRecord],
-) -> Result<Option<Fatal>, Outcome> {
+    root: Option<&Path>,
+) -> Result<Option<Terminal>, Outcome> {
     let Some((last, earlier)) = owners.split_last() else {
         return Ok(None);
     };
@@ -300,9 +305,9 @@ fn earlier_owner_fatal(
             .find(|(_, modified)| *modified >= owner.started_at_unix_ms && *modified <= end)
         {
             let tail = read_tail(path)?;
-            return Ok(fatal_line(&tail).map(|line| Fatal {
+            return Ok(terminal_outcome(&tail, root).map(|outcome| Terminal {
                 log: plain_path(path).display().to_string(),
-                line,
+                outcome,
             }));
         }
         next_started = owner.started_at_unix_ms;
@@ -339,29 +344,33 @@ fn epoch_text(value: &Value) -> Option<String> {
 }
 
 /// L, J and F of one state root, the owner observation the decision rows read; `live` is left to
-/// the caller. F is searched only for an unlocked journal with a record, among the logs in
-/// `log_directories` (Workflow #381 A: a state root a test wrote is read the same way, I7).
+/// the caller. F, the terminal outcome, is searched only for an unlocked journal with a record,
+/// among the logs in `log_directories` (Workflow #381 A: a state root a test wrote is read the
+/// same way, I7). `root` is the supervised installation: a terminal outcome that names another
+/// installation's `install_root` is not this root's (Workflow #378 A6a, model section 8.2 N4).
 pub(crate) fn observe_owner(
     state_root: &Path,
     log_directories: &[PathBuf],
+    root: Option<&Path>,
 ) -> Result<Observed, Outcome> {
     let (lock, journal, bytes) = read_owner_journal(state_root)?;
-    let fatal = match (&lock, &journal) {
+    let terminal = match (&lock, &journal) {
         (
             OwnerLock::Unlocked,
             Journal::Record {
                 modified_unix_ms, ..
             },
-        ) => fatal_after(
+        ) => terminal_after(
             log_directories,
             modified_unix_ms.saturating_sub(super::decide::CLOCK_SLACK_MS),
+            root,
         )?,
         _ => None,
     };
     // R5b: a formal close that no log covers looks back to the owners before it.
-    let earlier_fatal = match (&lock, &journal) {
+    let earlier_terminal = match (&lock, &journal) {
         (OwnerLock::Unlocked, Journal::Record { record, .. })
-            if fatal.is_none() && !record.active =>
+            if terminal.is_none() && !record.active =>
         {
             let logged = match record.closed_at_unix_ms {
                 Some(closed_at) => {
@@ -374,7 +383,7 @@ pub(crate) fn observe_owner(
             } else {
                 let owners = owner_blocks(&bytes)
                     .map_err(|failure| failure.path(state_root.join(OWNER_JOURNAL_FILE)))?;
-                earlier_owner_fatal(log_directories, &owners)?
+                earlier_owner_terminal(log_directories, &owners, root)?
             }
         }
         _ => None,
@@ -383,8 +392,8 @@ pub(crate) fn observe_owner(
         lock,
         live: None,
         journal,
-        fatal,
-        earlier_fatal,
+        terminal,
+        earlier_terminal,
     })
 }
 
@@ -422,7 +431,7 @@ pub(crate) fn live_owner(
     })
 }
 
-/// The logs a FATAL is searched in: `actingd-*.log` in the given directories (the root for
+/// The logs a terminal outcome is searched in: `actingd-*.log` in the given directories (the root for
 /// acsetup, a logon script and an operator's restart script; `<root>\watchdog` for the
 /// watchdog's own starts; the console's log directory).
 fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Outcome> {
@@ -459,25 +468,41 @@ fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Outcom
     Ok(logs)
 }
 
-/// F: the newest candidate log modified at or after `since_unix_ms` whose tail holds a FATAL
-/// line of actingd or acforward, other than a lost start race (`owner_conflict`).
-pub(crate) fn fatal_after(
+/// F: the terminal outcome of the newest candidate log modified at or after `since_unix_ms`
+/// that holds one of this root (Workflow #378 A6a, model section 7.5: it was the newest FATAL
+/// line; a lost start race, `owner_conflict`, is an error terminal like any other).
+pub(crate) fn terminal_after(
     directories: &[PathBuf],
     since_unix_ms: u64,
-) -> Result<Option<Fatal>, Outcome> {
+    root: Option<&Path>,
+) -> Result<Option<Terminal>, Outcome> {
     for (path, modified) in candidate_logs(directories)? {
         if modified < since_unix_ms {
             break;
         }
         let tail = read_tail(&path)?;
-        if let Some(line) = fatal_line(&tail) {
-            return Ok(Some(Fatal {
+        if let Some(outcome) = terminal_outcome(&tail, root) {
+            return Ok(Some(Terminal {
                 log: plain_path(&path).display().to_string(),
-                line,
+                outcome,
             }));
         }
     }
     Ok(None)
+}
+
+/// Workflow #378 A6a (model sections 2.4, 7.5): the terminal outcome of each start that counts
+/// against the budget, oldest first, read from the log the watchdog gave it; `None` for a start
+/// whose log is gone, unreadable or holds no terminal outcome.
+pub(crate) fn start_terminals(state: &WatchdogState, now_unix_ms: u64) -> Vec<Option<Outcome>> {
+    super::decide::budget_starts(state, now_unix_ms)
+        .into_iter()
+        .map(|start| {
+            read_tail(Path::new(&start.log))
+                .ok()
+                .and_then(|tail| terminal_outcome(&tail, None))
+        })
+        .collect()
 }
 
 /// Review M2 (ii): a formal close is `logged` when some candidate log was written during the
@@ -512,15 +537,43 @@ fn read_tail(path: &Path) -> Result<String, Outcome> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The last FATAL line of actingd or acforward in a log tail; a multi-line detail follows it
-/// (review L2), and both print FATAL only as their last act.
-pub(crate) fn fatal_line(tail: &str) -> Option<String> {
-    let line = tail.lines().rev().find(|line| {
-        let line = line.trim_start();
-        line.starts_with("FATAL actingd:") || line.starts_with("FATAL acforward:")
+/// Workflow #378 A6a (model section 7.5): a log tail's terminal outcome, its last `OUTCOME
+/// actingd:` or `OUTCOME acforward:` line that holds an envelope, as received. With `root`, an
+/// outcome naming another installation's `install_root` (a fallback-log line of another root's
+/// start, N4) is not this root's terminal outcome; a line without `install_root` is every
+/// root's.
+pub(crate) fn terminal_outcome(tail: &str, root: Option<&Path>) -> Option<Outcome> {
+    let outcome = tail.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let envelope = line
+            .strip_prefix("OUTCOME actingd: ")
+            .or_else(|| line.strip_prefix("OUTCOME acforward: "))?;
+        serde_json::from_str::<OutcomeEnvelope>(envelope)
+            .ok()
+            .map(OutcomeEnvelope::into_outcome)
     })?;
-    (!line.contains(actingcommand_contract::RuntimeErrorCode::OwnerConflict.as_str()))
-        .then(|| line.trim().to_owned())
+    match root {
+        Some(root) if names_other_root(&outcome, root) => None,
+        _ => Some(outcome),
+    }
+}
+
+/// Whether an outcome names an `install_root` other than `root` (compared as canonical paths
+/// when the named one exists, else as plain paths ignoring case).
+fn names_other_root(outcome: &Outcome, root: &Path) -> bool {
+    let Some(named) = outcome
+        .value("install_root")
+        .and_then(Value::as_str)
+        .map(Path::new)
+    else {
+        return false;
+    };
+    let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let same = fs::canonicalize(named).is_ok_and(|named| named == canonical)
+        || plain_path(named)
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&plain_path(&canonical).to_string_lossy());
+    !same
 }
 
 /// W, probed only when a start is considered. A free lock is returned held shared, so acsetup
@@ -732,23 +785,61 @@ mod tests {
         );
     }
 
+    // Workflow #378 A6a (model sections 7.5, 8.2 N4; apps gate 48): a log tail's terminal
+    // outcome is its last `OUTCOME actingd:` or `OUTCOME acforward:` line that holds an envelope;
+    // an outcome naming another installation's `install_root` is not this root's, and one without
+    // `install_root` is every root's.
     #[test]
-    fn fatal_lines_skip_a_lost_start_race_and_survive_a_multi_line_detail() {
-        assert_eq!(
-            fatal_line("actingd ready pid=1\nFATAL actingd: config: bind_port_invalid\n"),
-            Some("FATAL actingd: config: bind_port_invalid".to_owned())
+    fn a6a_the_terminal_outcome_is_the_last_outcome_line_of_this_root() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("root-a");
+        let other = temp.path().join("root-b");
+        fs::create_dir_all(&root).expect("root a");
+        fs::create_dir_all(&other).expect("root b");
+        let line = |program: &str, code: &str, category: &str, install_root: Option<&Path>| {
+            let mut values = serde_json::json!({});
+            if let Some(install_root) = install_root {
+                values["install_root"] = serde_json::json!(install_root.display().to_string());
+            }
+            let envelope = serde_json::json!({
+                "schema_version": "actingcommand.outcome.v1",
+                "code": code,
+                "category": category,
+                "values": values,
+            });
+            format!("OUTCOME {program}: {envelope}")
+        };
+        let code = |outcome: Option<Outcome>| outcome.map(|outcome| outcome.code().clone());
+        // The last envelope counts; a line still being written does not.
+        let tail = format!(
+            "{}\nERROR actingd: usage_invalid\n{}\nOUTCOME actingd: {{\"code\":\n",
+            line("actingd", "runtime_stopped", "info", None),
+            line("actingd", "usage_invalid", "error", None),
         );
         assert_eq!(
-            fatal_line("FATAL actingd: runtime: detail first line\nsecond line\n\n"),
-            Some("FATAL actingd: runtime: detail first line".to_owned())
+            code(terminal_outcome(&tail, Some(root.as_path())))
+                .as_ref()
+                .map(|code| code.as_str()),
+            Some("usage_invalid")
         );
+        // acforward's lines count as actingd's do.
+        let forward = line("acforward", "acforward_runtime_missing", "fatal", None);
         assert_eq!(
-            fatal_line("FATAL acforward: Cannot run x\n"),
-            Some("FATAL acforward: Cannot run x".to_owned())
+            terminal_outcome(&forward, None).map(|outcome| outcome.category()),
+            Some(actingcommand_contract::outcome::Category::Fatal)
         );
-        assert_eq!(fatal_line("FATAL actingd: owner_conflict: held\n"), None);
-        assert_eq!(fatal_line("actingd ready pid=1\n"), None);
-        assert_eq!(fatal_line("FATAL actingctl: usage\n"), None);
+        // A fallback-log line of another root's refusal is not this root's terminal outcome;
+        // one naming this root, or no root, is.
+        let named =
+            |install_root: &Path| line("actingd", "usage_invalid", "error", Some(install_root));
+        assert_eq!(terminal_outcome(&named(&other), Some(root.as_path())), None);
+        assert!(terminal_outcome(&named(&root), Some(root.as_path())).is_some());
+        assert!(terminal_outcome(&named(&other), None).is_some());
+        // No OUTCOME line, or only a FATAL line, is no terminal outcome.
+        assert_eq!(
+            terminal_outcome("FATAL actingd: usage_invalid\n", None),
+            None
+        );
     }
 
     #[test]

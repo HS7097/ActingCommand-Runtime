@@ -525,21 +525,34 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
             }
         }
     });
-    let mut stdout_lines = Vec::new();
-    let started = Instant::now();
-    // The policy monitor starts after `actingd ready`; an earlier drain would refuse the
-    // startup governance calls instead (a separate startup-window case, not this test).
-    while !stdout_lines
-        .iter()
-        .any(|line: &String| line.starts_with("actingd ready "))
-    {
-        match received.recv_timeout(Duration::from_millis(100)) {
-            Ok(line) => stdout_lines.push(line),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("actingd stdout closed before ready: {stdout_lines:?}")
+    // Workflow #378 A6a: actingd's daemon lines, `runtime_ready` among them, are on stderr.
+    let stderr = child.0.stderr.take().expect("actingd stderr");
+    let (error_lines, errors_received) = std::sync::mpsc::channel::<String>();
+    let error_reader = thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if error_lines.send(line).is_err() {
+                break;
             }
         }
+    });
+    let mut stdout_lines = Vec::new();
+    let mut stderr_lines = Vec::new();
+    let started = Instant::now();
+    // The policy monitor starts after `runtime_ready`; an earlier drain would refuse the
+    // startup governance calls instead (a separate startup-window case, not this test).
+    while !stderr_lines
+        .iter()
+        .any(|line: &String| daemon_outcome_code(line) == Some("runtime_ready".to_owned()))
+    {
+        match errors_received.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => stderr_lines.push(line),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("actingd stderr closed before ready: {stderr_lines:?}")
+            }
+        }
+        stdout_lines.extend(received.try_iter());
         if let Some(status) = child.0.try_wait().expect("process state") {
             panic!("actingd exited before ready with {status}");
         }
@@ -672,16 +685,23 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
         );
         thread::sleep(Duration::from_millis(20));
     };
-    let mut stderr = String::new();
-    if let Some(pipe) = child.0.stderr.as_mut() {
-        pipe.read_to_string(&mut stderr)
-            .expect("read actingd stderr");
-    }
+    error_reader.join().expect("stderr reader");
+    stderr_lines.extend(errors_received.try_iter());
+    let stderr = stderr_lines.join("\n");
     assert!(
         status.success(),
         "a formal install close must exit zero: {status}: {stderr}"
     );
     assert!(!stderr.contains("FATAL"), "{stderr}");
+    // Workflow #378 A6a: a requested stop's terminal outcome is `runtime_stopped`.
+    assert_eq!(
+        stderr_lines
+            .iter()
+            .rev()
+            .find_map(|line| daemon_outcome_code(line)),
+        Some("runtime_stopped".to_owned()),
+        "{stderr}"
+    );
     reader.join().expect("stdout reader");
     stdout_lines.extend(received.try_iter());
     let monitor_lines = stdout_lines
@@ -2907,8 +2927,12 @@ fn invalid_startup_returns_nonzero() {
         .args(["--config", "missing-actingd-config.json"])
         .output()
         .expect("run actingd");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("FATAL actingd"));
+    // Workflow #378 A6a (model sections 7.4, 7.6): the refusal is the terminal `OUTCOME
+    // actingd:` line, an error, and the exit code is its category's (it was a FATAL line).
+    assert_eq!(output.status.code(), Some(1));
+    let terminal = terminal_outcome(&output.stderr);
+    assert_eq!(terminal["code"], "config_unavailable", "{terminal}");
+    assert_eq!(terminal["category"], "error", "{terminal}");
 }
 
 #[test]
@@ -3045,9 +3069,13 @@ fn policy_configuration_is_refused_before_any_catalog_record() {
         assert!(!checked.status.success(), "{case}: check-config must fail");
         let report: Value = serde_json::from_slice(&checked.stdout)
             .unwrap_or_else(|error| panic!("{case}: check-config report: {error}"));
-        assert_eq!(report["status"], "failed", "{case}");
-        assert_eq!(report["error"]["code"], code, "{case}");
-        assert_eq!(report["error"]["stage"], "assemble", "{case}");
+        // Workflow #378 A6a: check-config v2, the refusal is the report's outcome with its stage.
+        assert_eq!(report["outcome"]["category"], "error", "{case}");
+        assert_eq!(report["outcome"]["code"], code, "{case}");
+        assert_eq!(
+            report["outcome"]["values"]["stage"], "config_assemble",
+            "{case}"
+        );
 
         let started = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
             .args(["--config", config_argument])
@@ -3114,8 +3142,10 @@ fn check_config_previews_the_catalog_plan_read_only() {
 
     let mut absent = config.clone();
     absent["state_root"] = json!(root.path().join("missing-state"));
-    let (passed, report) = check(&write_variant(root.path(), "absent.json", &absent));
-    assert!(passed, "{report}");
+    let (passed, checked) = check(&write_variant(root.path(), "absent.json", &absent));
+    assert!(passed, "{checked}");
+    // Workflow #378 A6a: check-config v2 carries what it checked as `report`.
+    let report = &checked["report"];
     assert_eq!(report["policy_plan"]["state"], "state_root_absent");
     assert_eq!(report["policy_plan"]["plan"], "first");
     assert!(
@@ -3126,8 +3156,9 @@ fn check_config_previews_the_catalog_plan_read_only() {
     );
     assert!(!root.path().join("missing-state").exists());
 
-    let (passed, report) = check(&config_path);
-    assert!(passed, "{report}");
+    let (passed, checked) = check(&config_path);
+    assert!(passed, "{checked}");
+    let report = &checked["report"];
     assert_eq!(report["policy_plan"]["state"], "read");
     assert_eq!(report["policy_plan"]["driver"], "on");
     assert_eq!(report["policy_plan"]["active"], Value::Null);
@@ -3167,8 +3198,9 @@ fn check_config_previews_the_catalog_plan_read_only() {
     drop(client);
 
     // Beside the running daemon, which holds the owner lock.
-    let (passed, report) = check(&config_path);
-    assert!(passed, "{report}");
+    let (passed, checked) = check(&config_path);
+    assert!(passed, "{checked}");
+    let report = &checked["report"];
     assert_eq!(report["policy_plan"]["plan"], "unchanged");
     assert_eq!(
         report["policy_plan"]["active"]["catalog_hash"],
@@ -3207,8 +3239,11 @@ fn check_config_previews_the_catalog_plan_read_only() {
     write_next("approval:fixture-a");
     let (passed, report) = check(&write_variant(root.path(), "conflict.json", &next));
     assert!(!passed, "{report}");
-    assert_eq!(report["error"]["code"], "policy_catalog_approval_conflict");
-    assert_eq!(report["error"]["stage"], "policy_state");
+    assert_eq!(
+        report["outcome"]["code"],
+        "policy_catalog_approval_conflict"
+    );
+    assert_eq!(report["outcome"]["values"]["stage"], "policy_state");
 
     write_next("approval:fixture-a2");
     next["policy"]["catalog_approval_ids"] = json!(["approval:fixture-a2"]);
@@ -3220,13 +3255,14 @@ fn check_config_previews_the_catalog_plan_read_only() {
     let (passed, report) = check(&write_variant(root.path(), "stale.json", &stale));
     assert!(!passed, "{report}");
     assert_eq!(
-        report["error"]["code"],
+        report["outcome"]["code"],
         "catalog_transition_expectation_mismatch"
     );
-    assert_eq!(report["error"]["stage"], "policy_state");
+    assert_eq!(report["outcome"]["values"]["stage"], "policy_state");
 
-    let (passed, report) = check(&write_variant(root.path(), "forward.json", &next));
-    assert!(passed, "{report}");
+    let (passed, checked) = check(&write_variant(root.path(), "forward.json", &next));
+    assert!(passed, "{checked}");
+    let report = &checked["report"];
     assert_eq!(report["policy_plan"]["plan"], "forward");
     assert_eq!(
         report["policy_plan"]["approvals"],
@@ -3250,9 +3286,9 @@ fn check_config_previews_the_catalog_plan_read_only() {
         names(root.path()),
         Sha256::digest(fs::read(&database).expect("read state database")),
     );
-    let (passed, report) = check(&config_path);
-    assert!(passed, "{report}");
-    assert_eq!(report["policy_plan"]["plan"], "unchanged");
+    let (passed, checked) = check(&config_path);
+    assert!(passed, "{checked}");
+    assert_eq!(checked["report"]["policy_plan"]["plan"], "unchanged");
     let after = (
         names(root.path()),
         Sha256::digest(fs::read(&database).expect("read state database")),
@@ -3342,15 +3378,16 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
         ])
         .output()
         .expect("run actingd check-config");
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+    let checked: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "check-config report: {error}: {}",
             String::from_utf8_lossy(&output.stderr)
         )
     });
-    assert!(output.status.success(), "{report}");
-    assert_eq!(report["status"], "ok");
-    let packs = &report["standard_packs"];
+    assert!(output.status.success(), "{checked}");
+    // Workflow #378 A6a: check-config v2, `check_config_passed` with the report.
+    assert_eq!(checked["outcome"]["code"], "check_config_passed");
+    let packs = &checked["report"]["standard_packs"];
     assert!(
         packs["root"]
             .as_str()
@@ -3379,12 +3416,14 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
         games[1]["problem"]["values"]["standard_pack_problem"],
         "pages_missing"
     );
+    // The broken game root is a note of the passed check (it was the warning
+    // `standard_pack_root_invalid:other`).
     assert!(
-        report["warnings"]
-            .as_array()
-            .expect("warnings")
-            .contains(&json!("standard_pack_root_invalid:other")),
-        "{report}"
+        notes(&checked)
+            .iter()
+            .any(|note| note["code"] == "standard_pack_root_invalid"
+                && note["values"]["standard_pack_problem"] == "pages_missing"),
+        "{checked}"
     );
 }
 
@@ -3428,18 +3467,30 @@ fn tc_2_tc_5_a_broken_performance_rule_refuses_check_config_and_the_start_with_e
         assert_eq!(checked.status.code(), Some(1), "{case}: check-config");
         let report: Value = serde_json::from_slice(&checked.stdout)
             .unwrap_or_else(|error| panic!("{case}: check-config report: {error}"));
-        assert_eq!(report["status"], "failed", "{case}");
-        assert_eq!(report["error"]["code"], "perf_config_invalid", "{case}");
+        // Workflow #378 A6a: check-config v2; the refusal names the key of the broken rule
+        // (`config_key`), at check-config and at the start alike.
+        assert_eq!(report["outcome"]["category"], "error", "{case}");
+        assert_eq!(report["outcome"]["code"], "perf_config_invalid", "{case}");
+        assert!(
+            report["outcome"]["values"]["config_key"]
+                .as_str()
+                .is_some_and(|key| key.starts_with("performance.")),
+            "{case}: {report}"
+        );
 
         let started = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
             .args(["--config", config_argument])
             .output()
             .expect("run actingd");
         assert_eq!(started.status.code(), Some(1), "{case}: startup");
-        assert!(
-            String::from_utf8_lossy(&started.stderr).contains("perf_config_invalid"),
-            "{case}: {}",
-            String::from_utf8_lossy(&started.stderr)
+        let terminal = terminal_outcome(&started.stderr);
+        assert_eq!(
+            terminal["code"], "perf_config_invalid",
+            "{case}: {terminal}"
+        );
+        assert_eq!(
+            terminal["values"]["config_key"], report["outcome"]["values"]["config_key"],
+            "{case}: {terminal}"
         );
         assert!(
             !root.path().join("runtime-state.sqlite").exists(),
@@ -3558,14 +3609,13 @@ fn rd1b_t4_check_config_refuses_a_handset_without_a_binding() {
 
     let (succeeded, report) = rd1b_check_config(&config_path);
     assert!(!succeeded, "{report}");
-    assert_eq!(report["status"], "failed");
+    // Workflow #378 A6a: check-config v2, the refusal's outcome names the stage and the instance
+    // (it was v1's `error {code, stage, detail}`).
+    assert_eq!(report["outcome"]["code"], "device_binding_missing");
+    assert_eq!(report["outcome"]["category"], "error");
     assert_eq!(
-        report["error"],
-        json!({
-            "code": "device_binding_missing",
-            "stage": "assemble",
-            "detail": {"alias": "neutral.handset"}
-        })
+        report["outcome"]["values"],
+        json!({"stage": "config_assemble", "alias": "neutral.handset"})
     );
 }
 
@@ -3578,8 +3628,9 @@ fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
     let config_path = root.path().join("actingd.json");
     write_config(&config_path, root.path(), instance_id(), false);
 
-    let (succeeded, report) = rd1b_check_config(&config_path);
-    assert!(succeeded, "{report}");
+    let (succeeded, checked) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{checked}");
+    let report = &checked["report"];
     assert_eq!(
         report["instances"],
         json!([{
@@ -3593,7 +3644,13 @@ fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
             "stuck_recovery_cooldown_secs": 600
         }])
     );
-    assert_eq!(report["warnings"], json!([]));
+    // Workflow #378 A6a: no device note (it was an empty `warnings`).
+    assert!(
+        notes(&checked)
+            .iter()
+            .all(|note| note["code"] != "device_binding_unused"),
+        "{checked}"
+    );
     let parameters = report["config_manifest"]["parameters"]
         .as_array()
         .expect("manifest parameters");
@@ -3603,6 +3660,39 @@ fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
             .is_some_and(|key| key.ends_with(".device_kind"))),
         "{parameters:?}"
     );
+}
+
+/// The code of one of actingd's `OUTCOME actingd:` daemon lines (Workflow #378 A6a); `None` for
+/// any other line.
+fn daemon_outcome_code(line: &str) -> Option<String> {
+    let envelope: Value = serde_json::from_str(line.strip_prefix("OUTCOME actingd: ")?).ok()?;
+    envelope["code"].as_str().map(str::to_owned)
+}
+
+/// actingd's terminal outcome: the envelope of its last `OUTCOME actingd:` line on stderr
+/// (Workflow #378 A6a, model section 7.5).
+fn terminal_outcome(stderr: &[u8]) -> Value {
+    let stderr = String::from_utf8_lossy(stderr);
+    stderr
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("OUTCOME actingd: "))
+        .map(|envelope| serde_json::from_str(envelope).expect("the terminal envelope"))
+        .unwrap_or_else(|| panic!("no OUTCOME actingd: line: {stderr}"))
+}
+
+/// The `note` links of a passed check-config's outcome (Workflow #378 A6a).
+fn notes(checked: &Value) -> Vec<Value> {
+    checked["outcome"]["causes"]
+        .as_array()
+        .map(|causes| {
+            causes
+                .iter()
+                .filter(|link| link["relation"] == "note")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatcher_enabled: bool) {

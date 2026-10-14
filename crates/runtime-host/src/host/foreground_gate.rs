@@ -17,7 +17,7 @@
 //! `not_performed`) plus the `runtime.failed` record, receipt state `denied`, host codes
 //! `application_not_foreground` / `application_foreground_unknown` (`invalid_request`).
 //! An ADB failure whose child or pipe cleanup is unconfirmed invalidates the same facts and
-//! then poisons the host (`application_foreground_unknown`, `runtime_fatal`, Workflow #191 E3).
+//! then poisons the host (`application_foreground_unknown`, `runtime_halted`, Workflow #191 E3).
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
@@ -69,7 +69,7 @@ impl HostShared {
                     let mut fatal = RuntimeHostError::fatal(
                         HostCode::ApplicationForegroundUnknown,
                         GATE_OPERATION,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                     .with_native_detail(format!("instance_alias={alias}; adb_failed={error}"));
                     fatal.lifecycle.instance_id = Some(instance_id);

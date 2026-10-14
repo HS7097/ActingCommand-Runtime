@@ -132,7 +132,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     SharedCode::ReturnHomePackageUnbound,
                     HostLocation::ResolveReturnHomePackage,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_native_detail(format!("package_id={package_id}"))
             })

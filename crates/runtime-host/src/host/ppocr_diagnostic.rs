@@ -109,7 +109,7 @@ pub(super) fn attach_ppocr_source(
             let mut secondary = RuntimeHostError::fatal(
                 HostCode::PpocrOriginalErrorEncodeFailed,
                 HostLocation::ArchivePpocrDiagnostic,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             );
             secondary.lifecycle.ppocr_message = Some(cause.to_string());
             error.with_complete_failure(RuntimeFailureRelation::DiagnosticArchive, secondary)
@@ -233,7 +233,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::PpocrDiagnosticInvalid,
                         HostLocation::ArchivePpocrDiagnostic,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                     .with_native_detail(message.to_string())
                 })?;
@@ -290,7 +290,7 @@ impl HostShared {
                     let mut error = RuntimeHostError::fatal(
                         HostCode::PpocrDiagnosticWriteFailed,
                         HostLocation::ArchivePpocrDiagnostic,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                     .with_native_detail(message.clone());
                     error.lifecycle.ppocr_message = Some(message);
@@ -330,7 +330,7 @@ impl HostShared {
                     return Err(RuntimeHostError::fatal(
                         HostCode::PpocrDiagnosticVerifiedEventMissing,
                         HostLocation::ArchivePpocrDiagnostic,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ));
                 }
                 Ok(())

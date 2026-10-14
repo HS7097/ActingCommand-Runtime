@@ -6,7 +6,8 @@
 
 use super::state::{StartRecord, WatchdogState};
 use crate::codes::ActingctlCode;
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::codes::{ContractCode, SharedCode};
+use actingcommand_contract::outcome::{Category, CauseRelation, Code, Outcome};
 
 /// A start record counts against the budget for this long.
 pub(crate) const BUDGET_WINDOW_MS: u64 = 30 * 60 * 1000;
@@ -29,8 +30,6 @@ pub(crate) const PROCESS_WITHOUT_OWNER_MS: u64 = 10 * 60 * 1000;
 pub(crate) const READY_TIMEOUT_MS: u64 = 180 * 1000;
 /// Clock slack between a spawn and the started owner's recorded start.
 pub(crate) const CLOCK_SLACK_MS: u64 = 2 * 1000;
-/// The developer line actingd prints for a Runtime host error: the top code comes next.
-const RUNTIME_FATAL_PREFIX: &str = "FATAL actingd: runtime host error ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnerLock {
@@ -81,10 +80,12 @@ pub(crate) struct LiveOwner {
     pub(crate) started_at_unix_ms: u64,
 }
 
+/// Workflow #378 A6a (model section 7.5): a start's terminal outcome, the last `OUTCOME
+/// actingd:` or `OUTCOME acforward:` line of its log, and the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Fatal {
+pub(crate) struct Terminal {
     pub(crate) log: String,
-    pub(crate) line: String,
+    pub(crate) outcome: Outcome,
 }
 
 /// Rows 2-6: what the tick observed before any start is considered.
@@ -93,10 +94,11 @@ pub(crate) struct Observed {
     /// Only with `lock == Locked`: the owner answered, or why it did not.
     pub(crate) live: Option<Result<LiveOwner, Outcome>>,
     pub(crate) journal: Journal,
-    pub(crate) fatal: Option<Fatal>,
-    /// Workflow #381 A R5b: with J closed but no log covering its epoch, the FATAL of the last
-    /// earlier owner whose epoch a log covers, if that log holds one.
-    pub(crate) earlier_fatal: Option<Fatal>,
+    /// The terminal outcome of the newest log written since the journal's last record.
+    pub(crate) terminal: Option<Terminal>,
+    /// Workflow #381 A R5b: with J closed but no log covering its epoch, the terminal outcome
+    /// of the last earlier owner whose epoch a log covers, if that log holds one.
+    pub(crate) earlier_terminal: Option<Terminal>,
 }
 
 /// Rows 7a-7b: the probes taken only when a start is considered.
@@ -133,7 +135,8 @@ pub(crate) enum Decision {
     OwnerRetainedUnconfirmed {
         owner_epoch: String,
     },
-    FatalHold(Fatal),
+    /// Row 5: the last start ended in a fatal terminal outcome.
+    FatalHold(Terminal),
     FormalClose {
         owner_epoch: String,
     },
@@ -145,8 +148,18 @@ pub(crate) enum Decision {
     RuntimeProcessWithoutOwner {
         processes: Vec<RuntimeProcess>,
     },
+    /// The restart budget ran out; the terminal outcome of the window's last start that has
+    /// one is its link.
     BudgetExhausted {
         since_unix_ms: u64,
+        terminal: Option<Outcome>,
+    },
+    /// Workflow #378 A6a (model sections 2.4, 7.5): the restart budget ran out and every start
+    /// in its window ended in `runtime_restart_required`; the last one's terminal outcome is
+    /// the link.
+    PanicUnrecovered {
+        since_unix_ms: u64,
+        terminal: Outcome,
     },
     Grace {
         until_unix_ms: u64,
@@ -170,8 +183,9 @@ pub(crate) enum Stage {
 
 impl Decision {
     /// The decision's registered code (its category sets the exit, model §7.6).
-    pub(crate) fn code(&self) -> ActingctlCode {
-        match self {
+    pub(crate) fn code(&self) -> Code {
+        let code = match self {
+            Self::PanicUnrecovered { .. } => return ContractCode::PanicUnrecovered.code(),
             Self::RunInProgress => ActingctlCode::WatchdogRunInProgress,
             Self::Misconfigured(_) => ActingctlCode::WatchdogMisconfigured,
             Self::Alive { .. } => ActingctlCode::WatchdogAlive,
@@ -193,7 +207,8 @@ impl Decision {
             Self::Start => ActingctlCode::WatchdogStartDue,
             Self::Started { .. } => ActingctlCode::WatchdogStartedRuntime,
             Self::StartFailed(_) => ActingctlCode::WatchdogStartFailed,
-        }
+        };
+        code.code()
     }
 
     /// The decision as its outcome: the code with its values (`owner_epoch`, `pid`, `log`,
@@ -224,12 +239,31 @@ impl Decision {
             Self::OwnerRetainedUnconfirmed { owner_epoch } | Self::FormalClose { owner_epoch } => {
                 outcome.owner_epoch(owner_epoch.clone())
             }
-            Self::FatalHold(fatal) => outcome.log(&fatal.log),
+            // Workflow #378 A6a: the hold's link is the terminal outcome that caused it.
+            Self::FatalHold(terminal) => outcome
+                .log(&terminal.log)
+                .caused_by(terminal.outcome.clone()),
             Self::RuntimeProcessPresent { processes }
             | Self::RuntimeProcessWithoutOwner { processes } => outcome.count(processes.len()),
-            Self::BudgetExhausted { since_unix_ms } => outcome
+            Self::BudgetExhausted {
+                since_unix_ms,
+                terminal,
+            } => {
+                let outcome = outcome
+                    .at_unix_ms(*since_unix_ms)
+                    .limit_count(BUDGET_STARTS);
+                match terminal {
+                    Some(terminal) => outcome.joined(CauseRelation::CausedBy, terminal.clone()),
+                    None => outcome,
+                }
+            }
+            Self::PanicUnrecovered {
+                since_unix_ms,
+                terminal,
+            } => outcome
                 .at_unix_ms(*since_unix_ms)
-                .limit_count(BUDGET_STARTS),
+                .limit_count(BUDGET_STARTS)
+                .caused_by(terminal.clone()),
             Self::Grace { until_unix_ms } => outcome.next_eligible_unix_ms(*until_unix_ms),
             Self::Started { owner, log, .. } => outcome
                 .owner_epoch(owner.owner_epoch.clone())
@@ -282,15 +316,15 @@ pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Sta
             owner_epoch: record.owner_epoch.clone(),
         });
     }
-    // Row 5 precedes row 6 (review M7): a FATAL exit also closes the journal.
-    if let Some(fatal) = &observed.fatal {
-        return fatal_stage(fatal);
+    // Row 5 precedes row 6 (review M7): a stop by a condition also closes the journal.
+    if let Some(stage) = observed.terminal.as_ref().and_then(terminal_stage) {
+        return stage;
     }
     if !record.active {
-        // Row 6′ (Workflow #381 A R5b): a close no log covers may follow the FATAL of an owner
+        // Row 6′ (Workflow #381 A R5b): a close no log covers may follow the stop of an owner
         // before it, which row 5 cannot see behind the later record.
-        if let Some(fatal) = &observed.earlier_fatal {
-            return fatal_stage(fatal);
+        if let Some(stage) = observed.earlier_terminal.as_ref().and_then(terminal_stage) {
+            return stage;
         }
         return Stage::Decided(Decision::FormalClose {
             owner_epoch: record.owner_epoch.clone(),
@@ -299,22 +333,41 @@ pub(crate) fn decide_observed(observed: &Observed, state: &WatchdogState) -> Sta
     Stage::ConsiderStart
 }
 
-/// Rows 5 and 5′ (Workflow #381 A R5′): a FATAL holds, unless its top code is one of a
-/// held start that stopped; that one considers a start.
-fn fatal_stage(fatal: &Fatal) -> Stage {
-    /// Workflow #381 A R5′: the registered top codes of a held start that stopped (runtime-host
-    /// `HostCode`). Such a halt is one a restart may fix, so the start rows 7a-7f decide, as
-    /// after a crash. Only the top code counts, never the operation or a cause.
-    const RESTARTABLE_STOP_CODES: [&str; 3] =
-        ["install_startup_stopped", "held_timeout", "release_timeout"];
-    let top_code = fatal
-        .line
-        .strip_prefix(RUNTIME_FATAL_PREFIX)
-        .and_then(|rest| rest.split_whitespace().next());
-    if top_code.is_some_and(|code| RESTARTABLE_STOP_CODES.contains(&code)) {
-        Stage::ConsiderStart
-    } else {
-        Stage::Decided(Decision::FatalHold(fatal.clone()))
+/// Rows 5 and 5′ (Workflow #378 A6a, model section 7.5): the terminal outcome decides by its
+/// category alone. A fatal one holds: only an external fix helps. An error considers a start,
+/// as after a crash: a restart or the person operating the Runtime may fix it, and the budget
+/// bounds the restarts (an owner conflict and a held start that stopped included, Workflow
+/// #381 A R5′). Anything else, a requested stop's `runtime_stopped` included, leaves the
+/// journal rows to decide.
+fn terminal_stage(terminal: &Terminal) -> Option<Stage> {
+    match terminal.outcome.category() {
+        Category::Fatal => Some(Stage::Decided(Decision::FatalHold(terminal.clone()))),
+        Category::Error => Some(Stage::ConsiderStart),
+        Category::Success | Category::Info | Category::Warning => None,
+    }
+}
+
+/// Workflow #378 A6a (model sections 2.4, 7.5): a run-out restart budget, judged by the
+/// terminal outcomes of the starts in its window, oldest first (`None` for a start whose log
+/// holds none). When every one ended in `runtime_restart_required`, neither the Runtime nor the
+/// person operating it recovered it: `panic_unrecovered`, fatal. Otherwise
+/// `watchdog_budget_exhausted` with the last terminal outcome as its link: the person can still
+/// fix the cause through the supported path.
+pub(crate) fn budget_decision(since_unix_ms: u64, terminals: &[Option<Outcome>]) -> Decision {
+    let restart_required = |terminal: &Option<Outcome>| {
+        terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.is(SharedCode::RuntimeRestartRequired))
+    };
+    match terminals.last() {
+        Some(Some(last)) if terminals.iter().all(restart_required) => Decision::PanicUnrecovered {
+            since_unix_ms,
+            terminal: last.clone(),
+        },
+        _ => Decision::BudgetExhausted {
+            since_unix_ms,
+            terminal: terminals.iter().rev().flatten().next().cloned(),
+        },
     }
 }
 
@@ -344,7 +397,10 @@ pub(crate) fn decide_start(
         };
     }
     if let Some(since_unix_ms) = state.exhausted_since_unix_ms {
-        return Decision::BudgetExhausted { since_unix_ms };
+        return Decision::BudgetExhausted {
+            since_unix_ms,
+            terminal: None,
+        };
     }
     if from_task
         && let Some(until_unix_ms) = state.grace_until_unix_ms
@@ -355,6 +411,7 @@ pub(crate) fn decide_start(
     if starts_in_budget(state, now_unix_ms) >= BUDGET_STARTS {
         return Decision::BudgetExhausted {
             since_unix_ms: now_unix_ms,
+            terminal: None,
         };
     }
     Decision::Start
@@ -378,6 +435,19 @@ pub(crate) fn started_by_watchdog(owner: &LiveOwner, starts: &[StartRecord]) -> 
 /// Starts since the last observed formal start, within the budget window.
 pub(crate) fn starts_in_budget(state: &WatchdogState, now_unix_ms: u64) -> usize {
     starts_since(state, now_unix_ms.saturating_sub(BUDGET_WINDOW_MS))
+}
+
+/// The start records that count against the budget, oldest first (Workflow #378 A6a: their
+/// logs' terminal outcomes decide a run-out budget).
+pub(crate) fn budget_starts(state: &WatchdogState, now_unix_ms: u64) -> Vec<&StartRecord> {
+    let floor = now_unix_ms
+        .saturating_sub(BUDGET_WINDOW_MS)
+        .max(state.formal_start_at_unix_ms.unwrap_or(0));
+    state
+        .starts
+        .iter()
+        .filter(|start| start.at_unix_ms > floor)
+        .collect()
 }
 
 /// Watchdog starts since the last observed formal start, within the last day (review M8).
@@ -430,13 +500,13 @@ mod tests {
         }
     }
 
-    fn observed(lock: OwnerLock, journal: Journal, fatal: Option<Fatal>) -> Observed {
+    fn observed(lock: OwnerLock, journal: Journal, terminal: Option<Terminal>) -> Observed {
         Observed {
             lock,
             live: None,
             journal,
-            fatal,
-            earlier_fatal: None,
+            terminal,
+            earlier_terminal: None,
         }
     }
 
@@ -447,11 +517,26 @@ mod tests {
         }
     }
 
-    fn fatal() -> Fatal {
-        Fatal {
+    // A terminal outcome as the watchdog reads it from an `OUTCOME actingd:` line (received).
+    fn terminal(code: &str, category: &str) -> Terminal {
+        let envelope = serde_json::json!({
+            "schema_version": "actingcommand.outcome.v1",
+            "code": code,
+            "category": category,
+            "values": {},
+        });
+        Terminal {
             log: "actingd-1.log".to_owned(),
-            line: "FATAL actingd: config: bind_port_invalid".to_owned(),
+            outcome: serde_json::from_value::<actingcommand_contract::outcome::OutcomeEnvelope>(
+                envelope,
+            )
+            .expect("a terminal envelope")
+            .into_outcome(),
         }
+    }
+
+    fn fatal() -> Terminal {
+        terminal("adb_install_missing", "fatal")
     }
 
     fn decided(stage: Stage) -> Decision {
@@ -541,7 +626,7 @@ mod tests {
         );
         assert_eq!(
             decided(decide_observed(&retained, &state)).code(),
-            ActingctlCode::WatchdogOwnerRetainedUnconfirmed
+            ActingctlCode::WatchdogOwnerRetainedUnconfirmed.code()
         );
         // Row 5 precedes row 6: a FATAL exit also wrote `active=false`.
         let fatal_close = observed(
@@ -552,7 +637,7 @@ mod tests {
         let decision = decided(decide_observed(&fatal_close, &state));
         assert_eq!(
             (decision.code(), exit(&decision)),
-            (ActingctlCode::WatchdogFatalHold, 2)
+            (ActingctlCode::WatchdogFatalHold.code(), 2)
         );
         let fatal_active = observed(
             OwnerLock::Unlocked,
@@ -561,7 +646,7 @@ mod tests {
         );
         assert_eq!(
             decided(decide_observed(&fatal_active, &state)).code(),
-            ActingctlCode::WatchdogFatalHold
+            ActingctlCode::WatchdogFatalHold.code()
         );
         // Row 6: a formal close stands aside.
         let closed = observed(
@@ -572,7 +657,7 @@ mod tests {
         let decision = decided(decide_observed(&closed, &state));
         assert_eq!(
             (decision.code(), exit(&decision)),
-            (ActingctlCode::WatchdogFormalClose, 0)
+            (ActingctlCode::WatchdogFormalClose.code(), 0)
         );
         // A v1 record without a disposition that is still active considers a start.
         let crashed = observed(OwnerLock::Unlocked, journal(record(true, None)), None);
@@ -602,13 +687,13 @@ mod tests {
         present.processes = vec![RuntimeProcess { pid: 9, path: None }];
         assert_eq!(
             decide_start(&present, &state, NOW, true).code(),
-            ActingctlCode::WatchdogRuntimeProcessPresent
+            ActingctlCode::WatchdogRuntimeProcessPresent.code()
         );
         state.process_present_since_unix_ms = Some(NOW - PROCESS_WITHOUT_OWNER_MS);
         let decision = decide_start(&present, &state, NOW, true);
         assert_eq!(
             (decision.code(), exit(&decision)),
-            (ActingctlCode::WatchdogRuntimeProcessWithoutOwner, 1)
+            (ActingctlCode::WatchdogRuntimeProcessWithoutOwner.code(), 1)
         );
         state.process_present_since_unix_ms = None;
         // Row 7c: sticky exhaustion outlives the window.
@@ -616,7 +701,8 @@ mod tests {
         assert_eq!(
             decide_start(&probes(), &state, NOW, true),
             Decision::BudgetExhausted {
-                since_unix_ms: NOW - 2 * BUDGET_WINDOW_MS
+                since_unix_ms: NOW - 2 * BUDGET_WINDOW_MS,
+                terminal: None,
             }
         );
         state.exhausted_since_unix_ms = None;
@@ -644,7 +730,7 @@ mod tests {
         let decision = decide_start(&probes(), &state, NOW, true);
         assert_eq!(
             (decision.code(), exit(&decision)),
-            (ActingctlCode::WatchdogBudgetExhausted, 1)
+            (ActingctlCode::WatchdogBudgetExhausted.code(), 1)
         );
         // Outside the window, or before an observed formal start, a start no longer counts.
         state.starts[2].at_unix_ms = NOW - BUDGET_WINDOW_MS;
@@ -754,9 +840,9 @@ mod tests {
     fn log_keys_change_once_per_log_file_and_epoch() {
         let first = Recorded::of(&Decision::FatalHold(fatal()).outcome());
         let second = Recorded::of(
-            &Decision::FatalHold(Fatal {
+            &Decision::FatalHold(Terminal {
                 log: "actingd-2.log".to_owned(),
-                line: fatal().line,
+                outcome: fatal().outcome,
             })
             .outcome(),
         );
@@ -876,7 +962,10 @@ mod tests {
                 1,
             ),
             (
-                Decision::BudgetExhausted { since_unix_ms: NOW },
+                Decision::BudgetExhausted {
+                    since_unix_ms: NOW,
+                    terminal: None,
+                },
                 "watchdog_budget_exhausted",
                 Category::Error,
                 1,
@@ -928,8 +1017,8 @@ mod tests {
                     assert_eq!(value("owner_epoch"), Some("epoch_e".into()));
                     assert_eq!(value("log"), Some(log.as_str().into()));
                 }
-                Decision::FatalHold(fatal) => {
-                    assert_eq!(value("log"), Some(fatal.log.as_str().into()));
+                Decision::FatalHold(terminal) => {
+                    assert_eq!(value("log"), Some(terminal.log.as_str().into()));
                 }
                 Decision::Misconfigured(cause) | Decision::StartFailed(cause) => {
                     assert_eq!(value("failure_code"), Some(cause.code().as_str().into()));
@@ -945,5 +1034,123 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    // Workflow #378 A6a (model section 7.5, apps gate 48): rows 5 and 5' read the terminal
+    // outcome's category alone: fatal holds with the outcome as the hold's link, an error (a
+    // lost start race and a stopped held start included) considers a start, and a requested
+    // stop's info leaves row 6 to decide.
+    #[test]
+    fn a6a_the_terminal_outcome_decides_by_its_category() {
+        let state = WatchdogState::default();
+        for active in [false, true] {
+            let held = fatal();
+            let decision = decided(decide_observed(
+                &observed(
+                    OwnerLock::Unlocked,
+                    journal(record(active, Some("none"))),
+                    Some(held.clone()),
+                ),
+                &state,
+            ));
+            assert_eq!(decision, Decision::FatalHold(held.clone()), "{active}");
+            let outcome = decision.outcome();
+            assert_eq!(outcome.category(), Category::Fatal);
+            assert_eq!(outcome.causes().len(), 1);
+            assert_eq!(outcome.causes()[0].outcome(), &held.outcome);
+            assert_eq!(exit(&decision), 2);
+        }
+        for code in ["owner_conflict", "install_startup_stopped", "usage_invalid"] {
+            assert!(
+                matches!(
+                    decide_observed(
+                        &observed(
+                            OwnerLock::Unlocked,
+                            journal(record(false, Some("none"))),
+                            Some(terminal(code, "error")),
+                        ),
+                        &state,
+                    ),
+                    Stage::ConsiderStart
+                ),
+                "{code}"
+            );
+        }
+        let stopped = observed(
+            OwnerLock::Unlocked,
+            journal(record(false, Some("none"))),
+            Some(terminal("runtime_stopped", "info")),
+        );
+        assert_eq!(
+            decided(decide_observed(&stopped, &state)),
+            Decision::FormalClose {
+                owner_epoch: "epoch_a".to_owned()
+            }
+        );
+        // Row 6': an unlogged close looks back to an earlier owner's terminal outcome.
+        let mut earlier = observed(
+            OwnerLock::Unlocked,
+            journal(record(false, Some("none"))),
+            None,
+        );
+        earlier.earlier_terminal = Some(fatal());
+        assert_eq!(
+            decided(decide_observed(&earlier, &state)),
+            Decision::FatalHold(fatal())
+        );
+    }
+
+    // Workflow #378 A6a (model sections 2.4, 7.5, apps gate 48): a run-out budget is
+    // `panic_unrecovered` (fatal) only when every start in its window ended in
+    // `runtime_restart_required`; otherwise `watchdog_budget_exhausted` (error) with the last
+    // terminal outcome as its link.
+    #[test]
+    fn a6a_a_run_out_budget_escalates_only_after_restarts_required() {
+        let restart = terminal("runtime_restart_required", "error").outcome;
+        let decision = budget_decision(NOW, &[Some(restart.clone()), Some(restart.clone())]);
+        assert_eq!(
+            decision,
+            Decision::PanicUnrecovered {
+                since_unix_ms: NOW,
+                terminal: restart.clone(),
+            }
+        );
+        let outcome = decision.outcome();
+        assert_eq!(outcome.code().as_str(), "panic_unrecovered");
+        assert_eq!(outcome.category(), Category::Fatal);
+        assert_eq!(outcome.causes()[0].outcome(), &restart);
+        assert_eq!(exit(&decision), 2);
+
+        let conflict = terminal("owner_conflict", "error").outcome;
+        for terminals in [
+            vec![Some(restart.clone()), Some(conflict.clone())],
+            vec![Some(conflict.clone()), None],
+            vec![None, Some(restart.clone())],
+        ] {
+            let decision = budget_decision(NOW, &terminals);
+            let last = terminals.iter().rev().flatten().next().cloned();
+            assert_eq!(
+                decision,
+                Decision::BudgetExhausted {
+                    since_unix_ms: NOW,
+                    terminal: last.clone(),
+                },
+                "{terminals:?}"
+            );
+            let outcome = decision.outcome();
+            assert_eq!(outcome.code().as_str(), "watchdog_budget_exhausted");
+            assert_eq!(exit(&decision), 1);
+            assert_eq!(
+                outcome.causes().first().map(|link| link.outcome().clone()),
+                last
+            );
+        }
+        assert_eq!(
+            budget_decision(NOW, &[]),
+            Decision::BudgetExhausted {
+                since_unix_ms: NOW,
+                terminal: None,
+            }
+        );
     }
 }

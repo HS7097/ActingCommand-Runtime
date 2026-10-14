@@ -265,6 +265,48 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "panic_unrecovered": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "at_unix_ms": "optional",
+        "limit_count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The watchdog's restart budget ran out and every start in its window ended in runtime_restart_required (Workflow #378 A6a, model sections 2.4 and 7.5): neither the Runtime nor the person operating it recovered it. The last start's terminal outcome is the caused_by link, with its panic_caught links. Only the watchdog decides it; at_unix_ms is when the budget ran out and limit_count the budget.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_restart_required": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.11.6",
+      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category. Workflow #378 A6a: the contract's, as the watchdog reads it from a start's terminal outcome (panic_unrecovered).",
+      "common_causes": "A defect that panics on every payload of one instance.",
+      "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
+    },
     "outcome_relay_unregistered": {
       "category": "error",
       "ladder_class": "none",
@@ -397,9 +439,34 @@
         "request_id": "optional"
       },
       "review": "pending",
+      "status": "retired",
+      "since": "0.12.0",
+      "description": "Retired (Workflow #378 A6a): renamed runtime_halted (model section 2.3, M1a).",
+      "common_causes": "TBD",
+      "handling": "TBD",
+      "retired_in": "0.12.0",
+      "replaced_by": "runtime_halted"
+    },
+    "runtime_halted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "holder_id": "optional",
+        "lease_id": "optional",
+        "retry_after_ms": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime's wire error code (receipt projection `code`): runtime fatal.",
+      "description": "The Runtime halted (Workflow #378 A6a, model section 2.3, M1a; was runtime_fatal): the Runtime error code a receipt projection carries for a condition that latched the host. A latched host answers every later request with an error condition under runtime_halted as its caused_by link, and with a fatal condition as itself.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

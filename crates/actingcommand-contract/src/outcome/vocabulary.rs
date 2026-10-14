@@ -145,6 +145,17 @@ crate::outcome_vocabulary! {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// The state of one file in an integrity check (vocabulary `file_state`; Workflow #378 A6a
+    /// reports the install root's adb files with it).
+    pub enum FileState: "file_state" {
+        Ok => "ok",
+        Missing => "missing",
+        Sha256Mismatch => "sha256_mismatch",
+        Unreadable => "unreadable",
+    }
+}
+
 impl IoKind {
     /// The token of a Rust error kind; a kind this vocabulary does not list is `uncategorized`.
     pub fn from_error_kind(kind: std::io::ErrorKind) -> Self {

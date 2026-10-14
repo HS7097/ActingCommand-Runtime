@@ -76,14 +76,12 @@ pub struct MaintenanceFile {
     pub sha256: String,
 }
 
+/// A warning of a maintenance pass (Workflow #378 A6a): its outcome, a warning code with the
+/// operation it arose in. The backup manifest and the ledger-maintenance report carry it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceWarning {
-    pub severity: String,
-    pub operation: String,
-    pub code: String,
-    pub sqlite_code: i32,
-    pub recovery: String,
+    pub outcome: actingcommand_contract::outcome::Outcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,21 +208,16 @@ impl RuntimeDatabase {
                     state @ (StepResult::Busy | StepResult::Locked) => {
                         busy += 1;
                         if warnings.is_empty() {
+                            // At most three waits within the deadline follow; the
+                            // code says whether SQLite reported busy or locked.
+                            let code = if matches!(state, StepResult::Busy) {
+                                DatabaseCode::SqliteBackupBusy
+                            } else {
+                                DatabaseCode::SqliteBackupLocked
+                            };
                             warnings.push(MaintenanceWarning {
-                                severity: "warning".into(),
-                                operation: DatabaseLocation::StepDatabaseBackup.as_str().into(),
-                                code: if matches!(state, StepResult::Busy) {
-                                    DatabaseCode::SqliteBackupBusy.as_str()
-                                } else {
-                                    DatabaseCode::SqliteBackupLocked.as_str()
-                                }
-                                .into(),
-                                sqlite_code: if matches!(state, StepResult::Busy) {
-                                    5
-                                } else {
-                                    6
-                                },
-                                recovery: "at_most_three_waits_within_deadline".into(),
+                                outcome: actingcommand_contract::outcome::Outcome::new(code)
+                                    .operation(DatabaseLocation::StepDatabaseBackup),
                             });
                         }
                         if busy > 3 {

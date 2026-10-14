@@ -516,11 +516,26 @@ fn maintenance_verify_refuses_only_a_pending_eviction() {
     drop(database);
     let refused = maintain(root.path(), LedgerMaintenanceOperation::Verify, None, None)
         .expect_err("a pending intent refuses verify");
-    assert_eq!(refused.code, "maintenance_artifact_material_unavailable");
+    // Workflow #378 A6a: the pending artifacts are the outcome's `count`, and the read's phases
+    // its `ledger_open_measured` note link (they were the text `pending_evictions=1; ledger_open
+    // …`).
+    let outcome = refused.outcome();
+    assert_eq!(
+        outcome.code().as_str(),
+        "maintenance_artifact_material_unavailable"
+    );
+    assert_eq!(
+        outcome.value("count"),
+        Some(&serde_json::json!(1)),
+        "{outcome}"
+    );
     assert!(
-        refused.cause.starts_with("pending_evictions=1;"),
-        "{}",
-        refused.cause
+        outcome
+            .causes()
+            .iter()
+            .any(|link| link.relation().as_str() == "note"
+                && link.outcome().code().as_str() == "ledger_open_measured"),
+        "{outcome}"
     );
     assert!(pending.material.exists(), "nothing was read or removed");
 }
