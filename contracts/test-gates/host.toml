@@ -592,3 +592,13 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): a catalog reading a subset of its package's declared outcomes runs it, a declared outcome a successful run did not produce is false while a failed run leaves it Unknown, and a zero-input fields package with two outcomes ends on its other page without fields (OUT-1's tests live in the host crate; key after the reservations 63 to 71)
+[[gate]]
+key = "72"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_catalog_reads_a_subset_of_the_declared_outcomes_and_an_unproduced_one_is_false",
+    "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_without_fields",
+]
+incident = ["#390 O-03", "#390 O-04"]
