@@ -738,6 +738,34 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.48 Wave 12 slice OUT-2 (#390, forced compromises O-01, O-02, R-03, S-01)
+
+OUT-2 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` designated effect sets") is the contract. A package's designated effects may
+be a set whose members repeat up to an explicit cap (a constant, or an instance fact read before
+the run's first step), and the run's terminal records each member's count beside its cap. No new
+event type, no new member of a persisted record and no configuration key; the policy inputs are
+unchanged (a catalog reads the mapped outcome key). The code
+`contained_task_designated_effect_cap_unresolved` (execution-kernel, error, `declaration_error`)
+is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| O2-1 | package format: task `scheduling_outcome.designated_effects[] {operation_id, max_repeats?}`, `max_repeats` an integer or `{fact_key}` (task schema `0.9`) | new member (resource file format, not a ledger shape) | OUT-2 | resource side | 1 to 8 members, each operation once; a constant cap from 1 to 1,000, absent = 1; a fact cap is an unexpired integer instance fact from 0 to 1,000, read once before the run's first step; not with `designated_operation`; an older task schema refuses it (`UnconsumedField`); the `package` interface revision is declared once by A8 |
+| O2-2 | `task.completed` `TerminalCommitted.scheduling_disposition.effect` (and the same disposition in a scheduling outcome projection's `scheduling_result`): `SchedulingEffectEvidence::DesignatedEffects` (`{"kind": "designated_effects", "effects": [DesignatedEffectTally {operation_label, count, max_repeats}]}`) | new enum value of an existing member | OUT-2 | OUT-2 | written for a run of a package that declares a set: one tally per member in declaration order, `count` the times its effect completed (0 when none), `max_repeats` the cap the run held it to; 1 to 8 tallies, each operation once, `max_repeats` at most 1,000 and `count` at most `max_repeats` (`invalid_scheduling_outcome_declaration`, field `designated_effects`); its mapping condition is `designated_effect_completed` when any count is above 0. A run of a `designated_operation` package keeps `designated_effect_completed` or `no_designated_effect` |
+
+### 1.50 Wave 12 slice REC-5 (#396, REC-M v1.2.1 §7)
+
+REC-5 brings and writes R5-1 in the task diagnostic stream; R5-2 is resource file format, not a
+ledger shape. No ledger record type, code, location or key is added
+([resource-declarations.md](resource-declarations.md), section Task schema `0.9` multi-scale
+templates).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R5-1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTemplateData.scale_milli` | new optional member, absent when unused | REC-5 (#396, REC-M v1.2.1 §2, §7) | REC-5 | the factor in milli (500 to 2000) the matched template was resampled by, present exactly on the template data of a target that declares `scales`; the row's box is then the resampled template's. The recognition evaluation's `TemplateEvaluation.scale_milli` carries the same value. In base (scale-frame) pixels, as X9's correction is |
+| R5-2 | task schema `0.9` `anchors[].scales` and `verify_templates[].scales`; recognition pack schema `0.7` template target `scales` (`{"factors_milli": [...]}`) | new member (resource file format, not a ledger shape) | REC-5 | resource side | 1 to 4 distinct integers from 500 to 2000, no default; older task and pack schemas refuse it (`UnconsumedField`); a scaled template is refused as a `target_consensus` target, a `repeated_anchor` anchor and an offset feature; where a package is admitted with its bytes, each resampled template keeps at least 4 pixels a side and fits its region (`InvalidValue` at `/targets/<i>/scales/factors_milli/<k>`), and the mask minimum and threshold floor hold per factor; the `package` interface revision for it is declared once by A8 |
+
 ### 1.52 Wave 12 slice RD-2 (#398 model-398 v1.1 §4, §10.1, §12; #387 ruling A9)
 
 RD-2 brings its own shapes and writes them. The link of a handset is watched by one
@@ -765,6 +793,19 @@ locations. `device_link_reconnect_failed` is not in model-398 §10.1: it records
 the one `adb reconnect` that `offline_action = kick_once` sends (Fail Loud), and the Runtime then
 waits as under `wait`. The defaults file adds `device_link_lost` to
 `recovery_ladder.exclude_codes` (coordinator ruling on model-398 §16 item 5).
+
+### 1.54 Wave 12 slice READ-1 (#390, forced-compromises mapping O-08)
+
+READ-1 lets a fraction reading write its capacity as a second reading key;
+[resource-readings.md](resource-readings.md), "Second reading key", is the contract. No new event
+type and no new member of a persisted record: the capacity is one more `fact.published` of the
+existing shape. The contract's declaration reason `resource_reading_capacity_fact_key_invalid`
+(`declaration_error`) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
+| RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

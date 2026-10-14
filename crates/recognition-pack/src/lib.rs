@@ -27,6 +27,8 @@ mod codes;
 mod target_consensus;
 // Workflow #396 REC-7.
 mod template_mask;
+// Workflow #396 REC-5.
+mod template_scales;
 // Workflow #396 REC-2.
 mod target_unique;
 mod text_locate;
@@ -36,6 +38,7 @@ pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
 pub use template_mask::{TEMPLATE_FLAT_FIELD_MARGIN_MILLI, TEMPLATE_MASK_MIN_PIXELS};
+pub use template_scales::{TEMPLATE_SCALED_MIN_SIDE, TemplateScales};
 pub use text_locate::{
     OcrLocate, OcrLocateBlocks, OcrLocateCells, OcrLocateGapFactor, OcrLocateLineMerge,
     OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
@@ -422,6 +425,10 @@ pub struct TemplateTarget {
     /// Schema 0.7: a second place within this margin fails the target (Workflow #396 REC-2).
     #[serde(default)]
     pub unique: Option<TargetUnique>,
+    /// Schema 0.7: the factors the template is resampled by and searched at, in the order that
+    /// breaks ties (Workflow #396 REC-5); absent means the template as declared.
+    #[serde(default)]
+    pub scales: Option<TemplateScales>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -946,6 +953,10 @@ pub struct TemplateEvaluation {
     pub raw_score: f32,
     pub score: f32,
     pub threshold: f32,
+    /// Workflow #396 REC-5: the factor the match's template was resampled by, for a target that
+    /// declares `scales` (the box is the resampled template's); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_milli: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1126,15 +1137,15 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
 }
 
 /// The search a joint template and relative color evaluation selects with: the direct joint
-/// search, or (Workflow #396 REC-2, REC-7) the exact score map of a template that declares
-/// `unique` or `mask`, whose limit reports `stage`.
+/// search, or (Workflow #396 REC-2, REC-7, REC-5) the exact score maps of a template that
+/// declares `unique`, `mask` or `scales`, whose limit reports `stage`.
 pub(crate) enum JointSearch<'a> {
     Filter {
         template_png: &'a [u8],
         region: Option<recognition::Rect>,
     },
     Map {
-        map: &'a recognition::ExactScoreMap,
+        maps: &'a recognition::ScaledScoreMaps,
         stage: RecognitionPackLocation,
     },
 }
@@ -1331,15 +1342,30 @@ impl SceneEvaluation<'_> {
         if !evaluated.passed {
             return Err(fail(evidence, OcrRegionUnresolvedReason::AnchorNotMatched));
         }
+        // Workflow #396 REC-5: the region scales by the factor the anchor matched at; the
+        // evidence keeps the declared offset and size, and `roi` the scaled rectangle.
+        let Some((offset, width, height)) = template_scales::scaled_relative(
+            *offset,
+            *width,
+            *height,
+            matched
+                .scale_milli
+                .unwrap_or(recognition::resample::SCALE_IDENTITY_MILLI),
+        ) else {
+            return Err(fail(
+                evidence,
+                OcrRegionUnresolvedReason::CoordinateOverflow,
+            ));
+        };
         let rect = match resolve_template_relative_region(
             self.scene,
             PackPoint {
                 x: matched.x,
                 y: matched.y,
             },
-            *offset,
-            *width,
-            *height,
+            offset,
+            width,
+            height,
         ) {
             Ok(rect) => rect,
             Err((rect, reason)) => {
@@ -1536,6 +1562,13 @@ impl RecognitionEvaluator {
         if target.mask.is_some() {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' declares mask, which template-region batch evaluation does not score",
+                target.id
+            )));
+        }
+        // Workflow #396 REC-5: nor does it resample a template.
+        if target.scales.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' declares scales, which template-region batch evaluation does not search",
                 target.id
             )));
         }
@@ -1916,9 +1949,10 @@ impl RecognitionEvaluator {
                 ))
             })?;
         let region = target_region(&target.id, &target.region)?;
-        // Workflow #396 REC-2 and REC-7: a unique or masked template is scored exactly.
+        // Workflow #396 REC-2, REC-7 and REC-5: a unique, masked or scaled template is scored
+        // exactly.
         let mask = template_mask::scored_mask(&self.pack.schema_version, target);
-        if target.unique.is_some() || mask.is_some() {
+        if target.unique.is_some() || mask.is_some() || target.scales.is_some() {
             return self.evaluate_exact_template(
                 context,
                 target,
@@ -1949,6 +1983,7 @@ impl RecognitionEvaluator {
             raw_score: matched.raw_score,
             score: matched.score,
             threshold,
+            scale_milli: None,
         };
         let template_ok = template.score >= template.threshold;
 
@@ -1999,12 +2034,14 @@ impl RecognitionEvaluator {
     }
 
     /// The relative color of `target`'s check at `candidate` (`template-relative-color.md`),
-    /// or why its region is unresolved there.
+    /// or why its region is unresolved there. Workflow #396 REC-5: the check's offset and size
+    /// scale by the factor `scale_milli` the candidate's template was resampled by.
     pub(crate) fn relative_color_at(
         &self,
         scene: &Scene,
         target: &TemplateTarget,
         candidate: recognition::TemplateMatch,
+        scale_milli: u32,
     ) -> recognition::RecognitionResult<(Option<ColorEvaluation>, Option<OcrRegionUnresolvedReason>)>
     {
         let relative = target
@@ -2024,6 +2061,11 @@ impl RecognitionEvaluator {
                 "relative color declaration missing",
             ));
         };
+        let Some((offset, width, height)) =
+            template_scales::scaled_relative(*offset, *width, *height, scale_milli)
+        else {
+            return Ok((None, Some(OcrRegionUnresolvedReason::CoordinateOverflow)));
+        };
         Ok(
             match resolve_template_relative_region(
                 scene,
@@ -2031,9 +2073,9 @@ impl RecognitionEvaluator {
                     x: candidate.x,
                     y: candidate.y,
                 },
-                *offset,
-                *width,
-                *height,
+                offset,
+                width,
+                height,
             ) {
                 Ok(region) => {
                     let measured = scene.compare_color(region.into(), check.expected)?;
@@ -2054,13 +2096,14 @@ impl RecognitionEvaluator {
     }
 
     /// The joint template and relative color evaluation of `target`: the selection `search`
-    /// makes with the joint acceptance, and the accepted candidate.
+    /// makes with the joint acceptance, and the accepted candidate with the factor its template
+    /// was resampled by (Workflow #396 REC-5; 1000 for the direct joint search).
     pub(crate) fn joint_color_evaluation(
         &self,
         scene: &Scene,
         target: &TemplateTarget,
         search: JointSearch<'_>,
-    ) -> RecognitionPackResult<(TargetEvaluation, Option<recognition::TemplateMatch>)> {
+    ) -> RecognitionPackResult<(TargetEvaluation, Option<recognition::ScaledMatch>)> {
         if !target
             .color_check
             .as_ref()
@@ -2077,38 +2120,51 @@ impl RecognitionEvaluator {
         let mut best_color = None;
         let mut best_color_unresolved = None;
         let mut accepted_color = None;
-        let mut accept =
-            |candidate: recognition::TemplateMatch| -> recognition::RecognitionResult<bool> {
-                let (color, unresolved) = self.relative_color_at(scene, target, candidate)?;
-                if best_color_score.is_none_or(|score| candidate.raw_score > score) {
-                    best_color_score = Some(candidate.raw_score);
-                    best_color = color;
-                    best_color_unresolved = unresolved;
-                }
-                let passed = color.is_some_and(|color| color.distance <= color.max_distance);
-                if passed {
-                    accepted_color = color;
-                }
-                Ok(passed)
-            };
+        let mut accept = |candidate: recognition::TemplateMatch,
+                          scale_milli: u32|
+         -> recognition::RecognitionResult<bool> {
+            let (color, unresolved) =
+                self.relative_color_at(scene, target, candidate, scale_milli)?;
+            if best_color_score.is_none_or(|score| candidate.raw_score > score) {
+                best_color_score = Some(candidate.raw_score);
+                best_color = color;
+                best_color_unresolved = unresolved;
+            }
+            let passed = color.is_some_and(|color| color.distance <= color.max_distance);
+            if passed {
+                accepted_color = color;
+            }
+            Ok(passed)
+        };
+        let as_declared = |matched| recognition::ScaledMatch {
+            matched,
+            scale_milli: recognition::resample::SCALE_IDENTITY_MILLI,
+        };
         let selection = match search {
             JointSearch::Filter {
                 template_png,
                 region,
-            } => scene
-                .match_template_with_filter(
-                    template_png,
-                    region,
-                    self.default_match_metric(),
-                    threshold,
-                    &mut accept,
-                )
-                .map_err(|err| primitive_error(&target.id, err))?,
-            JointSearch::Map { map, stage } => map
-                .select(threshold, &mut accept)
+            } => {
+                let selection = scene
+                    .match_template_with_filter(
+                        template_png,
+                        region,
+                        self.default_match_metric(),
+                        threshold,
+                        |candidate| accept(candidate, recognition::resample::SCALE_IDENTITY_MILLI),
+                    )
+                    .map_err(|err| primitive_error(&target.id, err))?;
+                recognition::ScaledSelection {
+                    best: as_declared(selection.best_template),
+                    accepted: selection.accepted.map(as_declared),
+                }
+            }
+            JointSearch::Map { maps, stage } => maps
+                .select(threshold, |found| accept(found.matched, found.scale_milli))
                 .map_err(|err| target_unique::search_error(&target.id, stage, err))?,
         };
-        let matched = selection.accepted.unwrap_or(selection.best_template);
+        let chosen = selection.accepted.unwrap_or(selection.best);
+        let matched = chosen.matched;
         let passed = selection.accepted.is_some();
         let (color, unresolved) = if passed {
             (accepted_color, None)
@@ -2130,6 +2186,7 @@ impl RecognitionEvaluator {
                     raw_score: matched.raw_score,
                     score: matched.score,
                     threshold,
+                    scale_milli: target.scales.as_ref().map(|_| chosen.scale_milli),
                 }),
                 color,
                 ocr: None,
@@ -2692,6 +2749,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     "color_check",
                     "click",
                     "unique",
+                    "scales",
                 ][..]
             }
             "color" if schema == SCHEMA_0_7 => {
@@ -2780,6 +2838,10 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         reject_unknown_fields(object, allowed, &format!("/targets/{index}"))?;
         // Workflow #396 REC-2.
         target_unique::validate_unique_wire(schema, object, index)?;
+        // Workflow #396 REC-5.
+        if target_type == "template" {
+            template_scales::validate_scales_wire(schema, object, index)?;
+        }
         if let Some(locate) = object.get("locate") {
             validate_locate_wire(locate, &format!("/targets/{index}/locate"))?;
         }
@@ -3265,6 +3327,8 @@ fn validate_pack(
     target_unique::validate_unique_declarations(pack, errors);
     // Workflow #396 REC-7.
     template_mask::validate_mask_declarations(pack, errors);
+    // Workflow #396 REC-5.
+    template_scales::validate_scales_declarations(pack, errors);
     // Workflow #396 REC-6.
     if let Err(refusal) = value_test::validate_value_test_declarations(pack) {
         errors.push(format!("{}: {}", refusal.pointer, refusal.explanation));
@@ -5533,6 +5597,7 @@ mod tests {
                     color_check: None,
                     click: Some(rect(5, 6, 7, 8)),
                     unique: None,
+                    scales: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "color".to_string(),
@@ -5600,6 +5665,7 @@ mod tests {
                     color_check: None,
                     click: None,
                     unique: None,
+                    scales: None,
                 }),
                 RecognitionTarget::Color(ColorTarget {
                     id: "".to_string(),
@@ -5763,6 +5829,7 @@ mod tests {
                     color_check: None,
                     click: None,
                     unique: None,
+                    scales: None,
                 })],
                 ..base_pack()
             };
@@ -5790,6 +5857,7 @@ mod tests {
                     }),
                     click: None,
                     unique: None,
+                    scales: None,
                 })],
                 ..base_pack()
             };
@@ -5840,6 +5908,7 @@ mod tests {
                         color_check: None,
                         click: None,
                         unique: None,
+                        scales: None,
                     }),
                     RecognitionTarget::Color(ColorTarget {
                         id: "color".to_string(),

@@ -16,14 +16,14 @@ use actingcommand_contract::codes::{
 };
 use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
-    CaptureBackendName, CaptureExtent, CaptureGeometryObservation,
+    CaptureBackendName, CaptureExtent, CaptureGeometryObservation, DesignatedEffectTally,
     SCHEDULING_PAUSE_CHECKPOINT_GRACE_MS, SchedulingDrainSummary, TaskGeometryConclusion,
     TaskGeometryFailure, TaskGeometryFrame, TaskGeometryObservation, TaskGeometryPhase,
     TaskGeometryRecheckTrigger, TaskRunIdentity,
 };
 use actingcommand_execution_kernel::{
-    CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, ExecutionKernelCode,
-    ResourceAdjustmentResult, ResourceReadingValue, StepPacing,
+    CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, DesignatedEffectCap,
+    ExecutionKernelCode, ResourceAdjustmentResult, ResourceReadingValue, StepPacing,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -195,6 +195,9 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) failure_severe: bool,
     pub(super) scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
     pub(super) selected_scheduling_outcome: Option<String>,
+    /// Workflow #390 OUT-2: the caps the run held its designated effect set to; empty without
+    /// a set.
+    pub(super) designated_effect_caps: Vec<DesignatedEffectCap>,
     pub(super) capture_summary: Option<CapturePipelineSummary>,
     pub(super) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     /// Readings a successful run took (Workflow #335 S5b, #384 D2-S2); in memory only.
@@ -254,7 +257,10 @@ pub(super) struct JoinedReadingFrame {
 /// Workflow #335 S5b: the instance fact of one reading. The scope is the run's instance, the
 /// observation time the terminal frame's capture time; the TTL is the declared `valid_for_ms`
 /// from the detector contract. `None` for a reading the fact record cannot hold (an integer
-/// beyond `i64`, an expiry beyond `u64`).
+/// beyond `i64`, an expiry beyond `u64`). Workflow #390 READ-1: the key is the reading's own,
+/// so a mark's capacity is written under its `capacity_fact_key`, with the mark's detector and
+/// a snapshot of its own (`resource_reading_capacity_snapshot_id`): one observation per reading,
+/// as for two marks read on one frame.
 fn resource_reading_fact_record(
     readings: &ContainedTaskResourceReadings,
     reading: &ResourceReadingValue,
@@ -267,7 +273,7 @@ fn resource_reading_fact_record(
         scope: FactScope::Instance {
             instance_id: readings.instance_alias.clone(),
         },
-        key: declaration.fact_key.clone(),
+        key: reading.fact_key.clone(),
         content: FactContent::Inline {
             value: ContractFactValue::Integer(i64::try_from(reading.value).ok()?),
         },
@@ -285,11 +291,19 @@ fn resource_reading_fact_record(
             readings.task_label,
             declaration.id
         ),
-        source_snapshot_id: actingcommand_contract::resource_reading_snapshot_id(
-            run_text,
-            frame_text,
-            &declaration.id,
-        ),
+        source_snapshot_id: if reading.fact_key == declaration.fact_key {
+            actingcommand_contract::resource_reading_snapshot_id(
+                run_text,
+                frame_text,
+                &declaration.id,
+            )
+        } else {
+            actingcommand_contract::resource_reading_capacity_snapshot_id(
+                run_text,
+                frame_text,
+                &declaration.id,
+            )
+        },
         schema_version: "fact.v1".to_owned(),
         resource_bundle_hash: readings.resource_bundle_hash.clone(),
         invalidate_on: Vec::new(),
@@ -4840,6 +4854,7 @@ fn select_scheduling_disposition(
     executed_steps: Option<u32>,
     contract: Option<&(String, SchedulingOutcomeDeclaration)>,
     selected_outcome_key: Option<&str>,
+    designated_effect_caps: &[DesignatedEffectCap],
 ) -> Result<Option<SchedulingDisposition>, RequestFailure> {
     let Some((game, declaration)) = contract else {
         if selected_outcome_key.is_some() {
@@ -4859,28 +4874,32 @@ fn select_scheduling_disposition(
     let final_page = final_page.ok_or_else(|| {
         scheduling_outcome_failure(HostCode::ContainedTaskOutcomeTerminalPageMissing)
     })?;
-    let designated_effects = declaration
-        .designated_operation()
-        .map(|designated| {
-            events
-                .iter()
-                .filter_map(|event| {
-                    let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
-                        return None;
-                    };
-                    let TaskSemanticFact::EffectCompleted {
-                        step_index,
-                        operation_label,
-                    } = payload.fact()
-                    else {
-                        return None;
-                    };
-                    (operation_label == designated)
-                        .then_some((*step_index, operation_label.clone()))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    // The completed effects of every designated operation (Workflow #390 OUT-2: of each member
+    // of a designated effect set), in ledger order.
+    let effects_of = |designated: &str| {
+        events
+            .iter()
+            .filter_map(|event| {
+                let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
+                    return None;
+                };
+                let TaskSemanticFact::EffectCompleted {
+                    step_index,
+                    operation_label,
+                } = payload.fact()
+                else {
+                    return None;
+                };
+                (operation_label == designated).then_some((*step_index, operation_label.clone()))
+            })
+            .collect::<Vec<_>>()
+    };
+    let member_effects = declaration
+        .designated_operations()
+        .into_iter()
+        .map(effects_of)
+        .collect::<Vec<_>>();
+    let designated_effects = member_effects.concat();
     if designated_effects
         .iter()
         .any(|(step_index, _)| *step_index >= executed_steps)
@@ -4889,11 +4908,45 @@ fn select_scheduling_disposition(
             HostCode::ContainedTaskOutcomeEffectOutsideExecutedSteps,
         ));
     }
-    if designated_effects.len() > 1 {
-        return Err(scheduling_outcome_failure(
-            HostCode::ContainedTaskOutcomeDesignatedEffectDuplicate,
-        ));
-    }
+    // The one designated operation completes at most once; a member of a set at most once per
+    // step and at most as often as the cap its run held it to.
+    let tallies = match declaration.designated_effects() {
+        None => {
+            if designated_effects.len() > 1 {
+                return Err(scheduling_outcome_failure(
+                    HostCode::ContainedTaskOutcomeDesignatedEffectDuplicate,
+                ));
+            }
+            None
+        }
+        Some(members) => {
+            if designated_effect_caps.len() != members.len()
+                || members
+                    .iter()
+                    .zip(designated_effect_caps)
+                    .any(|(member, cap)| member.operation_id() != cap.operation_id)
+            {
+                return Err(scheduling_outcome_failure(
+                    HostCode::ContainedTaskOutcomeProgressMissing,
+                ));
+            }
+            let mut tallies = Vec::with_capacity(members.len());
+            for (effects, cap) in member_effects.iter().zip(designated_effect_caps) {
+                let steps = effects
+                    .iter()
+                    .map(|(step_index, _)| *step_index)
+                    .collect::<BTreeSet<_>>();
+                let count = u32::try_from(effects.len()).unwrap_or(u32::MAX);
+                if steps.len() != effects.len() || count > cap.max_repeats {
+                    return Err(scheduling_outcome_failure(
+                        HostCode::ContainedTaskOutcomeDesignatedEffectDuplicate,
+                    ));
+                }
+                tallies.push((cap.operation_id.clone(), count, cap.max_repeats));
+            }
+            Some(tallies)
+        }
+    };
     if executed_steps == 0 {
         let observed_page = events.iter().rev().find_map(|event| {
             let EventPayload::Task(TaskPayload::Semantic(payload)) = event.payload() else {
@@ -4958,7 +5011,7 @@ fn select_scheduling_disposition(
             ));
         }
     }
-    if let [(step_index, operation_label)] = designated_effects.as_slice() {
+    for (step_index, operation_label) in &designated_effects {
         // Same last-attempt rule as the final step: earlier attempts' StepFinished are ignored.
         let last_attempt_started = events
             .iter()
@@ -4999,22 +5052,32 @@ fn select_scheduling_disposition(
             ));
         }
     }
-    let effect = if let [(step_index, operation_label)] = designated_effects.as_slice() {
-        SchedulingEffectEvidence::DesignatedEffectCompleted {
-            step_index: *step_index,
-            operation_label: operation_label.clone(),
+    let effect = match (tallies, designated_effects.as_slice()) {
+        // Workflow #390 OUT-2: a set's run records every member's count and cap.
+        (Some(tallies), _) => SchedulingEffectEvidence::DesignatedEffects {
+            effects: tallies
+                .into_iter()
+                .map(|(operation, count, max_repeats)| {
+                    DesignatedEffectTally::new(operation, count, max_repeats)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        HostCode::ContainedTaskOutcomeDispositionInvalid,
+                        HostLocation::AppendContainedTaskTerminal,
+                        RuntimeErrorCode::RuntimeHalted,
+                    ))
+                })?,
+        },
+        (None, [(step_index, operation_label)]) => {
+            SchedulingEffectEvidence::DesignatedEffectCompleted {
+                step_index: *step_index,
+                operation_label: operation_label.clone(),
+            }
         }
-    } else {
-        SchedulingEffectEvidence::NoDesignatedEffect
+        (None, _) => SchedulingEffectEvidence::NoDesignatedEffect,
     };
-    let condition = match &effect {
-        SchedulingEffectEvidence::NoDesignatedEffect => {
-            SchedulingEffectCondition::NoDesignatedEffect
-        }
-        SchedulingEffectEvidence::DesignatedEffectCompleted { .. } => {
-            SchedulingEffectCondition::DesignatedEffectCompleted
-        }
-    };
+    let condition = effect.condition();
     let matching = declaration
         .mappings()
         .iter()
@@ -6486,6 +6549,7 @@ impl HostShared {
                             failure_severe: false,
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
+                            designated_effect_caps: Vec::new(),
                             capture_summary: Some(capture_summary),
                             task_timing: Some(task_timing.clone()),
                             resource_readings: None,
@@ -6580,6 +6644,7 @@ impl HostShared {
                             failure_severe,
                             scheduling_outcome: None,
                             selected_scheduling_outcome: None,
+                            designated_effect_caps: Vec::new(),
                             capture_summary: Some(capture_summary),
                             task_timing: Some(task_timing.clone()),
                             resource_readings: None,
@@ -6674,6 +6739,7 @@ impl HostShared {
                         failure_severe: false,
                         scheduling_outcome: None,
                         selected_scheduling_outcome: None,
+                        designated_effect_caps: Vec::new(),
                         capture_summary: Some(capture_summary),
                         task_timing: Some(task_timing.clone()),
                         resource_readings: None,
@@ -6801,6 +6867,7 @@ impl HostShared {
                 failure_severe: false,
                 scheduling_outcome,
                 selected_scheduling_outcome: outcome.selected_scheduling_outcome,
+                designated_effect_caps: outcome.designated_effect_caps,
                 capture_summary: Some(capture_summary),
                 task_timing: Some(task_timing),
                 resource_readings: (!taken_resource_readings.is_empty()
@@ -8389,6 +8456,7 @@ impl HostShared {
             draft.executed_steps,
             draft.scheduling_outcome.as_ref(),
             draft.selected_scheduling_outcome.as_deref(),
+            &draft.designated_effect_caps,
         );
         Ok(ContainedTaskTerminalCheck::Open {
             summary_committed: existing_summary.is_some(),
@@ -8478,12 +8546,7 @@ impl HostShared {
                         .frames
                         .get(*frame)
                         .and_then(|joined| joined.readings.get(*reading))
-                        .map(|value| {
-                            (
-                                value.declaration.id.as_str(),
-                                value.declaration.fact_key.as_str(),
-                            )
-                        }),
+                        .map(|value| (value.declaration.id.as_str(), value.fact_key.as_str())),
                     PlannedPublication::Adjustment(adjustment) => Some((
                         adjustment.adjustment_id.as_str(),
                         adjustment.fact_key.as_str(),

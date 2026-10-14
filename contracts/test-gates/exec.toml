@@ -772,3 +772,50 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_recognition_that_cannot_conclude_stays_the_class_4_recognition_failure",
 ]
 incident = ["#387"]
+
+# Workflow #390 OUT-2 (FCM O-01, O-02, R-03, S-01): a scheduling outcome may name a designated effect set (1 to 8 members, each once, a constant cap from 1 to 1000 or a fact cap under a fact key, never with designated_operation); admission refuses a member that leaves its page without an operation once capped, and a fact cap (which may be 0) needs a mapping for a run without a designated effect; a run repeats each member up to its cap and then takes the page's next operation, ending when its page changes before the cap; a fact cap is the instance fact's integer, read once before the first step, and a missing, expired, non-integer or out-of-range fact or no fact snapshot ends the run before any input with contained_task_designated_effect_cap_unresolved
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::out2_a_designated_effect_set_declares_caps_and_needs_a_way_on_once_capped",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::out2_a_counted_loop_repeats_each_member_to_its_cap_then_goes_on",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::out2_a_fact_cap_is_read_once_before_the_first_step",
+]
+incident = ["#390 O-01", "#390 O-02", "#390 R-03", "#390 S-01"]
+
+# Workflow #396 REC-5: multi-scale templates. The resampling primitive keeps its golden bytes (a gray image shrunk by 750, an RGB image grown by 1250, a 1920x1080 frame converted to 1280x720); a ccorr_normed template whose only factor is 1000 scores every position as the direct scorer; a template shown at 0.75 matches at 750 with its resampled box and scale_milli, equal scores keep the earlier factor, and a second place at another factor makes a unique template fail; factors out of range, repeated or leaving a side below 4 pixels are refused; a relative color region, a template_relative OCR region and a click offset scale with the factor; a masked template matches once resampled; a scaled template cannot declare target consensus; a ccoeff_normed template whose only factor is 1000 evaluates as one without scales; the frame is converted to the base coordinates before the template is resampled
+[[gate]]
+key = "60"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::resample::tests::a_gray_image_shrunk_by_750_keeps_its_golden_bytes",
+    "actingcommand-recognition::lib::resample::tests::an_rgb_image_grown_by_1250_keeps_its_golden_bytes",
+    "actingcommand-recognition::lib::resample::tests::a_1920x1080_frame_converted_to_1280x720_keeps_its_golden_bytes",
+    "actingcommand-recognition::lib::exact_score::scale_tests::a_ccorr_template_whose_only_factor_is_1000_scores_every_position_as_the_direct_scorer",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_template_shown_at_three_quarters_matches_at_750_with_its_resampled_box",
+    "actingcommand-recognition-pack::lib::template_scales::tests::equal_scores_at_two_factors_keep_the_earlier_factor",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_second_place_at_another_factor_makes_a_unique_template_fail",
+    "actingcommand-recognition-pack::lib::template_scales::tests::factors_out_of_range_or_repeated_are_refused_when_the_pack_loads",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_factor_that_leaves_a_side_below_4_pixels_is_refused_at_admission",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_relative_color_region_scales_with_the_factor_the_template_matched_at",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_template_relative_ocr_region_scales_with_the_factor_its_anchor_matched_at",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_masked_template_matches_once_resampled",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_scaled_template_cannot_declare_target_consensus",
+    "actingcommand-recognition-pack::lib::template_scales::tests::a_ccoeff_template_whose_only_factor_is_1000_evaluates_as_one_without_scales",
+    "actingcommand-recognition-pack::lib::template_scales::tests::the_frame_is_converted_to_the_base_coordinates_before_the_template_is_resampled",
+    "actingcommand-execution-kernel::lib::contained_task::scales_tests::a_click_offset_from_a_template_matched_at_750_milli_scales_with_the_factor",
+]
+incident = ["#396"]
+
+# Workflow #390 READ-1 (forced compromise O-08): a current_capacity reading mark that declares capacity_fact_key writes its denominator as that second reading key; the declaration gate admits the second key only on a fraction mark, under the reading key rule and unique among the task's reading keys; the run gives both readings from the mark's one evaluation on its frame, a requested key set of the second key reads the mark, and the host publishes the denominator as its own instance fact with the mark's observation, expiry, confidence, detector and snapshot
+[[gate]]
+key = "61"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_read1::read1_the_gate_admits_a_second_reading_key_only_on_a_fraction_mark",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_read1::read1_a_fraction_mark_writes_its_denominator_as_a_second_reading",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_read1::read1_a_key_set_of_the_second_key_reads_its_mark",
+    "actingcommand-runtime-host::lib::tests::gate_390_read1::read1_a_run_publishes_the_denominator_under_the_second_reading_key",
+]
+incident = ["#390"]

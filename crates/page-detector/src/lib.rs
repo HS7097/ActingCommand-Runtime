@@ -1458,6 +1458,7 @@ mod tests {
                     color_check: None,
                     click: None,
                     unique: None,
+                    scales: None,
                 }),
                 RecognitionTarget::Ocr(OcrTarget {
                     id: "fixture/unselected_ocr".to_string(),
@@ -2096,6 +2097,7 @@ mod tests {
                 color_check: None,
                 click: None,
                 unique: None,
+                scales: None,
             }));
         let evaluator = RecognitionEvaluator::new(root.clone(), pack).expect("evaluator");
         let detector = PageDetector::new(PageSet {

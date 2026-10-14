@@ -84,12 +84,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held start (actingd --install-held) received no release before its held deadline. The installation transition fails with admission closed; the operation is install_transition.",
-      "common_causes": "The installer stopped, timed out or lost its connection before it sent the release.",
-      "handling": "TBD"
+      "description": "A held start (actingd --install-held) received no release before its deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
+      "common_causes": "The installer stopped, timed out or lost its connection before it released the new Runtime.",
+      "handling": "Let the installer finish or roll back; the previous Runtime is started again by the installer or the watchdog."
     },
     "install_startup_shut_down": {
       "category": "error",
@@ -124,12 +124,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. The latched failure is the outcome's caused_by link in the ledger (ledger revision 3), and the tokens cause=<code> cause_operation=<operation> on the FATAL line and in the transition's status fact. A restart may succeed, so the watchdog considers a start.",
-      "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
-      "handling": "TBD"
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile. The operation is install_transition; the latched failure is the caused_by link. A restart may succeed, so the watchdog considers a start.",
+      "common_causes": "A ledger write or another latched failure during the start's preparation.",
+      "handling": "Read the caused_by link and fix its condition; start again."
     },
     "maintenance_artifact_material_unavailable": {
       "category": "error",
@@ -301,12 +301,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A released start did not finish preparing before its release deadline. The installation transition fails with admission closed; the operation is install_transition.",
-      "common_causes": "A slow preparation, such as the startup recovery of a long ledger.",
-      "handling": "TBD"
+      "description": "A released start did not finish preparing before its release deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
+      "common_causes": "A slow preparation, such as the startup recovery of a long ledger or slow devices, against a short release timeout.",
+      "handling": "Release again with a longer timeout; check the start's log for the slow step."
     },
     "strategic_evidence_unavailable": {
       "category": "error",
@@ -576,12 +576,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. The self-check's failure is the outcome's caused_by link, for example input_backend_open_failed (ledger revision 3). When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
-      "common_causes": "The instance's device did not answer while the new build prepared it: its adb daemon hung or went offline, or the emulator or phone was stopped or unplugged.",
-      "handling": "Bring the device back, then run actingctl selfcheck for the instance; a passing self-check makes it available again."
+      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes.",
+      "common_causes": "The instance's device did not answer while the new build prepared it.",
+      "handling": "Bring the device back, then run actingctl selfcheck for the instance."
     },
     "instance_resources_fenced": {
       "category": "error",
@@ -7537,12 +7537,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1). When some prepared instance passed, the start goes on instead and each failed instance is recorded as install_preparation_instance_unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1).",
+      "common_causes": "Every device stopped or unreachable while the new build prepared, or a new build that cannot capture or touch on this machine.",
+      "handling": "Bring the devices back and run the installation again; when they answer and it still fails, roll back to the previous build."
     },
     "install_previous_drain_unverified": {
       "category": "error",
@@ -9706,12 +9706,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start opened its ledger (Workflow #378 A6a, model section 7.4, N1): the open's phases (events read, artifacts and their bytes checked, workers, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start opened its ledger: the open's measures as values (events read, artifacts and their bytes checked, worker threads, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line before runtime_ready.",
+      "common_causes": "Every start.",
+      "handling": "None; long times point at a large ledger or a slow volume."
     },
     "ledger_open_measured": {
       "category": "info",
@@ -9735,12 +9735,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure (Workflow #378 A6a, N1).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure.",
+      "common_causes": "A ledger open or verify that failed partway.",
+      "handling": "None by itself; handle the failure it is attached to."
     },
     "owner_released": {
       "category": "info",
@@ -9757,12 +9757,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start released the previous owner, whose process had exited although its last journal record declared resources in use or unconfirmed (slice #315-B2c-2): owner_pid is its process and at_unix_ms when it started. actingd writes it as a daemon line (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start released the previous owner, whose process had exited although its last journal record declared resources in use or unconfirmed: owner_pid is that process and at_unix_ms when it started. actingd writes it as a daemon line.",
+      "common_causes": "A previous Runtime that ended without a formal close (killed, crashed or powered off) after its process was confirmed gone.",
+      "handling": "None; check why the previous Runtime ended when it was not intended."
     },
     "scheduling_pause_restored": {
       "category": "info",
@@ -9779,12 +9779,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start restored a scheduling pause (Workflow #361 B1): an instance's with its alias, the global one without; at_unix_ms is since when it holds. actingd writes it as a daemon line (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start restored a scheduling pause that was in force when the previous Runtime stopped: an instance's (alias names it) or the global one (no alias); at_unix_ms is since when it holds. actingd writes it as a daemon line.",
+      "common_causes": "A pause set with actingctl pause or the console before the restart.",
+      "handling": "None; lift it with actingctl resume when scheduling should run."
     },
     "scheduling_pause_dropped": {
       "category": "info",
@@ -9800,12 +9800,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start dropped an instance's scheduling pause because the instance is not registered (Workflow #361 B1). actingd writes it as a daemon line (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start dropped an instance's scheduling pause because the instance (alias) is not registered in the new configuration. actingd writes it as a daemon line.",
+      "common_causes": "An instance removed or renamed in the configuration while it was paused.",
+      "handling": "None; pause the instance again under its new alias if needed."
     },
     "suspended_frame_missing": {
       "category": "info",
@@ -19377,12 +19377,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install transition's drain did not finish before its deadline; the transition aborts and the old owner reopens.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition's drain did not finish before its deadline: the transition aborts and admission reopens on the old owner. The operation is install_transition; the status reports phase aborted with this failure code.",
+      "common_causes": "Work in flight that takes longer than the drain's timeout.",
+      "handling": "Wait until running work finishes, or begin the transition again with a longer timeout."
     },
     "dispatch_paused_global": {
       "category": "info",

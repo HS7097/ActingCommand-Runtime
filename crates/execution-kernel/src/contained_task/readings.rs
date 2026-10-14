@@ -151,11 +151,14 @@ pub fn judge_resource_adjustment_amount(
     })
 }
 
-/// Judges one mark's OCR evaluation: the shared trim and parse, then the confidence floor.
+/// Judges one mark's OCR evaluation: the shared trim and parse, then the confidence floor. The
+/// readings of a mark that held: its value, and (Workflow #390 READ-1) for a mark that declares
+/// `capacity_fact_key` then its capacity, both at the evaluation's confidence. A mark gives
+/// both readings or none.
 pub fn judge_resource_reading(
     declaration: &ResourceReadingDeclaration,
     result: &RecognitionPackResult<OcrObservationEvaluation>,
-) -> Result<ResourceReadingValue, ResourceReadingProblem> {
+) -> Result<Vec<ResourceReadingValue>, ResourceReadingProblem> {
     let evaluated = match result {
         Ok(evaluated) => evaluated,
         Err(error) if error.code() == RecognitionPackErrorCode::RegionUnresolved => {
@@ -163,19 +166,27 @@ pub fn judge_resource_reading(
         }
         Err(_) => return Err(ResourceReadingProblem::ProviderFailed),
     };
-    let value = declaration
-        .parse(&evaluated.text)
+    let parts = declaration
+        .parse_parts(&evaluated.text)
         .map_err(ResourceReadingProblem::of_parse)?;
     let confidence_milli = ocr_confidence_milli(evaluated.confidence)
         .ok_or(ResourceReadingProblem::ConfidenceMissing)?;
     if confidence_milli < declaration.minimum_confidence_milli {
         return Err(ResourceReadingProblem::LowConfidence);
     }
-    Ok(ResourceReadingValue {
+    let reading = |fact_key: &str, value: u64| ResourceReadingValue {
         declaration: declaration.clone(),
+        fact_key: fact_key.to_owned(),
         value,
         confidence_milli,
-    })
+    };
+    let mut readings = vec![reading(declaration.fact_key.as_str(), parts.value)];
+    if let (Some(capacity_fact_key), Some(capacity)) =
+        (declaration.capacity_fact_key.as_deref(), parts.capacity)
+    {
+        readings.push(reading(capacity_fact_key, capacity));
+    }
+    Ok(readings)
 }
 
 /// Workflow #384 D2-S2: the package id and the reading-mark keys of a package, read from its
@@ -184,7 +195,8 @@ pub fn judge_resource_reading(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadingMarks {
     pub package_id: String,
-    /// The keys of its reading marks, in declaration order.
+    /// The keys of its reading marks, in declaration order (Workflow #390 READ-1: a mark's
+    /// capacity key after its key).
     pub fact_keys: Vec<String>,
 }
 
@@ -221,8 +233,9 @@ impl PreparedContainedTask {
         Ok(ReadingMarks {
             package_id: control.package_id,
             fact_keys: readings
-                .into_iter()
-                .map(|reading| reading.fact_key)
+                .iter()
+                .flat_map(|reading| reading.fact_keys())
+                .map(str::to_owned)
                 .collect(),
         })
     }
@@ -294,9 +307,10 @@ impl<'a> ReadingRelay<'a> {
         self.declarations
     }
 
+    /// Workflow #390 READ-1: a key set reads a mark when it requests any key the mark writes.
     fn wanted(&self, declaration: &ResourceReadingDeclaration) -> bool {
         self.requested
-            .is_none_or(|keys| keys.contains(&declaration.fact_key))
+            .is_none_or(|keys| declaration.fact_keys().any(|key| keys.contains(key)))
     }
 
     /// Whether the run reads a mark on `page`.
@@ -488,7 +502,7 @@ impl PreparedContainedTask {
                             )
                             .map_err(ContainedTaskRunError::Boundary)?;
                         match judge_resource_reading(&declaration, &result) {
-                            Ok(reading) => readings.push(reading),
+                            Ok(held) => readings.extend(held),
                             Err(problem) => unresolved.push(ResourceReadingMiss {
                                 declaration,
                                 problem,
