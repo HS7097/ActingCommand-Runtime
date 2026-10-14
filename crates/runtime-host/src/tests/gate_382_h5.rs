@@ -45,9 +45,9 @@
 use super::*;
 use crate::owner::ScriptedProcessProbe;
 use actingcommand_contract::{
-    InstallTransitionAction, InstallTransitionPhase, OWNER_JOURNAL_SCHEMA,
-    OwnerResourceDisposition, RuntimeLifecyclePhase, RuntimePayload, RuntimeSubscriptionRequest,
-    SubscriptionCursor,
+    ConfigParameter, ConfigParameterSource, FactScalar, InstallTransitionAction,
+    InstallTransitionPhase, OWNER_JOURNAL_SCHEMA, OwnerResourceDisposition, RuntimeConfigManifest,
+    RuntimeLifecyclePhase, RuntimePayload, RuntimeSubscriptionRequest, SubscriptionCursor,
 };
 use actingcommand_host_metrics::{HostMetricsCode, ProcessProbe};
 use actingcommand_ledger::WriterStallGate;
@@ -475,11 +475,37 @@ fn gate_the_same_request_on_a_new_connection_after_a_stall_gets_the_one_terminal
     host.close().expect("close host");
 }
 
+/// A start as actingd makes one: with its configuration manifest, whose `config.*` runtime facts
+/// the host records once per start (contracts/runtime-fact-store.md, `config.subsystems` and
+/// `config.parameters.<section>`). A host built without a manifest records none.
+fn host_with_manifest(root: &TempDir) -> RuntimeHost {
+    let mut parameters = vec![ConfigParameter {
+        key: "bind_port".to_owned(),
+        value: FactScalar::Integer(0),
+        source: ConfigParameterSource::Default,
+        settable: false,
+    }];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("every key is in the key table");
+    RuntimeHost::start(
+        config(root).with_config_manifest(RuntimeConfigManifest {
+            subsystems: Vec::new(),
+            parameters,
+        }),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host")
+}
+
 #[test]
 fn gate_runtime_fact_recovery_reads_only_after_the_newest_complete_snapshot_set() {
     let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
-    // The start recorded its runtime facts (its configuration among them); seal them.
+    let host = host_with_manifest(&root);
+    // The start recorded its runtime facts (its configuration); seal them.
     assert!(
         host.append_runtime_fact_snapshot_for_test()
             .expect("seal a runtime-fact snapshot set"),
@@ -515,7 +541,7 @@ fn gate_runtime_fact_recovery_reads_only_after_the_newest_complete_snapshot_set(
         .count();
 
     let _ = RuntimeHost::take_last_runtime_fact_replay_for_test();
-    let restarted = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    let restarted = host_with_manifest(&root);
     assert_eq!(
         RuntimeHost::take_last_runtime_fact_replay_for_test(),
         Some((newest_set + 1, after_set)),
