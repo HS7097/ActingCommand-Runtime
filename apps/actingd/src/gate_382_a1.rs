@@ -320,9 +320,13 @@ fn gate_check_config_refuses_each_vision_root_with_the_model_folder_reports_code
                     Some(ActingdLocation::ConfigVision.location().as_str()),
                     "{case}: {outcome}"
                 );
-                Some(outcome.code())
+                Some(outcome.code().as_str().to_owned())
             }
         };
-        assert_eq!(refused, expected.map(VisionListingCode::code), "{case}");
+        assert_eq!(
+            refused.as_deref(),
+            expected.map(|code| code.code().as_str()),
+            "{case}"
+        );
     }
 }
