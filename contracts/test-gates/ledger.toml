@@ -65,10 +65,10 @@ tests = [
 ]
 incident = []
 
-# Subscriptions
+# Subscriptions (Workflow #382 L-3 G8: also on the SQLite store, so Y)
 [[gate]]
 key = "7"
-coverage = "P"
+coverage = "Y"
 tests = [
     "actingcommand-ledger::lib::global::tests::subscription::paged_replay_then_live_is_gap_free_and_ordered",
     "actingcommand-ledger::lib::global::tests::subscription_reports_timeout_and_clean_close_separately",
@@ -87,8 +87,17 @@ tests = [
     "actingcommand-ledger::lib::global::tests::subscription::subscription_lag_is_absorbing_and_discards_buffered_events",
     "actingcommand-ledger::lib::global::tests::subscription::subscription_registration_does_not_clone_unbounded_history",
     "actingcommand-ledger::lib::global::tests::subscription::terminal_writer_failure_preempts_replay_and_is_stable",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_paged_replay_then_live_is_gap_free_and_ordered",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_replay_pages_are_bounded_and_the_writer_stays_responsive",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_a_resume_cursor_recovers_every_missing_event",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_a_future_cursor_suppresses_earlier_events_and_stays_gap_free",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_lag_is_absorbing",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_terminal_writer_failure_preempts_replay_and_is_stable",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_dropped_subscribers_harm_no_other_subscriber",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_a_clean_close_reaches_the_subscriber_and_stays_latched",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g8::gate_l3_g8_a_stalled_commit_reaches_the_subscriber_without_timeout_or_gap",
 ]
-incident = []
+incident = ["#382 L-3"]
 
 # Query contracts on SQLite
 [[gate]]
@@ -488,3 +497,15 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_l3_g5::gate_l3_g5_a_readback_whose_work_cannot_tell_is_unknown",
 ]
 incident = ["#381 A", "#382 L-3"]
+
+# Formal SQLite open (#375): one pass over the event and link rows, linear in the records, and no
+# artifact material, whatever its size or presence (Workflow #382 L-3 G9, LED-I5)
+[[gate]]
+key = "6"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_l3_g9::gate_l3_g9_formal_open_reads_each_row_once_and_scales_linearly",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g9::gate_l3_g9_ten_times_larger_material_reads_the_same_rows",
+    "actingcommand-ledger::lib::global::tests::gate_l3_g9::gate_l3_g9_material_deleted_by_hand_reads_the_same_rows",
+]
+incident = ["#375", "#382 L-3"]
