@@ -202,10 +202,11 @@ impl AdbDefault {
 /// Checks the install root's adb, identically for `check-config` and daemon startup and
 /// before any side effect: `Ok(None)` outside an install root; at an install root the three
 /// distributed binaries are hashed against the pin, and a missing or different file refuses
-/// only when an instance uses that adb. Zero users still report the state.
+/// only when an instance uses that adb. Zero users still report the state. The rejection is
+/// boxed: it carries every file that is not as pinned.
 pub(crate) fn require(
     requirement: &AdbRequirement,
-) -> Result<Option<AdbDefault>, AdbInstallRejection> {
+) -> Result<Option<AdbDefault>, Box<AdbInstallRejection>> {
     let Some(installed) = &requirement.installed else {
         return Ok(None);
     };
@@ -226,7 +227,7 @@ pub(crate) fn require(
             state,
         }));
     }
-    Err(AdbInstallRejection {
+    Err(Box::new(AdbInstallRejection {
         code: if missing {
             ActingdCode::AdbInstallMissing.code()
         } else {
@@ -236,7 +237,7 @@ pub(crate) fn require(
         adb: installed.adb.clone(),
         users: requirement.users.clone(),
         findings,
-    })
+    }))
 }
 
 /// One distributed binary that is not as pinned.

@@ -785,7 +785,7 @@ mod tests {
         );
     }
 
-    // Workflow #378 A6a (model sections 7.5, 8.2 N4; apps gate 48): a log tail's terminal
+    // Workflow #378 A6a (model sections 7.5, 8.2 N4; apps gates 23, 48): a log tail's terminal
     // outcome is its last `OUTCOME actingd:` or `OUTCOME acforward:` line that holds an envelope;
     // an outcome naming another installation's `install_root` is not this root's, and one without
     // `install_root` is every root's.

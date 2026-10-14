@@ -744,7 +744,9 @@ jobs:
             'RELEASE-NOTES.md'
           ) -SourceDirectory (Join-Path $PWD 'distribution/windows') -Destination $runtimeDir
           # Workflow #387 D1b (model v1.2 §5.2): the shipped defaults file is the one the program
-          # embeds: its SHA-256 equals check-config's config_selection.defaults_sha256.
+          # embeds: its SHA-256 equals check-config's config_selection.defaults_sha256. Workflow
+          # #378 A6a: check-config prints one v2 line, `{schema_version, outcome, report}`, and the
+          # digest is the report's; a missing or empty digest fails the check.
           $defaultsRoot = Join-Path $env:RUNNER_TEMP 'defaults-digest-check'
           if (Test-Path -LiteralPath $defaultsRoot) {
             Remove-Item -LiteralPath $defaultsRoot -Recurse -Force -ErrorAction Stop
@@ -760,7 +762,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "defaults digest check: check-config exited ${LASTEXITCODE}: $checkReport"
           }
-          $reportedDefaults = ($checkReport | ConvertFrom-Json).config_selection.defaults_sha256
+          $checkLine = $checkReport | ConvertFrom-Json
+          if ($checkLine.schema_version -cne 'actingcommand.actingd.check-config.v2') {
+            throw "defaults digest check: check-config printed schema '$($checkLine.schema_version)', not actingcommand.actingd.check-config.v2: $checkReport"
+          }
+          $reportedDefaults = [string]$checkLine.report.config_selection.defaults_sha256
+          if ([string]::IsNullOrEmpty($reportedDefaults)) {
+            throw "defaults digest check: check-config v2 reports no report.config_selection.defaults_sha256: $checkReport"
+          }
           $shippedDefaults = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $runtimeDir 'actingd.defaults.json')).Hash.ToLowerInvariant()
           if ($reportedDefaults -cne $shippedDefaults) {
             throw "defaults digest check: the program embeds $reportedDefaults, the artifact ships $shippedDefaults"
