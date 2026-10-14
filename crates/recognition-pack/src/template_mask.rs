@@ -195,11 +195,17 @@ impl RecognitionEvaluator {
     ///   milli (rounded down, over the masked pixels when it declares a mask) plus
     ///   [`TEMPLATE_FLAT_FIELD_MARGIN_MILLI`]. A threshold of 0 declares a target that always
     ///   passes and is not checked. `ccoeff_normed` scores a region of one brightness 0.
+    /// - Workflow #396 REC-5: a target that declares `scales` is searched only as resampled by
+    ///   its factors, so each resampled template keeps at least
+    ///   `TEMPLATE_SCALED_MIN_SIDE` pixels a side and fits its search
+    ///   region (its rectangle, or the coordinate space for `full_frame`), and the two rules above
+    ///   hold for each resampled template.
     ///
     /// Targets this build cannot evaluate are skipped. A refusal is `InvalidValue` at the mask
-    /// (`/targets/<i>/mask`) or at the threshold in effect (`/targets/<i>/threshold`, or
-    /// `/defaults/template_threshold` when the target declares none); the developer text of a
-    /// floor refusal names every template below its floor with its `flat_score_milli`. Pack
+    /// (`/targets/<i>/mask`), at the factor (`/targets/<i>/scales/factors_milli/<k>`) or at the
+    /// threshold in effect (`/targets/<i>/threshold`, or `/defaults/template_threshold` when the
+    /// target declares none); the developer text of a floor refusal names every template below its
+    /// floor with its `flat_score_milli` (and, for a scaled template, its `scale_milli`). Pack
     /// containment runs this where it admits a package, holding its template bytes (the Runtime
     /// and `actinglab package bundle`); metadata-only validation reads no template.
     pub fn admit_template_assets(&self) -> RecognitionPackResult<()> {
@@ -226,7 +232,7 @@ impl RecognitionEvaluator {
             let mask = scored_mask(&pack.schema_version, target);
             let threshold = target.threshold.unwrap_or(pack.defaults.template_threshold);
             let floored = ccorr && threshold > 0.0;
-            if mask.is_none() && !floored {
+            if mask.is_none() && !floored && target.scales.is_none() {
                 continue;
             }
             let template_png = self
@@ -240,45 +246,89 @@ impl RecognitionEvaluator {
                         err.message()
                     ))
                 })?;
-            let sums = recognition::TemplatePixelSums::of_png(&template_png, mask)
-                .map_err(|err| primitive_error(&target.id, err))?;
-            if mask.is_some() {
-                if sums.count < TEMPLATE_MASK_MIN_PIXELS {
-                    return Err(refuse(
-                        format!("/targets/{index}/mask"),
-                        format!(
-                            "template target '{}' mask selects {} pixels, fewer than {TEMPLATE_MASK_MIN_PIXELS}",
-                            target.id, sums.count
-                        ),
-                    ));
+            // Workflow #396 REC-5: a target that declares scales is searched only as resampled.
+            let search = crate::template_scales::search_size(pack, target);
+            for (position, factor) in crate::template_scales::searched_factors(target)
+                .into_iter()
+                .enumerate()
+            {
+                let ((width, height), sums) =
+                    recognition::TemplatePixelSums::of_png_scaled(&template_png, mask, factor)
+                        .map_err(|err| primitive_error(&target.id, err))?;
+                // Developer text naming a resampled template.
+                let scaled = if target.scales.is_some() {
+                    format!(" scaled by {factor} milli")
+                } else {
+                    String::new()
+                };
+                if target.scales.is_some() {
+                    let min_side = crate::template_scales::TEMPLATE_SCALED_MIN_SIDE;
+                    let pointer = format!("/targets/{index}/scales/factors_milli/{position}");
+                    if width < min_side || height < min_side {
+                        return Err(refuse(
+                            pointer,
+                            format!(
+                                "template target '{}'{scaled} is {width}x{height}, below {min_side} pixels a side",
+                                target.id
+                            ),
+                        ));
+                    }
+                    if let Some((search_width, search_height)) = search
+                        && (width > search_width || height > search_height)
+                    {
+                        return Err(refuse(
+                            pointer,
+                            format!(
+                                "template target '{}'{scaled} is {width}x{height}, larger than its search region {search_width}x{search_height}",
+                                target.id
+                            ),
+                        ));
+                    }
                 }
-                if !ccorr && !sums.has_variance() {
-                    return Err(refuse(
-                        format!("/targets/{index}/mask"),
-                        format!(
-                            "ccoeff_normed template target '{}' has no variance inside its mask",
+                if mask.is_some() {
+                    if sums.count < TEMPLATE_MASK_MIN_PIXELS {
+                        return Err(refuse(
+                            format!("/targets/{index}/mask"),
+                            format!(
+                                "template target '{}'{scaled} mask selects {} pixels, fewer than {TEMPLATE_MASK_MIN_PIXELS}",
+                                target.id, sums.count
+                            ),
+                        ));
+                    }
+                    if !ccorr && !sums.has_variance() {
+                        return Err(refuse(
+                            format!("/targets/{index}/mask"),
+                            format!(
+                                "ccoeff_normed template target '{}'{scaled} has no variance inside its mask",
+                                target.id
+                            ),
+                        ));
+                    }
+                }
+                if floored {
+                    let flat_score_milli = flat_score_milli(sums.flat_field_score());
+                    let floor_milli = flat_score_milli + TEMPLATE_FLAT_FIELD_MARGIN_MILLI;
+                    // The threshold and the floor compare as the evaluation compares scores
+                    // (f32); a declared threshold of three decimals equals its milli value
+                    // exactly.
+                    if threshold < floor_milli as f32 / 1000.0 {
+                        let pointer = if target.threshold.is_some() {
+                            format!("/targets/{index}/threshold")
+                        } else {
+                            "/defaults/template_threshold".to_string()
+                        };
+                        let scale = if target.scales.is_some() {
+                            format!(", scale_milli={factor}")
+                        } else {
+                            String::new()
+                        };
+                        below_floor.push(format!(
+                            "template target '{}' threshold {threshold} at {pointer} is below its flat-field floor: flat_score_milli={flat_score_milli}, floor_milli={floor_milli}{scale}",
                             target.id
-                        ),
-                    ));
-                }
-            }
-            if floored {
-                let flat_score_milli = flat_score_milli(sums.flat_field_score());
-                let floor_milli = flat_score_milli + TEMPLATE_FLAT_FIELD_MARGIN_MILLI;
-                // The threshold and the floor compare as the evaluation compares scores (f32);
-                // a declared threshold of three decimals equals its milli value exactly.
-                if threshold < floor_milli as f32 / 1000.0 {
-                    let pointer = if target.threshold.is_some() {
-                        format!("/targets/{index}/threshold")
-                    } else {
-                        "/defaults/template_threshold".to_string()
-                    };
-                    below_floor.push(format!(
-                        "template target '{}' threshold {threshold} at {pointer} is below its flat-field floor: flat_score_milli={flat_score_milli}, floor_milli={floor_milli}",
-                        target.id
-                    ));
-                    if first_pointer.is_none() {
-                        first_pointer = Some(pointer);
+                        ));
+                        if first_pointer.is_none() {
+                            first_pointer = Some(pointer);
+                        }
                     }
                 }
             }

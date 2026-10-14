@@ -11,11 +11,15 @@ use std::time::{Duration, Instant};
 
 mod codes;
 pub mod color_digest;
-// Workflow #396 REC-2; REC-7 masks.
+// Workflow #396 REC-2; REC-7 masks; REC-5 scaled templates.
 mod exact_score;
+// Workflow #396 REC-5: the resampling primitive (Workflow #392 reuses it).
+pub mod resample;
 
 pub use codes::ColorDigestErrorCode;
-pub use exact_score::{ExactScoreMap, RegionSpectra, score_milli};
+pub use exact_score::{
+    ExactScoreMap, RegionSpectra, ScaledMatch, ScaledScoreMaps, ScaledSelection, score_milli,
+};
 
 pub type RecognitionResult<T> = Result<T, RecognitionError>;
 
@@ -209,7 +213,19 @@ pub struct TemplatePixelSums {
 impl TemplatePixelSums {
     /// The sums of the template `template_png` decodes to.
     pub fn of_png(template_png: &[u8], mask: Option<TemplateMask>) -> RecognitionResult<Self> {
-        let template = decode_template(template_png)?;
+        Self::of_png_scaled(template_png, mask, resample::SCALE_IDENTITY_MILLI)
+            .map(|(_, sums)| sums)
+    }
+
+    /// Workflow #396 REC-5: the size of the template `template_png` decodes to once resampled
+    /// by `factor_milli` (1000: as declared), as every search resamples it, and the sums of its
+    /// scored pixels.
+    pub fn of_png_scaled(
+        template_png: &[u8],
+        mask: Option<TemplateMask>,
+        factor_milli: u32,
+    ) -> RecognitionResult<((u32, u32), Self)> {
+        let template = scaled_template(&decode_template(template_png)?, factor_milli)?;
         let mut sums = Self {
             count: 0,
             sum: 0,
@@ -223,7 +239,7 @@ impl TemplatePixelSums {
                 sums.squared_sum += value * value;
             }
         }
-        Ok(sums)
+        Ok((template.dimensions(), sums))
     }
 
     /// The `ccorr_normed` score of this template at any window of one constant, non-zero
@@ -573,14 +589,67 @@ impl Scene {
         Ok(TemplateSearch::Complete(accepted))
     }
 
+    /// Workflow #396 REC-5: the exact score maps of `template_png` resampled by each of
+    /// `factors_milli` (1000: as declared) with [`resample::resample`], in that order, over the
+    /// same `region` (the whole frame when `None`) and within one 5 s search limit read on
+    /// `clock`. Every resampled template must fit the region; the declared one need not when
+    /// 1000 is not among the factors. The region's transforms are kept in `spectra` and shared by
+    /// every factor; with `mask`, each resampled template scores the pixels it selects.
+    #[allow(clippy::too_many_arguments)]
+    pub fn exact_score_maps(
+        &self,
+        template_png: &[u8],
+        region: Option<Rect>,
+        metric: MatchMetric,
+        stage: TemplateMatchTimingStage,
+        mask: Option<TemplateMask>,
+        factors_milli: &[u32],
+        spectra: &mut RegionSpectra,
+        clock: &SearchClock,
+    ) -> RecognitionResult<ScaledScoreMaps> {
+        let declared = decode_template(template_png)?;
+        let (search, offset_x, offset_y) = self.search_region(region)?;
+        let deadline = TemplateMatchDeadline::with_clock(TEMPLATE_MATCH_TIMEOUT, clock.clone());
+        let mut maps = Vec::with_capacity(factors_milli.len());
+        for factor in factors_milli.iter().copied() {
+            let template = scaled_template(&declared, factor)?;
+            ensure_template_fits(&template, &search)?;
+            let engine = exact_score::choose_engine(&search, &template);
+            maps.push(
+                ExactScoreMap::compute(
+                    exact_score::ScoreSearch {
+                        search: &search,
+                        template: &template,
+                        metric,
+                        mask,
+                        offset_x,
+                        offset_y,
+                    },
+                    engine,
+                    Some(&mut *spectra),
+                    deadline.clone(),
+                    stage,
+                )?
+                .with_scale(factor),
+            );
+        }
+        ScaledScoreMaps::new(maps)
+    }
+
     fn prepare_template_match(
         &self,
         template_png: &[u8],
         region: Option<Rect>,
     ) -> RecognitionResult<(GrayImage, GrayImage, u32, u32)> {
         let template = decode_template(template_png)?;
+        let (search, offset_x, offset_y) = self.search_region(region)?;
+        ensure_template_fits(&template, &search)?;
+        Ok((search, template, offset_x, offset_y))
+    }
 
-        let (search, offset_x, offset_y) = match region {
+    /// The gray image of `region` (the whole frame when `None`) and its place in the frame.
+    fn search_region(&self, region: Option<Rect>) -> RecognitionResult<(GrayImage, u32, u32)> {
+        Ok(match region {
             Some(rect) => {
                 let bounds = validate_rect(rect, self.width(), self.height())?;
                 (
@@ -591,19 +660,7 @@ impl Scene {
                 )
             }
             None => (self.gray.clone(), 0, 0),
-        };
-
-        if template.width() > search.width() || template.height() > search.height() {
-            return Err(RecognitionError::fatal(format!(
-                "template {}x{} exceeds search area {}x{}",
-                template.width(),
-                template.height(),
-                search.width(),
-                search.height()
-            )));
-        }
-
-        Ok((search, template, offset_x, offset_y))
+        })
     }
 
     pub fn compare_color(&self, region: Rect, expected: [u8; 3]) -> RecognitionResult<ColorMatch> {
@@ -629,6 +686,38 @@ impl Scene {
 
         Ok(ColorMatch { distance, mean })
     }
+}
+
+/// A template no larger than the search area it is searched in.
+fn ensure_template_fits(template: &GrayImage, search: &GrayImage) -> RecognitionResult<()> {
+    if template.width() > search.width() || template.height() > search.height() {
+        return Err(RecognitionError::fatal(format!(
+            "template {}x{} exceeds search area {}x{}",
+            template.width(),
+            template.height(),
+            search.width(),
+            search.height()
+        )));
+    }
+    Ok(())
+}
+
+/// Workflow #396 REC-5: a template's gray image resampled by `factor_milli` to
+/// `round(width * factor / 1000)` by `round(height * factor / 1000)`; 1000 keeps it as declared.
+fn scaled_template(template: &GrayImage, factor_milli: u32) -> RecognitionResult<GrayImage> {
+    if factor_milli == resample::SCALE_IDENTITY_MILLI {
+        return Ok(template.clone());
+    }
+    let width = resample::scaled_length(template.width(), factor_milli);
+    let height = resample::scaled_length(template.height(), factor_milli);
+    if width == 0 || height == 0 {
+        return Err(RecognitionError::fatal(format!(
+            "template {}x{} scaled by {factor_milli} milli has no pixel",
+            template.width(),
+            template.height()
+        )));
+    }
+    resample::resample(template, width, height)
 }
 
 fn exact_metric_match(
@@ -1139,6 +1228,7 @@ impl IntegralImages {
     }
 }
 
+#[derive(Clone)]
 struct TemplateMatchDeadline {
     started: Instant,
     timeout: Duration,

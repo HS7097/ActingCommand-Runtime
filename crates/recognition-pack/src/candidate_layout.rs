@@ -968,6 +968,14 @@ impl SceneEvaluation<'_> {
                 target.id
             )));
         }
+        // Workflow #396 REC-5: nor does it resample a template (admission refuses one as an
+        // anchor).
+        if target.scales.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "instance anchor '{}' declares scales, which a repeated_anchor search does not search",
+                target.id
+            )));
+        }
         let relative = match &target.color_check {
             None => None,
             Some(check) => match &check.region {
@@ -1044,6 +1052,7 @@ impl SceneEvaluation<'_> {
                         raw_score: matched.raw_score,
                         score: matched.score,
                         threshold,
+                        scale_milli: None,
                     })
                     .collect(),
             ),
@@ -1205,6 +1214,7 @@ impl SceneEvaluation<'_> {
                         raw_score: row.raw_score,
                         score: row.normalized_score,
                         threshold: row.threshold,
+                        scale_milli: None,
                     }),
                     color: row.color,
                     ocr: None,

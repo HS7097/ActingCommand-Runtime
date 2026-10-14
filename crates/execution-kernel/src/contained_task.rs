@@ -66,6 +66,9 @@ mod text_locate_tests;
 mod timing;
 #[cfg(test)]
 mod unique_tests;
+// Workflow #396 REC-5.
+#[cfg(test)]
+mod scales_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
@@ -8339,6 +8342,7 @@ impl TaskClick {
                             ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
                         )
                     })?;
+                    let offset = scaled_click_offset(offset, target)?;
                     rect = ClickRect {
                         x: rect.x + offset.x,
                         y: rect.y + offset.y,
@@ -8346,6 +8350,7 @@ impl TaskClick {
                         height: offset.height,
                     };
                 } else if let Some(offset) = self.offset {
+                    let offset = scaled_click_offset(offset, target)?;
                     rect = ClickRect {
                         x: rect.x + offset.x,
                         y: rect.y + offset.y,
@@ -8438,6 +8443,29 @@ fn target_click_box(target: &TargetEvaluation) -> Result<(ClickRect, bool), Cont
         },
         true,
     ))
+}
+
+/// Workflow #396 REC-5: a click `offset` from a template that matched at a declared factor,
+/// scaled by it: each of the four numbers `(v * factor + 500) div 1000` with the sign of `v`, a
+/// width or height at least 1. A template without `scales`, or a located text, keeps the offset.
+fn scaled_click_offset(
+    offset: ClickRect,
+    target: &TargetEvaluation,
+) -> Result<ClickRect, ContainedTaskError> {
+    let Some(factor) = target.template.and_then(|template| template.scale_milli) else {
+        return Ok(offset);
+    };
+    let scale = |value: i32| {
+        actingcommand_recognition::resample::scale_signed(value, factor).ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
+        })
+    };
+    Ok(ClickRect {
+        x: scale(offset.x)?,
+        y: scale(offset.y)?,
+        width: scale(offset.width)?.max(1),
+        height: scale(offset.height)?.max(1),
+    })
 }
 
 fn target_kind_name(kind: TargetKind) -> &'static str {
@@ -13345,6 +13373,7 @@ mod retry_wiring_tests {
                 raw_score: 1.0,
                 score: 1.0,
                 threshold: 0.9,
+                scale_milli: None,
             }),
             color: None,
             ocr: None,
@@ -13492,6 +13521,7 @@ mod retry_wiring_tests {
                 raw_score: 1.0,
                 score: 1.0,
                 threshold: 0.9,
+                scale_milli: None,
             }),
             color: None,
             ocr: None,
