@@ -20,6 +20,13 @@
 // after the Abort the same cursor subscribes again and reads on from where it stood (m376 M5).
 // The `drain_timeout` row is not written: the drain deadline runs on the monotonic wall clock,
 // and its clock seam (H-1-rest I2) is not built yet (coordinator ruling 7 of wave 12).
+//
+// G11 (no inventory key; host key 79; req-basis-ha H-5 G11, coordinator 10-09 on
+// input-receipt-wait.md): the ledger writer stalls past a client's I/O budget, with the stall
+// gate (LED-I3 = HOST-I4) holding the commit. The typed client gets
+// `runtime_receipt_header_failed`, latches it and sends nothing more; the Runtime writes one
+// terminal for the request; a new connection that sends the same request (same id, same payload)
+// gets the receipt of that one terminal, with no second effect.
 
 use super::*;
 use crate::owner::ScriptedProcessProbe;
@@ -29,6 +36,7 @@ use actingcommand_contract::{
     SubscriptionCursor,
 };
 use actingcommand_host_metrics::{HostMetricsCode, ProcessProbe};
+use actingcommand_ledger::WriterStallGate;
 use actingcommand_ledger::owner_journal::RuntimeOwnerRecord;
 
 /// The previous owner's pid and the start its record names.
@@ -37,6 +45,8 @@ const OWNER_STARTED_AT_UNIX_MS: u64 = 1_700_000_000_000;
 /// The contract's pid-reuse tolerance: a process created later than this after the recorded
 /// start is another incarnation of the pid.
 const PID_REUSE_TOLERANCE_MS: u64 = 2_000;
+/// Bounds a broken run's waits only; every wait returns as soon as its condition holds.
+const GATE_WAIT: Duration = Duration::from_secs(120);
 
 /// A state root whose owner journal ends in the previous owner's active record with resources
 /// in use, as an owner that died mid-run leaves it.
@@ -304,5 +314,148 @@ fn gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_c
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(monitor);
     drop(installer);
+    host.close().expect("close host");
+}
+
+/// A client action, the request whose one effect is its own record.
+fn client_action(target: &str) -> ClientActionRecord {
+    ClientActionRecord::new("settings", target, ClientActionKind::Button, None, None)
+        .expect("client action")
+}
+
+/// Records one more client action on a new connection and returns its terminal's sequence. The
+/// ledger has one writer, which commits in order: once this receipt is back, every commit held
+/// before it has finished.
+fn write_barrier(host: &RuntimeHost) -> u64 {
+    let mut barrier = TestClient::connect(host);
+    let request = barrier.request(RuntimeOperation::RecordClientAction {
+        action: client_action("barrier"),
+    });
+    let receipt = barrier.send(&request);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    receipt.terminal().expect("the barrier's terminal").sequence
+}
+
+/// The ledger's `client.action` records, in order.
+fn client_actions(host: &RuntimeHost) -> Vec<PersistedEvent> {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::ClientAction),
+        ..EventQuery::default()
+    })
+    .expect("ledger events")
+}
+
+#[test]
+fn gate_a_stalled_writer_latches_the_typed_client_and_its_request_has_one_terminal() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    let client = actingcommand_runtime_client::RuntimeClient::connect(
+        actingcommand_runtime_client::RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(500)),
+    )
+    .expect("connect the typed client");
+    let gate = WriterStallGate::arm(root.path()).expect("arm the writer stall gate");
+
+    let Err(stalled) = client.record_client_action(client_action("first")) else {
+        panic!("the receipt arrived while the writer was stalled");
+    };
+    assert!(
+        gate.wait_held_commit(GATE_WAIT),
+        "no commit reached the gate"
+    );
+    assert_eq!(
+        stalled.code().as_str(),
+        "runtime_receipt_header_failed",
+        "{stalled}"
+    );
+    // Latched: the next call fails with the same error and sends nothing.
+    let Err(latched) = client.record_client_action(client_action("second")) else {
+        panic!("a latched client sent another request");
+    };
+    assert_eq!(latched.code(), stalled.code(), "{latched}");
+    gate.release();
+    drop(client);
+
+    // The Runtime wrote one record of the first request and none of the second: besides the
+    // barrier's own record, one client action.
+    let barrier = write_barrier(&host);
+    let actions = client_actions(&host);
+    let [action, last] = actions.as_slice() else {
+        panic!(
+            "the stalled action and the barrier, not {} records",
+            actions.len()
+        );
+    };
+    assert_eq!(last.sequence(), barrier);
+    assert!(action.sequence() < barrier);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+#[test]
+fn gate_the_same_request_on_a_new_connection_after_a_stall_gets_the_one_terminals_receipt() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    let mut first = TestClient::connect(&host);
+    let request = first.request(RuntimeOperation::RecordClientAction {
+        action: client_action("stalled"),
+    });
+    let gate = WriterStallGate::arm(root.path()).expect("arm the writer stall gate");
+
+    // The test client's own I/O budget runs out while the commit is held.
+    assert!(
+        first.send_result(&request).is_err(),
+        "the receipt arrived while the writer was stalled"
+    );
+    assert!(
+        gate.wait_held_commit(GATE_WAIT),
+        "no commit reached the gate"
+    );
+    gate.release();
+    drop(first);
+
+    let barrier = write_barrier(&host);
+
+    let mut second = TestClient::connect(&host);
+    let replayed = second.send(&request);
+    assert_eq!(
+        replayed.state(),
+        RuntimeReceiptState::Completed,
+        "{replayed:?}"
+    );
+    // The stalled request's one record, before the barrier's; the replay wrote nothing.
+    let actions = client_actions(&host);
+    let [action, last] = actions.as_slice() else {
+        panic!(
+            "the stalled action and the barrier, not {} records",
+            actions.len()
+        );
+    };
+    assert_eq!(last.sequence(), barrier);
+    let terminal = replayed.terminal().expect("the receipt's terminal");
+    assert_eq!(
+        (terminal.sequence, terminal.event_id),
+        (action.sequence(), *action.event_id())
+    );
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_request(
+            &host,
+            &IdentifierIssuer::new().expect("identifier issuer"),
+            ConnectionId::new(279).expect("query connection"),
+            request.request_id(),
+        ),
+        &[EventType::ClientAction],
+        &[EventType::ClientAction, EventType::CommandRejected],
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(second);
     host.close().expect("close host");
 }

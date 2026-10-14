@@ -753,3 +753,13 @@ tests = [
     "actingcommand-host-metrics::lib::gate_382_h5::gate_capacity_queries_each_volume_once_and_keeps_each_failure_with_its_targets",
 ]
 incident = ["#382 H-5 G20"]
+
+# The ledger writer stalled past a client's I/O budget: the typed client gets runtime_receipt_header_failed, latches it and sends nothing more; the Runtime writes one terminal for the request, and the same request (same id, same payload) on a new connection gets that terminal's receipt with no second effect (Workflow #382 H-5 G11; no inventory key, the next free key after this wave's reservations 74 to 78)
+[[gate]]
+key = "79"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_stalled_writer_latches_the_typed_client_and_its_request_has_one_terminal",
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_the_same_request_on_a_new_connection_after_a_stall_gets_the_one_terminals_receipt",
+]
+incident = ["#382 H-5 G11"]
