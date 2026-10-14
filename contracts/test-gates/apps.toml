@@ -284,5 +284,6 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::every_decision_has_its_code_category_and_exit",
     "actingcommand-actingctl::bin:actingctl::watchdog::tests::report_v2_of_a_live_owner_has_its_schema_outcome_and_attention",
     "actingcommand-actingctl::bin:actingctl::watchdog::state::tests::state_v2_round_trips_results_and_sets_a_v1_document_aside",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_387_d1b::rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top",
 ]
-incident = ["#378 A5"]
+incident = ["#378 A5", "#378 RK-1"]
