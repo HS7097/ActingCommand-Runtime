@@ -457,7 +457,13 @@ impl AgentDispatcherState {
     ) -> RuntimeHostResult<AgentSessionContext> {
         let wake = self.wake(status.wake_id())?;
         let mut projection = Vec::<ProjectedEvent>::new();
-        for sequence in [wake.data.trigger_sequence(), wake.event_sequence] {
+        // Workflow #383 register X3: a wake without a trigger sequence projects its own record.
+        for sequence in wake
+            .data
+            .trigger_sequence()
+            .into_iter()
+            .chain([wake.event_sequence])
+        {
             let mut events = ledger
                 .project(
                     EventQuery {
@@ -497,12 +503,17 @@ impl AgentDispatcherState {
                 if event.links().instance_id() != Some(&wake.instance_id())
                     || event.links().correlation_id() != Some(&wake.correlation_id())
                     || source_events.is_some_and(|events| {
-                        events.get(&wake.trigger_event_id()).is_none_or(|source| {
-                            source.sequence != wake.trigger_sequence()
-                                || source.timestamp_unix_ms != wake.requested_at_unix_ms()
-                                || source.instance_id != wake.instance_id()
-                                || source.kind != wake.kind()
-                        })
+                        // A replayed wake names its planning signal; its sequence is compared
+                        // while the record carries it (register X3).
+                        wake.trigger_event_id()
+                            .and_then(|trigger| events.get(&trigger))
+                            .is_none_or(|source| {
+                                wake.trigger_sequence()
+                                    .is_some_and(|sequence| sequence != source.sequence)
+                                    || source.timestamp_unix_ms != wake.requested_at_unix_ms()
+                                    || source.instance_id != wake.instance_id()
+                                    || source.kind != wake.kind()
+                            })
                     })
                 {
                     return Err(fatal(
@@ -519,14 +530,15 @@ impl AgentDispatcherState {
                     }
                     return Ok(());
                 }
-                if self.wakes_by_trigger.contains_key(&wake.trigger_event_id()) {
-                    return Err(fatal(
-                        HostCode::AgentWakeTriggerConflict,
-                        HostLocation::ApplyAgentEvent,
-                    ));
+                if let Some(trigger) = wake.trigger_event_id() {
+                    if self.wakes_by_trigger.contains_key(&trigger) {
+                        return Err(fatal(
+                            HostCode::AgentWakeTriggerConflict,
+                            HostLocation::ApplyAgentEvent,
+                        ));
+                    }
+                    self.wakes_by_trigger.insert(trigger, wake.wake_id());
                 }
-                self.wakes_by_trigger
-                    .insert(wake.trigger_event_id(), wake.wake_id());
                 self.wakes.insert(
                     wake.wake_id(),
                     AgentWakeRecord {

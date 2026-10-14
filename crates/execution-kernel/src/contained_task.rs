@@ -42,7 +42,7 @@ use actingcommand_recognition_pack::{
     RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -63,6 +63,9 @@ mod unique_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
+// Workflow #396 REC-6.
+#[cfg(test)]
+mod value_test_tests;
 pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -820,6 +823,26 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             prepared,
             ..Self::default()
         }
+    }
+
+    /// Workflow #396 REC-6: the OCR targets this run collects or reads (fields, the collection
+    /// mode's targets, readings), whose observation by a page gate is kept for the same frame.
+    fn remembered_ocr_targets(&self) -> HashSet<String> {
+        let fields = self
+            .fields
+            .into_iter()
+            .flat_map(|fields| fields.declaration.fields.iter())
+            .map(|field| field.target_id.clone());
+        let collected = self
+            .prepared
+            .into_iter()
+            .flat_map(|prepared| prepared.target_ids.iter().cloned());
+        let readings = self
+            .resource_readings
+            .into_iter()
+            .flatten()
+            .map(|reading| reading.target_id.clone());
+        fields.chain(collected).chain(readings).collect()
     }
 
     #[cfg(test)]
@@ -1804,6 +1827,8 @@ pub struct ResourceReadingValue {
 
 /// Reads the declarations bound to `page_label` from one already captured scene: one OCR
 /// evaluation of each declared target, the shared trim and parse, and the confidence floor.
+/// Workflow #396 REC-6: a target the page gate observed on this scene (`remembered`) takes that
+/// observation instead of calling the provider again.
 /// Each evaluation goes to `observer` before it is judged. Declarations of other pages are
 /// not read; an empty result means none is bound to this page. The first reading that does
 /// not hold fails with `contained_task_resource_reading_unresolved` and detail
@@ -1813,11 +1838,14 @@ pub fn evaluate_resource_readings(
     game: &str,
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
+    remembered: actingcommand_recognition_pack::RememberedOcrObservations,
     page_label: &str,
     declarations: &[ResourceReadingDeclaration],
     observer: &mut OcrEvaluationObserver<'_>,
 ) -> Result<Vec<ResourceReadingValue>, ContainedTaskError> {
-    let context = evaluator.scene_context(scene);
+    let context = evaluator
+        .scene_context(scene)
+        .with_remembered_observations(remembered);
     let mut readings = Vec::new();
     for declaration in declarations
         .iter()
@@ -2413,7 +2441,7 @@ impl PreparedContainedTask {
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
-        program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
+        program.validate_resource_reading_targets(&bundle, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -4309,6 +4337,7 @@ impl PreparedContainedTask {
             &self.control.game,
             &self.evaluator,
             &observation.scene,
+            observation.remembered_ocr.clone(),
             &observation.page_label,
             declarations,
             &mut |target, result| {
@@ -4864,7 +4893,10 @@ impl PreparedContainedTask {
             // observation's sampling timeout, not a recognition failure.
             let mut deadline_passed = false;
             let mut sampled_duration = Duration::ZERO;
-            let results = {
+            // Workflow #396 REC-6: a page gate's observation of a target this frame collects or
+            // reads is kept for that collection.
+            let remembered_targets = ocr_collector.remembered_ocr_targets();
+            let (results, remembered) = {
                 let mut recorder =
                     |target: &str,
                      result: &actingcommand_recognition_pack::RecognitionPackResult<
@@ -4918,13 +4950,16 @@ impl PreparedContainedTask {
                 if sampled {
                     context = context.with_sample_deadline(sample_deadline);
                 }
-                let context = context.with_sample_recorder(&mut recorder);
-                if let Some(pages) = candidates {
+                let context = context
+                    .with_sample_recorder(&mut recorder)
+                    .with_remembered_targets(&remembered_targets);
+                let results = if let Some(pages) = candidates {
                     self.detector
                         .evaluate_pages_outcomes_in_context(&context, pages)
                 } else {
                     self.detector.evaluate_all_outcomes_in_context(&context)
-                }
+                };
+                (results, context.take_remembered_observations())
             };
             if let Some(error) = recording_error {
                 return Err(ContainedTaskRunError::Boundary(error));
@@ -5043,7 +5078,10 @@ impl PreparedContainedTask {
             };
             // Preserve a recorder failure's original boundary type across the collector's task error API.
             let mut recording_failure = None;
-            let context = self.evaluator.scene_context(&scene);
+            let context = self
+                .evaluator
+                .scene_context(&scene)
+                .with_remembered_observations(remembered);
             let observation = ocr_collector.observe_in_context_recorded(
                 &self.control.game,
                 &context,
@@ -5062,6 +5100,7 @@ impl PreparedContainedTask {
             if let Some(error) = recording_failure {
                 return Err(ContainedTaskRunError::Boundary(error));
             }
+            let remembered_ocr = context.take_remembered_observations();
             if let Some((frame_index, observation)) = observation? {
                 runtime
                     .record(ContainedTaskTrace::PostAdmissionOcrObservation {
@@ -5082,6 +5121,7 @@ impl PreparedContainedTask {
                 frame_started,
                 sample_scenes,
                 sampling: sampled.then_some((timing, sample_deadline)),
+                remembered_ocr,
             }))
         })();
         let capture_ended = Instant::now();
@@ -5271,6 +5311,9 @@ struct PageObservation {
     frame_started: Instant,
     sample_scenes: Vec<Scene>,
     sampling: Option<(ContainedTaskTimingContext, Instant)>,
+    /// Workflow #396 REC-6: the page gate's observations of reading targets on this frame, which
+    /// the terminal frame's readings take instead of calling the provider again.
+    remembered_ocr: actingcommand_recognition_pack::RememberedOcrObservations,
 }
 
 fn sample_geometry_matches(
@@ -6266,7 +6309,7 @@ impl TaskProgram {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         validate_page_references(&control.game, &page_ids, detector)?;
-        validate_post_admission_ocr_page_gate(control, bundle, evaluator, &page_ids, &target_ids)?;
+        validate_post_admission_ocr_page_gate(control, bundle, &page_ids)?;
         for target_id in &target_ids {
             validate_post_admission_ocr_target(control, evaluator, target_id)?;
         }
@@ -6431,13 +6474,7 @@ impl TaskProgram {
             .map(|f| f.target_id.clone())
             .collect::<Vec<_>>();
         validate_page_references(&control.game, &declaration.page_ids, detector)?;
-        validate_post_admission_ocr_page_gate(
-            control,
-            bundle,
-            evaluator,
-            &declaration.page_ids,
-            &target_ids,
-        )?;
+        validate_post_admission_ocr_page_gate(control, bundle, &declaration.page_ids)?;
         for target in &target_ids {
             validate_post_admission_ocr_target(control, evaluator, target)?;
         }
@@ -6490,12 +6527,12 @@ impl TaskProgram {
         }))
     }
 
-    /// Before any input: each reading's target is one OCR target, used by no page gate and not
-    /// marked personal by the projection metadata. The page gate's own backends are not limited.
+    /// Before any input: each reading's target is one OCR target that does not locate text and is
+    /// not marked personal by the projection metadata. Workflow #396 REC-6: a page gate may name
+    /// it, and the gate's observation of the terminal frame is the reading's.
     fn validate_resource_reading_targets(
         &self,
         bundle: &LoadedBundle,
-        detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<(), ContainedTaskError> {
         for (index, reading) in self.resource_readings.iter().flatten().enumerate() {
@@ -6515,17 +6552,6 @@ impl TaskProgram {
             };
             if let Some(refusal) = reading_target_refusal(evaluator, &reading.target_id) {
                 return Err(invalid(refusal));
-            }
-            if detector.page_definitions().iter().any(|page| {
-                page.required
-                    .iter()
-                    .chain(page.any_of.iter().flatten())
-                    .chain(page.optional.iter())
-                    .chain(page.forbidden.iter())
-                    .flat_map(|target| page_target_evaluates(evaluator, target))
-                    .any(|target| target == reading.target_id)
-            }) {
-                return Err(invalid("target_in_page_gate"));
             }
             if bundle.projection_metadata().is_some_and(|metadata| {
                 metadata.target_privacy(&reading.target_id)
@@ -6592,9 +6618,7 @@ impl TaskProgram {
 fn validate_post_admission_ocr_page_gate(
     control: &TaskControl,
     bundle: &LoadedBundle,
-    evaluator: &RecognitionEvaluator,
     page_ids: &[String],
-    target_ids: &[String],
 ) -> Result<(), ContainedTaskError> {
     let pages_path = bundle.pages_path().ok_or_else(|| {
         ContainedTaskError::new(
@@ -6611,30 +6635,18 @@ fn validate_post_admission_ocr_page_gate(
             ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateInvalid.code(),
         )
     })?;
-    validate_post_admission_ocr_page_set(control, evaluator, &pages, page_ids, target_ids)
+    validate_post_admission_ocr_page_set(control, &pages, page_ids)
 }
 
+/// Each page that collects OCR resolves to exactly one page definition with a positive gate
+/// (`required` or `any_of`). Workflow #396 REC-6: the gate may use any recognition backend, and
+/// name the collected targets themselves; its text reads stay within the page recognition's
+/// budget, which the page detector's validation checks for the whole page set.
 fn validate_post_admission_ocr_page_set(
     control: &TaskControl,
-    evaluator: &RecognitionEvaluator,
     pages: &PageSet,
     page_ids: &[String],
-    target_ids: &[String],
 ) -> Result<(), ContainedTaskError> {
-    // A composite evaluates its members, so a member counts as referenced by the page.
-    if pages.pages.iter().any(|page| {
-        page.required
-            .iter()
-            .chain(page.any_of.iter().flatten())
-            .chain(page.optional.iter())
-            .chain(page.forbidden.iter())
-            .flat_map(|target| page_target_evaluates(evaluator, target))
-            .any(|target| target_ids.iter().any(|target_id| target == target_id))
-    }) {
-        return Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskPostAdmissionOcrTargetInPageGate.code(),
-        ));
-    }
     for page_id in page_ids {
         let matching = pages
             .pages
@@ -6646,71 +6658,14 @@ fn validate_post_admission_ocr_page_set(
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateInvalid.code(),
             ));
         };
-        let gate_targets = page
-            .required
-            .iter()
-            .chain(page.any_of.iter().flatten())
-            .chain(page.optional.iter())
-            .chain(page.forbidden.iter())
-            .collect::<Vec<_>>();
         let positive_count = page.required.len() + page.any_of.iter().map(Vec::len).sum::<usize>();
-        if positive_count == 0
-            || gate_targets
-                .iter()
-                .any(|target| !post_admission_ocr_gate_target_is_pixel(evaluator, target))
-        {
+        if positive_count == 0 {
             return Err(ContainedTaskError::new(
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrPageGateInvalid.code(),
             ));
         }
     }
     Ok(())
-}
-
-/// A page gating post-admission OCR is judged by pixel backends only: template, color and
-/// color digest targets, or a composite whose members are all of those.
-fn post_admission_ocr_gate_target_is_pixel(evaluator: &RecognitionEvaluator, target: &str) -> bool {
-    let is_pixel = |target: &str| {
-        matches!(
-            evaluator.target_kind(target),
-            Ok(TargetKind::Template | TargetKind::Color | TargetKind::ColorDigest)
-        )
-    };
-    match evaluator.target_kind(target) {
-        Ok(TargetKind::Composite) => composite_members(evaluator, target)
-            .is_some_and(|members| members.iter().all(|member| is_pixel(member.as_str()))),
-        _ => is_pixel(target),
-    }
-}
-
-/// A page target and, when it is a composite, every member it evaluates.
-fn page_target_evaluates<'a>(
-    evaluator: &'a RecognitionEvaluator,
-    target: &'a str,
-) -> impl Iterator<Item = &'a str> {
-    std::iter::once(target).chain(
-        composite_members(evaluator, target)
-            .into_iter()
-            .flatten()
-            .map(String::as_str),
-    )
-}
-
-/// The declared members of a composite target; `None` for any other target.
-fn composite_members<'a>(
-    evaluator: &'a RecognitionEvaluator,
-    target_id: &str,
-) -> Option<&'a [String]> {
-    evaluator
-        .pack()
-        .targets
-        .iter()
-        .find_map(|target| match target {
-            RecognitionTarget::Composite(composite) if composite.id == target_id => {
-                Some(composite.members.as_slice())
-            }
-            _ => None,
-        })
 }
 
 /// Targets of the matched page, or of the first candidate page when no page matched.
@@ -6789,7 +6744,7 @@ fn recognized_target_region(
                 height: roi.height,
             }),
         TargetKind::Nn => evaluation.nn.as_ref().map(|nn| nn.requested_region),
-        TargetKind::ClickOnly | TargetKind::Composite => None,
+        TargetKind::ClickOnly | TargetKind::Composite | TargetKind::ValueTest => None,
     };
     rect.map(|rect| {
         match (
@@ -6842,7 +6797,8 @@ fn declared_target_rect(
         RecognitionTarget::ClickOnly(_)
         | RecognitionTarget::Ocr(_)
         | RecognitionTarget::Nn(_)
-        | RecognitionTarget::Composite(_) => None,
+        | RecognitionTarget::Composite(_)
+        | RecognitionTarget::ValueTest(_) => None,
     })
 }
 
@@ -6855,6 +6811,7 @@ fn recognition_target_id(target: &RecognitionTarget) -> &str {
         RecognitionTarget::Nn(target) => &target.id,
         RecognitionTarget::ColorDigest(target) => &target.id,
         RecognitionTarget::Composite(target) => &target.id,
+        RecognitionTarget::ValueTest(target) => &target.id,
     }
 }
 
@@ -8260,6 +8217,7 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
         TargetKind::Nn => "nn",
         TargetKind::ColorDigest => "color_digest",
         TargetKind::Composite => "composite",
+        TargetKind::ValueTest => "value_test",
     }
 }
 
@@ -10380,11 +10338,6 @@ mod post_admission_ocr_tests {
     #[test]
     fn post_admission_ocr_two_page_gates_are_unique_positive_and_non_ocr() {
         let target_ids = ordered_target_ids();
-        let evaluator = RecognitionEvaluator::with_asset_resolver(
-            ordered_ocr_pack(&target_ids, 16),
-            Arc::new(FsAssetResolver::new(PathBuf::new())),
-        )
-        .expect("provider-free page-gate evaluator");
         let control: TaskControl = serde_json::from_value(json!({
             "schema_version": CONTROL_SCHEMA,
             "package_id": "neutral.test.task",
@@ -10413,16 +10366,14 @@ mod post_admission_ocr_tests {
             &PageDetector::new(good.clone()).unwrap(),
         )
         .expect("each page resolves exactly once");
-        validate_post_admission_ocr_page_set(&control, &evaluator, &good, &page_ids, &target_ids)
+        validate_post_admission_ocr_page_set(&control, &good, &page_ids)
             .expect("two positive color-only page gates");
 
         assert_eq!(
             validate_post_admission_ocr_page_set(
                 &control,
-                &evaluator,
                 &good,
                 &["operator".to_string(), "missing".to_string()],
-                &target_ids,
             )
             .expect_err("unknown page must fail closed")
             .code()
@@ -10435,16 +10386,10 @@ mod post_admission_ocr_tests {
             {"id": "neutral/operator_end", "required": ["page/operator_end"]}
         ]));
         assert_eq!(
-            validate_post_admission_ocr_page_set(
-                &control,
-                &evaluator,
-                &duplicate,
-                &page_ids,
-                &target_ids,
-            )
-            .expect_err("duplicate page resolution must fail closed")
-            .code()
-            .as_str(),
+            validate_post_admission_ocr_page_set(&control, &duplicate, &page_ids)
+                .expect_err("duplicate page resolution must fail closed")
+                .code()
+                .as_str(),
             "contained_task_post_admission_ocr_page_gate_invalid"
         );
         let empty_positive = pages(json!([
@@ -10452,35 +10397,20 @@ mod post_admission_ocr_tests {
             {"id": "neutral/operator_end", "required": ["page/operator_end"]}
         ]));
         assert_eq!(
-            validate_post_admission_ocr_page_set(
-                &control,
-                &evaluator,
-                &empty_positive,
-                &page_ids,
-                &target_ids,
-            )
-            .expect_err("each page requires a positive gate")
-            .code()
-            .as_str(),
+            validate_post_admission_ocr_page_set(&control, &empty_positive, &page_ids)
+                .expect_err("each page requires a positive gate")
+                .code()
+                .as_str(),
             "contained_task_post_admission_ocr_page_gate_invalid"
         );
+        // Workflow #396 REC-6: a page gate may use any recognition backend and name the
+        // collected OCR target itself.
         let ocr_gate = pages(json!([
             {"id": "neutral/operator", "required": ["fixture/ocr-00"]},
             {"id": "neutral/operator_end", "required": ["page/operator_end"]}
         ]));
-        assert_eq!(
-            validate_post_admission_ocr_page_set(
-                &control,
-                &evaluator,
-                &ocr_gate,
-                &page_ids,
-                &target_ids,
-            )
-            .expect_err("selected OCR target must stay out of every page gate")
-            .code()
-            .as_str(),
-            "contained_task_post_admission_ocr_target_in_page_gate"
-        );
+        validate_post_admission_ocr_page_set(&control, &ocr_gate, &page_ids)
+            .expect("an OCR page gate naming a collected target is admitted");
         #[derive(Debug)]
         struct GateIcon(Vec<u8>);
         impl actingcommand_recognition_pack::AssetResolver for GateIcon {
@@ -10511,8 +10441,7 @@ mod post_admission_ocr_tests {
         pack.targets.push(serde_json::from_value(json!({"type":"template","id":"icon","template_path":"icon.png","region":"full_frame","threshold":0.99})).unwrap());
         let relative =
             RecognitionEvaluator::with_asset_resolver(pack, Arc::new(GateIcon(icon))).unwrap();
-        validate_post_admission_ocr_page_set(&control, &relative, &good, &page_ids, &target_ids)
-            .unwrap();
+        validate_post_admission_ocr_page_set(&control, &good, &page_ids).unwrap();
         for id in &target_ids {
             validate_post_admission_ocr_target(&control, &relative, id).unwrap();
         }
@@ -11654,6 +11583,7 @@ mod retry_wiring_tests {
         let mut task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
+            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/home".to_owned(),
@@ -11748,6 +11678,7 @@ mod retry_wiring_tests {
         let task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
+            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/terminal".to_owned(),
@@ -11790,6 +11721,7 @@ mod retry_wiring_tests {
             .page_id = "any".to_owned();
         let observation = PageObservation {
             sample_scenes: Vec::new(),
+            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/terminal".to_owned(),
@@ -11828,6 +11760,7 @@ mod retry_wiring_tests {
         frame.pixels[3..6].fill(0);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
+            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/home".to_owned(),
@@ -12992,6 +12925,7 @@ mod retry_wiring_tests {
             sampling: None,
             message: "matched".to_string(),
             failure: None,
+            value_test: None,
             uniqueness: None,
         };
         for click in [
@@ -13138,6 +13072,7 @@ mod retry_wiring_tests {
             sampling: None,
             message: "matched".to_string(),
             failure: None,
+            value_test: None,
             uniqueness: None,
         };
         let target_center: TaskClick = serde_json::from_value(json!({

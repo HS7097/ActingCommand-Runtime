@@ -125,6 +125,7 @@ fn geometry_unavailable() -> TaskSemanticFact {
                 outcome: actingcommand_contract::outcome::Outcome::relayed("capture_failed"),
                 event_id: None,
             }),
+            display_map: None,
         }),
     }
 }
@@ -594,8 +595,8 @@ fn observational(ids: &IdentifierIssuer, owner: OwnerEpoch) -> Vec<Row> {
             RuntimePayloadDraft::adb_target_recovery(
                 owner,
                 AdbTargetRecovery {
-                    endpoint: LifecycleNativeDetail::new("127.0.0.1:5555", false),
-                    initial_error: LifecycleNativeDetail::new("device offline", false),
+                    endpoint: Some(LifecycleNativeDetail::new("127.0.0.1:5555", false)),
+                    initial_error: Some(LifecycleNativeDetail::new("device offline", false)),
                     path: AdbRecoveryPath::Connect,
                     budget_ms: 1_000,
                     steps: vec![AdbRecoveryStep {
@@ -604,10 +605,12 @@ fn observational(ids: &IdentifierIssuer, owner: OwnerEpoch) -> Vec<Row> {
                         elapsed_ms: 10,
                         command: None,
                         error: None,
+                        outcome: None,
                     }],
                     final_state: AdbTransportState::Device,
                     recovered: true,
                     dropped_count: 0,
+                    outcome: None,
                 },
             )
             .into(),

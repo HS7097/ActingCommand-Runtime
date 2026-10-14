@@ -13,14 +13,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::codes::{ActingledgerCode, ActingledgerLocation};
-use actingcommand_contract::DiagnosticCode;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::{DiagnosticCode, InstanceId, RunId};
 use actingcommand_ledger_forensics::{
-    ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
-    ForensicReplayRequest, ForensicReport, ForensicRequest, ForensicRuntimeFactsResult,
-    ForensicViewOptions, ForensicViewRequest, ForensicsCode, ForensicsLocation,
-    MAX_FORENSIC_EVENTS, TaskRecordsRequest,
+    ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicFramesRequest,
+    ForensicOutput, ForensicReplayRequest, ForensicReport, ForensicRequest,
+    ForensicRuntimeFactsResult, ForensicViewOptions, ForensicViewRequest, ForensicsCode,
+    ForensicsLocation, FrameClassFilter, LocalDate, MAX_FORENSIC_EVENTS, TaskRecordsRequest,
 };
 
 /// Cooperative deadline of each phase of one `facts` replay, from the phase's own start
@@ -34,6 +34,7 @@ enum CliRequest {
     Replay(ForensicReplayRequest),
     Signatures(actingcommand_ledger_forensics::ForensicSignatureRequest),
     Facts { state_root: PathBuf, position: u64 },
+    Frames(Box<ForensicFramesRequest>),
 }
 
 #[derive(Debug)]
@@ -98,6 +99,7 @@ where
         CliRequest::Signatures(request) => {
             actingcommand_ledger_forensics::replay_signatures_read_only(request)
         }
+        CliRequest::Frames(request) => actingcommand_ledger_forensics::list_frames(*request),
         CliRequest::Facts {
             state_root,
             position,
@@ -239,6 +241,10 @@ where
                 .map(|request| CliRequest::Views(Box::new(request)));
         }
         "signatures" => return parse_signatures(state_root, args).map(CliRequest::Signatures),
+        "frames" => {
+            return parse_frames(state_root, args)
+                .map(|request| CliRequest::Frames(Box::new(request)));
+        }
         "facts" => {
             require_utf8(args.next(), "--at")?;
             let position = parse_u64(&next_value(&mut args, "--at")?, "--at")?;
@@ -331,6 +337,77 @@ where
     }
     ForensicViewRequest::from_options(state_root, options)
         .map_err(|error| invalid_arguments(error.to_string()))
+}
+
+/// Workflow #375 R5e: `frames [--class <class>] [--before <YYYY-MM-DD>] [--instance <id>]
+/// [--run <id>] [--error-sequence <n>] [--paths]`; each option at most once.
+fn parse_frames<I>(state_root: PathBuf, mut args: I) -> Result<ForensicFramesRequest, CliError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let mut class = None;
+    let mut before = None;
+    let mut instance = None;
+    let mut run = None;
+    let mut error_sequence = None;
+    let mut paths = false;
+    while let Some(option) = args.next() {
+        let option = option
+            .into_string()
+            .map_err(|_| invalid_arguments("frames option is not valid UTF-8"))?;
+        if option == "--paths" {
+            if paths {
+                return Err(invalid_arguments("duplicate frames option --paths"));
+            }
+            paths = true;
+            continue;
+        }
+        let value = next_value(&mut args, &option)?;
+        match option.as_str() {
+            "--class" if class.is_none() => {
+                class = Some(
+                    FrameClassFilter::parse(&value)
+                        .ok_or_else(|| invalid_arguments("value for --class is not a class"))?,
+                );
+            }
+            "--before" if before.is_none() => {
+                before =
+                    Some(LocalDate::parse(&value).ok_or_else(|| {
+                        invalid_arguments("value for --before is not YYYY-MM-DD")
+                    })?);
+            }
+            "--instance" if instance.is_none() => {
+                instance = Some(
+                    serde_json::from_value::<InstanceId>(serde_json::Value::String(value))
+                        .map_err(|_| invalid_arguments("value for --instance is not an id"))?,
+                );
+            }
+            "--run" if run.is_none() => {
+                run = Some(
+                    serde_json::from_value::<RunId>(serde_json::Value::String(value))
+                        .map_err(|_| invalid_arguments("value for --run is not an id"))?,
+                );
+            }
+            "--error-sequence" if error_sequence.is_none() => {
+                error_sequence = Some(parse_u64(&value, "--error-sequence")?);
+            }
+            "--class" | "--before" | "--instance" | "--run" | "--error-sequence" => {
+                return Err(invalid_arguments(format!(
+                    "duplicate frames option {option}"
+                )));
+            }
+            _ => return Err(invalid_arguments(format!("unknown frames option {option}"))),
+        }
+    }
+    Ok(ForensicFramesRequest {
+        state_root,
+        class: class.unwrap_or(FrameClassFilter::All),
+        before,
+        instance,
+        run,
+        error_sequence,
+        paths,
+    })
 }
 
 fn parse_signatures<I>(

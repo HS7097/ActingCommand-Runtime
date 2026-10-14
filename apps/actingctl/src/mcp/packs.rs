@@ -80,7 +80,7 @@ fn encode<T: Serialize>(value: &T) -> Result<Value, ToolError> {
 }
 
 /// An answer that does not encode: `actingctl_output_failed`, caused by the encoder's failure.
-fn encode_failed(error: serde_json::Error) -> ToolError {
+pub(super) fn encode_failed(error: serde_json::Error) -> ToolError {
     ToolError::new("runtime", ActingctlCode::ActingctlOutputFailed).caused_by(
         Outcome::new(ContractCode::ForeignDataError)
             .raw_source(RawSource::Json)

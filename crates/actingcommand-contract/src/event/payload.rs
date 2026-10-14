@@ -29,6 +29,9 @@ mod observer;
 pub use observer::*;
 mod pacing;
 pub use pacing::*;
+// Workflow #383 SH-2 (register §1.25 X7): the display map of a task geometry observation.
+mod display_map;
+pub use display_map::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -1563,6 +1566,14 @@ impl RuntimeLifecycleFailureRecord {
         if self.adb_recovery.is_some() {
             sensitivity = Sensitivity::Sensitive;
         }
+        // Workflow #383 register X13: foreign text on the ADB evidence's outcome links.
+        if let Some(foreign) = self
+            .adb_recovery
+            .as_deref()
+            .and_then(AdbTargetRecovery::foreign_text_sensitivity)
+        {
+            sensitivity = sensitivity.max(foreign);
+        }
         if self
             .cause
             .as_ref()
@@ -1915,12 +1926,20 @@ pub enum RuntimeLifecyclePhase {
     },
     /// Workflow #383 (register L5): the stores and the decision memory were loaded from the
     /// tagged records and opened new lineages; the base record of each new lineage, one entry
-    /// per store.
+    /// per store. Register X4: `outcome` is the load's report (`ledger_tagged_state_loaded`,
+    /// with a `ledger_tagged_entries_dropped` link; AO-6), an info outcome.
     TaggedStateLoaded {
         stores: Vec<TaggedStateStore>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
     },
-    /// Workflow #383 (register L6): tagged records are enabled on this state root.
-    TaggedStateEnabled,
+    /// Workflow #383 (register L6): tagged records are enabled on this state root. Register
+    /// X4: `outcome` is the seeding's report (`ledger_tagged_state_seeded`; AO-5), an info
+    /// outcome.
+    TaggedStateEnabled {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<Outcome>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1944,14 +1963,15 @@ pub struct RuntimeLifecyclePayload {
 
 impl RuntimeLifecyclePayload {
     /// The outcome the phase carries (ledger revision 3): why a recovery rung failed or was
-    /// skipped, why a recovery ladder ended exhausted, or why an instance preparation failed.
+    /// skipped, why a recovery ladder ended exhausted, or why an instance preparation failed;
+    /// and the report of a tagged state load or seeding (Workflow #383 register X4).
     pub fn outcome(&self) -> Option<&Outcome> {
         match &self.phase {
             RuntimeLifecyclePhase::RecoveryRungFinished { outcome, .. }
             | RuntimeLifecyclePhase::RecoveryLadderFinished { outcome, .. }
-            | RuntimeLifecyclePhase::InstancePreparationFinished { outcome, .. } => {
-                outcome.as_ref()
-            }
+            | RuntimeLifecyclePhase::InstancePreparationFinished { outcome, .. }
+            | RuntimeLifecyclePhase::TaggedStateLoaded { outcome, .. }
+            | RuntimeLifecyclePhase::TaggedStateEnabled { outcome } => outcome.as_ref(),
             RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
             RuntimeLifecyclePhase::StandardPackRead { outcome } => Some(outcome),
             _ => None,
@@ -3401,11 +3421,44 @@ pub struct PolicyDispatchPayload {
     /// dispatch intent carries it.
     #[serde(default, skip_serializing_if = "is_false")]
     priority_locked: bool,
+    /// Workflow #383 register X14 (first writer #405): the random delay drawn for this
+    /// dispatch. Only a dispatch intent carries it; a drawn delay is not kept across a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    random_delay: Option<PolicyRandomDelay>,
     #[serde(skip_serializing_if = "Option::is_none")]
     admission: Option<Box<PolicyAdmissionRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rejection: Option<Box<PolicyDispatchRejection>>,
     audit: SanitizedAudit,
+}
+
+/// The longest random delay a configuration allows (`scheduling.random_delay.max_ms`, 24 h).
+pub const MAX_POLICY_RANDOM_DELAY_MS: u64 = 86_400_000;
+
+/// Workflow #383 register X14 (#405): a dispatched task waits a random delay after it is due
+/// before it starts. `delay_ms` is the delay applied, which a short allowed period may have
+/// shortened down to 0, so `planned_start_unix_ms` is `due_at_unix_ms + delay_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyRandomDelay {
+    pub due_at_unix_ms: u64,
+    pub planned_start_unix_ms: u64,
+    pub delay_ms: u64,
+}
+
+impl PolicyRandomDelay {
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.due_at_unix_ms == 0
+            || self.delay_ms > MAX_POLICY_RANDOM_DELAY_MS
+            || self.due_at_unix_ms.checked_add(self.delay_ms) != Some(self.planned_start_unix_ms)
+        {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidPolicyPayload,
+                "random_delay",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3506,6 +3559,11 @@ impl PolicyDispatchPayload {
     /// Reserved (register A4): the dispatched task's priority is locked.
     pub const fn priority_locked(&self) -> bool {
         self.priority_locked
+    }
+
+    /// Workflow #383 register X14: the random delay drawn for this dispatch intent.
+    pub const fn random_delay(&self) -> Option<&PolicyRandomDelay> {
+        self.random_delay.as_ref()
     }
 
     pub fn fact_snapshot_id(&self) -> &str {
@@ -3703,6 +3761,9 @@ pub enum TaskInterruptThen {
 pub enum TaskGeometryPhase {
     Initial,
     Recheck,
+    /// Workflow #383 register X8 (model 392 §7.3, §8.3; first writer DA-4): the display
+    /// changed during the run and the map was rebuilt; the trigger names the change.
+    Changed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3711,6 +3772,23 @@ pub enum TaskGeometryRecheckTrigger {
     RecognitionFailed,
     InputFailed,
     PageUnknown,
+    /// Register X8: the frame's extent changed (a `changed` observation's trigger).
+    ExtentChanged,
+    /// Register X8: the display's rotation changed (a `changed` observation's trigger).
+    RotationChanged,
+    /// Register X8: the safe area's insets changed (a `changed` observation's trigger).
+    InsetsChanged,
+}
+
+impl TaskGeometryRecheckTrigger {
+    /// Whether the trigger names a change of the display (register X8) rather than a failure
+    /// that asked for a recheck.
+    pub const fn is_display_change(self) -> bool {
+        matches!(
+            self,
+            Self::ExtentChanged | Self::RotationChanged | Self::InsetsChanged
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3771,6 +3849,10 @@ pub struct TaskGeometryObservation {
     pub trigger: Option<TaskGeometryRecheckTrigger>,
     pub original_failure: Option<TaskGeometryFailure>,
     pub unavailable: Option<TaskGeometryFailure>,
+    /// Workflow #383 register X7 (model 392 §8.3; first writer DA-4): the display map this
+    /// observation used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_map: Option<TaskGeometryDisplayMap>,
 }
 
 impl TaskGeometryObservation {
@@ -3872,11 +3954,23 @@ impl TaskGeometryObservation {
     }
 
     fn validate(&self) -> Result<(), SanitizationError> {
+        // Register X8: a recheck follows a failure, a change names what changed.
         let phase_valid = match self.phase {
             TaskGeometryPhase::Initial => {
                 self.frame.is_some() && self.trigger.is_none() && self.original_failure.is_none()
             }
-            TaskGeometryPhase::Recheck => self.trigger.is_some() && self.original_failure.is_some(),
+            TaskGeometryPhase::Recheck => {
+                self.trigger
+                    .is_some_and(|trigger| !trigger.is_display_change())
+                    && self.original_failure.is_some()
+            }
+            TaskGeometryPhase::Changed => {
+                self.frame.is_some()
+                    && self
+                        .trigger
+                        .is_some_and(TaskGeometryRecheckTrigger::is_display_change)
+                    && self.original_failure.is_none()
+            }
         };
         if !phase_valid {
             return Err(SanitizationError::new(
@@ -3889,6 +3983,9 @@ impl TaskGeometryObservation {
         }
         if let Some(observation) = &self.observation {
             validate_geometry_source(observation)?;
+        }
+        if let Some(map) = &self.display_map {
+            map.validate()?;
         }
         let conclusion_valid = if self.unavailable.is_some() {
             self.observation.is_none() && self.conclusion == TaskGeometryConclusion::Unavailable
@@ -3938,10 +4035,17 @@ fn same_geometry_source_binding(
 fn validate_geometry_source(
     observation: &crate::CaptureGeometryObservation,
 ) -> Result<(), SanitizationError> {
-    if let crate::CaptureGeometryObservation::Observed(geometry) = observation
-        && let crate::CaptureGeometrySource::AdbDefaultDisplay { serial, .. } = &geometry.source
-    {
-        validate_task_semantic_label(serial, "geometry_adb_source")?;
+    if let crate::CaptureGeometryObservation::Observed(geometry) = observation {
+        if let crate::CaptureGeometrySource::AdbDefaultDisplay { serial, .. } = &geometry.source {
+            validate_task_semantic_label(serial, "geometry_adb_source")?;
+        }
+        // Workflow #383 register X6: the insets leave a safe area inside the display.
+        if !geometry.safe_insets_fit_display() {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidSanitizedPayload,
+                "safe_insets",
+            ));
+        }
     }
     Ok(())
 }
@@ -4128,6 +4232,31 @@ pub enum TaskSemanticFact {
 #[serde(rename_all = "snake_case")]
 pub enum InputSamplingAlgorithm {
     Xorshift64UniformRectV1,
+    /// Reserved (Workflow #383 register X11; first writer #406 T-1): a truncated normal
+    /// draw around the box's centre, redrawn when it falls outside, the centre after the
+    /// last redraw.
+    CenterHotspotNormalV1,
+    /// Reserved (register X11; first writer #406 T-2): several centre-hotspot candidates, the
+    /// one unused for the longest time chosen.
+    CenterHotspotLeastRecentV1,
+}
+
+/// Reserved (Workflow #383 register X12; first writers #406 T-1, T-2): the configured values a
+/// centre-hotspot draw used, so a replay from the seed draws the same point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputSamplingParameters {
+    /// The standard deviation as a share of the box's width and height, in milli.
+    pub sigma_ratio_milli: u32,
+    /// How often a draw outside the box is drawn again before the centre is taken.
+    pub max_redraws: u32,
+    /// How many candidates a least-recent draw drew (T-2 only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_count: Option<u32>,
+    /// The index of the chosen candidate, in draw order (T-2 only): the choice also depends
+    /// on the in-memory landing history, which no record keeps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_candidate: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -4201,6 +4330,9 @@ pub struct InputSamplingEvidence {
     algorithm: InputSamplingAlgorithm,
     action_seed: u64,
     source_regions: Vec<InputSamplingRegion>,
+    /// Reserved (register X12): present exactly for a centre-hotspot algorithm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parameters: Option<InputSamplingParameters>,
 }
 
 impl InputSamplingEvidence {
@@ -4212,6 +4344,7 @@ impl InputSamplingEvidence {
             algorithm: InputSamplingAlgorithm::Xorshift64UniformRectV1,
             action_seed,
             source_regions,
+            parameters: None,
         };
         value.validate_regions()?;
         Ok(value)
@@ -4229,6 +4362,40 @@ impl InputSamplingEvidence {
         &self.source_regions
     }
 
+    /// Reserved (register X12): the values a centre-hotspot draw used.
+    pub const fn parameters(&self) -> Option<&InputSamplingParameters> {
+        self.parameters.as_ref()
+    }
+
+    /// Register X11, X12: the uniform draw has no parameters; a centre-hotspot draw names its
+    /// spread; a least-recent draw also names its candidates and the one it chose.
+    fn validate_parameters(&self) -> Result<(), SanitizationError> {
+        let valid = match (self.algorithm, &self.parameters) {
+            (InputSamplingAlgorithm::Xorshift64UniformRectV1, None) => true,
+            (InputSamplingAlgorithm::CenterHotspotNormalV1, Some(parameters)) => {
+                parameters.sigma_ratio_milli > 0
+                    && parameters.candidate_count.is_none()
+                    && parameters.chosen_candidate.is_none()
+            }
+            (InputSamplingAlgorithm::CenterHotspotLeastRecentV1, Some(parameters)) => {
+                parameters.sigma_ratio_milli > 0
+                    && matches!(
+                        (parameters.candidate_count, parameters.chosen_candidate),
+                        (Some(count), Some(chosen)) if chosen < count
+                    )
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(SanitizationError::new(
+                SanitizationCode::InvalidSanitizedPayload,
+                "sampling_parameters",
+            ))
+        }
+    }
+
     fn validate_regions(&self) -> Result<(), SanitizationError> {
         if !matches!(self.source_regions.len(), 1 | 2) {
             return Err(SanitizationError::new(
@@ -4244,6 +4411,7 @@ impl InputSamplingEvidence {
 
     fn validate(&self, action: &InputAction) -> Result<(), SanitizationError> {
         self.validate_regions()?;
+        self.validate_parameters()?;
         let valid = match (action, self.source_regions.as_slice()) {
             (InputAction::Tap { x, y }, [region]) => region.contains(*x, *y),
             (InputAction::Swipe { x1, y1, x2, y2, .. }, [from, to]) => {
@@ -6732,6 +6900,7 @@ impl PolicyDispatchDraft {
             approval_fact_ids: self.data.approval_fact_ids,
             urgency_milli: self.data.urgency_milli,
             priority_locked: false,
+            random_delay: None,
             admission: self.admission,
             rejection: self.rejection,
             audit: self.audit.sanitize(fingerprinter)?,
@@ -7739,6 +7908,16 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
             SanitizationCode::InvalidPolicyPayload,
             "priority_locked",
         ));
+    }
+    // Workflow #383 register X14: only a dispatch intent carries its random delay.
+    if let Some(delay) = &value.random_delay {
+        if !matches!(payload, PolicyPayload::DispatchIntent(_)) {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidPolicyPayload,
+                "random_delay",
+            ));
+        }
+        delay.validate()?;
     }
     validate_policy_dispatch_fields(
         &PolicyDispatchEventData {
@@ -11492,6 +11671,14 @@ impl EventPayload {
         {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
+        // Workflow #383 register X13: foreign text on the ADB evidence's outcome links.
+        if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self
+            && let Some(foreign) = value
+                .adb_recovery()
+                .and_then(AdbTargetRecovery::foreign_text_sensitivity)
+        {
+            sensitivity = sensitivity.max(foreign);
+        }
         if self.artifact_failure().is_some() {
             sensitivity = sensitivity.max(Sensitivity::Sensitive);
         }
@@ -11824,8 +12011,13 @@ impl EventPayload {
                 recovery.validate()?;
             }
             validate_recovery_ladder_phase(&value.phase)?;
-            if let RuntimeLifecyclePhase::TaggedStateLoaded { stores } = &value.phase {
+            if let RuntimeLifecyclePhase::TaggedStateLoaded { stores, .. } = &value.phase {
                 observer::validate_tagged_state_stores(stores)?;
+            }
+            if let RuntimeLifecyclePhase::TaggedStateLoaded { outcome, .. }
+            | RuntimeLifecyclePhase::TaggedStateEnabled { outcome } = &value.phase
+            {
+                observer::validate_tagged_state_outcome(outcome.as_ref())?;
             }
             if let RuntimeLifecyclePhase::FactSnapshotSetSkipped {
                 parts_found, parts, ..
@@ -11979,13 +12171,21 @@ impl EventPayload {
         if let Self::Input(InputPayload::Intent(intent)) = self {
             intent.validate()?;
         }
-        match self {
-            Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
-                return Err(SanitizationError::new(
-                    SanitizationCode::InvalidTaskSemanticPayload,
-                    "task_semantic_fact",
-                ));
+        // Register X8 (Workflow #383 SH-2): a stored geometry observation whose phase does not
+        // fit its frame, trigger and original failure is refused with the phase rule's own code,
+        // as the writer refuses it; any other refusal of a task semantic fact stays the generic one.
+        if let Self::Task(TaskPayload::Semantic(value)) = self
+            && let Err(error) = value.validate()
+        {
+            if error.code() == SanitizationCode::InvalidTaskGeometryPhase.code() {
+                return Err(error);
             }
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidTaskSemanticPayload,
+                "task_semantic_fact",
+            ));
+        }
+        match self {
             Self::Ledger(LedgerPayload::Recovered(recovery))
                 if recovery.segment_index == Some(0) =>
             {

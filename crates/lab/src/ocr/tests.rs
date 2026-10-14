@@ -328,6 +328,64 @@ fn lab3_an_ocr_target_without_a_model_is_refused_with_its_code_never_skipped() {
         .expect("OCR is available");
 }
 
+// Workflow #396 REC-6: a value test reads OCR targets, so without an OCR model a command that
+// evaluates it, directly or as a member of a check, refuses under `lab_ocr_unavailable` naming the
+// OCR target its side reads, as LAB-3 refuses an OCR target; page detection the same.
+#[test]
+fn rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable() {
+    let pack = load_pack_from_json_str(
+        &json!({
+            "schema_version": "0.7",
+            "coordinate_space": {"width": FRAME_WIDTH, "height": FRAME_HEIGHT},
+            "targets": [
+                {"type": "color", "id": "label/marker", "region": {"x": 0, "y": 0, "width": 4, "height": 4},
+                 "expected": [255, 0, 0]},
+                {"type": "ocr", "id": "label/count", "region": {"x": 8, "y": 8, "width": 32, "height": 16},
+                 "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact", "expected": ["unused"],
+                 "case_sensitive": false, "minimum_confidence": 0.8, "model_ref": "neutral-ocr",
+                 "model_sha256": MODEL_SHA256},
+                {"type": "value_test", "id": "check/count",
+                 "left": {"target_id": "label/count", "trim": "whitespace_v1",
+                          "value": {"type": "unsigned_integer", "min": 0, "max": 99}},
+                 "op": "gt", "right": {"const": 0}},
+                {"type": "composite", "id": "check/ready", "mode": "all_of",
+                 "members": ["label/marker", "check/count"]}
+            ]
+        })
+        .to_string(),
+    )
+    .expect("the neutral pack");
+    let unavailable = LabOcr::from_installation(None);
+
+    for requested in ["check/count", "check/ready"] {
+        let error = unavailable
+            .require(&pack, [requested])
+            .expect_err("a value test needs the OCR model");
+        assert_eq!(error.code, "lab_ocr_unavailable", "{requested}");
+        assert_eq!(error.class, LabErrorClass::SafetyBlocked);
+        assert_eq!(error.blocked_by, vec!["ocr_model".to_string()]);
+        let outcome = &error.details.as_ref().expect("the outcome")["outcome"];
+        assert_eq!(outcome["code"], "lab_ocr_unavailable");
+        assert_eq!(outcome["values"]["target_id"], "label/count", "{requested}");
+    }
+    let pages = json!({
+        "schema_version": "0.3",
+        "pages": [{"id": "neutral/count", "required": ["label/marker", "check/count"],
+                   "optional": [], "forbidden": []}]
+    });
+    let detector =
+        PageDetector::new(load_page_set_from_json_str(&pages.to_string()).expect("pages"))
+            .expect("detector");
+    let error = unavailable
+        .require_pages(&pack, &detector)
+        .expect_err("page detection evaluates the value test");
+    assert_eq!(error.code, "lab_ocr_unavailable");
+
+    LabOcr::with_provider(Arc::new(ScriptedOcr))
+        .require(&pack, ["check/count", "check/ready"])
+        .expect("OCR is available");
+}
+
 fn frame(red: bool) -> LoadedFrame {
     let pixel = if red { [255, 0, 0] } else { [0, 0, 255] };
     let pixels = pixel.repeat((FRAME_WIDTH * FRAME_HEIGHT) as usize);

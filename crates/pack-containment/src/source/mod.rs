@@ -576,13 +576,12 @@ impl OperationParser {
         self.validate_error_page_anchor_definitions()?;
         let declared_anchor_ids = self.declared_anchor_ids();
         let page_rule_ids = self.explicit_positive_page_ids();
-        let page_gate_targets = self.page_rule_target_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
             if let Err(error) = validate_phases_bundle(bundle) {
                 errors.push(error.message);
             }
-            validate_resource_readings_bundle(bundle, &self.game, &page_gate_targets, &mut errors);
+            validate_resource_readings_bundle(bundle, &self.game, &mut errors);
             if let Err(error) = validate_task_timeout_bundle(bundle) {
                 errors.push(error.message);
             }
@@ -1831,63 +1830,6 @@ impl OperationParser {
             .collect()
     }
 
-    /// Every target a `page_rules` entry names in `required`, `optional`, `forbidden` or
-    /// `any_of`: the page gates of the generated pages besides their template anchors. A check
-    /// a page gate names evaluates its members, so its members are page-gate targets too.
-    fn page_rule_target_ids(&self) -> BTreeSet<String> {
-        let mut targets = self.direct_page_rule_target_ids();
-        let members = self
-            .bundles
-            .iter()
-            .flat_map(|bundle| array_field(&bundle.data, "checks"))
-            .filter(|check| {
-                check
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| targets.contains(id))
-            })
-            .flat_map(|check| {
-                array_field(check, "all_of")
-                    .iter()
-                    .chain(array_field(check, "any_of"))
-            })
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        targets.extend(members);
-        targets
-    }
-
-    fn direct_page_rule_target_ids(&self) -> BTreeSet<String> {
-        let mut targets = BTreeSet::new();
-        for rule in self
-            .bundles
-            .iter()
-            .filter_map(|bundle| bundle.data.get("page_rules").and_then(Value::as_object))
-            .flat_map(|rules| rules.values())
-        {
-            for field in ["required", "optional", "forbidden"] {
-                targets.extend(
-                    array_field(rule, field)
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned),
-                );
-            }
-            for group in array_field(rule, "any_of") {
-                targets.extend(
-                    group
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned),
-                );
-            }
-        }
-        targets
-    }
-
     fn validate_error_page_anchor_definitions(&self) -> CliOutcome<()> {
         let page_rule_ids = self.explicit_positive_page_ids();
         let mut anchor_counts = HashMap::<String, usize>::new();
@@ -2509,9 +2451,23 @@ fn color_digest_target(color_probe: &Value, coordinate_space: &Value) -> CliOutc
     Ok(Value::Object(target))
 }
 
-/// The `composite` target of one `checks` entry and the field that holds its members.
+/// The `composite` target of one `checks` entry and the field that holds its members, or
+/// (Workflow #396 REC-6) the `value_test` target of an entry that declares `value_test`, whose
+/// `left`, `op` and `right` pass to the pack target as declared.
 fn composite_target(check: &Value) -> CliOutcome<(&'static str, Value)> {
     let id = required_string(check, "id")?;
+    if let Some(test) = check.get("value_test") {
+        let mut target = ordered_map([
+            ("type", Value::String("value_test".to_string())),
+            ("id", Value::String(id)),
+        ]);
+        for field in ["left", "op", "right"] {
+            if let Some(value) = test.get(field) {
+                target.insert(field.to_string(), value.clone());
+            }
+        }
+        return Ok(("value_test", Value::Object(target)));
+    }
     let (mode, members) = match (check.get("all_of"), check.get("any_of")) {
         (Some(members), None) => ("all_of", members),
         (None, Some(members)) => ("any_of", members),
@@ -2559,7 +2515,8 @@ fn add_declared_target(
 }
 
 /// Every member of every check is an existing template, color, color digest, OCR or NN
-/// target of the pack; a check never nests another check. A refusal names the member entry.
+/// target or (Workflow #396 REC-6) value test of the pack; a check never nests another
+/// composite check. A refusal names the member entry.
 fn validate_check_members(targets: &HashMap<String, Value>, bundles: &[Bundle]) -> CliOutcome<()> {
     for bundle in bundles {
         for (index, check) in array_field(&bundle.data, "checks").iter().enumerate() {
@@ -2571,7 +2528,9 @@ fn validate_check_members(targets: &HashMap<String, Value>, bundles: &[Bundle]) 
                     .and_then(|target| target.get("type"))
                     .and_then(Value::as_str);
                 let detail = match kind {
-                    Some("template" | "color" | "color_digest" | "ocr" | "nn") => continue,
+                    Some("template" | "color" | "color_digest" | "ocr" | "nn" | "value_test") => {
+                        continue;
+                    }
                     Some("composite") => "a check member cannot be another check".to_string(),
                     Some(kind) => format!("a check member cannot be a {kind} target"),
                     None => format!("check member {member} is not a recognition target"),
@@ -2856,7 +2815,7 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
         || targets.iter().any(|target| {
             matches!(
                 target.get("type").and_then(Value::as_str),
-                Some("composite" | "color_digest")
+                Some("composite" | "color_digest" | "value_test")
             ) || target.get("max_distance").is_some()
                 || target.pointer("/color_check/max_distance").is_some()
                 || target.get("locate").is_some()
@@ -3120,13 +3079,9 @@ fn entry_page_ids(bundle: &Bundle) -> Vec<&str> {
 /// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
 /// declaration gate has already checked each entry; this adds the pages and targets it names:
 /// a reading's page is a `scheduling_outcome` terminal page and its target is one of the task's
-/// own `ocr_targets`, used by no page gate. Each error names the entry's field pointer.
-fn validate_resource_readings_bundle(
-    bundle: &Bundle,
-    game: &str,
-    page_gate_targets: &BTreeSet<String>,
-    errors: &mut Vec<String>,
-) {
+/// own `ocr_targets`, which a page gate may also name (Workflow #396 REC-6). Each error names
+/// the entry's field pointer.
+fn validate_resource_readings_bundle(bundle: &Bundle, game: &str, errors: &mut Vec<String>) {
     let Some(value) = bundle.data.get("resource_readings") else {
         return;
     };
@@ -3174,12 +3129,6 @@ fn validate_resource_readings_bundle(
         if declared != 1 {
             errors.push(format!(
                 "{}: /resource_readings/{index}/target_id '{}' is not one declared ocr_targets entry",
-                path.display(),
-                reading.target_id
-            ));
-        } else if page_gate_targets.contains(&reading.target_id) {
-            errors.push(format!(
-                "{}: /resource_readings/{index}/target_id '{}' is used by a page gate",
                 path.display(),
                 reading.target_id
             ));
@@ -4745,11 +4694,15 @@ fn validate_parsed_guard_references(
                 "operation '{operation_id}' guard.color_probe points to non-color target '{target_id}'"
             ));
         }
+        // Workflow #396 REC-6: a value test guards the input as a check does.
         if guard.get("check").and_then(Value::as_str).is_some()
-            && target.get("type").and_then(Value::as_str) != Some("composite")
+            && !matches!(
+                target.get("type").and_then(Value::as_str),
+                Some("composite" | "value_test")
+            )
         {
             errors.push(format!(
-                "operation '{operation_id}' guard.check points to non-composite target '{target_id}'"
+                "operation '{operation_id}' guard.check points to target '{target_id}', which is no check"
             ));
         }
         // Workflow #396 REC-1: `verify_text` names the guard target, a locate OCR target.

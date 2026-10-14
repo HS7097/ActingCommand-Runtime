@@ -127,6 +127,8 @@ mod gate_383_sh1;
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
 mod gate_387_d1c;
+// Workflow #389 MCP-4, register W2: the instance fact read records nothing.
+mod gate_389_mcp4;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;

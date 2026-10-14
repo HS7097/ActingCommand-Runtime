@@ -242,6 +242,8 @@ actingcommand_contract::outcome_locations! {
         RuntimeHealth => "runtime_health",
         RuntimeStatus => "runtime_status",
         RuntimeFactSnapshot => "runtime_fact_snapshot",
+        // Workflow #389 MCP-4: the instance fact read (register W2).
+        RuntimeInstanceFactSnapshot => "runtime_instance_fact_snapshot",
         RuntimeProjectInterface => "runtime_project_interface",
         RuntimeMonitorStatus => "runtime_monitor_status",
         RuntimeMonitorConfigure => "runtime_monitor_configure",

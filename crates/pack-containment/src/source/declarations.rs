@@ -1277,16 +1277,58 @@ impl Declaration<'_> {
     }
 
     /// The `checks` family (`contracts/selection-graph.md`, section Checks): each check names
-    /// 2..=8 distinct member targets under exactly one of `all_of` and `any_of`. Whether each
-    /// member exists, and is not itself a check, is checked against the derived pack.
+    /// 2..=8 distinct member targets under exactly one of `all_of` and `any_of`, or (task
+    /// schema `0.9`, Workflow #396 REC-6) declares one `value_test`. Whether each member exists,
+    /// and is not itself a check, is checked against the derived pack; a value test's sides and
+    /// values are checked with the derived pack's declaration rules.
     fn checks(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         for (index, check) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
-            let object = self.object(check, &pointer, &["id", "all_of", "any_of"])?;
+            let object = self.object(check, &pointer, &["id", "all_of", "any_of", "value_test"])?;
             self.string(
                 self.required(object, &pointer, "id")?,
                 &child(&pointer, "id"),
             )?;
+            if object.contains_key("value_test") {
+                let value_test_pointer = child(&pointer, "value_test");
+                if self.schema != Some("0.9") {
+                    return Err(self.error(
+                        &value_test_pointer,
+                        ResourceDeclarationReason::UnconsumedField,
+                    ));
+                }
+                if let Some(field) = ["all_of", "any_of"]
+                    .into_iter()
+                    .find(|field| object.contains_key(*field))
+                {
+                    return Err(self.error(
+                        &child(&pointer, field),
+                        ResourceDeclarationReason::UnconsumedField,
+                    ));
+                }
+                let test = self.object(
+                    &object["value_test"],
+                    &value_test_pointer,
+                    &["left", "op", "right"],
+                )?;
+                self.object(
+                    self.required(test, &value_test_pointer, "left")?,
+                    &child(&value_test_pointer, "left"),
+                    &["target_id", "trim", "value", "part"],
+                )?;
+                self.string(
+                    self.required(test, &value_test_pointer, "op")?,
+                    &child(&value_test_pointer, "op"),
+                )?;
+                if let Some(right) = test.get("right") {
+                    self.object(
+                        right,
+                        &child(&value_test_pointer, "right"),
+                        &["const", "target_id", "trim", "value", "part", "mul", "add"],
+                    )?;
+                }
+                continue;
+            }
             let mode = match (object.contains_key("all_of"), object.contains_key("any_of")) {
                 (true, false) => "all_of",
                 (false, true) => "any_of",

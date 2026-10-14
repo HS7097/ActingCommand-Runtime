@@ -30,6 +30,10 @@ actingcommand_contract::outcome_codes! {
         // target's `failure`; a search past its limit is an evaluation error.
         TargetMatchNotUnique => "target_match_not_unique": error / pack_logic_mismatch,
         TargetMatchSearchIncomplete => "target_match_search_incomplete": error / budget_or_permission,
+        // Workflow #396 REC-6: a value test that did not pass carries one of these as its
+        // `failure`.
+        ValueTestUnresolved => "value_test_unresolved": error / pack_logic_mismatch,
+        ValueTestNotMet => "value_test_not_met": error / pack_logic_mismatch,
         /// Error. A recognition pack refused its package or a target declaration
         /// (`RecognitionPackErrorCode::InvalidPackage`).
         /// Workflow #378 A2-P.
@@ -81,6 +85,9 @@ actingcommand_contract::outcome_locations! {
         // Workflow #396 REC-7.
         /// Scoring a masked template target that declares no `unique` on its exact score map.
         TargetMatchExact => "target_match_exact",
+        // Workflow #396 REC-6.
+        /// Reading, parsing and comparing the sides of a value test.
+        ValueTestEvaluate => "value_test_evaluate",
     }
 }
 
@@ -103,5 +110,56 @@ actingcommand_contract::outcome_vocabulary! {
         Template => "template",
         /// A locate OCR target: text blocks and their confidence.
         Ocr => "ocr",
+    }
+}
+
+// Workflow #396 REC-6.
+actingcommand_contract::outcome_vocabulary! {
+    /// Which side of a value test could not be read (`value_side`).
+    pub enum ValueSide: "value_side" {
+        /// The left side.
+        Left => "left",
+        /// The right side, another read value.
+        Right => "right",
+    }
+}
+
+// Workflow #396 REC-6.
+actingcommand_contract::outcome_vocabulary! {
+    /// Why one side of a value test could not be read (`value_problem`).
+    pub enum ValueProblem: "value_problem" {
+        /// The trimmed text is empty.
+        Empty => "empty",
+        /// The text is not in the declared format.
+        Invalid => "invalid",
+        /// The number does not fit 64 bits.
+        Overflow => "overflow",
+        /// The value lies outside the declared `min..=max`.
+        OutOfRange => "out_of_range",
+        /// The OCR target's region could not be resolved on the frame.
+        RegionUnresolved => "region_unresolved",
+        /// The read's confidence is missing or below the OCR target's `minimum_confidence`.
+        LowConfidence => "low_confidence",
+    }
+}
+
+// Workflow #396 REC-6.
+actingcommand_contract::outcome_vocabulary! {
+    /// The comparison of a value test (`value_op`).
+    pub enum ValueOp: "value_op" {
+        /// Equal.
+        Eq => "eq",
+        /// Not equal.
+        Ne => "ne",
+        /// Less than.
+        Lt => "lt",
+        /// Less than or equal.
+        Le => "le",
+        /// Greater than.
+        Gt => "gt",
+        /// Greater than or equal.
+        Ge => "ge",
+        /// The left side reads in its format.
+        Parses => "parses",
     }
 }

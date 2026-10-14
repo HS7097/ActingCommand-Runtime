@@ -11,11 +11,11 @@ use actingcommand_contract::{
     ArtifactEvictionDisposition, ArtifactEvictionIntentRecord, ArtifactEvictionProof, ArtifactId,
     ArtifactKind, ArtifactPinReason, ArtifactRetentionFact, ArtifactRetentionIdentity,
     CapturePayload, CorrelationId, EffectDisposition, EventId, EventPayload, EventSeverity,
-    EventSource, EventType, FRAME_RETENTION_BACKTRACE, FactContent, FactPayload,
-    FailedRunRetentionBasis, FrameId, InstanceId, LeaseId, LeasePayload, OwnerEpoch,
-    PolicyExecutionOutcome, PolicyPayload, ProjectedArtifactReference, RETENTION_ROUND_OBJECTS,
-    RequestId, RunId, RuntimeLifecyclePhase, RuntimePayload, RuntimeStateFact, TaskOutcome,
-    TaskPayload, TaskSemanticFact, TerminalEvent, VerifiedArtifactReference,
+    EventSource, EventType, FRAME_RETENTION_BACKTRACE, FactContent, FactPayload, FrameId,
+    InstanceId, LeaseId, LeasePayload, OwnerEpoch, PolicyExecutionOutcome, PolicyPayload,
+    ProjectedArtifactReference, RETENTION_ROUND_OBJECTS, RequestId, RunId, RuntimeLifecyclePhase,
+    RuntimePayload, RuntimeStateFact, TaskOutcome, TaskPayload, TaskSemanticFact, TerminalEvent,
+    VerifiedArtifactReference,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod material;
@@ -267,7 +267,6 @@ impl RetentionIndex {
         reference: &ProjectedArtifactReference,
         events: &[E],
         indexes: &EventIndexes,
-        now: u64,
     ) -> GlobalLedgerResult<Option<ArtifactEvictionIntentRecord>> {
         let Some(object) = self.objects.get(&reference.artifact_id) else {
             return Ok(None);
@@ -323,13 +322,12 @@ impl RetentionIndex {
             identity: identity.clone(),
             verified: *verified,
             success: Some(success),
-            failed_run: None,
             close: *close,
             capture_summary: object.summary,
             settlement: closure.settlement,
             through_sequence: self.through_sequence,
         };
-        self.validate_intent(object, &intent, events, indexes, now, true)?;
+        self.validate_intent(object, &intent, events, indexes, true)?;
         Ok(Some(intent))
     }
 
@@ -629,14 +627,7 @@ impl RetentionIndex {
                 if !guarded_intent {
                     return Err(invalid(LedgerCode::ArtifactEvictionGuardRequired.code()));
                 }
-                self.validate_intent(
-                    object,
-                    intent,
-                    events,
-                    indexes,
-                    event.timestamp_unix_ms(),
-                    admission,
-                )?;
+                self.validate_intent(object, intent, events, indexes, admission)?;
             }
             ArtifactRetentionFact::EvictionOutcome(outcome) => {
                 if !guarded_intent {
@@ -656,18 +647,17 @@ impl RetentionIndex {
 
     /// Workflow #332 H2f Q3: replay (`admission` false) checks only that the sealed intent is
     /// authentic and consistent with the index: its prefix, its object's identity and verified
-    /// source, no earlier proof, its evaluation time, and that every source it names resolves
-    /// in the preceding prefix. Eligibility (protection, pins, Lab, close, success, summary,
-    /// settlement) is decided once, by the admitting writer; a reader never re-judges it. Since
-    /// Workflow #382 L-5 the writer admits no failed-run (K/T) intent; replay of one already in a
-    /// ledger keeps the checks above.
+    /// source, no earlier proof, and that every source it names resolves in the preceding
+    /// prefix. Eligibility (protection, pins, Lab, close, success, summary, settlement) is
+    /// decided once, by the admitting writer; a reader never re-judges it. Workflow #382 L-5b:
+    /// an intent names its original success; the failed-run (K/T) evidence is retired, so a
+    /// stored intent that still carries it does not decode and never reaches this check.
     fn validate_intent<E: LedgerEventRead>(
         &self,
         object: &RetainedObject,
         intent: &ArtifactEvictionIntentRecord,
         events: &[E],
         indexes: &EventIndexes,
-        now: u64,
         admission: bool,
     ) -> GlobalLedgerResult<()> {
         if intent.through_sequence != self.through_sequence
@@ -682,27 +672,10 @@ impl RetentionIndex {
             return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
         }
         let verified = source(events, &intent.verified)?;
-        let terminal_ref = match (&intent.success, &intent.failed_run) {
-            (Some(success), None) => success,
-            (None, Some(failed)) => {
-                if admission {
-                    return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
-                }
-                if failed.evaluated_at_unix_ms != now {
-                    return Err(invalid(
-                        LedgerCode::ArtifactEvictionFailedRunBasisConflict.code(),
-                    ));
-                }
-                if let FailedRunRetentionBasis::SuccessorSuccesses { terminals } = &failed.basis {
-                    for terminal in terminals {
-                        source(events, terminal)?;
-                    }
-                }
-                &failed.terminal
-            }
-            _ => return Err(invalid(LedgerCode::ArtifactEvictionTerminalMissing.code())),
+        let Some(success) = &intent.success else {
+            return Err(invalid(LedgerCode::ArtifactEvictionTerminalMissing.code()));
         };
-        let success = source(events, terminal_ref)?;
+        let success = source(events, success)?;
         let close = source(events, &intent.close)?;
         let summary = intent
             .capture_summary
@@ -1537,9 +1510,9 @@ impl<B: super::storage::DurableStorage> super::storage::EventStore<B> {
                 false,
             )?);
         }
-        let Some(intent) =
-            self.retention
-                .intent(&reference, &self.events, &self.indexes, retention_now()?)?
+        let Some(intent) = self
+            .retention
+            .intent(&reference, &self.events, &self.indexes)?
         else {
             return Ok((ArtifactEvictionAdmission::Deferred, appended));
         };

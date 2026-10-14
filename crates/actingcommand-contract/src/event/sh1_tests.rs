@@ -15,25 +15,25 @@ use crate::{
 };
 use serde_json::{Map, Value, json};
 
-const AT_MS: u64 = 1_752_147_200_000;
+pub(super) const AT_MS: u64 = 1_752_147_200_000;
 
-fn ids() -> IdentifierIssuer {
+pub(super) fn ids() -> IdentifierIssuer {
     IdentifierIssuer::new().expect("identifier issuer")
 }
 
-fn token(value: impl serde::Serialize) -> Value {
+pub(super) fn token(value: impl serde::Serialize) -> Value {
     serde_json::to_value(value).expect("a JSON value")
 }
 
-fn epoch(ids: &IdentifierIssuer) -> Value {
+pub(super) fn epoch(ids: &IdentifierIssuer) -> Value {
     token(*ids.mint_owner_epoch().expect("owner epoch").transport())
 }
 
-fn outcome(code: &str, category: &str) -> Value {
+pub(super) fn outcome(code: &str, category: &str) -> Value {
     json!({"code": code, "category": category, "values": {}})
 }
 
-fn record(family: &str, kind: &str, data: Value) -> Value {
+pub(super) fn record(family: &str, kind: &str, data: Value) -> Value {
     json!({"family": family, "payload": {"kind": kind, "data": data}})
 }
 
@@ -47,7 +47,7 @@ fn severity(category: &str) -> EventSeverity {
 }
 
 // The reader: decode, validate, and encode back to the same record.
-fn read_back(stored: &Value) -> EventPayload {
+pub(super) fn read_back(stored: &Value) -> EventPayload {
     let payload: EventPayload = serde_json::from_value(stored.clone()).expect("the record decodes");
     payload.validate().expect("the record validates");
     assert_eq!(
@@ -58,26 +58,26 @@ fn read_back(stored: &Value) -> EventPayload {
     payload
 }
 
-fn refused(stored: Value) -> SanitizationError {
+pub(super) fn refused(stored: Value) -> SanitizationError {
     let payload: EventPayload = serde_json::from_value(stored).expect("the record decodes");
     payload
         .validate()
         .expect_err("the reader refuses the record")
 }
 
-fn data(stored: &mut Value) -> &mut Map<String, Value> {
+pub(super) fn data(stored: &mut Value) -> &mut Map<String, Value> {
     stored
         .pointer_mut("/payload/data")
         .and_then(Value::as_object_mut)
         .expect("a payload's data")
 }
 
-fn with(mut stored: Value, member: &str, value: Value) -> Value {
+pub(super) fn with(mut stored: Value, member: &str, value: Value) -> Value {
     data(&mut stored).insert(member.to_owned(), value);
     stored
 }
 
-fn without(mut stored: Value, member: &str) -> Value {
+pub(super) fn without(mut stored: Value, member: &str) -> Value {
     data(&mut stored).remove(member);
     stored
 }
@@ -90,7 +90,7 @@ fn state_of(stored: &mut Value) -> &mut Map<String, Value> {
 }
 
 // A payload an existing writer makes, as it is stored.
-fn written(draft: EventPayloadDraft) -> Value {
+pub(super) fn written(draft: EventPayloadDraft) -> Value {
     let payload = draft
         .sanitize(&SpyFingerprinter::new())
         .expect("the draft sanitizes");
@@ -98,7 +98,7 @@ fn written(draft: EventPayloadDraft) -> Value {
     token(payload)
 }
 
-fn dispatch_data() -> PolicyDispatchEventData {
+pub(super) fn dispatch_data() -> PolicyDispatchEventData {
     PolicyDispatchEventData {
         decision_id: "decision:fixture-a".to_owned(),
         task_id: "task:fixture-a".to_owned(),
@@ -117,7 +117,7 @@ fn dispatch_data() -> PolicyDispatchEventData {
     }
 }
 
-fn admission() -> PolicyAdmissionRecord {
+pub(super) fn admission() -> PolicyAdmissionRecord {
     PolicyAdmissionRecord {
         activity: PolicyActivitySample {
             profile_id: "activity:fixture-a".to_owned(),
@@ -145,7 +145,7 @@ fn admission() -> PolicyAdmissionRecord {
     }
 }
 
-fn wake(ids: &IdentifierIssuer, kind: AgentWakeKind) -> AgentWakeData {
+pub(super) fn wake(ids: &IdentifierIssuer, kind: AgentWakeKind) -> AgentWakeData {
     AgentWakeData::new(
         *ids.mint_agent_wake_id().expect("wake id").transport(),
         *ids.mint_correlation_id()
@@ -166,7 +166,7 @@ fn wake(ids: &IdentifierIssuer, kind: AgentWakeKind) -> AgentWakeData {
 }
 
 // The JSON object that holds `member`, wherever it is nested.
-fn holder<'a>(value: &'a mut Value, member: &str) -> Option<&'a mut Map<String, Value>> {
+pub(super) fn holder<'a>(value: &'a mut Value, member: &str) -> Option<&'a mut Map<String, Value>> {
     // Looked up through a shared borrow first, so the mutable one is taken on one path only.
     if value
         .as_object()
@@ -181,7 +181,7 @@ fn holder<'a>(value: &'a mut Value, member: &str) -> Option<&'a mut Map<String, 
     }
 }
 
-fn lifecycle(ids: &IdentifierIssuer, phase: Value) -> Value {
+pub(super) fn lifecycle(ids: &IdentifierIssuer, phase: Value) -> Value {
     record(
         "runtime",
         "lifecycle_observed",
@@ -420,7 +420,7 @@ fn l5_l6_tagged_state_phases_read_back() {
     let EventPayload::Runtime(RuntimePayload::LifecycleObserved(observed)) = &payload else {
         panic!("a lifecycle record");
     };
-    let RuntimeLifecyclePhase::TaggedStateLoaded { stores: read } = observed.phase() else {
+    let RuntimeLifecyclePhase::TaggedStateLoaded { stores: read, .. } = observed.phase() else {
         panic!("the tagged_state_loaded phase");
     };
     assert_eq!(read.len(), 3);
@@ -451,7 +451,10 @@ fn l5_l6_tagged_state_phases_read_back() {
     let EventPayload::Runtime(RuntimePayload::LifecycleObserved(observed)) = &payload else {
         panic!("a lifecycle record");
     };
-    assert_eq!(observed.phase(), RuntimeLifecyclePhase::TaggedStateEnabled);
+    assert_eq!(
+        observed.phase(),
+        RuntimeLifecyclePhase::TaggedStateEnabled { outcome: None }
+    );
 }
 
 #[test]

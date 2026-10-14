@@ -260,6 +260,78 @@ pub struct TaskDiagnosticTargetData {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uniqueness: Option<TaskDiagnosticUniquenessData>,
+    /// Workflow #383 register X9 (model 392 §5.3, §8.4; first writer DA-2): how far the match
+    /// lay from its mapped region in the correction window; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<TaskDiagnosticCorrectionData>,
+    /// Workflow #396 REC-6: the sides, comparison and result of a value test target; absent
+    /// otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_test: Option<Box<TaskDiagnosticValueTestData>>,
+    /// Workflow #396 REC-6: a page target the page recognition did not evaluate, and why; it did
+    /// not pass and has no evidence. Absent for an evaluated target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<TaskDiagnosticTargetSkip>,
+}
+
+/// Workflow #383 register X9: the match's top-left corner minus the mapped region's, in
+/// scale-frame pixels (base pixels, like REC-5's `scale_milli`), so the resource side can
+/// compare it with the package's numbers. The correction radius bounds it (at most 64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticCorrectionData {
+    pub dx: i16,
+    pub dy: i16,
+}
+
+/// Workflow #396 REC-6: why a page recognition left a page target unevaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDiagnosticTargetSkip {
+    /// The page's immediate targets, or one of its required located text and value tests,
+    /// already ruled the page out.
+    PageUnmatched,
+}
+
+/// Workflow #396 REC-6: one value test's evaluation. A side that read carries its text and
+/// value; a side that did not carries its problem. `right` is absent for `parses`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticValueTestData {
+    pub left: TaskDiagnosticValueOperand,
+    pub op: crate::ValueTestOp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<TaskDiagnosticValueRight>,
+    pub passed: bool,
+}
+
+/// One side of a value test that reads an OCR target: the text the target read, the value of
+/// its declared part, or why no value was read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDiagnosticValueOperand {
+    pub target_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<crate::ValueTestProblem>,
+}
+
+/// The right side of a value test: a constant, or another read value times `mul` plus `add`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskDiagnosticValueRight {
+    Const {
+        #[serde(rename = "const")]
+        constant: u64,
+    },
+    Operand {
+        operand: TaskDiagnosticValueOperand,
+        mul: u64,
+        add: i64,
+    },
 }
 
 /// Workflow #396 REC-2: the best match's score and the declared margin, in milli, and the

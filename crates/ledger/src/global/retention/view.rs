@@ -12,6 +12,7 @@ use super::super::projection::EventIndexes;
 use super::{RetentionIndex, material_references, referenced_frames, source};
 use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::LedgerEventRead;
+use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactPinReason, CapturePayload, EffectDisposition, EventAction,
     EventFamily, EventPayload, EventSeverity, EventType, FactContent, FactPayload, FrameId,
@@ -117,6 +118,9 @@ pub struct FrameErrorPoint {
     pub at_unix_ms: u64,
     pub date: String,
     pub leaf: String,
+    /// The `<code>` part of its leaf (Workflow #375 R5e: the listing names each point's code),
+    /// as a received code: it is read from the ledger, never emitted here.
+    pub code: CodeStr,
 }
 
 /// The view at one head and one clock.
@@ -660,7 +664,8 @@ impl RetentionIndex {
 }
 
 /// Classes every frame at one head. Pure: every input is a fact of the committed prefix or an
-/// argument. `None` when the local offset of a named instant is unknown.
+/// argument. `None` when the local offset of a named instant is unknown (a point's leaf code
+/// always reads back as a received code).
 fn classify(
     facts: &FrameFacts,
     frame_artifacts: &BTreeMap<FrameId, BTreeSet<ArtifactId>>,
@@ -919,6 +924,7 @@ fn classify(
             at_unix_ms: point.at,
             date: local_date(point.at, local)?,
             leaf: point_leaf(facts, point),
+            code: received_code(&point.leaf_name)?,
         });
     }
     Some(Classified {
@@ -952,6 +958,13 @@ fn point_leaf(facts: &FrameFacts, point: &ResolvedPoint) -> String {
         point.sequence,
         point.leaf_name
     )
+}
+
+/// The `<code>` of a point's leaf as a received code. A [`CodeStr`] is built only by
+/// deserialising, and a JSON string always deserialises into one.
+fn received_code(leaf_name: &str) -> Option<CodeStr> {
+    <CodeStr as serde::Deserialize>::deserialize(serde_json::Value::String(leaf_name.to_owned()))
+        .ok()
 }
 
 /// `<HHmmss-fff>_<object file name>`, in local time.

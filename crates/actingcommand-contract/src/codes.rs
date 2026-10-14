@@ -169,6 +169,8 @@ crate::outcome_codes! {
         ApplyResourceTargetsCompleted => "request_apply_resource_targets_completed": success / none,
         ResourceTargetViewCompleted => "request_resource_target_view_completed": success / none,
         ConfigureSettingsCompleted => "request_configure_settings_completed": success / none,
+        // Workflow #389 MCP-4 (register W2).
+        InstanceFactSnapshotCompleted => "request_instance_fact_snapshot_completed": success / none,
     }
 }
 
@@ -302,7 +304,6 @@ crate::outcome_codes! {
         InvalidCapacitySample => "invalid_capacity_sample": error / none,
         InvalidCapacityThresholds => "invalid_capacity_thresholds": error / none,
         InvalidCapturePolicy => "invalid_capture_policy": error / none,
-        InvalidFailedRunRetentionPolicy => "invalid_failed_run_retention_policy": error / none,
         InvalidGovernanceIdentityCard => "invalid_governance_identity_card": error / none,
         InvalidGovernanceOrigin => "invalid_governance_origin": error / none,
         InvalidInstanceAlias => "invalid_instance_alias": error / none,

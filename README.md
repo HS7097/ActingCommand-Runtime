@@ -250,6 +250,7 @@ actingcommand-actingd --config runtime.json
 actingctl status --state-root <state-root>
 actingctl status --config --state-root <state-root>     # only the config.* program facts: subsystems, selection, parameters.<section>
 actingctl facts --program --state-root <state-root>
+actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root> [--key-prefix <prefix>]   # one instance's facts
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>
 actingctl reset --state-root <state-root> --instance <alias>

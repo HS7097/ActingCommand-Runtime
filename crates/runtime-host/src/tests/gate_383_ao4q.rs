@@ -11,7 +11,7 @@
 use super::*;
 
 // The ledger's committed head: the snapshot position of a first event page.
-fn ledger_head(reader: &mut TestClient) -> u64 {
+pub(super) fn ledger_head(reader: &mut TestClient) -> u64 {
     let request = reader.request(RuntimeOperation::QueryEvents {
         query: EventQuery::default(),
         profile: ProjectionProfile::Concise,

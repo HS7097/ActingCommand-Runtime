@@ -1935,6 +1935,12 @@ fn pressure_severity(
                 ..
             },
         ) => *process_count >= 3 || *peak_cpu_basis_points >= 8_000,
+        // Workflow #383 register X1 (PERF §3.4): a backlog's tier names its severity; the
+        // monitor samples no backlog before P-s.
+        (
+            PerformancePressureKind::LedgerBacklog,
+            PerformancePressureValue::LedgerBacklog { tier, .. },
+        ) => *tier >= 3,
         _ => false,
     };
     if critical {
@@ -1959,6 +1965,7 @@ fn pressure_severity(
                 peak_cpu_basis_points,
                 ..
             } => *process_count >= 2 || *peak_cpu_basis_points >= 6_000,
+            PerformancePressureValue::LedgerBacklog { tier, .. } => *tier >= 2,
         };
         if high {
             PerformancePressureSeverity::High

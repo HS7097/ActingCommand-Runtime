@@ -431,3 +431,31 @@ tests = [
     "actingcommand-contract::lib::event::tests::sh1::h1_the_reserved_path_drag_decodes_validates_and_redacts",
 ]
 incident = ["#383 SH-1"]
+
+# The shapes of the 10-14 shape re-check: readers, validation and round trips (v012-register §1.25)
+[[gate]]
+key = "K20"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::sh2::x1_fullscreen_contention_and_ledger_backlog_pressures_read_back_in_pairs",
+    "actingcommand-contract::lib::event::tests::sh2::x2_x3_a_wake_may_name_no_trigger_record",
+    "actingcommand-contract::lib::event::tests::sh2::x4_tagged_state_phases_may_carry_their_report",
+    "actingcommand-contract::lib::event::tests::sh2::x5_a_probe_finding_may_report_an_unclassified_workbench_key",
+    "actingcommand-contract::lib::event::tests::sh2::x6_capture_geometry_records_its_safe_insets",
+    "actingcommand-contract::lib::event::tests::sh2::x7_a_geometry_observation_names_the_display_map_it_used",
+    "actingcommand-contract::lib::event::tests::sh2::x8_a_changed_observation_names_the_change_and_a_recheck_a_failure",
+    "actingcommand-contract::lib::event::tests::sh2::x9_a_diagnostic_target_row_records_its_correction",
+    "actingcommand-contract::lib::event::tests::sh2::x11_x12_a_centre_hotspot_draw_names_its_algorithm_and_parameters",
+    "actingcommand-contract::lib::event::tests::sh2::x13_adb_recovery_evidence_may_carry_outcomes_instead_of_text",
+    "actingcommand-contract::lib::event::tests::sh2::x14_a_dispatch_intent_records_its_random_delay",
+]
+incident = ["#383 SH-2"]
+
+# Workflow #396 REC-6: a value test whose side reads a personal OCR target is personal, as is a check holding it, and its evidence is redacted in the projection (REC-6's tests in the contract crate; key after the wave 8 reservations K19 and K20)
+[[gate]]
+key = "K21"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::page_projection::tests::a_value_test_reading_a_personal_target_is_personal_and_its_evidence_is_redacted",
+]
+incident = ["#396"]

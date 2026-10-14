@@ -227,7 +227,7 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
         | RuntimeLifecyclePhase::ResourceFenceLifted { .. }
         | RuntimeLifecyclePhase::StandardPackRead { .. }
         | RuntimeLifecyclePhase::TaggedStateLoaded { .. }
-        | RuntimeLifecyclePhase::TaggedStateEnabled => CommitSync::Full,
+        | RuntimeLifecyclePhase::TaggedStateEnabled { .. } => CommitSync::Full,
     }
 }
 

@@ -279,6 +279,92 @@ struct Entry {
     name: OsString,
     folder: bool,
     file: bool,
+    byte_count: u64,
+}
+
+/// One leaf folder `kept\<date>\<leaf>\` and the kept frame files in it, as the frame listing
+/// reads them (Workflow #375 R5e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptLeafListing {
+    /// The date folder's name.
+    pub date: String,
+    /// The leaf folder's name.
+    pub leaf: String,
+    /// Its kept frame files, in file name order.
+    pub files: Vec<KeptFileListing>,
+}
+
+/// One kept frame file of a leaf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptFileListing {
+    /// `<HHmmss-fff>_artifact_<hex>.png`.
+    pub file_name: String,
+    /// The object file name it holds, `artifact_<hex>.png`: the text after the first `_`.
+    pub object_file: String,
+    pub byte_count: u64,
+}
+
+/// Workflow #375 R5e: every leaf below `kept\<date>\` with its kept frame files and their sizes,
+/// by the rules of the readers' walk: `kept\` itself absent is no leaf; `kept\` that is a reparse
+/// point, or any other listing error, fails (`artifact_kept_walk_failed`); a reparse point is never
+/// followed; an entry that vanishes or is being deleted meanwhile is skipped. Files at the top
+/// (`.moves`) and in date folders, names that are not UTF-8, and files that are not kept frame
+/// files are skipped. It reads no file contents. Leaves are in date, then leaf name order.
+pub fn list_kept_folders(root: &Path) -> ArtifactStoreResult<Vec<KeptLeafListing>> {
+    let kept = root.join(KEPT_DIRECTORY);
+    match fs::symlink_metadata(&kept) {
+        Ok(metadata) if crate::usage::is_link(&metadata) => {
+            return Err(kept_walk_failed(None, Some(KEPT_DIRECTORY)));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(kept_walk_failed(Some(&error), Some(KEPT_DIRECTORY))),
+    }
+    let mut leaves = Vec::new();
+    for date in entries(&kept, true)?
+        .into_iter()
+        .filter(|entry| entry.folder)
+    {
+        let Some(date_name) = date.name.to_str() else {
+            continue;
+        };
+        for leaf in entries(&date.path, false)?
+            .into_iter()
+            .filter(|entry| entry.folder)
+        {
+            let Some(leaf_name) = leaf.name.to_str() else {
+                continue;
+            };
+            let mut files = Vec::new();
+            for file in entries(&leaf.path, false)?
+                .into_iter()
+                .filter(|entry| entry.file)
+            {
+                let Some(file_name) = file.name.to_str() else {
+                    continue;
+                };
+                let Some((_, object_file)) = file_name.split_once('_') else {
+                    continue;
+                };
+                if object_id(object_file).is_none() {
+                    continue;
+                }
+                files.push(KeptFileListing {
+                    file_name: file_name.to_owned(),
+                    object_file: object_file.to_owned(),
+                    byte_count: file.byte_count,
+                });
+            }
+            files.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+            leaves.push(KeptLeafListing {
+                date: date_name.to_owned(),
+                leaf: leaf_name.to_owned(),
+                files,
+            });
+        }
+    }
+    leaves.sort_by(|left, right| (&left.date, &left.leaf).cmp(&(&right.date, &right.leaf)));
+    Ok(leaves)
 }
 
 /// The plain folders and files in `dir`, never a reparse point. Below `kept\`, a folder or an
@@ -314,6 +400,7 @@ fn entries(dir: &Path, top: bool) -> ArtifactStoreResult<Vec<Entry>> {
             name: entry.file_name(),
             folder: metadata.is_dir(),
             file: metadata.is_file(),
+            byte_count: metadata.len(),
         });
     }
     Ok(found)

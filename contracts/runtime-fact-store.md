@@ -268,15 +268,22 @@ state `denied`, not fatal) instead of failing the frame write. There is no
 paged read yet (`actingctl facts --program` reads the whole store); a paged
 read is the follow-up. The offline read below has no frame bound.
 
-`actingctl facts --program --state-root <state-root>` prints the snapshot as
-JSON. `facts` without `--program` (the per-instance read) is not built and is a
-usage error; the command takes no `--instance`.
+`actingctl facts --program --state-root <state-root> [--key-prefix <prefix>]`
+prints the snapshot (Workflow #389 MCP-4, the `ac_facts` answer of scope
+`program`) as `{scope, read_at_unix_ms, snapshot, records_total, records_kept}`:
+`read_at_unix_ms` is the snapshot's `taken_at_unix_ms`, and `--key-prefix` keeps
+only the records whose key starts with it (`records_total` counts the records
+read, `records_kept` those printed). `facts --instance <selector>` reads one
+instance's facts instead ([instance-fact-store.md](instance-fact-store.md),
+"Reading the seeds"); `--program` and `--instance` together are a usage error.
 
 `actingctl status --config --state-root <state-root>` runs the same
 `runtime_fact_snapshot` read (no new operation) and prints only the `config.*`
 records: `config.subsystems`, `config.selection` when recorded, and every
 `config.parameters.<section>` in key order (Workflow #387 D1b), as a JSON array
-of `RuntimeFactRecord` objects in the same shape the snapshot carries them. A
+of `RuntimeFactRecord` objects in the same shape the snapshot carries them, under
+`records` of `{scope, read_at_unix_ms, records, records_total, records_kept}`
+(Workflow #389 MCP-4, the `ac_facts` answer of scope `config`). A
 snapshot without `config.subsystems` or without any `config.parameters.<section>`
 is an error (`config_facts_missing`, exit code 1), never an empty array. Plain `status`
 is unchanged; `--config` on any other command is a usage error.

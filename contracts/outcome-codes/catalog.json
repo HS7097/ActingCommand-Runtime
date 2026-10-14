@@ -582,6 +582,18 @@
       "type": "integer",
       "description": "A declared margin in milli below the best match's score."
     },
+    "value_side": {
+      "type": "vocab:value_side",
+      "description": "Which side of a value test could not be read."
+    },
+    "value_problem": {
+      "type": "vocab:value_problem",
+      "description": "Why one side of a value test could not be read."
+    },
+    "value_op": {
+      "type": "vocab:value_op",
+      "description": "The comparison of a value test."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -3450,6 +3462,78 @@
         }
       }
     },
+    "value_side": {
+      "description": "Which side of a value test could not be read (Workflow #396 REC-6).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "ValueSide"
+      },
+      "tokens": {
+        "left": {
+          "description": "The left side."
+        },
+        "right": {
+          "description": "The right side, another read value."
+        }
+      }
+    },
+    "value_problem": {
+      "description": "Why one side of a value test could not be read (Workflow #396 REC-6).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "ValueProblem"
+      },
+      "tokens": {
+        "empty": {
+          "description": "The trimmed text is empty."
+        },
+        "invalid": {
+          "description": "The text is not in the declared format."
+        },
+        "overflow": {
+          "description": "The number does not fit 64 bits."
+        },
+        "out_of_range": {
+          "description": "The value lies outside the declared min..=max."
+        },
+        "region_unresolved": {
+          "description": "The OCR target's region could not be resolved on the frame."
+        },
+        "low_confidence": {
+          "description": "The read's confidence is missing or below the OCR target's minimum_confidence."
+        }
+      }
+    },
+    "value_op": {
+      "description": "The comparison of a value test (Workflow #396 REC-6).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "ValueOp"
+      },
+      "tokens": {
+        "eq": {
+          "description": "Equal."
+        },
+        "ne": {
+          "description": "Not equal."
+        },
+        "lt": {
+          "description": "Less than."
+        },
+        "le": {
+          "description": "Less than or equal."
+        },
+        "gt": {
+          "description": "Greater than."
+        },
+        "ge": {
+          "description": "Greater than or equal."
+        },
+        "parses": {
+          "description": "The left side reads in its format."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
@@ -5972,6 +6056,7 @@
       "contract",
       "device",
       "execution-kernel",
+      "ledger-forensics",
       "runtime-host"
     ],
     "freeze_": [
@@ -6240,8 +6325,12 @@
       "execution-kernel",
       "runtime-host"
     ],
+    "kept_folder_": [
+      "ledger-forensics"
+    ],
     "list_": [
       "ledger",
+      "ledger-forensics",
       "runtime-database",
       "runtime-host"
     ],
@@ -7643,6 +7732,9 @@
     ],
     "valuation_": [
       "policy"
+    ],
+    "value_test_": [
+      "recognition-pack"
     ],
     "vendor_": [
       "actinglab",

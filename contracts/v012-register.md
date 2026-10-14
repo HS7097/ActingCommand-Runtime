@@ -455,6 +455,78 @@ lowercase token). `execution.defaults.*` is not in P-c (see the PR). Read in v0.
 streaks (as before), `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*` (the
 controller; before, code constants); every other key by its later slice.
 
+### 1.25 Shape re-check additions (10-14)
+
+Workflow #383 SH-2, the second v0.12.0 shape slice (ORD §3.5 item 12, rule R5). The coordinator's
+re-check of 2026-10-14 found 0.12.x shapes that later models and later rulings bring (the #331
+ruling of 10-13, #405 and #406 approved 10-14, B5's v0.12.1 change). SH-2 writes their types,
+readers, validation and round-trip tests as SH-1 did (§1.1-§1.7), never a writer; the "First
+writer" column names the slice that writes them later. Every new member is omitted when absent,
+so today's records keep their bytes. X11 and X12 supersede §1.18's sentence that centre-hotspot
+sampling adds no persisted shape: a draw must name its real algorithm. Coordinator rulings
+applied: M392's rename of `FrameAndLogicalDisplayDiffer` is dropped (V4 keeps today's spelling);
+no later ledger revision for DA or REC, their shapes are here; a drawn random delay is not kept
+across a restart, so L7 gains no member. Left to the v0.12.0 slices that bring their own shapes:
+NAV-5, SEL-L3b, OUT-2, EXEC-1/2, DRILL-1, the W rows of D2-S5 and P-m, and the keys of RD-2,
+RD-5b and RD-4.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| X1 | `PerformancePressureKind::FullscreenContention` (`fullscreen_contention`), `::LedgerBacklog` (`ledger_backlog`); peak `PerformancePressureValue::LedgerBacklog {tier, buffer_bytes, buffer_records}` (`ledger_backlog`) | new enum values of `PerformancePressureRecord.kind` and `.peak` (`perf.pressure_started`, `perf.pressure_ended`, the `pressures` of a performance context) | SH-2 | P-s | the reader checks kind and peak in pairs: `fullscreen_contention` with a `process_load` peak (as `third_party`), `ledger_backlog` with a `ledger_backlog` peak whose `tier` (1 to 3) names the record's severity (1 elevated, 2 high, 3 critical) and whose buffer holds bytes and records; otherwise `invalid_performance_pressure_value`; PERF §3.4, §8 D11, §13 P-s; the spellings are the ones `performance.pacing.pressure_floor.kinds` already accepts (P-c, §1.24) |
+| X2 | `AgentWakeKind::DailySummary` (`daily_summary`) | reserved enum value (`agent.wake_requested`) | SH-2 (decodable) | AGT-1 | #331 ruling 10-13: the first wake triggers are the daily results summary and recovery ladder exhausted (A1's `ladder_exhausted`); A1's other reserved values stay |
+| X3 | `AgentWakeData.trigger_event_id`, `.trigger_sequence` | changed: both optional; `trigger_sequence` never 0 when present (`invalid_agent_wake`) | SH-2 | AGT-1 (a timer's wake names neither), AO-4 (stops writing `trigger_sequence`, [ledger-observer.md §13](ledger-observer.md#13-identity-without-ledger-positions-ao-3-ao-4-ao-4q-in-v0120)) | today's writer still writes both; the host's agent replay compares the sequence only while a record carries it and indexes wakes by trigger only when one is named |
+| X4 | `runtime.lifecycle_observed` phases `tagged_state_loaded` and `tagged_state_enabled` (L5, L6): `outcome` | new optional member of each | SH-2 | AO-6 (`ledger_tagged_state_loaded`, with a `ledger_tagged_entries_dropped` link), AO-5 (`ledger_tagged_state_seeded`) | an info outcome ([ledger-observer.md §11.5, §11.6, §16](ledger-observer.md#16-outcome-codes)); another category is refused; the record's severity is its category (E2) |
+| X5 | `ledger.health_observed` (L2): finding `ledger_tag_key_unclassified` {`fact_key`} | allowed finding | — (L2's reader restricts the category to warning or error, not the code, so it already reads it; SH-2 adds the round-trip test) | AO-5 | [ledger-observer.md §11.2](ledger-observer.md#112-which-keys-are-tagged-configuration-ledg-82) |
+| X6 | `CaptureGeometry.safe_insets` (`CaptureInsets {left, top, right, bottom}`, device-frame pixels) | new optional member (`task.geometry_observed`: `observation`, `frame.producer`) | SH-2 | DA-4 | model 392 §8.2; absent = not read, or no cutout section; left + right and top + bottom stay below the logical display's width and height (`invalid_sanitized_payload`, field `safe_insets`) |
+| X7 | `TaskGeometryObservation.display_map` (`TaskGeometryDisplayMap {kind: identity \| scale \| translate, scale_num, scale_den, scale_width, scale_height, base_width, base_height, scale_by: height \| width, scale_area: screen \| safe_area, anchor_area: screen \| safe_area, insets_source?: reported \| declared, declared}`) | new optional member | SH-2 | DA-4 | model 392 §4, §8.1, §8.3: sizes non-zero; `scale_num / scale_den` reduced and at least 1; `identity` = factor 1 on the base size, `scale` = a larger factor on the base size, `translate` = any other scale frame and only with a declaration (§11); a map measured on the safe area names its insets' source; otherwise `invalid_sanitized_payload`, field `display_map` |
+| X8 | `TaskGeometryPhase::Changed` (`changed`); `TaskGeometryRecheckTrigger::ExtentChanged`, `::RotationChanged`, `::InsetsChanged` (`extent_changed`, `rotation_changed`, `insets_changed`) | new enum values | SH-2 | DA-4 (DA-2's map rebuild) | model 392 §7.3, §8.3: a `changed` observation has a frame, one of the three change triggers and no original failure; a `recheck` keeps a failure trigger and its original failure; otherwise `invalid_task_geometry_phase`. V4 keeps `frame_and_logical_display_differ` (the rename is dropped) |
+| X9 | `TaskDiagnosticTargetData.correction` (`TaskDiagnosticCorrectionData {dx, dy}`) | new optional member of the task diagnostic stream (`task-diagnostic.v2`) | SH-2 | DA-2 | model 392 §5.3, §8.4: the match's top-left corner minus the mapped region's, in scale-frame (base) pixels like REC-5's `scale_milli`; `i16` each, the correction radius (at most 64) bounds them; unknown members refused; no ledger record type is added |
+| X10 | §4 rows `display.logical_extent`, `display.safe_area.reported`, `display.safe_area.declared`, `display.map` | instance-store fact keys, tagged | — (fact values) | DA-4 (`declared`: a person or an agent) | register only; model 392 §8.1; DA-4 books them in the [capacity ledger](instance-fact-store.md#capacity-ledger-workflow-383-ao-0) when it adds them |
+| X11 | `InputSamplingAlgorithm::CenterHotspotNormalV1` (`center_hotspot_normal_v1`), `::CenterHotspotLeastRecentV1` (`center_hotspot_least_recent_v1`) | reserved enum values of `InputSamplingEvidence.algorithm` (`TaskSemanticPayload.sampling`) | SH-2 (decodable) | #406 T-1, T-2 | a draw names its real algorithm; today's writer records `xorshift64_uniform_rect_v1` |
+| X12 | `InputSamplingEvidence.parameters` (`InputSamplingParameters {sigma_ratio_milli, max_redraws, candidate_count?, chosen_candidate?}`) | reserved optional member | SH-2 | T-1 (`sigma_ratio_milli`, `max_redraws`), T-2 (the candidates) | the configured values at the draw, so T-4 replays from the seed; T-2's pick also depends on the in-memory landing history, so `chosen_candidate` (0-based, in draw order) names the winner. Present exactly for a centre-hotspot algorithm; `sigma_ratio_milli` > 0; the two candidate members exactly for `center_hotspot_least_recent_v1`, `chosen_candidate` < `candidate_count`; otherwise `invalid_sanitized_payload`, field `sampling_parameters` |
+| X13 | the ADB recovery evidence (`adb_recovery`): `AdbTargetRecovery.endpoint`, `.initial_error` optional; `outcome` on `AdbTargetRecovery`, `AdbRecoveryStep` and `AdbCommandEvidence` | changed members, new optional members (`runtime.lifecycle_observed` phase `adb_target_recovery`, a `runtime.failed` lifecycle failure) | SH-2 | B5 (v0.12.1) | E7 and the payload's own note: B5 moves the device text to `foreign_adb_error` links with `raw_text`; the error that started the recovery stays recorded, as `initial_error` or as `outcome` (`invalid_adb_target_recovery`); a record is at least as sensitive as the highest `raw_text_sensitivity` on the evidence's outcomes (E7); today's writer keeps the text members and writes no outcome |
+| X14 | `policy.dispatch_intent`: `random_delay` (`PolicyRandomDelay {due_at_unix_ms, planned_start_unix_ms, delay_ms}`) | new optional member | SH-2 | #405 | only a dispatch intent carries it (`invalid_policy_payload`, field `random_delay`); `due_at_unix_ms` non-zero; `delay_ms` is the delay applied, at most 86 400 000 (the configuration's bound, §5), 0 when the allowed period left none; `planned_start_unix_ms` = `due_at_unix_ms` + `delay_ms`; not kept across a restart (no L7 member) |
+
+The register-only rows of the re-check are in §3 (W7, W13) and §4 (X10's keys,
+`host.kept_folder_cleared`).
+
+### 1.27 Wave 8 slice MCP-4 (#389, MCP-0 command table v1.1 §4.4)
+
+MCP-4 brings the read kind of §3 W2 and the one read output below; neither is a ledger shape, and
+no persisted record changes ([runtime-interface.md](runtime-interface.md), the actingctl and MCP
+tables; [instance-fact-store.md](instance-fact-store.md), "Reading the seeds").
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| M41 | `actingctl facts --program`, `facts --instance <selector>` and `status --config` ↔ `ac_facts` (`scope` program, instance or config; `instance`; `key_prefix`): `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}` | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | MCP-4 | MCP-4 | `snapshot` is the `RuntimeFactSnapshot` (program) or the instance's `InstanceFactView` (W2); `records` the `config.*` records (config); `read_at_unix_ms` is the Runtime's clock at the read (the snapshot's `taken_at_unix_ms`, the instance read's `sampled_completed_at_unix_ms`); `records_total` counts the records read, `records_kept` those answered after `key_prefix` (program and instance only); the selector is the alias, instance_id or ADB port, resolved with one status read; MCP exports an answer past its output budget (`answer_exported`); CLI success codes `runtime_facts_reported`, `instance_facts_reported` (new) and `runtime_config_reported` |
+
+### 1.29 Wave 8 slice REC-6 (#396, REC-M v1.2.1 §8)
+
+REC-6 brings and writes both members of R6-1, in the task diagnostic stream; R6-2 is resource file
+format, not a ledger shape. No ledger record type is added. The retired code
+`contained_task_post_admission_ocr_target_in_page_gate` and the new codes, locations, keys and
+vocabularies are catalog entries, not rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R6-1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTargetData.value_test` (`TaskDiagnosticValueTestData`) and `TaskDiagnosticTargetData.skipped` (`TaskDiagnosticTargetSkip`) | two new optional members, absent when unused | REC-6 (#396, REC-M v1.2.1 §2, §8.3, §8.4) | REC-6 | `value_test` = `{left: TaskDiagnosticValueOperand, op, right?, passed}` with `TaskDiagnosticValueOperand {target_id, raw_text?, value?, problem?}` (`deny_unknown_fields`), `op` one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `parses`, `problem` one of `empty`, `invalid`, `overflow`, `out_of_range`, `region_unresolved`, `low_confidence`, and `right` = `{"kind": "const", "const"}` or `{"kind": "operand", "operand", "mul", "add"}`, absent for `parses`; REC-1's `failure` (V3) then carries `value_test_unresolved` or `value_test_not_met`. `skipped` = `page_unmatched` on a page target row the page recognition left unevaluated (not passed, no child rows); the page detector's `PageTargetEvaluation.skipped` carries the same value |
+| R6-2 | task schema `0.9` `checks[].value_test` (`{left, op, right?}`); recognition pack schema `0.7` target type `value_test`; `OcrUnsignedIntegerFormat::ClockHms` (`clock_hms`, for fields, readings and value tests); a value test side's `trim` `whitespace_all_v1`; the page gate of a page that collects or reads OCR | new members and values, one rule relaxed (resource file format, not a ledger shape) | REC-6 | resource side | older task and pack schemas refuse the new members (`UnconsumedField`); a value test in a page rule's `forbidden`, directly or through a check, is refused at `/pages/<i>/forbidden/<j>`; a page that collects fields, collection-mode targets or readings may gate on any backend and on those targets themselves (the gate's observation is the collection's); the `package` interface revision for these is declared once by A8 |
+
+### 1.30 Wave 8 slice L-5b (#382: the K/T remnants L-5 left)
+
+L-5b removes what is left of the retired K/T policy (Workflow #382 L-5, after #375 R5d) and
+writes no new shape; [ledger-store.md](ledger-store.md) and
+[actingd-check-config.md](actingd-check-config.md) are the contract. No 0.12 build writes a
+`failed_run` intent (L-5), and no reader accepts a ledger or a configuration written before
+v0.12.0, so nothing written by a 0.12 build becomes unreadable.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L5-1 | `ArtifactEvictionIntentRecord.failed_run` and its types `FailedRunRetentionEvidence`, `FailedRunRetentionBasis`, `FailedRunRetentionPolicy` | removed persisted member | L-5b | — | an intent names its `success` source; a stored intent that still carries `failed_run` does not decode, so replay refuses it (`corrupt_ledger_record`, location `decode_sqlite_record`) and the ledger does not open |
+| L5-2 | `ArtifactRetentionPublicFact::EvictionIntent.failed_run` (the public read data of `artifact.eviction_intent`) | removed wire member | L-5b | — | it was never present on a record a 0.12 build wrote |
+| L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
+| L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -482,17 +554,18 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | # | Shape | Revision | Slice | Notes |
 |---|---|---|---|---|
 | W1 | `RuntimeStateSource` = `{instance_facts? {lineage, revision}, runtime_facts? {lineage, revision}, ledger_committed_head, sampled_started_at_unix_ms, sampled_completed_at_unix_ms}` | runtime-client 2 | AO-4q | replaces `{event_id, sequence}`; store fields absent before AO-3 and readers accept that; status queries stop appending records; **done (AO-4q):** each store field is a `RuntimeStateStoreRevision {lineage (owner epoch), revision}`; `Status`, `MonitorStatus`, `ProjectInterface` and `DiscoverInstances` append nothing on success and read the committed head inside the sampling interval ([runtime-state-observation.md](runtime-state-observation.md)); a discovery refusal still records its refusal |
-| W2 | `RuntimeOperation::InstanceFactSnapshot { instance }` → `RuntimeResult::InstanceFactSnapshot { snapshot, source }` | runtime-client 2 | MCP-4 | general read, one instance's facts with observation and expiry times and the resolved scope; a new kind, not a parameter of `RuntimeFactSnapshot` (that kind stays field-less); U-1's classification table gains the row |
+| W2 | `RuntimeOperation::InstanceFactSnapshot { instance }` → `RuntimeResult::InstanceFactSnapshot { snapshot, source }` | runtime-client 2 | MCP-4 | general read, one instance's facts with observation and expiry times and the resolved scope; a new kind, not a parameter of `RuntimeFactSnapshot` (that kind stays field-less); U-1's classification table gains the row; **done (MCP-4):** `instance` is the registered instance alias; `snapshot` is an `InstanceFactView {instance_alias, server_id?, game_id?, records}`: the active records of the instance's own scope and of the server and game its configuration binds it to (`server_id` and `game_id` both absent when it binds none, and then only the instance's own records), ordered by key, then scope; the host projection's `ledger_position` and `snapshot_id` never go on the wire (the view is built from the store's records; `contracts/ledger-observer.md` §13); `source` is W1's `RuntimeStateSource` sampled around the read; nothing is appended (U-1 row: general read, no record); a reply past one IPC frame is refused `instance_fact_snapshot_too_large_for_frame`; a completed receipt carries `request_instance_fact_snapshot_completed` |
 | W3 | `ConfigureSettings { changes: [{key, value?}] }` and its receipt `{key, value, source}` | runtime-client 2 | D1b | M387 §5.6 |
 | W4 | `PerformanceYield`, `BlackoutStop` | runtime-client 2 | SH-1 | P7, S2 |
 | W5 | read request `ScheduleExplanation { instance }` | runtime-client 3 | MCP-19 | reserved; per task: trigger, last dispatch, next due, not-run reason, produces, consumes, pools |
 | W6 | gate-class receipts carry `event_id` and store revisions, never a ledger sequence; install receipts after the commit | runtime-client 3 | AO-4 | [ledger-observer.md §13](ledger-observer.md#13-identity-without-ledger-positions-ao-3-ao-4-ao-4q-in-v0120) |
-| W7 | status blocks `ledger`, `tagged_state` | runtime-client 3 | AO-8 | [ledger-observer.md §14.2](ledger-observer.md#142-status-blocks) |
+| W7 | status blocks `ledger`, `tagged_state`; `startup`, `host` | runtime-client 3 | AO-8; MCP-9b (`startup`, `host`) | [ledger-observer.md §14.2](ledger-observer.md#142-status-blocks); `startup` and `host` (MCP-9b) are held in memory and leave through the same status read as AO-8's blocks (re-check 10-14, §1.25) |
 | W8 | request `actingcommand.runtime.request.v4`: optional `detail` (`codes` \| `full`) | runtime-client 2 | A4 | #378 §7.1; absent, the source's class default applies (codes only for `source: ui`, the full outcome for every other source); requests v1–v3 are refused; [client-interactions.md](client-interactions.md) |
 | W9 | receipt `actingcommand.runtime.receipt.v2`: `outcome` (an `actingcommand.outcome.v1` envelope) on every receipt; the v1 member `error` (`RuntimeErrorProjection`) is removed | runtime-client 2 | A4 | #378 §7.2; admitted, observed, queued and cancelled carry `request_admitted`, `request_observed`, `request_queued`, `request_cancelled`; completed carries its kind's `request_<kind>_completed`; denied and failed carry the refusal or failure on top, with the values `runtime_code`, `operation`, `host_halted`, `holder_id`, `lease_id`, `retry_after_ms` where they apply; `host_halted` travels in codes mode too; a consumer judges refusal by `state` (denied/failed), the category only says how bad it is; codes mode is applied where the receipt leaves the host |
 | W10 | `RuntimeResult::ContainedTaskCompleted.outcome` → `task_result`; `ContainedTaskCancellationStatus::Terminal.outcome` → `task_result` | runtime-client 2 | A4 | #378 §8.1: renames in receipt v2 (same value), because `outcome` is reserved for the envelope |
 | W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
+| W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
@@ -511,6 +584,8 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `host.pack_registry.*` | workbench | no (added to `tag.reobserve_prefixes`, UIM §6.5) | U-3 |
 | `display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect` (per instance, only for an instance bound to a device; [instance-fact-store.md](instance-fact-store.md#display-facts)) | instance | yes (every instance key) | DA-A |
+| `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
+| `host.kept_folder_cleared` (re-check 10-14, §1.25) | workbench | no (`tag.reobserve_prefixes`) | 375-R5e-clear (U-3) |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).
@@ -577,9 +652,12 @@ from D1b on, and each section fact holds at most 256 rows.
 ## 6 Interface revisions (declared once by A8, ORD §3.6)
 
 `ledger` [3, 3] (A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a, AO-1 dump import, AO-2 index
-table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15);
+table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15,
+SH-2 §1.25);
 `runtime-client` [2, 2] (§3 W1–W4, W8–W12: A4, U-1, D1b, D2-S5, P-m, RD-3; A2-P's wire
-spellings §1.15); `actingd-config` 5
+spellings §1.15); `runtime-client` 3 comes with its own later release, not with A8's
+declaration (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7,
+SR-6b's `not_running` in W13; re-check 10-14, §1.25); `actingd-config` 5
 (§5); `runtime-outcomes` [1, 1] (A5 §1.16); `package` (PKG-S1, PKG-S5, D2-S2/S3); `install-control` stays
 [0, 1] until U-4. AO-0 changes no declaration.
 

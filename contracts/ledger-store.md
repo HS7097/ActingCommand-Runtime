@@ -570,20 +570,23 @@ evidence: retention cannot silently reinterpret file loss as authorized eviction
 missing file without an eviction proof stays `Unrecorded`; since Workflow #375 R5a no
 formal opening reads material, so it no longer fails verification.
 
-The K/T policy is retired (Workflow #382 L-5, after #375 R5d). It let a failed or
-cancelled run's frames qualify for an eviction intent after K later successful runs
-on the same InstanceId or T days. Since R5d the frame cleaner admits no eviction
-intent, and the Ledger writer no longer evaluates or seals failed-run evidence: an
-intent the writer builds names only its original `success` source, and its append
-check refuses an intent with `failed_run` evidence (`artifact_eviction_not_eligible`).
-Frames of failed runs follow the frame classes below.
+The K/T policy is retired (Workflow #382 L-5, after #375 R5d; its remnants by L-5b).
+It let a failed or cancelled run's frames qualify for an eviction intent after K
+later successful runs on the same InstanceId or T days. Since R5d the frame cleaner
+admits no eviction intent, and the Ledger writer no longer evaluates or seals
+failed-run evidence: an intent the writer builds names only its original `success`
+source. Frames of failed runs follow the frame classes below. Since L-5b the
+`failed_run` evidence is no member of an eviction intent and its policy type is
+gone, with the actingd keys `frame_retention_failed_run_successes` and
+`frame_retention_failed_run_days` (`contracts/actingd-check-config.md`).
 
-An eviction intent already in a ledger contains exactly one of the original
-`success` source or `failed_run` evidence. Replay checks that a `failed_run`
-intent's evaluation time equals its own ledger timestamp and that every sealed
-terminal reference resolves, and does not reproduce the basis. Historical success
-intents retain their required original proof; no missing historical facts are
-synthesized.
+An eviction intent names its original `success` source. A stored intent that still
+carries `failed_run` evidence (sealed by the retired K/T admission) does not decode:
+replay refuses that record as `corrupt_ledger_record` (location
+`decode_sqlite_record` on a formal root) and the ledger does not open; no reader
+accepts it (no old-version compatibility). Replay checks that every sealed source
+reference resolves. Success intents retain their required original proof; no
+missing historical facts are synthesized.
 
 Startup recovery consumes sealed pending intents without changing them or
 re-judging eligibility, under the same try-only material guard,
@@ -644,9 +647,8 @@ read-only parser, kept for forensics and migration, has none), integrity only:
 the contract structure, origin and links; that the object is in
 the index with the same identity and verified source, its identity anchored in
 the object's first, scope-checked pin; no earlier proof; that the Intent prefix
-equals its position and a failed-run evaluation time equals its ledger time; that
-every referenced source resolves in the preceding prefix; that an outcome answers
-its exact Intent; and that sealed material is never used again. A reader never
+equals its position; that every referenced source resolves in the preceding
+prefix; that an outcome answers its exact Intent; and that sealed material is never used again. A reader never
 rejects a root because its own eligibility rules differ from the writer's. A
 missing file without an Intent and outcome is restored `Unrecorded` (Workflow #375
 R5a: formal openings read no material). Recovery of
@@ -834,6 +836,50 @@ resolves alike.
   opened. `restore_recovery_reference` writes a frame found in the source's `kept\` at
   the same `kept\` path in the target, verifies it there with the published file's
   bytes, and puts it into the target's map.
+
+### Frame listing (Workflow #375 R5e)
+
+`actingledger --state-root <root> frames [--class lab|error|resource|duplicate|default|due|running|all]
+[--before <YYYY-MM-DD>] [--instance <id>] [--run <id>] [--error-sequence <n>] [--paths]`
+lists the frames read-only. It opens the ledger as `events` does (no material read), takes
+the switches from the latest `config.parameters.top_level` runtime fact, which actingd
+writes at each start, and evaluates the frame classes above at the tool's clock, so it
+classes as the running actingd does. It stats only the frames it prints, then walks
+`kept\` for the folder sizes by the walk's rules above (`.moves` skipped); a frame moved
+between the two is found by the walk, and a frame found in both places counts
+`in_folder`. It writes nothing and reads no file contents.
+
+- **Selection.** `--class` defaults to `all`, every settled class (never `running`);
+  `due` is every duplicate, default and resource frame whose due time has come. `--before`
+  keeps frames captured before the date's local midnight, and the output repeats that
+  bound in UTC ms (`before_unix_ms`). `--instance` and `--run` keep that instance's or
+  run's frames. `--error-sequence` keeps the frames of that error point's window; a
+  sequence that names no error point is refused.
+- **Output** (`{"command":"frames","data":{…}}`, one JSON object): `through_sequence`,
+  `evaluated_at_unix_ms`, `switches` (`dedup_error`, `dedup_lab`, `retention_enabled`);
+  `totals` per class (`lab`, `error`, `resource`, `duplicate`, `default`): `frames`,
+  `bytes`, and `due_now` (what the next sweep deletes), `to_move` (a Lab or error frame
+  still at its object key), `in_folder` (found in `kept\` by the walk, whatever its class
+  is now) and `absent` (in neither place), each as `frames` and `bytes`; `running` has
+  counts only. `folders[]`, one per kept leaf the walk found or the index places frames
+  in: `path` (`kept/<date>/<leaf>`), `date`, `leaf`, `present` (from the walk), `placed`
+  (frames the index places there) and `error_points` (its owner, then any later points
+  whose windows hold its error frames). `error_points[]` (with `--class error` or
+  `--error-sequence`): each point with its `window` and `kept` frames and the `folders`
+  holding them. Every point has its `sequence`, `event_type`, `code`, `at_unix_ms`,
+  `run_id` and the run's `package_label` and `task_label`. `cleared[]`: every
+  `runtime.fact_recorded` event with key `host.kept_folder_cleared` (`sequence`,
+  `folder`, `cleared_at_unix_ms`), not only the latest fact. `non_frame`: the
+  `artifacts` and `bytes` of artifacts that are not capture frames. `paths[]` (with
+  `--paths`): each selected settled frame's `path` (`kept/…` when the walk found it, else
+  its object key) and `class`; running frames have no path.
+- **Refusals.** Usage errors are `invalid_arguments`. A ledger without the three
+  switches in its latest `config.parameters.top_level` fact is
+  `frame_switches_unavailable`; a frame file that cannot be stat'ed for a reason other
+  than its absence is `frame_stat_failed`; a `host.kept_folder_cleared` fact that is not
+  one row with `folder` and `cleared_at_unix_ms` is `kept_folder_cleared_record_invalid`;
+  an unreadable clock or local offset is `artifact_retention_clock_failed`; a failed walk
+  relays `artifact_kept_walk_failed`. The operation is `list_frames`.
 
 ## S1–S5 ownership and acceptance map
 

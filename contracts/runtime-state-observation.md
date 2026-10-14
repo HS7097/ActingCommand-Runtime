@@ -22,6 +22,9 @@ append no ledger record (Workflow #383 AO-4q; [Ledger observer](ledger-observer.
   (0 for an empty ledger). It is read inside the sampling interval.
 - The sampled status carries the owner epoch. The existing receipt terminal convention
   remains unchanged: a status read is `completed` without a terminal.
+- `InstanceFactSnapshot` (Workflow #389 MCP-4, register W2) samples one instance's facts the
+  same way: it appends nothing, and its answer's `source` is this source
+  ([instance-fact-store.md](instance-fact-store.md), "Reading the seeds").
 
 The owner samples current scheduler/registry state using its existing locks.
 The interval covers those reads; it does not assert a globally atomic instant

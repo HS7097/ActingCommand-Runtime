@@ -9,6 +9,8 @@
 // runs `actingd suspended` with it too.
 use crate::child;
 mod events;
+// Workflow #389 MCP-4: ac_facts.
+mod facts;
 mod jobs;
 mod lab;
 // Workflow #389 MCP-5a: ac_observe.

@@ -522,6 +522,17 @@ pub enum OcrUnsignedIntegerFormat {
     CurrentCapacity,
     /// ASCII decimal digits after at most one optional `x`, `X` or `×` (U+00D7) prefix.
     TimesPrefixed,
+    /// Workflow #396 REC-6: `H:MM:SS`, 1 to 3 ASCII digits of hours, then two digits each of
+    /// minutes and seconds in `00..=59`; the value is the number of seconds.
+    ClockHms,
+}
+
+/// Both parts of one parsed `unsigned_integer` observation (Workflow #396 REC-6): the value, and
+/// for `current_capacity` the capacity (the right-hand part), which only a value test reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OcrUnsignedIntegerParts {
+    pub value: u64,
+    pub capacity: Option<u64>,
 }
 
 impl OcrUnsignedIntegerFormat {
@@ -531,6 +542,17 @@ impl OcrUnsignedIntegerFormat {
 
     /// Parses the complete already-trimmed observation without changing its text.
     pub fn parse(self, text: &str, min: u64, max: u64) -> Result<u64, OcrFieldReason> {
+        let value = self.parse_parts(text)?.value;
+        if value < min || value > max {
+            return Err(OcrFieldReason::OutOfRange);
+        }
+        Ok(value)
+    }
+
+    /// Parses the complete already-trimmed observation into both its parts, without a range
+    /// check (Workflow #396 REC-6). [`Self::parse`] checks the value against its range; a value
+    /// test checks the part it declares.
+    pub fn parse_parts(self, text: &str) -> Result<OcrUnsignedIntegerParts, OcrFieldReason> {
         if text.is_empty() {
             return Err(OcrFieldReason::Empty);
         }
@@ -540,6 +562,7 @@ impl OcrUnsignedIntegerFormat {
             }
             digits.parse::<u64>().map_err(|_| OcrFieldReason::Overflow)
         };
+        let mut capacity = None;
         let value = match self {
             Self::AsciiDecimal => decimal(text)?,
             Self::CommaGrouped => {
@@ -565,22 +588,108 @@ impl OcrUnsignedIntegerFormat {
                     })?
             }
             Self::CurrentCapacity => {
-                let (current, capacity) =
+                let (current, declared) =
                     text.split_once('/').ok_or(OcrFieldReason::InvalidInteger)?;
                 let current = decimal(current)?;
-                decimal(capacity)?;
+                capacity = Some(decimal(declared)?);
                 current
             }
             Self::TimesPrefixed => decimal(
                 text.strip_prefix(|prefix: char| matches!(prefix, 'x' | 'X' | '\u{00D7}'))
                     .unwrap_or(text),
             )?,
+            Self::ClockHms => {
+                let mut parts = text.split(':');
+                let (Some(hours), Some(minutes), Some(seconds), None) =
+                    (parts.next(), parts.next(), parts.next(), parts.next())
+                else {
+                    return Err(OcrFieldReason::InvalidInteger);
+                };
+                let sixty = |digits: &str| {
+                    if digits.len() != 2 {
+                        return Err(OcrFieldReason::InvalidInteger);
+                    }
+                    decimal(digits).and_then(|value| {
+                        if value < 60 {
+                            Ok(value)
+                        } else {
+                            Err(OcrFieldReason::InvalidInteger)
+                        }
+                    })
+                };
+                if !(1..=3).contains(&hours.len()) {
+                    return Err(OcrFieldReason::InvalidInteger);
+                }
+                let hours = decimal(hours)?;
+                hours * 3_600 + sixty(minutes)? * 60 + sixty(seconds)?
+            }
         };
-        if value < min || value > max {
-            return Err(OcrFieldReason::OutOfRange);
-        }
-        Ok(value)
+        Ok(OcrUnsignedIntegerParts { value, capacity })
     }
+}
+
+/// How a value test trims an observed text before parsing it (Workflow #396 REC-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrValueTrim {
+    /// Unicode whitespace at both ends, as `str::trim` (the fields' `whitespace_v1`).
+    WhitespaceV1,
+    /// Every Unicode whitespace character, wherever it stands (`1 / 3` reads as `1/3`).
+    WhitespaceAllV1,
+}
+
+impl OcrValueTrim {
+    pub fn apply(self, text: &str) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::WhitespaceV1 => std::borrow::Cow::Borrowed(text.trim()),
+            Self::WhitespaceAllV1 => std::borrow::Cow::Owned(
+                text.chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// The comparison of a value test (Workflow #396 REC-6): `parses` needs only the left side to
+/// read; the others compare the left value with the right one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueTestOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Parses,
+}
+
+impl ValueTestOp {
+    /// Whether `left op right` holds; `parses` always holds once the left side reads.
+    pub fn holds(self, left: i128, right: i128) -> bool {
+        match self {
+            Self::Eq => left == right,
+            Self::Ne => left != right,
+            Self::Lt => left < right,
+            Self::Le => left <= right,
+            Self::Gt => left > right,
+            Self::Ge => left >= right,
+            Self::Parses => true,
+        }
+    }
+}
+
+/// Why one side of a value test could not be read (Workflow #396 REC-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueTestProblem {
+    Empty,
+    Invalid,
+    Overflow,
+    OutOfRange,
+    RegionUnresolved,
+    LowConfidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

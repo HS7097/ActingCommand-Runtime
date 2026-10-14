@@ -150,7 +150,8 @@ A check that combines backends is either one page rule requiring one target per 
 usually over the same region, or a named check of the `checks` family (below) that a page
 rule or an operation guard references as one target. The page matches only when every
 `required` target passes its own threshold, every `any_of` group has a passing target and no
-`forbidden` target passes:
+`forbidden` target passes. Located text, value tests and checks holding either are evaluated
+lazily (section Task schema `0.9` value tests); the match is the one a full evaluation gives:
 
 ```json
 {
@@ -179,6 +180,7 @@ rule or an operation guard references as one target. The page matches only when 
 | OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
 | Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text); with `unique`, no other matching block lies within its margin |
 | Check | `checks[]` | `all_of`: every member passes; `any_of`: at least one member passes. Every member is evaluated with its own threshold (`selection-graph.md`, section Checks) |
+| Value test | `checks[]` with `value_test` (task schema `0.9`) | both sides read, and the left value compared with the right one holds; `parses` needs only the left side to read (section Task schema `0.9` value tests) |
 
 ### Pack schema `0.7` declarations
 
@@ -188,15 +190,15 @@ uses none of them derives every document byte for byte as before.
 
 | Declaration | Rule |
 | --- | --- |
-| `checks[]` | `{"id", "all_of": [...]}` or `{"id", "any_of": [...]}`: exactly one of the two, with 2 to 8 distinct member IDs. Each member is a template, color, color digest, OCR or NN target of the derived pack, never another check. |
+| `checks[]` | `{"id", "all_of": [...]}` or `{"id", "any_of": [...]}`: exactly one of the two, with 2 to 8 distinct member IDs. Each member is a template, color, color digest, OCR or NN target or a value test of the derived pack, never another `all_of` or `any_of` check. Task schema `0.9` also accepts `{"id", "value_test": {...}}` (section Task schema `0.9` value tests). |
 | `color_probes[].max_distance`, `anchors[].color_check.max_distance` | Optional finite number `>= 0`, the target's own color threshold. |
 | `color_probes[].digest` | A color digest entry (`color-digest.md`, section Package declaration). A color probe declares exactly one of `expected` and `digest`; a digest entry has no `max_distance`. |
-| `operations[].guard.check` | A string naming the check that guards the input; the guard evaluates its `target_id`, which is that check. |
+| `operations[].guard.check` | A string naming the check, or (task schema `0.9`) the value test, that guards the input; the guard evaluates its `target_id`, which is that check. |
 | `candidate_layouts[]` | `{"id", "page_id", "kind": "fixed_slots", "features": [...], "slots": [...]}`: the candidate layouts of a page the task declares (`selection-graph.md`, section Candidate layouts, Source declaration). Each slot's `rect` and `click` lie inside the task's `coordinate_space`; each slot target is a template, color, color digest, check, OCR or NN target of the derived pack, and a `measure_milli` feature never reads a check. |
 | `operations[].select` | `{"layout_id", "policy": {"path": "policies/<name>.json", "sha256"}}`, the operation's only effect, with a declared `guard` of any accepted kind, an `expect_after` and no trusted coordinate (`selection-graph.md`, section Select step). The layout is one the task declares on the step's `from` page; the policy document is read as a selection-policy document and applies to the layout. Its declared `sha256` is format-checked and compared with nothing (Workflow #336 PKG-S1). |
 
 A check, like a color digest, is never clicked and never locates anything. `guard.check`
-requires the guard target to be a `composite` target. `guard.color_probe` accepts a color or a
+requires the guard target to be a `composite` or (Workflow #396 REC-6) `value_test` target. `guard.color_probe` accepts a color or a
 color digest target. A `target` or `offset` click requires a template guard
 (`guard.verify_template`) or a located-text guard (`guard.verify_text`, below); a
 `target_center` click requires a template guard.
@@ -212,6 +214,67 @@ derives every document byte for byte as before; one that uses `locate` derives p
 | --- | --- |
 | `ocr_targets[].locate` | `{"normalize": "identity_v1", "blocks": "detect" \| "region", "line_merge"?, "cells"?}` (`ocr-fields.md`, section Located text). The target is never an OCR field or reading target, an OCR relative anchor, a candidate layout slot target or feature, nor declares `target_consensus`. |
 | `operations[].guard.verify_text` | A string naming the guard's own `target_id`, a locate OCR target. The guard evaluates that target; a `target` or `offset` click takes the found cell, or block, as its box; `target_center` is refused. |
+
+### Task schema `0.9` value tests
+
+Workflow #396 REC-6. A task schema `0.9` `checks[]` entry may declare a value test instead of
+members; an older task schema refuses `value_test` with `UnconsumedField`, and an entry that
+declares it beside `all_of` or `any_of` is refused at that member. It derives a recognition pack
+schema `0.7` target of type `value_test` with the same `left`, `op` and `right`; an older pack
+schema refuses the type. A source that declares none derives every document byte for byte as
+before.
+
+```json
+{"id": "chk/count_matches_remaining",
+ "value_test": {
+   "left":  {"target_id": "ocr/count", "trim": "whitespace_v1",
+             "value": {"type": "unsigned_integer", "format": "ascii_decimal", "min": 0, "max": 999}},
+   "op": "eq",
+   "right": {"target_id": "ocr/remaining", "trim": "whitespace_all_v1",
+             "value": {"type": "unsigned_integer", "format": "current_capacity", "min": 0, "max": 999},
+             "part": "current", "mul": 1, "add": 0}}}
+```
+
+| Member | Rule |
+| --- | --- |
+| a side (`left`, an operand `right`) | `target_id` names an OCR target of the pack without `locate` and without `target_consensus`; `trim` is `whitespace_v1` (both ends, as `str::trim`) or `whitespace_all_v1` (every Unicode whitespace character: `1 / 3` reads `1/3`); `value` is `{"type": "unsigned_integer", "min", "max", "format"?}` with `min <= max` and a format of the shared parser (`ocr-fields.md`, default `ascii_decimal`); `part` (`current` or `capacity`) is required with `current_capacity` and refused with any other format |
+| `op` | `eq`, `ne`, `lt`, `le`, `gt`, `ge` or `parses`; `parses` has no `right` (`UnconsumedField`), every other `op` requires one (`MissingField`) |
+| `right` | `{"const": n}` with `0 <= n <= 2^53-1`, or another side with `mul` (1 to 1,000,000) and `add` (`-(2^53-1)` to `2^53-1`), both required; `mul` and `add` are refused on `left` |
+
+Each side reads its OCR target once per request and frame, within the text read budget of its
+consumer (`ocr-fields.md`, section Located text), trims the text and parses it with the shared
+`OcrUnsignedIntegerFormat` parser; the declared part must lie in `min..=max`, and the read's
+confidence must be present and at least the OCR target's `minimum_confidence`. The right value
+is the read value times `mul` plus `add`; both sides compare as 128-bit integers, without
+overflow. A side that does not read fails the test with `failure` `value_test_unresolved`
+(`target_id`, `value_side` `left` or `right`, the left side first, and `value_problem`
+`empty`, `invalid`, `overflow`, `out_of_range`, `region_unresolved` or `low_confidence`); a
+comparison that does not hold fails it with `value_test_not_met` (`target_id`, `value_op`). A
+provider failure is an evaluation error. The read text and values travel only in the value
+test's evidence (`value_test`: each side's `target_id`, `raw_text`, `value` or `problem`, `op`,
+the right side as `{"kind": "const", "const"}` or `{"kind": "operand", "operand", "mul", "add"}`,
+and `passed`) on its evaluation and on the task diagnostic target row; a projection treats a
+value test, and a check holding one, as personal when a side's OCR target is personal, and
+redacts that evidence.
+
+A value test may stand in a page rule's `required`, `any_of` and `optional`, as a member of a
+check, and as an operation's `guard.check` (directly or through a check); a guard whose value
+test does not pass refuses its input (`contained_task_guard_refused`, the code as its `cause=`
+token). In `forbidden`, directly or through a check, it is refused at the page set's
+`/pages/<i>/forbidden/<j>` (`InvalidValue`): a test that cannot read does not pass, which there
+would let the page match unseen; declare the opposite comparison in `required` instead. A value
+test is never clicked, locates nothing, and is refused as a candidate layout slot target or
+feature and with `target_consensus`.
+
+A page recognition evaluates each page's immediate targets first, in the order `required`,
+`any_of`, `optional`, `forbidden`. Its lazy targets (located text, value tests and checks
+holding either) follow in the order `required`, `any_of`, `forbidden`, `optional`, and only
+while the page can still match: once an immediate `required` target failed, an `any_of` group
+of immediate targets all failed, an immediate `forbidden` target passed, or a lazy `required`
+target failed, every remaining lazy target is skipped. A skipped target did not pass, calls no
+provider and carries `skipped` (`page_unmatched`) on its page result and task diagnostic row,
+with no evidence. The page results keep the declared order, and the match, including a frame
+that matches more than one page, is the one a full evaluation gives.
 
 ### Task schema `0.9` unique matches
 
@@ -346,8 +409,9 @@ declare that page, and a slot target that is not an evaluable target of the deri
 targets in the same build. The derived layout names its page by the full page-set ID
 `<game>/<page>`.
 
-Only `pack.json` is written at schema `0.7`, and only when it holds a `composite` or
-`color_digest` target, a per-target `max_distance` or a candidate layout. The page set,
+Only `pack.json` is written at schema `0.7`, and only when it holds a `composite`,
+`color_digest` or (task schema `0.9`) `value_test` target, a per-target `max_distance` or a
+candidate layout. The page set,
 navigation, operation index and primitives stay at `0.6`.
 
 A select step's refusals name the task's `task.json` (`/operations/<i>/select/…`, its `guard`,

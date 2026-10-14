@@ -449,6 +449,7 @@ impl PreparedPageObservation {
                         group_index: None,
                         target_index: 0,
                         evaluation: value,
+                        skipped: None,
                     };
                     let row = json!({"kind":"explicit_target", "stage":ExecutionKernelLocation::EvaluateRequestedTarget.as_str(), "target":evaluated});
                     private_facts.push(row.clone(), 1).map_err(|error| {
@@ -767,6 +768,8 @@ fn target_geometry(
                     // A digest verifies a place and a composite is a check; neither is clicked.
                     RecognitionTarget::ColorDigest(target) => (&target.id, None),
                     RecognitionTarget::Composite(target) => (&target.id, None),
+                    // Workflow #396 REC-6: a value test compares read values; it is not clicked.
+                    RecognitionTarget::ValueTest(target) => (&target.id, None),
                 };
                 (id == &value.id).then_some(click)
             })

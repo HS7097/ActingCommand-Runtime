@@ -2138,6 +2138,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "instance_facts_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl facts --instance: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "runtime_diagnosis_reported": {
       "category": "success",
       "ladder_class": "none",

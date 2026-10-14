@@ -164,19 +164,14 @@ startup still completes previously committed pending `EvictionIntent` records.
 The manifest reports effective configuration, not evidence that a sweep or
 deletion has occurred.
 
-`frame_retention_failed_run_successes` (K, default `3`, range `1..=1024`) and
-`frame_retention_failed_run_days` (T, default `7`, range `1..=36500`) configure
-eligibility for failed/cancelled run frames. Either K later successful runs with
-distinct RunIds on the same InstanceId, or T days since the original terminal's
-ledger timestamp, satisfies the status condition. Both are integer configuration
-parameters; omission and explicit values retain their independent `default` or
-`explicit` sources in the manifest. Invalid values fail configuration assembly,
-even when periodic retention is disabled. Days convert to milliseconds within
-`u64`; a backward clock cannot supply a negative elapsed duration as an expiry.
-Confirmed close, summary/settlement, material binding and permanent evidence
-protections still apply. Since Workflow #375 R5d the cleaner admits no eviction
-intent, and since Workflow #382 L-5 GlobalLedger no longer evaluates or seals
-K/T, so K and T gate nothing; both keys are still validated and reported.
+The failed-run keys `frame_retention_failed_run_successes` (K) and
+`frame_retention_failed_run_days` (T) are retired (Workflow #382 L-5b), with the
+K/T policy they configured (`contracts/ledger-store.md`). A configuration that
+still names either one is refused as an unknown member when it is loaded, by a
+start and by `check-config` alike (`config_decode_failed`, before any
+assembly); `config.parameters` no longer reports them, and an instruction that
+names one is `config_key_unknown`. Frames of failed runs follow the frame
+classes.
 
 `frame_retention_dedup_error` (boolean, default `true`) and
 `frame_retention_dedup_lab` (boolean, default `false`) are the frame classes'
@@ -313,8 +308,7 @@ revision.
     variable is never silent.
   - `parameters` (`key`, `value`, `source`): the effective values of
     `bind_host`, `bind_port`, `device_diagnostic_mode`,
-    `frame_retention_enabled`, `frame_retention_failed_run_successes`,
-    `frame_retention_failed_run_days`, `frame_retention_dedup_error`,
+    `frame_retention_enabled`, `frame_retention_dedup_error`,
     `frame_retention_dedup_lab`, `secret_fingerprint_salt_bytes` (the byte
     length only; the salt itself is never printed), `allow_env_overrides`
     (boolean, default `false`), `governance.allowed_clients` (string: the

@@ -582,6 +582,18 @@
       "type": "integer",
       "description": "A declared margin in milli below the best match's score."
     },
+    "value_side": {
+      "type": "vocab:value_side",
+      "description": "Which side of a value test could not be read."
+    },
+    "value_problem": {
+      "type": "vocab:value_problem",
+      "description": "Why one side of a value test could not be read."
+    },
+    "value_op": {
+      "type": "vocab:value_op",
+      "description": "The comparison of a value test."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -3450,6 +3462,78 @@
         }
       }
     },
+    "value_side": {
+      "description": "Which side of a value test could not be read (Workflow #396 REC-6).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "ValueSide"
+      },
+      "tokens": {
+        "left": {
+          "description": "The left side."
+        },
+        "right": {
+          "description": "The right side, another read value."
+        }
+      }
+    },
+    "value_problem": {
+      "description": "Why one side of a value test could not be read (Workflow #396 REC-6).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "ValueProblem"
+      },
+      "tokens": {
+        "empty": {
+          "description": "The trimmed text is empty."
+        },
+        "invalid": {
+          "description": "The text is not in the declared format."
+        },
+        "overflow": {
+          "description": "The number does not fit 64 bits."
+        },
+        "out_of_range": {
+          "description": "The value lies outside the declared min..=max."
+        },
+        "region_unresolved": {
+          "description": "The OCR target's region could not be resolved on the frame."
+        },
+        "low_confidence": {
+          "description": "The read's confidence is missing or below the OCR target's minimum_confidence."
+        }
+      }
+    },
+    "value_op": {
+      "description": "The comparison of a value test (Workflow #396 REC-6).",
+      "source": {
+        "file": "crates/recognition-pack/src/codes.rs",
+        "enum": "ValueOp"
+      },
+      "tokens": {
+        "eq": {
+          "description": "Equal."
+        },
+        "ne": {
+          "description": "Not equal."
+        },
+        "lt": {
+          "description": "Less than."
+        },
+        "le": {
+          "description": "Less than or equal."
+        },
+        "gt": {
+          "description": "Greater than."
+        },
+        "ge": {
+          "description": "Greater than or equal."
+        },
+        "parses": {
+          "description": "The left side reads in its format."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
@@ -5972,6 +6056,7 @@
       "contract",
       "device",
       "execution-kernel",
+      "ledger-forensics",
       "runtime-host"
     ],
     "freeze_": [
@@ -6240,8 +6325,12 @@
       "execution-kernel",
       "runtime-host"
     ],
+    "kept_folder_": [
+      "ledger-forensics"
+    ],
     "list_": [
       "ledger",
+      "ledger-forensics",
       "runtime-database",
       "runtime-host"
     ],
@@ -7643,6 +7732,9 @@
     ],
     "valuation_": [
       "policy"
+    ],
+    "value_test_": [
+      "recognition-pack"
     ],
     "vendor_": [
       "actinglab",
@@ -9724,11 +9816,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The ledger reports artifact eviction failed run basis conflict.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #382 L-5b). Replay refused a sealed failed-run (K/T) eviction intent whose evaluation time was not its own ledger time. The failed_run evidence is no member of an eviction intent any more: a stored intent that still carries it does not decode, and replay refuses it as corrupt_ledger_record.",
+      "common_causes": "A ledger written before the K/T policy was retired.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "artifact_eviction_guard_required": {
       "category": "error",
@@ -18812,11 +18905,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A post-admission OCR target is also part of a page gate.",
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #396 REC-6). A post-admission OCR target was also part of a page gate. A page that collects or reads OCR may now gate on any recognition backend and name the targets it collects; the gate's observation of such a target is the collection's, so the target is still read once per frame.",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "contained_task_post_admission_ocr_target_invalid": {
       "category": "error",
@@ -26792,6 +26886,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "frame_stat_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The frame listing (actingledger frames, Workflow #375 R5e) could not stat a frame's file at its object key for a reason other than its absence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "frame_store_device": {
       "category": "error",
       "ladder_class": "none",
@@ -26929,6 +27037,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The artifact store reports frame store watermarks invalid.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "frame_switches_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The frame listing found no config.parameters.top_level runtime fact naming the three frame retention switches, so it cannot class frames as actingd does.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -29599,6 +29721,40 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl emulator start|stop|restart: the Runtime completed the emulator control.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_fact_snapshot_too_large_for_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An InstanceFactSnapshot read (Workflow #389 MCP-4) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "instance_facts_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl facts --instance: one instance's facts (InstanceFactSnapshot) were printed, as ac_facts with scope instance answers them (Workflow #389 MCP-4).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -32566,11 +32722,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): invalid failed run retention policy.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #382 L-5b). actingd and the host refused a failed-run (K/T) retention policy outside its bounds: frame_retention_failed_run_successes outside 1..=1024 or frame_retention_failed_run_days outside 1..=36500. The K/T policy is retired, and with it both configuration keys and the contract type FailedRunRetentionPolicy; a configuration that still names either key does not decode (config_decode_failed), and an instruction naming it is config_key_unknown.",
+      "common_causes": "A configuration written for a Runtime before v0.12.0 that set a K/T key.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted. Remove the key from the configuration."
     },
     "invalid_fingerprint": {
       "category": "error",
@@ -38024,6 +38181,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger reports joint event type unsupported.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "kept_folder_cleared_record_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A host.kept_folder_cleared runtime fact is not one row with a folder and a cleared_at_unix_ms.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -59229,6 +59400,20 @@
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
+    "request_instance_fact_snapshot_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of an InstanceFactSnapshot request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #389 MCP-4 adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
     "request_match_diagnostic_signatures_completed": {
       "category": "success",
       "ladder_class": "none",
@@ -74869,6 +75054,53 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "value_test_not_met": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "value_op": "required",
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A value test did not pass: both sides read, and the left value compared with the right one (a constant, or the other read value times mul plus add) does not satisfy value_op (Workflow #396 REC-6). target_id is the value test. Carried as the target evaluation's failure: a page whose rule needs the value test does not match, and a guard refuses its input with it as the cause. The values are not values of the code; they are in the value test's evidence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "value_test_unresolved": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "required",
+        "value_side": "required",
+        "value_problem": "required",
+        "stage": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A value test did not pass because one of its sides could not be read (Workflow #396 REC-6). target_id is the value test; value_side names the side (the left side is reported first) and value_problem why: the trimmed text was empty, not in the declared format or too large for 64 bits, its value (or the declared part) lay outside min..=max, the OCR target's region could not be resolved, or the read's confidence was missing or below the OCR target's minimum_confidence. A provider failure is an evaluation error instead. Carried as the target evaluation's failure: a page whose rule needs the value test does not match, and a guard refuses its input with it as the cause. The read text and value are not values of the code; they are in the value test's evidence.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "vendor_stdio_residue_facts_exceeded": {
       "category": "error",
       "ladder_class": "none",
@@ -80428,6 +80660,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: list connection queues."
+    },
+    "list_frames": {
+      "owner": "ledger-forensics",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #375 R5e: actingledger frames, the read-only frame listing (open, view, stat, kept walk)."
     },
     "list_maintenance_material": {
       "owner": "runtime-database",
@@ -86461,6 +86701,14 @@
       "since": "0.12.0",
       "description": "A runtime client operation: runtime input."
     },
+    "runtime_instance_fact_snapshot": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: one instance's facts (InstanceFactSnapshot, Workflow #389 MCP-4)."
+    },
     "runtime_ipc_connection_panic": {
       "owner": "runtime-host",
       "layer": "host",
@@ -88205,6 +88453,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger's operation or stage: validate writer metadata."
+    },
+    "value_test_evaluate": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Reading, parsing and comparing the sides of a value test (Workflow #396 REC-6)."
     },
     "verify_artifact": {
       "owner": "artifact-store",

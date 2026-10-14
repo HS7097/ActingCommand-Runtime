@@ -396,3 +396,31 @@ tests = [
     "actingcommand-ledger::lib::fact::capture_tests::l4_a_stored_record_reads_its_capture_and_refuses_another_time",
 ]
 incident = ["#383 SH-1"]
+
+# The release baseline check reads one fixed snapshot while appends commit
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-state::lib::store::tests::release_baseline_check_reads_one_snapshot_while_an_append_lands_mid_scan",
+]
+incident = ["#381 A"]
+
+# The frame listing: every class, overlapping windows, a deleted leaf, an epoch-end folder,
+# every clear event, a frame in both places counted in_folder, running frames without paths
+[[gate]]
+key = "41"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger-forensics::lib::frames::tests::frames_listing_reports_every_class_folder_and_both_cleared_records",
+]
+incident = ["#375 R5e"]
+
+# Replay refuses an eviction intent that carries the retired failed-run (K/T) evidence; a success-sourced one replays (Workflow #382 L-5b)
+[[gate]]
+key = "44"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_l5b::gate_replay_refuses_an_eviction_intent_carrying_failed_run_evidence",
+]
+incident = ["#382 L-5b"]

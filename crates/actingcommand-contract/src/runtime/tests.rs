@@ -176,8 +176,11 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         },
     ];
     let recovery = crate::AdbTargetRecovery {
-        endpoint: LifecycleNativeDetail::new("private-endpoint:5555", false),
-        initial_error: LifecycleNativeDetail::new("preserved device offline", false),
+        endpoint: Some(LifecycleNativeDetail::new("private-endpoint:5555", false)),
+        initial_error: Some(LifecycleNativeDetail::new(
+            "preserved device offline",
+            false,
+        )),
         path: crate::AdbRecoveryPath::TargetDisconnectConnect,
         budget_ms: 12000,
         steps: vec![crate::AdbRecoveryStep {
@@ -193,15 +196,18 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
                 stderr_lossy_decode: false,
                 state: crate::AdbTransportState::Offline,
                 raw_text_redacted: false,
+                outcome: None,
             }),
             error: Some(LifecycleNativeDetail::new(
                 "original verification failure",
                 false,
             )),
+            outcome: None,
         }],
         final_state: crate::AdbTransportState::Offline,
         recovered: false,
         dropped_count: 0,
+        outcome: None,
     };
     // Ledger revision 3 (Workflow #378 A3): the failure is the payload's outcome, with its
     // `operation` and `stage`; the cause and the cleanup are its links, and native text rides

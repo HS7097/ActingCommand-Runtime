@@ -25,6 +25,9 @@ pub enum AgentWakeKind {
     LadderExhausted,
     /// Reserved (register A1, AGT-1): a task was paused.
     TaskPaused,
+    /// Reserved (register X2, AGT-1; #331 ruling 10-13): the daily results summary is due. A
+    /// timer wakes it, so its wake names no trigger record (register X3).
+    DailySummary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,8 +180,14 @@ pub struct AgentWakeData {
     instance_id: InstanceId,
     correlation_id: CorrelationId,
     kind: AgentWakeKind,
-    trigger_event_id: EventId,
-    trigger_sequence: u64,
+    /// The record that triggered the wake. Workflow #383 register X3: absent for a wake no
+    /// record triggered (a timer's, AGT-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trigger_event_id: Option<EventId>,
+    /// The trigger record's ledger sequence, never 0 when present. Register X3: absent for a
+    /// timer's wake, and AO-4 stops writing it (business uses no ledger position).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trigger_sequence: Option<u64>,
     requested_at_unix_ms: u64,
     attention_state: AgentAttentionState,
     budget: AgentSessionBudget,
@@ -198,8 +207,8 @@ impl AgentWakeData {
             instance_id: trigger.instance_id,
             correlation_id,
             kind: trigger.kind,
-            trigger_event_id: trigger.event_id,
-            trigger_sequence: trigger.event_sequence,
+            trigger_event_id: Some(trigger.event_id),
+            trigger_sequence: Some(trigger.event_sequence),
             requested_at_unix_ms: trigger.observed_at_unix_ms,
             attention_state: AgentAttentionState::PausedNeedsAgent,
             budget,
@@ -210,7 +219,7 @@ impl AgentWakeData {
     }
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
-        if self.trigger_sequence == 0
+        if self.trigger_sequence == Some(0)
             || self.requested_at_unix_ms == 0
             || self.attention_state != AgentAttentionState::PausedNeedsAgent
         {
@@ -239,11 +248,13 @@ impl AgentWakeData {
         self.kind
     }
 
-    pub const fn trigger_event_id(&self) -> EventId {
+    /// Absent for a wake no record triggered (register X3).
+    pub const fn trigger_event_id(&self) -> Option<EventId> {
         self.trigger_event_id
     }
 
-    pub const fn trigger_sequence(&self) -> u64 {
+    /// Absent for a wake no record triggered, or once AO-4 stops writing it (register X3).
+    pub const fn trigger_sequence(&self) -> Option<u64> {
         self.trigger_sequence
     }
 
