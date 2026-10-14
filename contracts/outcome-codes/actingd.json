@@ -2259,6 +2259,22 @@
       "description": "The private binding file binds an alias that no handset instance of the configuration has (#398 R1 RD-1b); a check-config note, not a failure.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "start_emulator_requires_discovery_binding": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused its configuration (Workflow #369 S6a): an instance names start_emulator true but has no emulator the daemon can start, because it is a fixture or is not bound by instance_index or instance_name. check-config names the instance as alias.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {

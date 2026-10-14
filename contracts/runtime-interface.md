@@ -491,6 +491,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `selfcheck` | SelfCheckInstance | option two | retires → actinglab `emulator selfcheck` |
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
+| new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything) | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
 | new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
 | planned: `pack-schedule set`, `pack-schedule get` (SR-11), `perf-status` (#385), the D2 S5 query, the SR-5a entry | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
@@ -503,7 +504,7 @@ two.
 
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|
-| `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; output as today | general |
+| `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
 | `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `exclude_event_types`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1). Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design) | general |
 | `ac_get_run` | read | `actingctl run get` | `handle` or `run_id` ↔ `--handle` or `--run-id`; `wait_s` is presentation | general |
 | `ac_material` | read | `actingctl material` | `ref`, `mode`, `offset`, `max_bytes` ↔ same flags | general |
@@ -530,6 +531,14 @@ two.
 | `ac_emulator` | operation | actinglab `emulator start`, `stop`, `restart` (new) | `instance`, `action` ↔ `--instance` and the subcommand | option two |
 | `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG) | option two |
 
+- `ac_overview` past the output budget (#389 MCP-8, MCP-0 command table §4.9): it cuts one
+  block at a time until the answer fits, in this order: `fact_refresh`, `host`, `startup`,
+  `tagged_state`, `ledger`, `performance`, `watchdog`, `catalog`, `config_generation`, each
+  instance row's `run` (the last row first), each row's `monitor`, `install.build`. A cut
+  block leaves `<block>_truncated: true` where it was. The daemon, the global pause, each
+  row's identity, `pause`, `lease_active` and `queued`, and `incomplete` are never cut; an
+  answer that still does not fit is `output_budget_exceeded`. A slice that adds an overview
+  block adds its name to `--sections` and registers its place in this order in the same PR.
 - `ac_run_pack` mints the request id and correlation id itself and returns `handle` =
   that request id at once (valid across restarts, as today); its job runs
   `actinglab --json run start … --request-id <id> --correlation-id <id> --via mcp` with

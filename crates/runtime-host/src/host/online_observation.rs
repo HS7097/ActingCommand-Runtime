@@ -188,8 +188,7 @@ impl HostShared {
             request_id: original.request_id(),
             correlation_id: request.correlation_id(),
             instance_id: resolved.instance_id(),
-            expected_package_sha256: input.expected_sha256().clone(),
-            actual_package_sha256: prepared.package_sha256(),
+            package_label: prepared.package_label(),
             frame: completed.observation,
             rgb8_sha256: evaluated.rgb8_sha256,
             status: evaluated.status,
@@ -247,8 +246,7 @@ impl HostShared {
         )?;
         let observation = ContainedPageObservation {
             instance_id: evidence.instance_id,
-            expected_package_sha256: evidence.expected_package_sha256,
-            actual_package_sha256: evidence.actual_package_sha256,
+            package_label: evidence.package_label,
             frame: evidence.frame,
             status: evidence.status,
             projection: evidence.projection,

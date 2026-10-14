@@ -3,7 +3,7 @@
   "source": "apps/actinglab/src/**/*.rs",
   "dispatch_function": "execute",
   "denominator_kind": "top_level_dispatch_arm",
-  "dispatch_arm_count": 47,
+  "dispatch_arm_count": 48,
   "dispatch_arms": [
     "help",
     "version",
@@ -26,6 +26,7 @@
     "recognize",
     "recognize-artifact",
     "observe",
+    "replay",
     "do",
     "ensure",
     "wait",
@@ -53,7 +54,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 133,
+  "command_count": 134,
   "commands": [
     "help",
     "version",
@@ -76,6 +77,7 @@
     "recognize",
     "recognize-artifact",
     "observe",
+    "replay",
     "do",
     "ensure",
     "wait",

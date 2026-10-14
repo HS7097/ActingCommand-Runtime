@@ -68,6 +68,11 @@ pub use actingcommand_execution_kernel::{
     RecoverySignal, RecoveryStatus, execute_recovery_graph, simulate_contained_task,
     simulate_contained_task_at,
 };
+// Workflow #308 SEL-L6a: the whole-package replay of `actinglab replay --frames`.
+pub use actingcommand_execution_kernel::{
+    OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts, OfflineReplayResult,
+    replay_contained_task,
+};
 
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,

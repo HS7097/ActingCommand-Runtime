@@ -61,8 +61,8 @@ pub use codes::{
 pub use candidate_layout::{
     CANDIDATE_FEATURE_FAILED, CANDIDATE_FEATURE_PROVIDER_MISSING, CANDIDATE_LAYOUT_UNKNOWN,
     CandidateFeatureDeclaration, CandidateFeatureValue, CandidateIntegerDeclaration,
-    CandidateLayout, CandidateOrder, CandidateProjectionFailure, CandidateSlot, TargetSearch,
-    UnknownIdentityHandling,
+    CandidateLayout, CandidateOrder, CandidateProjectionFailure, CandidateSharedOcr, CandidateSlot,
+    TargetSearch, UnknownIdentityHandling,
 };
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
@@ -1143,8 +1143,8 @@ pub(crate) enum JointSearch<'a> {
 /// OCR results are not cached, except the text reads of locate targets and value tests, which
 /// are remembered per request for this Scene only (Workflow #396 REC-1, REC-6), and the
 /// observations of the field and reading targets a page gate evaluates, which are remembered by
-/// target for the same frame's collection (REC-6); callers cannot import evaluations from
-/// another frame.
+/// target for the same frame's collection (REC-6) and count in this consumer's text read budget
+/// (REC-8); callers cannot import evaluations from another frame.
 pub struct SceneEvaluation<'a> {
     evaluator: &'a RecognitionEvaluator,
     scene: &'a Scene,
@@ -2237,9 +2237,13 @@ impl RecognitionEvaluator {
                         result
                     }
                     None => {
-                        let observation = provider
-                            .read_text_with_execution_evidence(request)
-                            .map_err(|err| provider_error(&target.id, "ocr", err))?;
+                        // Workflow #396 REC-8: the gate's read of a kept target is one read of
+                        // this page recognition's budget.
+                        context.admit_text_read(&target.id, region)?;
+                        let observation = provider.read_text_with_execution_evidence(request);
+                        context.count_text_read(region);
+                        let observation =
+                            observation.map_err(|err| provider_error(&target.id, "ocr", err))?;
                         context.observations.borrow_mut().observations.insert(
                             target.id.clone(),
                             RememberedOcrObservation {
@@ -2257,22 +2261,8 @@ impl RecognitionEvaluator {
                     .map_err(|err| provider_error(&target.id, "ocr", err))?
             };
             let ocr = validate_ocr_result(result, region)?;
-            let matched_expected = target
-                .expected
-                .iter()
-                .find(|expected| ocr_text_matches(&ocr.text, expected, target))
-                .cloned();
-            let confidence_ok = ocr
-                .confidence
-                .is_some_and(|confidence| confidence >= target.minimum_confidence);
-            let passed = matched_expected.is_some() && confidence_ok;
-            let message = match (matched_expected.is_some(), confidence_ok) {
-                (true, true) => "ocr passed",
-                (false, true) => "ocr text did not match",
-                (true, false) => "ocr confidence below threshold",
-                (false, false) => "ocr text did not match and confidence below threshold",
-            }
-            .to_string();
+            let (matched_expected, passed, message) =
+                ocr_verdict(target, &ocr.text, ocr.confidence);
 
             Ok(TargetEvaluation {
                 id: target.id.clone(),
@@ -3894,6 +3884,32 @@ fn rect_is_within(inner: PackRect, outer: PackRect) -> bool {
     let outer_right = i64::from(outer.x) + i64::from(outer.width);
     let outer_bottom = i64::from(outer.y) + i64::from(outer.height);
     inner_right <= outer_right && inner_bottom <= outer_bottom
+}
+
+/// The verdict of an OCR target without `locate` on its text and confidence: the `expected`
+/// value the text matches, whether the target passed (a match with a confidence of at least
+/// `minimum_confidence`), and the developer message.
+fn ocr_verdict(
+    target: &OcrTarget,
+    text: &str,
+    confidence: Option<f32>,
+) -> (Option<String>, bool, String) {
+    let matched_expected = target
+        .expected
+        .iter()
+        .find(|expected| ocr_text_matches(text, expected, target))
+        .cloned();
+    let confidence_ok =
+        confidence.is_some_and(|confidence| confidence >= target.minimum_confidence);
+    let passed = matched_expected.is_some() && confidence_ok;
+    let message = match (matched_expected.is_some(), confidence_ok) {
+        (true, true) => "ocr passed",
+        (false, true) => "ocr text did not match",
+        (true, false) => "ocr confidence below threshold",
+        (false, false) => "ocr text did not match and confidence below threshold",
+    }
+    .to_string();
+    (matched_expected, passed, message)
 }
 
 fn ocr_text_matches(text: &str, expected: &str, target: &OcrTarget) -> bool {

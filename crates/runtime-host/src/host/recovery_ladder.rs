@@ -125,7 +125,8 @@ pub(super) enum LadderInvariant {
     /// A5: business capacity refuses new work (the ledger could not record it).
     CapacityRefused,
     /// A7: a blackout window keeps the instance silent. The host has no blackout state before
-    /// SR-2a, so nothing sets it yet.
+    /// SR-4a, so nothing sets it yet; a build from SR-2a on reads the `blackout` suppression
+    /// SR-4a records (Workflow #386, register S3).
     Blackout,
 }
 

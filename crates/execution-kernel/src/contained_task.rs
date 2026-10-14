@@ -30,7 +30,7 @@ use actingcommand_contract::{
     EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, validate_entry_page_set,
 };
 use actingcommand_device::{Frame, PixelFormat};
-use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
+use actingcommand_pack_containment::{ContainmentError, LoadedBundle};
 use actingcommand_page_detector::{
     PageBatchResult, PageDetector, PageEvaluation, PageOutcome, PageSet, PageTargetRole,
     require_all_page_evaluations,
@@ -64,6 +64,12 @@ mod unique_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
+// Workflow #308 SEL-L6a.
+#[cfg(test)]
+mod gate_308_l6a;
+// Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
+#[cfg(test)]
+mod gate_387_d1cf;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -187,6 +193,9 @@ pub struct ContainedTaskError {
     timing: Option<Box<TaskTimingFailure>>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
+    /// Workflow #336 PKG-S2 (option 丙): with a refused declaration, the `package_id` the
+    /// package's control declares, when preparation read one.
+    declaration_package: Option<Box<str>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     /// Workflow #386 SR-1: the failure's outcome with the values its code declares, when the
     /// kernel attached them (a sampling timeout's `attempts`, `timeout_ms` and `stage`; a
@@ -206,6 +215,7 @@ impl ContainedTaskError {
             timing: None,
             timing_check_position: None,
             declaration_issue: None,
+            declaration_package: None,
             ppocr_diagnostics: Vec::new(),
             values: None,
         }
@@ -218,6 +228,7 @@ impl ContainedTaskError {
             timing: None,
             timing_check_position: None,
             declaration_issue: None,
+            declaration_package: None,
             ppocr_diagnostics: Vec::new(),
             values: None,
         }
@@ -307,6 +318,13 @@ impl ContainedTaskError {
 
     pub fn declaration_issue(&self) -> Option<&actingcommand_contract::ResourceDeclarationIssue> {
         self.declaration_issue.as_deref()
+    }
+
+    /// Workflow #336 PKG-S2 (option 丙): the `package_id` of the package whose declaration was
+    /// refused, when preparation read it from the package's control; the refusal record's
+    /// `package_label`.
+    pub fn declaration_package(&self) -> Option<&str> {
+        self.declaration_package.as_deref()
     }
 }
 
@@ -692,7 +710,6 @@ pub struct PostAdmissionOcrComparisonReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     target_ids: Option<Vec<String>>,
     truth_set_path: String,
-    truth_set_sha256: String,
     normalization: PostAdmissionOcrNormalization,
     comparison: PostAdmissionOcrComparisonMode,
     outcome_key: String,
@@ -724,11 +741,14 @@ impl PostAdmissionOcrComparisonReport {
     }
 }
 
+/// The truth set a post-admission comparison reads, by its task-local path. Workflow #336
+/// PKG-S2 (option 丙, D5): a `sha256` it may still declare is an `IgnoredPin`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PostAdmissionOcrTruthReference {
     path: String,
-    sha256: String,
+    #[serde(default, rename = "sha256")]
+    _ignored_sha256: actingcommand_contract::IgnoredPin,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -792,6 +812,28 @@ struct PreparedOcrFields {
     dictionaries: BTreeMap<String, OcrFieldDictionary>,
 }
 
+/// Workflow #396 REC-6, REC-8: the OCR targets a run collects or reads (fields, the collection
+/// mode's targets, readings), whose observation by a page gate is kept for the same frame and
+/// counts in the page recognition's text read budget.
+fn kept_ocr_targets(
+    fields: Option<&PreparedOcrFields>,
+    prepared: Option<&PreparedPostAdmissionOcr>,
+    readings: Option<&[ResourceReadingDeclaration]>,
+) -> HashSet<String> {
+    let fields = fields
+        .into_iter()
+        .flat_map(|fields| fields.declaration.fields.iter())
+        .map(|field| field.target_id.clone());
+    let collected = prepared
+        .into_iter()
+        .flat_map(|prepared| prepared.target_ids.iter().cloned());
+    let readings = readings
+        .into_iter()
+        .flatten()
+        .map(|reading| reading.target_id.clone());
+    fields.chain(collected).chain(readings).collect()
+}
+
 #[derive(Debug, Clone, Default)]
 struct PostAdmissionOcrObservedAggregate {
     occurrences: u32,
@@ -837,21 +879,13 @@ impl<'a> PostAdmissionOcrCollector<'a> {
     /// Workflow #384 D2-S2: the readings are the reading marks of the run's relay; a frame handed
     /// to recognition takes the gate's observations of their targets.
     fn remembered_ocr_targets(&self) -> HashSet<String> {
-        let fields = self
-            .fields
-            .into_iter()
-            .flat_map(|fields| fields.declaration.fields.iter())
-            .map(|field| field.target_id.clone());
-        let collected = self
-            .prepared
-            .into_iter()
-            .flat_map(|prepared| prepared.target_ids.iter().cloned());
-        let readings = self
-            .reading_relay
-            .iter()
-            .flat_map(|relay| relay.declarations().iter())
-            .map(|reading| reading.target_id.clone());
-        fields.chain(collected).chain(readings).collect()
+        kept_ocr_targets(
+            self.fields,
+            self.prepared,
+            self.reading_relay
+                .as_ref()
+                .map(readings::ReadingRelay::declarations),
+        )
     }
 
     #[cfg(test)]
@@ -1491,7 +1525,6 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             target_id: prepared.declaration.target_id.clone(),
             target_ids: prepared.declaration.target_ids.clone(),
             truth_set_path: prepared.declaration.truth_set.path.clone(),
-            truth_set_sha256: prepared.declaration.truth_set.sha256.clone(),
             normalization: prepared.declaration.normalization,
             comparison: prepared.declaration.comparison,
             outcome_key: prepared.declaration.outcome_key.clone(),
@@ -1727,7 +1760,6 @@ pub enum ContainedTaskTrace {
     PackageAdmitted {
         task_label: String,
         package_label: String,
-        package_sha256: actingcommand_contract::PackageRef,
     },
     RunStarted,
     /// Workflow #373 NAV-3b: the entry page set the run required and the one page of it the
@@ -2310,6 +2342,26 @@ impl PreparedContainedTask {
     /// Preparation over the already contained, externally verified package. Lab authoring
     /// preflight shares this exact owner with Runtime and never executes the prepared task.
     pub fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
+        // Workflow #336 PKG-S2 (option 丙): a refused declaration names its package by the
+        // `package_id` the package's control declares, when that is a label a record can carry.
+        let package_label = bundle
+            .loaded_bundle()
+            .control()
+            .and_then(|control| control.get("package_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|label| {
+                !label.is_empty() && label.len() <= 256 && !label.chars().any(char::is_control)
+            })
+            .map(Box::<str>::from);
+        Self::prepare_bundle(bundle).map_err(|mut error| {
+            if error.declaration_issue.is_some() {
+                error.declaration_package = package_label;
+            }
+            error
+        })
+    }
+
+    fn prepare_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
         let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
@@ -2332,25 +2384,7 @@ impl PreparedContainedTask {
         })?;
         detector
             .validate(&evaluator)
-            .map_err(|error| match error.declaration_issue() {
-                // Workflow #396 REC-1: a page set whose text reads exceed one consumer's
-                // budget is a refused declaration, pointing at the page that exceeds it.
-                Some(issue) => {
-                    let mut refused = ContainedTaskError::with_detail(
-                        SharedCode::ResourceDeclarationInvalid.code(),
-                        error.to_string(),
-                    );
-                    let mut issue = issue.clone();
-                    if let Some(path) = bundle.pages_path() {
-                        issue.declaration_file = path.to_owned();
-                    }
-                    refused.declaration_issue = Some(Box::new(issue));
-                    refused
-                }
-                None => ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskRecognitionInvalid.code(),
-                ),
-            })?;
+            .map_err(|error| page_set_refusal(&error, &bundle))?;
         evaluator
             .pack()
             .validate_candidate_layout_pages(|page_id| detector.contains_page(page_id))
@@ -2409,6 +2443,18 @@ impl PreparedContainedTask {
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
         program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
+        // Workflow #396 REC-8: a page that names a field, reading or collection target reads
+        // it in the page recognition, one more text read of that consumer's budget.
+        let kept = kept_ocr_targets(
+            post_admission_fields.as_ref(),
+            post_admission_ocr.as_ref(),
+            program.resource_readings.as_deref(),
+        );
+        if !kept.is_empty() {
+            detector
+                .validate_keeping(&evaluator, kept)
+                .map_err(|error| page_set_refusal(&error, &bundle))?;
+        }
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -2513,6 +2559,27 @@ impl PreparedContainedTask {
             .operations
             .iter()
             .any(|operation| operation.select.is_some())
+    }
+
+    /// Workflow #308 SEL-L6a (FCM T-03): the pages operation `operation_label` declares it
+    /// reaches, as the run waits for them: its `to` page set (more than one page for a
+    /// multi-destination operation), else its `expect_after` page; empty when it declares
+    /// neither. A label the task does not declare is `contained_task_operation_missing`.
+    pub fn operation_destinations(
+        &self,
+        operation_label: &str,
+    ) -> Result<Vec<String>, ContainedTaskError> {
+        self.program
+            .operations
+            .iter()
+            .find(|operation| operation.id == operation_label)
+            .ok_or_else(|| {
+                ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                    operation_label,
+                )
+            })?
+            .destination_pages()
     }
 
     /// The entry the run must see first, as detector page ids: one page, or the pages of an entry
@@ -3250,7 +3317,6 @@ impl PreparedContainedTask {
             .record(ContainedTaskTrace::PackageAdmitted {
                 task_label: self.task_label().to_string(),
                 package_label: self.package_label().to_string(),
-                package_sha256: self.package_sha256.clone(),
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         runtime
@@ -4206,10 +4272,10 @@ impl PreparedContainedTask {
         observation: &PageObservation,
     ) -> Result<Option<StabilityTerminalReason>, ContainedTaskRunError<R::Error>> {
         let terminal_reason = if let Some(declaration) = &self.control.stability_termination {
+            // Every observation a step completes on carries its sample while a declaration is
+            // in force; one without it is a Runtime-internal invariant (Workflow #387 D1c-F).
             let sample = observation.stability_sample.clone().ok_or_else(|| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-                )
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
             })?;
             let transition = stability_tracker.propose(sample, declaration, step_index)?;
             let (trace, terminal_reason) = match &transition {
@@ -5353,86 +5419,65 @@ struct StabilityFrameSample {
     pixels: Vec<u8>,
 }
 
+/// Workflow #387 D1c-F: the declared crop of `frame` for stability termination. Two causes are
+/// told apart. Frame data that does not add up (its pixel length against width x height x
+/// bytes per pixel, or a size that overflows) is the capture's failure:
+/// `contained_task_frame_invalid`. A region that is empty, overflows or does not lie inside the
+/// frame is the control declaration's: the frame passed the task resolution check before this
+/// call, and admission refuses the same region against that resolution with
+/// `contained_task_control_invalid`.
 fn stability_sample(
     frame: &Frame,
     declaration: &StabilityTerminationDeclaration,
 ) -> Result<StabilityFrameSample, ContainedTaskError> {
+    let frame_invalid =
+        || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code());
+    let region_invalid =
+        || ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code());
     let bytes_per_pixel = match frame.pixel_format {
         PixelFormat::Rgb8 => 3usize,
         PixelFormat::Rgba8 => 4usize,
     };
-    let frame_width = usize::try_from(frame.width).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let frame_height = usize::try_from(frame.height).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
+    let frame_width = usize::try_from(frame.width).map_err(|_| frame_invalid())?;
+    let frame_height = usize::try_from(frame.height).map_err(|_| frame_invalid())?;
     let expected_frame_len = frame_width
         .checked_mul(frame_height)
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
-        .ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-            )
-        })?;
+        .ok_or_else(frame_invalid)?;
     if frame.pixels.len() != expected_frame_len {
-        return Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-        ));
+        return Err(frame_invalid());
     }
 
     let region = declaration.region;
-    let end_x = region.x.checked_add(region.width).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let end_y = region.y.checked_add(region.height).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
+    let end_x = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(region_invalid)?;
+    let end_y = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(region_invalid)?;
     if region.width == 0 || region.height == 0 || end_x > frame.width || end_y > frame.height {
-        return Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-        ));
+        return Err(region_invalid());
     }
 
-    let x = usize::try_from(region.x).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let y = usize::try_from(region.y).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let width = usize::try_from(region.width).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let height = usize::try_from(region.height).map_err(|_| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let row_bytes = width.checked_mul(bytes_per_pixel).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
-    let capacity = row_bytes.checked_mul(height).ok_or_else(|| {
-        ContainedTaskError::new(ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code())
-    })?;
+    let x = usize::try_from(region.x).map_err(|_| region_invalid())?;
+    let y = usize::try_from(region.y).map_err(|_| region_invalid())?;
+    let width = usize::try_from(region.width).map_err(|_| region_invalid())?;
+    let height = usize::try_from(region.height).map_err(|_| region_invalid())?;
+    let row_bytes = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(region_invalid)?;
+    let capacity = row_bytes.checked_mul(height).ok_or_else(region_invalid)?;
     let mut pixels = Vec::with_capacity(capacity);
     for row in y..y + height {
         let start = row
             .checked_mul(frame_width)
             .and_then(|offset| offset.checked_add(x))
             .and_then(|offset| offset.checked_mul(bytes_per_pixel))
-            .ok_or_else(|| {
-                ContainedTaskError::new(
-                    ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-                )
-            })?;
-        let end = start.checked_add(row_bytes).ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-            )
-        })?;
-        pixels.extend_from_slice(frame.pixels.get(start..end).ok_or_else(|| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskStabilityCaptureInvalid.code(),
-            )
-        })?);
+            .ok_or_else(region_invalid)?;
+        let end = start.checked_add(row_bytes).ok_or_else(region_invalid)?;
+        pixels.extend_from_slice(frame.pixels.get(start..end).ok_or_else(region_invalid)?);
     }
 
     Ok(StabilityFrameSample {
@@ -6314,16 +6359,6 @@ impl TaskProgram {
                 ExecutionKernelCode::ContainedTaskPostAdmissionOcrOutcomeInvalid.code(),
             ));
         }
-        let declared_hash = Sha256Hash::parse_hex(&declaration.truth_set.sha256).map_err(|_| {
-            ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-            )
-        })?;
-        if declared_hash.to_string() != declaration.truth_set.sha256 {
-            return Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskPostAdmissionOcrTruthInvalid.code(),
-            ));
-        }
         let relative_path = format!("operations/{}/{}", self.task_id, declaration.truth_set.path);
         let bytes = bundle.resource_entry(&relative_path).map_err(|_| {
             ContainedTaskError::with_detail(
@@ -6331,8 +6366,8 @@ impl TaskProgram {
                 relative_path.clone(),
             )
         })?;
-        // Workflow #336 PKG-S1: the declared `sha256` is format-checked above and compared with
-        // nothing; only the size bound applies to the bytes.
+        // Workflow #336 PKG-S2: a declared `sha256` is ignored; only the size bound applies to the
+        // bytes.
         if u64::try_from(bytes.len()).map_or(true, |size| size > declaration.limits.max_total_bytes)
         {
             return Err(ContainedTaskError::with_detail(
@@ -6479,11 +6514,8 @@ impl TaskProgram {
         for field in &declaration.fields {
             if let OcrFieldType::DictionaryEntry { dictionary } = &field.value {
                 let path = format!("operations/{}/{}", self.task_id, dictionary.path);
-                // Workflow #336 PKG-S1: the declared `sha256` is format-checked and compared with
-                // nothing; only the total size bound applies to the bytes.
-                Sha256Hash::parse_hex(&dictionary.sha256).map_err(|_| {
-                    ContainedTaskError::new(SharedCode::OcrFieldsDictionaryReferenceInvalid.code())
-                })?;
+                // Workflow #336 PKG-S2: a declared `sha256` is ignored; only the total size bound
+                // applies to the bytes.
                 let bytes = bundle.resource_entry(&path).map_err(|_| {
                     ContainedTaskError::new(ExecutionKernelCode::OcrFieldsDictionaryMissing.code())
                 })?;
@@ -8220,6 +8252,31 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
     }
 }
 
+/// A page set the recognition pack refuses. Workflow #396 REC-1: a page set whose text reads
+/// exceed one consumer's budget is a refused declaration, pointing at the page that exceeds it.
+fn page_set_refusal(
+    error: &actingcommand_page_detector::PageDetectorError,
+    bundle: &LoadedBundle,
+) -> ContainedTaskError {
+    match error.declaration_issue() {
+        Some(issue) => {
+            let mut refused = ContainedTaskError::with_detail(
+                SharedCode::ResourceDeclarationInvalid.code(),
+                error.to_string(),
+            );
+            let mut issue = issue.clone();
+            if let Some(path) = bundle.pages_path() {
+                issue.declaration_file = path.to_owned();
+            }
+            refused.declaration_issue = Some(Box::new(issue));
+            refused
+        }
+        None => {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskRecognitionInvalid.code())
+        }
+    }
+}
+
 fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> ContainedTaskError {
     let mut failure = ContainedTaskError::with_detail(
         SharedCode::ResourceDeclarationInvalid.code(),
@@ -8696,7 +8753,7 @@ mod post_admission_ocr_tests {
                 target_ids: Some(target_ids.clone()),
                 truth_set: PostAdmissionOcrTruthReference {
                     path: "truth.json".to_string(),
-                    sha256: "c".repeat(64),
+                    _ignored_sha256: actingcommand_contract::IgnoredPin,
                 },
                 normalization: PostAdmissionOcrNormalization::TrimLowercaseV1,
                 comparison: PostAdmissionOcrComparisonMode::ExactSetV1,
@@ -8727,7 +8784,7 @@ mod post_admission_ocr_tests {
                 target_ids: None,
                 truth_set: PostAdmissionOcrTruthReference {
                     path: "truth.json".to_string(),
-                    sha256: "c".repeat(64),
+                    _ignored_sha256: actingcommand_contract::IgnoredPin,
                 },
                 normalization: PostAdmissionOcrNormalization::TrimLowercaseV1,
                 comparison: PostAdmissionOcrComparisonMode::ExactSetV1,
@@ -9759,6 +9816,50 @@ mod post_admission_ocr_tests {
             );
             assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
         }
+    }
+
+    // Workflow #336 PKG-S2, model M-PKG v1.1 §4.3 S2-T7: a truth set declared without a
+    // `sha256` is compared as before, and the comparison report names it by its path only.
+    #[test]
+    fn s2_t7_a_truth_set_without_a_pin_is_compared_and_its_report_names_no_pin() {
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([provider_observation(
+                "pinless-1",
+                &["alpha".to_string()],
+            )])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let mut prepared = prepared_v2(&["alpha"], &[]);
+        prepared.declaration = serde_json::from_value(json!({
+            "page_id": "target",
+            "target_id": "fixture/ocr",
+            "truth_set": {"path": "truth.json"},
+            "normalization": "trim_lowercase_v1",
+            "comparison": "exact_set_v1",
+            "limits": {
+                "max_frames": 2,
+                "max_items": 500,
+                "max_string_bytes": 64,
+                "max_total_bytes": 1_000_000,
+                "max_truth_entries": 500
+            },
+            "outcome_key": "comparison_recorded"
+        }))
+        .expect("a truth set reference without a pin");
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        collector
+            .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+            .expect("observation")
+            .expect("admitted frame");
+        let report = collector.finish().expect("comparison").expect("report");
+
+        assert!(report.exact_match);
+        let encoded = serde_json::to_value(&report).expect("report JSON");
+        assert_eq!(encoded["truth_set_path"], "truth.json");
+        assert!(encoded.get("truth_set_sha256").is_none());
     }
 
     #[test]
@@ -11574,6 +11675,94 @@ mod retry_wiring_tests {
             .expect("the package is admitted");
         selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
             .expect("the select step is admitted with its declared pin unchecked");
+        assert!(task.program.operations[0].prepared_select.is_some());
+    }
+
+    // Workflow #336 PKG-S2, model M-PKG v1.1 §4.3 S2-T7: a select step whose policy declares
+    // no `sha256` is admitted, its document read and prepared for evaluation.
+    #[test]
+    fn s2_t7_a_select_step_without_a_policy_pin_is_admitted() {
+        use std::io::Write;
+        let mut task = omitted_policy_task(false, false);
+        let mut pack = task.evaluator.pack().clone();
+        pack.schema_version = "0.7".into();
+        pack.candidate_layouts = vec![
+            serde_json::from_value(json!({
+                "id": "choices",
+                "page_id": "neutral/home",
+                "kind": "fixed_slots",
+                "features": [{"name": "ready", "value": "passed"}],
+                "slots": [{
+                    "rect": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "click": {"x": 0, "y": 0, "width": 2, "height": 1},
+                    "targets": {"ready": "guard/ready"}
+                }]
+            }))
+            .expect("candidate layout"),
+        ];
+        task.evaluator =
+            RecognitionEvaluator::new(PathBuf::new(), pack).expect("recognition evaluator");
+        task.program.operations[0].select = Some(
+            serde_json::from_value(json!({
+                "layout_id": "choices",
+                "policy": {"path": "policies/choices.json"}
+            }))
+            .expect("a select declaration without a pin"),
+        );
+        task.program.operations[0].click = None;
+        let policy = serde_json::to_vec(&json!({
+            "schema_version": actingcommand_selection_policy::SELECTION_POLICY_SCHEMA_VERSION,
+            "policy_id": "policy.choices",
+            "applies_to": {
+                "candidate_layout_id": "choices",
+                "outcome_keys": {
+                    "selected": "outcome.selected",
+                    "empty": "outcome.empty",
+                    "insufficient": "outcome.insufficient",
+                    "ambiguous": "outcome.ambiguous",
+                    "unknown": "outcome.unknown"
+                }
+            },
+            "fields": [{"name": "ready", "value_type": {"type": "boolean"}}],
+            "facts": [],
+            "gates": [],
+            "scoring": [],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": []
+        }))
+        .expect("policy document");
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, bytes) in [
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"entry_task_id":"task"}"#.to_vec(),
+            ),
+            (
+                "resources/operations/task/task.json",
+                br#"{"task_id":"task"}"#.to_vec(),
+            ),
+            ("resources/operations/task/policies/choices.json", policy),
+        ] {
+            zip.start_file(path, zip::write::FileOptions::default())
+                .expect("zip entry");
+            zip.write_all(&bytes).expect("zip bytes");
+        }
+        let bytes = zip.finish().expect("zip").into_inner();
+        let mut containment = actingcommand_pack_containment::Containment::new();
+        let bundle = containment
+            .load(
+                &actingcommand_pack_containment::InstanceId::new("neutral-select")
+                    .expect("instance"),
+                &bytes,
+                &actingcommand_contract::PackageRef::LegacyZipSha256("0".repeat(64)),
+            )
+            .expect("the package is admitted");
+        selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
+            .expect("the select step is admitted without a pin");
         assert!(task.program.operations[0].prepared_select.is_some());
     }
 

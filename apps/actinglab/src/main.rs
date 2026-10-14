@@ -180,6 +180,7 @@ mod package_cli;
 pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
+mod replay_cli;
 mod resource_restore;
 mod resource_runtime_support;
 mod run_summary;
@@ -312,6 +313,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
             readonly_cli::run_recognize_artifact(&invocation.args)
         }
         [cmd] if cmd == "observe" => lab2_cli::run_observe(&invocation.global, &invocation.args),
+        [cmd] if cmd == "replay" => {
+            replay_cli::run_replay(&invocation.global, &FlagArgs::parse(&invocation.args)?)
+        }
         [cmd] if cmd == "do" => lab2_cli::run_do(&invocation.global, &invocation.args),
         [cmd] if cmd == "ensure" => lab2_cli::run_ensure(&invocation.global, &invocation.args),
         [cmd] if cmd == "wait" => lab2_cli::run_wait(&invocation.global, &invocation.args),

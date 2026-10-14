@@ -31,10 +31,11 @@ use crate::{
 use actingcommand_contract::{
     CatalogPayload, CorrelationId, EventPayload, EventQuery, EventType, InstanceId,
     IssuedCorrelationId, IssuedRunId, IssuedTaskId, LeaseId, LeaseToken, OwnerEpoch,
-    PerformanceContext, PolicyAdmissionRecord, PolicyDetectionBudgetRecord,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyReasonRecord,
-    ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
+    PerformanceContext, PolicyAdmissionRecord, PolicyConditionSettlement,
+    PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode,
+    RuntimeRequest, TaskId,
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
@@ -2359,6 +2360,9 @@ impl PolicyHost {
         }
     }
 
+    /// The record a dispatch's run settles to, or the one it already has. Workflow #386 SR-2a:
+    /// `condition` is how a run that a condition ended settled; no live settlement decides one
+    /// before SR-2b, so the host's callers pass none.
     pub(crate) fn prepare_execution(
         &self,
         decision_id: &str,
@@ -2366,6 +2370,7 @@ impl PolicyHost {
         runtime_ms: u64,
         input: &PolicyExecutionInput,
         perf_context: &PerformanceContext,
+        condition: Option<PolicyConditionSettlement>,
     ) -> RuntimeHostResult<PolicyExecutionPreparation> {
         let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
             request(
@@ -2397,7 +2402,7 @@ impl PolicyHost {
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
         let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
         self.control
-            .preview_execution(
+            .preview_settlement(
                 &catalog.compiled,
                 &intent,
                 admission,
@@ -2407,6 +2412,7 @@ impl PolicyHost {
                 },
                 input,
                 perf_context,
+                condition,
             )
             .map(PolicyExecutionPreparation::New)
     }

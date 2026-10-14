@@ -387,10 +387,21 @@ impl PageDetector {
     }
 
     pub fn validate(&self, evaluator: &RecognitionEvaluator) -> PageDetectorResult<()> {
+        self.validate_keeping(evaluator, HashSet::new())
+    }
+
+    /// [`Self::validate`] for a page recognition that keeps its observations of `kept`, the
+    /// field, reading and collection targets of its task (Workflow #396 REC-8): a page that
+    /// names one of them reads it as one more text read of the page recognition's budget.
+    pub fn validate_keeping(
+        &self,
+        evaluator: &RecognitionEvaluator,
+        kept: HashSet<String>,
+    ) -> PageDetectorResult<()> {
         // Workflow #396 REC-1: one page recognition reads located text for every page of the
         // set, so the set's reads, each distinct request once, stay within one consumer's
         // budget; the page whose rule exceeds it is the refused declaration.
-        let mut text_reads = actingcommand_recognition_pack::TextReadCount::default();
+        let mut text_reads = actingcommand_recognition_pack::TextReadCount::keeping(kept);
         for (page_index, page) in self.page_set.pages.iter().enumerate() {
             for target_id in page_target_ids(page) {
                 match evaluator.target_kind(target_id).map_err(pack_error)? {

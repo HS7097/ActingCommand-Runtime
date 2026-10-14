@@ -861,7 +861,6 @@ fn official_ocr_fixture(
             "schema_version": OCR_COMPARISON_SCHEMA_V2,
             "target_ids": ["screen.left", "screen.right"],
             "truth_set_path": "fixture/truth.json",
-            "truth_set_sha256": "3".repeat(64),
             "normalization": "trim_lowercase_v1",
             "comparison": "exact_set_v1",
             "outcome_key": "comparison_recorded",

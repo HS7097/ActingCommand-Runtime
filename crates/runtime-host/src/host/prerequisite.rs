@@ -26,9 +26,9 @@ use super::failure_settlement::ResolvedLayer;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
+use actingcommand_contract::TaskTimingBudgetOrigin;
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
 use actingcommand_contract::outcome::Code;
-use actingcommand_contract::{PackageRef, TaskTimingBudgetOrigin};
 pub(super) use actingcommand_execution_kernel::MAX_PREREQUISITE_DEPTH;
 use actingcommand_execution_kernel::{MAX_GATED_STEPS, PrerequisiteChain};
 
@@ -221,9 +221,9 @@ impl HostShared {
 }
 
 /// The prerequisite packages of one gated run: those opened and not yet closed, outermost
-/// first, and the steps the completed ones executed.
+/// first, by `package_id` (Workflow #336 PKG-S2), and the steps the completed ones executed.
 struct Gate {
-    open: Vec<PackageRef>,
+    open: Vec<String>,
     executed: u32,
 }
 
@@ -293,14 +293,14 @@ fn gate_layer(
     if initial {
         return Ok(());
     }
-    let package_sha256 = prerequisite.package_sha256().to_owned();
+    let package_label = prerequisite.package_label().to_owned();
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
-            package_sha256: package_sha256.clone(),
+            package_label: package_label.clone(),
             role: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
-    gate.open.push(package_sha256.clone());
+    gate.open.push(package_label.clone());
     gate_layer(runtime, gate, layer + 1, prerequisite, rest)?;
     // Preparation already refused a chain whose step bounds exceed the limit; Workflow #373
     // NAV-6: the interrupt layers' steps count too.
@@ -319,7 +319,7 @@ fn gate_layer(
         runtime
             .record_configuration(
                 EffectiveConfigurationFacts::EntryRecovery {
-                    package_sha256: package_sha256.clone(),
+                    package_label: package_label.clone(),
                     timing: prerequisite.effective_timing(),
                 },
                 None,
@@ -353,7 +353,7 @@ fn gate_layer(
     };
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecoveryCompleted {
-            package_sha256,
+            package_label,
             final_page,
             executed_steps: outcome.executed_steps,
             role: None,
@@ -444,7 +444,7 @@ fn fail_gate(
 /// those is carried out as its code alone unless `keep_task_error`.
 fn close_open(
     runtime: &RuntimeContainedTask<'_>,
-    open: &[PackageRef],
+    open: &[String],
     error: ContainedTaskRunError<RequestFailure>,
     keep_task_error: bool,
 ) -> ContainedTaskRunError<RequestFailure> {
@@ -513,14 +513,14 @@ fn close_open(
 /// `EntryTargetDisposition { FailClosed }` of the gate.
 fn record_closed(
     runtime: &RuntimeContainedTask<'_>,
-    open: &[PackageRef],
+    open: &[String],
     code: &str,
 ) -> Result<(), RequestFailure> {
     // Ledger revision 3: the gate's failure is each fact's outcome, the code it relays.
     let outcome = actingcommand_contract::outcome::Outcome::relayed(code);
-    for package_sha256 in open.iter().rev() {
+    for package_label in open.iter().rev() {
         runtime.record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
-            package_sha256: package_sha256.clone(),
+            package_label: Some(package_label.clone()),
             outcome: outcome.clone(),
             role: None,
         })?;

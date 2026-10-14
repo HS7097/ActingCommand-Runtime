@@ -97,8 +97,7 @@ impl HostShared {
             request_id: original.request_id(),
             correlation_id: request.correlation_id(),
             instance_id: resolved.instance_id(),
-            expected_package_sha256: input.expected_sha256.clone(),
-            actual_package_sha256: observer.package_sha256(),
+            package_label: observer.package_label(),
             lease_id: None,
             selection: input.selection.clone(),
             projection_hint: input.projection_hint.clone(),
@@ -143,7 +142,6 @@ impl HostShared {
             let projection = self.evaluate_lab_operation_frame(
                 original,
                 request,
-                input,
                 &observer,
                 &frame,
                 resolved.instance_id(),
@@ -343,7 +341,6 @@ impl HostShared {
                         record.after_projection = Some(self.evaluate_lab_operation_frame(
                             original,
                             request,
-                            input,
                             &observer,
                             &frame,
                             resolved.instance_id(),
@@ -738,7 +735,6 @@ impl HostShared {
         &self,
         original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
-        input: &ContainedLabOperationRequest,
         observer: &PreparedPageObservation,
         captured: &CompletedReadonlyObservation,
         instance_id: InstanceId,
@@ -785,8 +781,7 @@ impl HostShared {
             request_id: original.request_id(),
             correlation_id: request.correlation_id(),
             instance_id,
-            expected_package_sha256: input.expected_sha256.clone(),
-            actual_package_sha256: observer.package_sha256(),
+            package_label: observer.package_label(),
             frame: captured.observation.clone(),
             rgb8_sha256: evaluated.rgb8_sha256,
             status: evaluated.status,
@@ -840,8 +835,7 @@ impl HostShared {
         )?;
         Ok(ContainedPageObservation {
             instance_id,
-            expected_package_sha256: evidence.expected_package_sha256,
-            actual_package_sha256: evidence.actual_package_sha256,
+            package_label: evidence.package_label,
             frame: evidence.frame,
             status: evidence.status,
             projection: evidence.projection,

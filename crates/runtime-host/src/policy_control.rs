@@ -10,9 +10,9 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     PackageRef, PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord,
-    PolicyBudgetDenial, PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord,
-    RuntimeErrorCode, scheduled_failure_code_str,
+    PolicyBudgetDenial, PolicyBudgetDimension, PolicyBudgetReceipt, PolicyConditionSettlement,
+    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyFailureRecord, RuntimeErrorCode, scheduled_failure_code_str,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -466,6 +466,7 @@ impl PolicyControlState {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn preview_execution(
         &self,
         catalog: &CompiledCatalog,
@@ -475,12 +476,58 @@ impl PolicyControlState {
         input: &PolicyExecutionInput,
         perf_context: &PerformanceContext,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        self.preview_settlement(
+            catalog,
+            intent,
+            admission,
+            timing,
+            input,
+            perf_context,
+            None,
+        )
+    }
+
+    /// The execution record a run settles to. Workflow #386 SR-2a (SCHED §4.2): `condition` is
+    /// how a run that a condition ended settled. A replay passes its record's own member, as it
+    /// passes `perf_context`, so the settlement never reads the configuration; the live
+    /// settlement passes none until SR-2b decides one.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn preview_settlement(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+        timing: PolicyExecutionTiming,
+        input: &PolicyExecutionInput,
+        perf_context: &PerformanceContext,
+        condition: Option<PolicyConditionSettlement>,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let PolicyExecutionTiming {
             observed_at_unix_ms,
             runtime_ms,
         } = timing;
         let (task, _) = task_and_profile(catalog, intent)?;
-        let runtime_exceeded = runtime_budget_exceeded(intent, admission, runtime_ms)?;
+        // Only a recoverable failure of a task that is not sensitive settles by a condition: its
+        // record continues, and a sensitive or severe failure pauses (register S1).
+        if condition.is_some()
+            && (task.sensitive
+                || !matches!(
+                    input,
+                    PolicyExecutionInput::Failed {
+                        class: PolicyFailureClass::Recoverable,
+                        ..
+                    }
+                ))
+        {
+            return Err(fatal(
+                HostCode::PolicyExecutionRecordMismatch,
+                HostLocation::ClassifyPolicyOutcome,
+            ));
+        }
+        // SCHED §4.2 item 4: a run a condition ended is never re-judged as over its runtime
+        // budget.
+        let runtime_exceeded =
+            condition.is_none() && runtime_budget_exceeded(intent, admission, runtime_ms)?;
         let effective_input = if runtime_exceeded {
             PolicyExecutionInput::Failed {
                 outcome: Outcome::new(actingcommand_contract::POLICY_RUNTIME_BUDGET_EXCEEDED),
@@ -492,6 +539,40 @@ impl PolicyControlState {
         };
         let outcome = match effective_input {
             PolicyExecutionInput::Succeeded => PolicyExecutionOutcome::Succeeded { runtime_ms },
+            // SCHED §4.2 items 1 and 2: a run a condition ended adds to no failure streak and
+            // escalates nothing. Its record keeps the pair's previous counters (0 when there are
+            // none) and continues.
+            PolicyExecutionInput::Failed {
+                outcome: failure_outcome,
+                failure_identity,
+                class,
+            } if condition.is_some() => {
+                let previous = self
+                    .failure_streaks
+                    .get(&(intent.task_id.clone(), intent.instance_id.clone()));
+                PolicyExecutionOutcome::Failed {
+                    failure: PolicyFailureRecord {
+                        outcome: failure_outcome,
+                        failure_identity,
+                        reported_success: false,
+                        original_class: class,
+                        effective_class: class,
+                        consecutive_same_error: previous.map_or(0, |previous| previous.count),
+                        escalation_streak: previous
+                            .map_or(0, |previous| previous.escalation_streak),
+                        performance_tax_exempt: class == PolicyFailureClass::Recoverable
+                            && !task.sensitive
+                            && perf_context.pressure_observed(),
+                        retry_attempt: 0,
+                        disposition: PolicyFailureDisposition::Continue,
+                        retry_at_unix_ms: None,
+                        runtime_ms,
+                        sensitive: task.sensitive,
+                        perf_context: Box::new(perf_context.clone()),
+                        condition,
+                    },
+                }
+            }
             PolicyExecutionInput::Failed {
                 outcome: failure_outcome,
                 failure_identity,
@@ -628,7 +709,13 @@ impl PolicyControlState {
             PolicyExecutionOutcome::Succeeded { runtime_ms } => *runtime_ms,
             PolicyExecutionOutcome::Failed { failure } => failure.runtime_ms,
         };
-        let expected = self.preview_execution(
+        // Workflow #386 SR-2a (SCHED §4.2): the condition comes from the record, never from the
+        // configuration, so a replay settles as the record did.
+        let condition = match &data.outcome {
+            PolicyExecutionOutcome::Succeeded { .. } => None,
+            PolicyExecutionOutcome::Failed { failure } => failure.condition,
+        };
+        let expected = self.preview_settlement(
             catalog,
             intent,
             admission,
@@ -638,6 +725,7 @@ impl PolicyControlState {
             },
             &input,
             &perf_context,
+            condition,
         )?;
         if &expected != data {
             return Err(fatal(
@@ -645,8 +733,11 @@ impl PolicyControlState {
                 HostLocation::CommitPolicyOutcome,
             ));
         }
+        // SCHED §4.2 item 4: the runtime of a run a condition ended is not counted; the windows
+        // keep what they held before its reservation.
+        let counted_runtime_ms = if condition.is_some() { 0 } else { runtime_ms };
         let (task_runtime_used_ms, activity_runtime_used_ms) =
-            actual_runtime_totals(intent, admission, runtime_ms)?;
+            actual_runtime_totals(intent, admission, counted_runtime_ms)?;
         let task_window_key = (
             intent.task_id.clone(),
             intent.instance_id.clone(),
@@ -666,6 +757,17 @@ impl PolicyControlState {
             PolicyExecutionOutcome::Succeeded { .. } => {
                 self.failure_streaks.remove(&key);
                 self.retry_rounds.remove(&key);
+            }
+            // SCHED §4.2 items 1 and 3: `failure_streaks` keeps the pair's latest real failure
+            // (the identity a suspension lift compares), and a refunded run gives back the four
+            // counts its admission took.
+            PolicyExecutionOutcome::Failed { failure } if failure.condition.is_some() => {
+                if failure
+                    .condition
+                    .is_some_and(|condition| condition.refunded)
+                {
+                    self.refund_admission_counts(intent, admission)?;
+                }
             }
             PolicyExecutionOutcome::Failed { failure } => {
                 // Live settlement and replay both pass here, so a restarted host rebuilds the
@@ -844,6 +946,48 @@ impl PolicyControlState {
         Ok(())
     }
 
+    /// Workflow #386 SR-2a (SCHED §4.2 item 3): gives back the task daily, task window,
+    /// activity daily and activity window counts `admission` took.
+    fn refund_admission_counts(
+        &mut self,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+    ) -> RuntimeHostResult<()> {
+        let activity = &admission.activity;
+        refund_count(
+            &mut self.task_daily,
+            (
+                intent.task_id.clone(),
+                intent.instance_id.clone(),
+                activity.local_day,
+            ),
+        )?;
+        refund_count(
+            &mut self.task_window,
+            (
+                intent.task_id.clone(),
+                intent.instance_id.clone(),
+                activity.window_id.clone(),
+            ),
+        )?;
+        refund_count(
+            &mut self.activity_daily,
+            (
+                activity.profile_id.clone(),
+                intent.instance_id.clone(),
+                activity.local_day,
+            ),
+        )?;
+        refund_count(
+            &mut self.activity_window,
+            (
+                activity.profile_id.clone(),
+                intent.instance_id.clone(),
+                activity.window_id.clone(),
+            ),
+        )
+    }
+
     fn end_exhausted_retry_rounds(&mut self, instance_id: &str, include_runtime: bool) {
         let ended: Vec<_> = self
             .retry_rounds
@@ -986,6 +1130,22 @@ fn next_count(
         ));
     }
     Ok(next)
+}
+
+/// Takes back one count an admission spent. The admission put at least one there, so a count
+/// that is missing or zero means the state lost it.
+fn refund_count<K: Ord>(counts: &mut BTreeMap<K, u32>, key: K) -> RuntimeHostResult<()> {
+    let count = counts
+        .get_mut(&key)
+        .filter(|count| **count > 0)
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyBudgetCounterOverflow,
+                HostLocation::CommitPolicyOutcome,
+            )
+        })?;
+    *count -= 1;
+    Ok(())
 }
 
 fn next_runtime(
@@ -2072,5 +2232,319 @@ mod tests {
                 first.activity.next_eligible_unix_ms,
             )
             .expect("the sampled cadence boundary admits without resampling state");
+    }
+
+    /// Workflow #386 SR-2a: a run that a condition ended (an observation out of its sampling
+    /// deadline, SCHED §4.1), as SR-2b's live settlement will record it.
+    fn sampling_ended() -> PolicyExecutionInput {
+        PolicyExecutionInput::Failed {
+            outcome: Outcome::new(
+                actingcommand_execution_kernel::ExecutionKernelCode::RecognitionSampleDeadlineExceeded
+                    .code(),
+            ),
+            failure_identity: None,
+            class: PolicyFailureClass::Recoverable,
+        }
+    }
+
+    fn capture_failed() -> PolicyExecutionInput {
+        PolicyExecutionInput::Failed {
+            outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+            failure_identity: None,
+            class: PolicyFailureClass::Recoverable,
+        }
+    }
+
+    /// The end of the activity window `at_unix_ms` falls in: the bookkeeping window an
+    /// occurrence expires with (SCHED §4.4).
+    fn window_end(catalog: &CompiledCatalog, at_unix_ms: u64) -> u64 {
+        activity_window_at(&catalog.catalog().activity.profiles[0], at_unix_ms)
+            .expect("activity window")
+            .expect("an open window")
+            .until_unix_ms
+    }
+
+    /// Admits `intent` at `now` and settles its run after `runtime_ms`, committing both as the
+    /// host does.
+    fn settle(
+        state: &mut PolicyControlState,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        now: u64,
+        runtime_ms: u64,
+        input: &PolicyExecutionInput,
+        condition: Option<PolicyConditionSettlement>,
+    ) -> (PolicyAdmissionRecord, PolicyExecutionEventData) {
+        let admission = state
+            .preview_admission(catalog, intent, now)
+            .expect("admission");
+        state
+            .commit_admission(catalog, intent, &admission, false)
+            .expect("commit the admission");
+        let data = state
+            .preview_settlement(
+                catalog,
+                intent,
+                &admission,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: now + runtime_ms,
+                    runtime_ms,
+                },
+                input,
+                &unavailable(now + runtime_ms),
+                condition,
+            )
+            .expect("settlement");
+        state
+            .commit_execution(catalog, intent, &admission, &data)
+            .expect("commit the settlement");
+        (admission, data)
+    }
+
+    // Workflow #386 SR-2a, test row T6 (SCHED §4.2 items 1 and 2): a run that a condition ended
+    // adds to no failure streak and escalates nothing. Its record keeps the pair's previous
+    // counters and continues; the pair's latest real failure stays the one the next failure
+    // counts on.
+    #[test]
+    fn sr2a_t6_a_condition_ending_adds_to_no_streak_and_keeps_the_latest_real_failure() {
+        let catalog = catalog();
+        let mut state = PolicyControlState::default();
+        let first = intent(&catalog, 1);
+        settle(
+            &mut state,
+            &catalog,
+            &first,
+            NOW,
+            100,
+            &capture_failed(),
+            None,
+        );
+
+        let condition = PolicyConditionSettlement {
+            refunded: true,
+            count: 1,
+            expires_at_unix_ms: window_end(&catalog, NOW),
+        };
+        let (_, ended) = settle(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 2),
+            NOW + 600_000,
+            100,
+            &sampling_ended(),
+            Some(condition),
+        );
+        let PolicyExecutionOutcome::Failed { failure } = &ended.outcome else {
+            panic!("expected a failure")
+        };
+        assert_eq!(failure.condition, Some(condition));
+        assert_eq!(failure.consecutive_same_error, 1);
+        assert_eq!(failure.escalation_streak, 1);
+        assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
+        assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
+        assert_eq!(failure.retry_attempt, 0);
+        assert_eq!(failure.retry_at_unix_ms, None);
+        assert_eq!(
+            state.latest_failure(&first.task_id, &first.instance_id),
+            Some((None, first.decision_id.as_str()))
+        );
+
+        let (_, next) = settle(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 3),
+            NOW + 1_200_000,
+            100,
+            &capture_failed(),
+            None,
+        );
+        let PolicyExecutionOutcome::Failed { failure } = &next.outcome else {
+            panic!("expected a failure")
+        };
+        assert_eq!(failure.consecutive_same_error, 2);
+        assert_eq!(failure.escalation_streak, 2);
+        assert_eq!(failure.condition, None);
+    }
+
+    // Workflow #386 SR-2a, test row T6 (SCHED §4.2 item 3): a run that a condition ended gives
+    // back the task daily, task window, activity daily and activity window counts when its
+    // record says `refunded`, so a task limited to one run a day is admitted again in the same
+    // window. A record that does not say it gives nothing back, and the rerun is refused with
+    // `policy_budget_exhausted`.
+    #[test]
+    fn sr2a_t6_a_refunded_condition_ending_gives_back_the_four_counts() {
+        let catalog = catalog_with(
+            |tasks| {
+                tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(1);
+                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(1);
+            },
+            |activity| {
+                activity["profiles"][0]["daily_budget"] = serde_json::json!(1);
+                activity["profiles"][0]["max_window_iterations"] = serde_json::json!(1);
+            },
+        );
+        for refunded in [true, false] {
+            let mut state = PolicyControlState::default();
+            let condition = PolicyConditionSettlement {
+                refunded,
+                count: 1,
+                expires_at_unix_ms: window_end(&catalog, NOW),
+            };
+            settle(
+                &mut state,
+                &catalog,
+                &intent(&catalog, 1),
+                NOW,
+                100,
+                &sampling_ended(),
+                Some(condition),
+            );
+            let rerun = state.preview_admission(&catalog, &intent(&catalog, 2), NOW + 600_000);
+            if refunded {
+                let budget = rerun.expect("the refunded counts admit the rerun").budget;
+                assert_eq!(
+                    (
+                        budget.task_daily_used,
+                        budget.task_window_used,
+                        budget.activity_daily_used,
+                        budget.activity_window_used,
+                    ),
+                    (1, 1, 1, 1)
+                );
+            } else {
+                let error = rerun.expect_err("nothing was given back");
+                assert_eq!(error.code(), "policy_budget_exhausted");
+                assert_eq!(
+                    error.policy_rejection().budget,
+                    Some(PolicyBudgetDenial {
+                        dimension: PolicyBudgetDimension::TaskDaily,
+                        used: 1,
+                        requested: 1,
+                        limit: 1,
+                    })
+                );
+            }
+        }
+    }
+
+    // Workflow #386 SR-2a, test row T6b (SCHED §4.2 item 4): on a task shaped like W2 v14's
+    // once-a-day tasks (`max_runtime_ms` 2,100,000), a run that a condition ended after
+    // 1,900,000 ms adds no runtime, so its 600,000 ms rerun settles as a success: no
+    // `policy_runtime_budget_exceeded`, no severe class, no paused task.
+    #[test]
+    fn sr2a_t6b_a_condition_ending_counts_no_runtime_against_its_rerun() {
+        let catalog = catalog_with(
+            |tasks| {
+                tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(1);
+                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(1);
+                tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(2_100_000);
+            },
+            |_| {},
+        );
+        let mut state = PolicyControlState::default();
+        let condition = PolicyConditionSettlement {
+            refunded: true,
+            count: 1,
+            expires_at_unix_ms: window_end(&catalog, NOW),
+        };
+        let (_, ended) = settle(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 1),
+            NOW,
+            1_900_000,
+            &sampling_ended(),
+            Some(condition),
+        );
+        let PolicyExecutionOutcome::Failed { failure } = &ended.outcome else {
+            panic!("expected a failure")
+        };
+        assert_eq!(failure.condition, Some(condition));
+        assert_eq!(failure.runtime_ms, 1_900_000);
+
+        let (_, rerun) = settle(
+            &mut state,
+            &catalog,
+            &intent(&catalog, 2),
+            NOW + 2_400_000,
+            600_000,
+            &PolicyExecutionInput::Succeeded,
+            None,
+        );
+        assert_eq!(
+            rerun.outcome,
+            PolicyExecutionOutcome::Succeeded {
+                runtime_ms: 600_000
+            }
+        );
+    }
+
+    // Workflow #386 SR-2a, test row T6c (SCHED §4.2 item 0, N1): condition endings settled live
+    // replay from their records alone. A fresh state commits the same admissions and execution
+    // records without `policy_budget_receipt_mismatch` or `policy_execution_record_mismatch` and
+    // rebuilds the same counts and the same streak.
+    #[test]
+    fn sr2a_t6c_condition_endings_replay_from_their_records() {
+        let catalog = catalog();
+        let expires_at_unix_ms = window_end(&catalog, NOW);
+        let mut live = PolicyControlState::default();
+        let mut records = Vec::new();
+        for (suffix, input, condition) in [
+            (1, capture_failed(), None),
+            (
+                2,
+                sampling_ended(),
+                Some(PolicyConditionSettlement {
+                    refunded: true,
+                    count: 1,
+                    expires_at_unix_ms,
+                }),
+            ),
+            (
+                3,
+                sampling_ended(),
+                Some(PolicyConditionSettlement {
+                    refunded: true,
+                    count: 2,
+                    expires_at_unix_ms,
+                }),
+            ),
+            (4, capture_failed(), None),
+        ] {
+            let intent = intent(&catalog, suffix);
+            let (admission, data) = settle(
+                &mut live,
+                &catalog,
+                &intent,
+                NOW + (suffix - 1) * 600_000,
+                100,
+                &input,
+                condition,
+            );
+            records.push((intent, admission, data));
+        }
+
+        let mut replay = PolicyControlState::default();
+        for (intent, admission, data) in &records {
+            replay
+                .commit_admission(&catalog, intent, admission, false)
+                .expect("the admission replays");
+            replay
+                .commit_execution(&catalog, intent, admission, data)
+                .expect("the execution replays from its record");
+        }
+        let next = intent(&catalog, 5);
+        let at = NOW + 2_400_000;
+        assert_eq!(
+            replay
+                .preview_admission(&catalog, &next, at)
+                .expect("the replayed counts admit"),
+            live.preview_admission(&catalog, &next, at)
+                .expect("the live counts admit")
+        );
+        assert_eq!(
+            replay.latest_failure(&next.task_id, &next.instance_id),
+            live.latest_failure(&next.task_id, &next.instance_id)
+        );
     }
 }

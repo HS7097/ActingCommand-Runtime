@@ -494,7 +494,11 @@ of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallbac
   counts, in memory and per instance, the records of warning severity or worse whose outcome code
   (or, for a backend open observation that failed, its entry's open failure code) a
   `stability_warnings` item matches. The item's `count`-th record within its `window_ms`
-  registers a burst, and every window of the instance starts empty again. Not counted: the
+  registers a burst, and every window of the instance starts empty again. The count is of
+  records, not incidents: one failure that commits several matching records counts each of them
+  (nothing is de-duplicated by run, request or incident), and an item that names both
+  `environment_fault` and `stability_warning` (as the default `stability_burst` does) adds
+  records of the two classes up in one count. Not counted: the
   records of an instance a ladder climbs on (its own work), the records of a direct run while
   `rules.direct_runs` is `exempt`, and codes the catalog does not list. The count takes no lock
   but its own and admits nothing on the write path; the lease sweep admits each burst's ladder
@@ -685,7 +689,7 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
 | `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
 | `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped; at most 3), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption) | success info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
-| `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied"`, `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
+| `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied" \| "blackout"` (`blackout`: a trigger inside a blackout, `until_unix_ms` its end; written from SR-4a on, read from v0.12.0 on, [scheduling-blackout.md](scheduling-blackout.md)), `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
 
 Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else
 the event type's (`info`); `outcome` is the record envelope (`contracts/v012-register.md`

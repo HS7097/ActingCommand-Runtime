@@ -2359,9 +2359,8 @@ fn task_semantic_effect_intent_sampling_rejects_invalid_evidence() {
 fn task_semantic_payload_rejects_invalid_facts() {
     let invalid = [
         TaskSemanticFact::PackageAdmitted {
-            package_label: "package".to_string(),
+            package_label: String::new(),
             task_label: "task".to_string(),
-            package_sha256: "not-a-sha256".into(),
             response_deadline_monotonic_ms: Some(60_000),
         },
         TaskSemanticFact::RecognitionStarted {
@@ -3139,7 +3138,6 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
                 projection: projection.into(),
                 policy: TaskSelectionPolicy {
                     path: "policy.json".to_owned(),
-                    package_sha256: "c".repeat(64),
                     policy_sha256: format!("sha256:{}", "d".repeat(64)),
                     policy_id: "policy-a".to_owned(),
                 },
@@ -3183,7 +3181,6 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
     };
     let failure = Outcome::new(crate::RuntimeErrorCode::BackendOperationFailed)
         .operation(crate::codes::ContractLocation::ControlInstance);
-    let package: crate::PackageRef = format!("sha256:{}", "c".repeat(64)).into();
     vec![
         (
             RuntimePayloadDraft::failed(
@@ -3308,7 +3305,7 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
         (
             TaskPayloadDraft::semantic(
                 TaskSemanticFact::EntryRecoveryFailed {
-                    package_sha256: package.clone(),
+                    package_label: Some("package".to_owned()),
                     outcome: failure.clone(),
                     role: None,
                 },
@@ -4001,3 +3998,6 @@ mod sh1;
 // Workflow #383 SH-2: the same for the shapes of the 10-14 shape re-check (register §1.25).
 #[path = "sh2_tests.rs"]
 mod sh2;
+// Workflow #336 PKG-S2: the package facts and records without a package digest (register §2).
+#[path = "pkg_s2_tests.rs"]
+mod pkg_s2;

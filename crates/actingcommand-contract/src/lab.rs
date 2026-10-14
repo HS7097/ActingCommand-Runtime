@@ -123,27 +123,25 @@ pub enum ResourceDeclarationReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceDeclarationRejection {
-    pub declared_package: crate::PackageRef,
-    pub verified_package: Option<crate::PackageRef>,
+    /// Workflow #336 PKG-S2 (option 丙): the refused package's `package_id`, when its control
+    /// declaration was read before the refusal; no package digest is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_label: Option<String>,
     pub program_version: String,
     pub issue: ResourceDeclarationIssue,
 }
 
 impl ResourceDeclarationRejection {
     pub fn validate(&self) -> Result<(), crate::outcome::Code> {
-        self.declared_package
-            .validate()
-            .map_err(|_| ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code())?;
-        if let Some(verified) = &self.verified_package {
-            verified
-                .validate()
-                .map_err(|_| ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code())?;
-            if verified != &self.declared_package {
-                return Err(ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code());
-            }
-        }
         let bounded =
             |text: &str, limit: usize| text.len() <= limit && !text.chars().any(char::is_control);
+        if self
+            .package_label
+            .as_deref()
+            .is_some_and(|label| label.is_empty() || !bounded(label, 256))
+        {
+            return Err(ResourceDeclarationCode::InvalidResourceDeclarationIdentity.code());
+        }
         if self.program_version.is_empty()
             || !bounded(&self.program_version, 128)
             || !crate::safe_source_path(&self.issue.declaration_file)

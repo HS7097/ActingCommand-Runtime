@@ -1004,8 +1004,8 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
 
 #[test]
 fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
-    let expected_package_sha256 = format!("{:x}", Sha256::digest(neutral_contained_task_package()));
-    let expected_package_digest = format!("sha256:{expected_package_sha256}");
+    // Workflow #336 PKG-S2 (option 丙): the run names its package by `package_id`.
+    let expected_package_label = "neutral.semantic.task";
     let actinglab_binary = prebuilt_actinglab();
     for (case, frames, max_inputs, expected_effects) in [
         (
@@ -1151,8 +1151,8 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                     EventPayload::Task(TaskPayload::Semantic(payload))
                         if matches!(
                             payload.fact(),
-                            TaskSemanticFact::PackageAdmitted { package_sha256, .. }
-                                if package_sha256 == &actingcommand_contract::PackageRef::from(&expected_package_sha256)
+                            TaskSemanticFact::PackageAdmitted { package_label, .. }
+                                if package_label == expected_package_label
                         )
                 )
         ));
@@ -1284,10 +1284,11 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         );
         assert_eq!(
             summary
-                .get("package_digest")
+                .get("package_label")
                 .and_then(serde_json::Value::as_str),
-            Some(expected_package_digest.as_str())
+            Some(expected_package_label)
         );
+        assert!(summary.get("package_digest").is_none());
         assert_eq!(
             summary.get("effect").and_then(serde_json::Value::as_str),
             Some(if expected_effects == 1 {
@@ -2149,7 +2150,6 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     let (package, frames) = sequential_contained_task_package(STEP_COUNT);
-    let expected_package_digest = format!("sha256:{:x}", Sha256::digest(&package));
     write_policy_execution_config_with_package(
         &config_path,
         root.path(),
@@ -2592,12 +2592,14 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             .and_then(serde_json::Value::as_u64),
         Some(0)
     );
+    // Workflow #336 PKG-S2 (option 丙): the summary names the package by `package_id`.
     assert_eq!(
         summary
-            .get("package_digest")
+            .get("package_label")
             .and_then(serde_json::Value::as_str),
-        Some(expected_package_digest.as_str())
+        Some("neutral.pagination.task")
     );
+    assert!(summary.get("package_digest").is_none());
     assert!(child.0.try_wait().expect("process state").is_none());
 
     drop(client);
@@ -3660,6 +3662,84 @@ fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
             .is_some_and(|key| key.ends_with(".device_kind"))),
         "{parameters:?}"
     );
+}
+
+/// Workflow #369 S6a (model 369 v3.1 H-5, slice S6a "check-config shows `start_emulator`"; ORD
+/// §3.5 item 17, default off): each discovery-bound entry of the report carries its
+/// `start_emulator`, `true` for the instance that names it and `false` for one that does not; the
+/// manifest reports `instance.<instance id>.start_emulator` only for the instance whose entry names
+/// it, explicit and not settable. Nothing is started by check-config.
+#[test]
+fn s6a_check_config_shows_start_emulator() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let started = instance_id();
+    let not_started = instance_id();
+    let instance = |alias: &str, id: InstanceId, index: u16| {
+        json!({
+            "alias": alias,
+            "instance_id": id,
+            "application_id": "neutral.application",
+            "instance_index": index,
+            "connect": false,
+            "touch_backend": "adb_shell_input",
+            "capture_backend": "adb"
+        })
+    };
+    let mut first = instance("neutral.autostart", started, 0);
+    first["start_emulator"] = json!(true);
+    let config = json!({
+        "schema_version": "actingcommand.actingd.config.v1",
+        "state_root": root.path().join("state"),
+        "bind_host": "127.0.0.1",
+        "bind_port": 0,
+        "secret_fingerprint_salt": PROCESS_TEST_SALT,
+        "mumu_root": root.path().join("mumu"),
+        "instances": [first, instance("neutral.manual", not_started, 1)]
+    });
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+
+    let (succeeded, checked) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{checked}");
+    // Workflow #378 A6a: check-config v2, `check_config_passed` with the report.
+    assert_eq!(checked["outcome"]["code"], "check_config_passed");
+    let report = &checked["report"];
+    let instances = report["instances"].as_array().expect("instances");
+    assert_eq!(instances.len(), 2, "{report}");
+    for (entry, alias, start_emulator) in [
+        (&instances[0], "neutral.autostart", true),
+        (&instances[1], "neutral.manual", false),
+    ] {
+        assert_eq!(entry["alias"], alias, "{entry}");
+        assert_eq!(entry["binding"], "discovery_pending", "{entry}");
+        assert_eq!(entry["start_emulator"], start_emulator, "{entry}");
+    }
+    let started = serde_json::to_value(started).expect("instance id JSON");
+    let expected = json!({
+        "key": format!(
+            "instance.{}.start_emulator",
+            started.as_str().expect("instance id text")
+        ),
+        "value": {"type": "boolean", "value": true},
+        "source": "explicit",
+        "settable": false
+    });
+    let parameters = report["config_manifest"]["parameters"]
+        .as_array()
+        .expect("manifest parameters");
+    let rows = parameters
+        .iter()
+        .filter(|parameter| {
+            parameter["key"]
+                .as_str()
+                .is_some_and(|key| key.ends_with(".start_emulator"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows, [&expected], "{parameters:?}");
 }
 
 /// The code of one of actingd's `OUTCOME actingd:` daemon lines (Workflow #378 A6a); `None` for

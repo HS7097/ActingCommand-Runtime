@@ -1446,6 +1446,12 @@ impl HostShared {
                     )
                 })?;
             let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
+            // Workflow #386 SR-2a: no live settlement is ended by a condition before SR-2b; a
+            // test stands in for that writer.
+            #[cfg(not(test))]
+            let condition = None;
+            #[cfg(test)]
+            let condition = self.take_policy_condition_for_test()?;
             let mut policy = lock(self.policy()?, HostLocation::RecordPolicyDispatchOutcome)?;
             let data = match policy.prepare_execution(
                 decision_id,
@@ -1453,6 +1459,7 @@ impl HostShared {
                 runtime_ms,
                 input,
                 &perf_context,
+                condition,
             )? {
                 PolicyExecutionPreparation::New(data) => {
                     let links = match context {
@@ -2052,6 +2059,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 runtime_ms,
                 &input,
                 &PerformanceContext::unavailable(observed_at_unix_ms),
+                None,
             )? {
                 PolicyExecutionPreparation::New(data) => data,
                 PolicyExecutionPreparation::Replay(_) => {

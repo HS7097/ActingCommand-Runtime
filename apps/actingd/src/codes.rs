@@ -85,6 +85,9 @@ actingcommand_contract::outcome_codes! {
         /// #398 R1 §3.2 (RD-1b): the private binding file binds an alias no handset instance of
         /// the configuration has (`alias`); a check-config note, not a failure.
         DeviceBindingUnused => "device_binding_unused": info / none,
+        /// Workflow #369 S6a: an instance names `start_emulator: true` but has no emulator the
+        /// daemon can start: a fixture, or an instance not bound by discovery (`alias`).
+        StartEmulatorRequiresDiscoveryBinding => "start_emulator_requires_discovery_binding": error / none,
         NemuAppIndexInvalid => "nemu_app_index_invalid": error / none,
         NemuPairedInputConfigurationMissing => "nemu_paired_input_configuration_missing": error / none,
         InstanceRegistrationInvalid => "instance_registration_invalid": error / none,

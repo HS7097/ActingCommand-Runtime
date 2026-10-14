@@ -450,6 +450,8 @@ fn start_daemon(
     let file = config::load(&config_path).map_err(ActingdError::config)?;
     // Workflow #398 RD-1b: a device refusal names its instance or file in its outcome.
     let device_refusal = file.device_refusal();
+    // Workflow #369 S6a: the instance a `start_emulator` refusal names.
+    let start_emulator = file.start_emulator_refusal();
     let RuntimeAssembly {
         host,
         provider,
@@ -463,7 +465,8 @@ fn start_daemon(
             Some(refused) => {
                 ActingdError::refused(code, refused.outcome()).with_detail(refused.to_string())
             }
-            None => ActingdError::refused(code, refusal),
+            None => start_emulator_refused(code, start_emulator)
+                .unwrap_or_else(|| ActingdError::refused(code, refusal)),
         }
     })?;
     // Workflow #337: the install root's adb check of `check-config`, before any side effect.
@@ -504,6 +507,17 @@ fn start_daemon(
         RuntimeHost::start_with_provider(host, |startup| provider.assemble_provider(startup))
             .map_err(ActingdError::runtime)?;
     Ok((host, policy))
+}
+
+/// Workflow #369 S6a: a `start_emulator_requires_discovery_binding` refusal names the instance
+/// (`alias`, Workflow #378 A6a); `None` for any other code.
+fn start_emulator_refused(code: Code, alias: Option<String>) -> Option<ActingdError> {
+    if code != ActingdCode::StartEmulatorRequiresDiscoveryBinding.code() {
+        return None;
+    }
+    let alias = alias?;
+    let text = format!("instance {alias:?} names start_emulator but is not bound by discovery");
+    Some(ActingdError::refused(code, Outcome::new(code).alias(alias)).with_detail(text))
 }
 
 /// The started Runtime until it stops: the policy's initial cycle, `runtime_ready`, then the

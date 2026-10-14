@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Run tools (#338 §四 工具表, R1): ac_overview's run per instance, ac_get_run and
-//! ac_diagnose. Every run is runtime-client's `actingcommand.run-status.v1` projection,
-//! passed on unchanged; this module only picks which runs to read, waits, and bounds the
-//! output. Every `recent_runs` read gets a bounded window, which the result echoes.
-//! ac_diagnose is `actingctl diagnose` (`crate::diagnose`, Workflow #389 MCP-7): the same
-//! reads and result, cut here to the output budget.
+//! Run tools (#338 §四 工具表, R1): ac_get_run and ac_diagnose. Every run is runtime-client's
+//! `actingcommand.run-status.v1` projection, passed on unchanged; this module only picks which
+//! runs to read, waits, and bounds the output. ac_diagnose is `actingctl diagnose`
+//! (`crate::diagnose`, Workflow #389 MCP-7): the same reads and result, cut here to the output
+//! budget. ac_overview's run per instance is read with `crate::overview` (Workflow #389 MCP-8).
 
 use super::lab;
 use super::runtime::Connected;
@@ -15,8 +14,8 @@ use super::tools::{
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::diagnose::{self, DiagnoseRequest, Failure};
 use crate::events::{CursorBinding, MAX_INTEGER};
-use actingcommand_contract::{RequestId, RunId, RuntimeInstanceStatus};
-use actingcommand_runtime_client::{ContainedRunState, RecentContainedRuns, RunKey, RunStatusMode};
+use actingcommand_contract::{RequestId, RunId};
+use actingcommand_runtime_client::{ContainedRunState, RunKey, RunStatusMode};
 use serde_json::{Map, Value, json};
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -25,9 +24,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 // Workflow #389 MCP-7: ac_diagnose's parts, shared with `actingctl diagnose`.
 pub(super) use crate::diagnose::Diagnosis;
 
-const DAY_MS: u64 = 24 * 60 * 60 * 1000;
-/// The run window of ac_overview.
-const DEFAULT_WINDOW_MS: u64 = DAY_MS;
 const MAX_WAIT_S: u64 = 25;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Time kept back from the call budget for the last full run read of a wait.
@@ -43,31 +39,6 @@ fn now_unix_ms() -> Result<u64, ToolError> {
         .ok()
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
         .ok_or_else(|| ToolError::new("runtime", ActingctlCode::ClockUnavailable))
-}
-
-/// The start of the default 24 h run window.
-pub(super) fn default_window() -> Result<u64, ToolError> {
-    Ok(now_unix_ms()?.saturating_sub(DEFAULT_WINDOW_MS))
-}
-
-/// The newest run first recorded on `instance` since `since_unix_ms`: one brief R1 read.
-pub(super) fn latest_run(
-    context: &ToolContext<'_>,
-    connected: &Connected,
-    instance: &RuntimeInstanceStatus,
-    since_unix_ms: u64,
-) -> Result<RecentContainedRuns, ToolError> {
-    // The 25 s call budget left no time to read the runs of this instance.
-    if Instant::now() + READ_RESERVE >= context.deadline {
-        return Err(
-            ToolError::new("runtime", ActingctlCode::CallBudgetExhausted)
-                .with(|outcome| outcome.alias(instance.instance_alias())),
-        );
-    }
-    connected
-        .client
-        .recent_runs(instance.instance_id(), since_unix_ms, 1)
-        .map_err(|error| context.runtime.failure(connected, &error))
 }
 
 /// ac_get_run: R1 Full by handle (request_id) or run_id; with wait_s it reads again every

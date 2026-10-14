@@ -5081,6 +5081,31 @@
           "description": "The run was preempted while it was held."
         }
       }
+    },
+    "connectivity_reason": {
+      "description": "Why the operating system's internet connectivity status is unknown (Workflow #369 S6a): the reason host-metrics' network_connectivity gives.",
+      "review": "pending",
+      "source": {
+        "file": "crates/host-metrics/src/codes.rs",
+        "enum": "ConnectivityReason"
+      },
+      "tokens": {
+        "level_unknown": {
+          "description": "The operating system reported its connectivity level as unknown, or a level this build does not know."
+        },
+        "query_failed": {
+          "description": "The connectivity query returned an error code (os_error)."
+        },
+        "query_unsupported": {
+          "description": "The system library has no connectivity query (a Windows before 10 2004)."
+        },
+        "library_unavailable": {
+          "description": "The system library of the connectivity query could not be loaded (os_error)."
+        },
+        "unsupported_os": {
+          "description": "This operating system has no connectivity query."
+        }
+      }
     }
   },
   "domains": {
@@ -7928,6 +7953,9 @@
     ],
     "instances_": [
       "actingctl"
+    ],
+    "start_emulator_": [
+      "actingd"
     ]
   },
   "fragments": {

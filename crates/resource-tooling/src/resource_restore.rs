@@ -484,7 +484,7 @@ pub fn restore_authoring_draft(
         "server_scope":[server],"locale":locale,"coordinate_space":coordinate_space,"defaults":defaults,
         "anchors":anchors.values().collect::<Vec<_>>(),"color_probes":colors.values().collect::<Vec<_>>(),
         "verify_templates":templates.values().collect::<Vec<_>>(),"page_rules":page_rules,"operations":operations,
-        "provenance":{"source":"global_ledger","package_sha256":package.package_ref(),
+        "provenance":{"source":"global_ledger","package_label":package_label(package),
             "through_sequence":request.through_sequence,"records":provenance,"gaps":gaps,
             "author_inputs":{"entry_page":request.entry_page,"target_pages":request.target_pages,"goal":request.goal},
             "source_entries":source_entries.iter().map(|(path,sha256)| json!({"path":path,"sha256":sha256})).collect::<Vec<_>>()}});
@@ -540,7 +540,7 @@ pub fn restore_authoring_draft(
     }
     let report = json!({"status":"draft_generated","record_count":records.len()+missing_records.len(),
         "operation_count":operations.len(),"gaps":gaps,"awaiting_author_input":awaiting,
-        "package_sha256":package.package_ref(),"through_sequence":request.through_sequence,
+        "package_label":package_label(package),"through_sequence":request.through_sequence,
         "task_id":request.task_id});
     let draft = AuthoringDraft::new(
         format!("ledger-through-{}", request.through_sequence),
@@ -602,7 +602,7 @@ fn record_provenance(input: &ResourceRestoreRecord) -> Value {
                 "artifact_sha256":projection.artifact.sha256,"content_sha256":projection.projection.content_sha256}))})
         };
     json!({"request_id":prepared.request_id,"correlation_id":prepared.correlation_id,"instance_id":prepared.instance_id,
-        "lease_id":prepared.lease_id,"expected_package_sha256":prepared.expected_package_sha256,"actual_package_sha256":prepared.actual_package_sha256,
+        "lease_id":prepared.lease_id,"package_label":prepared.package_label,
         "prepared":prepared_record_reference(&record.prepared_artifact),"terminal_record":prepared_record_reference(&input.operation.terminal_artifact),
         "command_terminal":input.terminal,"input_action_id":record.input_action_id,"input_intent":record.input_intent,
         "input_event":record.input_event,"input_event_type":input.input_event_type,"input_returned":record.input_returned,
@@ -611,6 +611,16 @@ fn record_provenance(input: &ResourceRestoreRecord) -> Value {
         "before":observation(&prepared.before_frame,&prepared.before_projection),"after":observation(&record.after_frame,&record.after_projection),
         "failure":record.failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event})),
         "cleanup_failure":record.cleanup_failure.as_ref().map(|failure|json!({"stage":failure.stage,"code":failure.code,"event":failure.event}))})
+}
+
+/// Workflow #336 PKG-S2 (option 丙): the original package by the `package_id` its control
+/// declares (`null` when it declares none); no package digest is recorded.
+fn package_label(package: &LoadedBundle) -> Value {
+    package
+        .control()
+        .and_then(|control| control.get("package_id"))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 fn prepared_record_reference(reference: &actingcommand_contract::LabEvidenceReference) -> Value {

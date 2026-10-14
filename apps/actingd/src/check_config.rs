@@ -70,6 +70,8 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     .map_err(|code| staged(ActingdError::config(code), ActingdLocation::ConfigLoad))?;
     // Workflow #398 RD-1b: the device refusal's outcome, when the assembly meets it.
     let device = file.device_refusal();
+    // Workflow #369 S6a: the instance a `start_emulator` refusal names.
+    let start_emulator = file.start_emulator_refusal();
     let RuntimeAssembly {
         host,
         provider,
@@ -82,12 +84,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         adb_requirement,
         unbound_handsets,
         unused_device_bindings,
+        emulator_autostart,
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         let error = match device.filter(|device| device.code() == code) {
             Some(device) => {
                 ActingdError::refused(code, device.outcome()).with_detail(device.to_string())
             }
-            None => ActingdError::refused(code, refusal),
+            None => start_emulator_refused(code, start_emulator)
+                .unwrap_or_else(|| ActingdError::refused(code, refusal)),
         };
         staged(error, ActingdLocation::ConfigAssemble)
     })?;
@@ -214,6 +218,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         adb_default,
         vision,
         unused_device_bindings,
+        emulator_autostart,
     };
     let (mut report, mut notes) = summarize(&config_path, &checked, &resource_packages)
         .map_err(|(code, stage)| staged(ActingdError::config(code), stage))?;
@@ -328,6 +333,8 @@ struct CheckedAssembly {
     /// Workflow #398 RD-1b: the aliases the private binding file binds that no handset instance
     /// has, in file order.
     unused_device_bindings: Vec<String>,
+    /// Workflow #369 S6a: the instances whose `start_emulator` is `true`.
+    emulator_autostart: Vec<String>,
 }
 
 /// Workflow #361 C3: `policy_plan`, startup's catalog plan as previewed from the ledger.
@@ -461,6 +468,8 @@ fn summarize(
                     "startup_package": startup_package,
                     "stuck_recovery": stuck_recovery.enabled,
                     "stuck_recovery_cooldown_secs": stuck_recovery.cooldown_secs,
+                    // Workflow #369 S6a: started by the daemon when stopped at its start (S6c).
+                    "start_emulator": checked.emulator_autostart.contains(&alias),
                 }));
             }
             let resolved = registry.resolve(&alias).ok_or_else(|| {

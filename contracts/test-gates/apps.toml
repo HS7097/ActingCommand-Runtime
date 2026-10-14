@@ -261,7 +261,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -272,6 +272,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_diagnose_parity::gate_actingctl_diagnose_and_ac_diagnose_answer_the_same_diagnosis_with_its_groups",
     "actingcommand-actingctl::gate::mcp_packs::gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuration",
     "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments",
 ]
 incident = ["#389"]
 
@@ -321,6 +322,17 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::l5b_a_configuration_naming_a_retired_failed_run_key_is_refused_as_unknown",
 ]
 incident = ["#382 L-5b"]
+
+# ac_overview cuts an answer over the output budget one block at a time in the order of the MCP-0 command table §4.9, marks each cut block and never cuts the daemon, the pauses, a row's identity, lease or queue, or incomplete; actingctl overview and ac_overview refuse a section name §4.9 does not have (Workflow #389 MCP-8)
+[[gate]]
+key = "47"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_ac_overview_cuts_every_block_in_the_order_of_4_9_and_never_the_identity_or_pauses",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_ac_overview_stops_cutting_as_soon_as_the_answer_fits",
+    "actingcommand-actingctl::gate::mcp_overview_parity::gate_overview_and_ac_overview_refuse_an_unknown_section_naming_it",
+]
+incident = ["#389 MCP-8"]
 
 # actingd speaks outcomes: each daemon outcome is a developer line and one `OUTCOME actingd:` line, at the level and the exit code of its category; a start refusal is appended to the fallback log only when nobody keeps stderr, with install_root; every subcommand exit is one report line with its outcome; the watchdog decides by the terminal outcome's category, ignores another root's fallback-log line, and escalates a run-out budget to panic_unrecovered only when every start ended in runtime_restart_required (Workflow #378 A6a)
 [[gate]]

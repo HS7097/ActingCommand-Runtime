@@ -129,14 +129,23 @@ impl HostShared {
         // input is prepared, so both touch backends pass the same check.
         self.require_foreground_application(request, token, &resolved, action, run_links)?;
         let before_frame_id = input_frame.map(|frame| frame.frame_id).or(before_frame_id);
+        // Workflow #387 D1c-F: every producer refused an invalid action before this point (a
+        // request by its contract check, a pack's action at admission and when it was built), so
+        // a plan that still cannot be prepared is a Runtime-internal defect of this one action.
+        // It ends this work as an error before any device input; the Runtime goes on.
         let prepared_action = self
             .execution()?
             .prepare_input(action.clone())
             .map_err(|error| {
-                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
-                    HostLocation::PrepareInput,
-                    &error,
-                ))
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        error.code(),
+                        HostLocation::PrepareInput,
+                        RuntimeErrorCode::InvalidRequest,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    None,
+                )
             })?;
         let execution_plan = input_execution_plan_record(&prepared_action)
             .map_err(RequestFailure::poison_without_terminal)?;

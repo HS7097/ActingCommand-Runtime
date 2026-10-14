@@ -107,10 +107,11 @@ outcome's category. The failure's code is the outcome's code, or for
 
 - `prepare`: the prerequisite chain was not resolved and admitted; the run has no task
   records. The step is `prepare`.
-- `pre:<digest>`: the run has a prerequisite chain, the gate did not start the package
+- `pre:<I>`: the run has a prerequisite chain, the gate did not start the package
   (`EntryTargetDisposition` `Started`), and a prerequisite package was opened
-  (`EntryRecoveryPackageAdmitted`) and not completed: the first 12 hex digits of the innermost
-  one.
+  (`EntryRecoveryPackageAdmitted`) and not completed: `I` is the first 8 hex digits of the
+  SHA-256 of the innermost one's `package_id`, the `package_label` its record carries
+  (Workflow #336 PKG-S2; before, the first 12 hex digits of its package digest).
 - `gate`: the same, with no prerequisite package open (the gate's own first check, its first
   capture, a recheck after a completed layer).
 - `main`: every other failure.
