@@ -14762,6 +14762,166 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_adjustments_count_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: it is empty or has more than 16 entries.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_id_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment id breaks the identifier rule of reading marks.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_id_duplicate": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: two adjustments have one id.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_fact_key_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment's fact_key is no resource.* or inventory.* instance fact key.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_fact_key_duplicate": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: two adjustments change one key on one operation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_operation_id_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment's operation_id is no operation of the task.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_target_id_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment amount's target_id breaks the identifier rule.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_mark_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment without amount reads the changed key after its operation, but the task has no reading mark of that key.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "ocr_fields_zero_input_outcome_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

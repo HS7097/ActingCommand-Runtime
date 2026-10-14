@@ -344,6 +344,13 @@ impl HistoricalFactProjection {
                     (data.scope.clone(), data.key.clone()),
                     data.source_snapshot_id.clone(),
                 );
+                // Workflow #384 D2-S3: an adjustment's invalidation is derived from no trigger
+                // event; it applies where it stands.
+                if !self.invalidated.contains_key(&identity)
+                    && actingcommand_contract::is_adjustment_invalidation(data)
+                {
+                    return self.invalidate(data.clone());
+                }
                 if self.invalidated.get(&identity) != Some(data) {
                     return Err(fact_fatal(
                         SharedCode::FactInvalidationSourceMismatch,
@@ -445,9 +452,10 @@ impl HistoricalFactProjection {
             )
         })?;
         if active.source_snapshot_id != data.source_snapshot_id
-            || !active
+            || !(active
                 .invalidate_on
                 .contains(&data.invalidated_by_event_type)
+                || actingcommand_contract::is_adjustment_invalidation(&data))
         {
             return Err(fact_fatal(
                 SharedCode::FactInvalidationTargetMismatch,
@@ -611,6 +619,51 @@ impl InstanceFactStore {
             .prepare_fact_projection(&pending.data, published, trigger)
             .map_err(fact_state_error)?;
         Ok(FactTransaction { state })
+    }
+
+    /// Workflow #384 D2-S3 (D2 model §3.6): the `fact.invalidated` that drops `key`'s active
+    /// record in `scope`, published at ledger sequence `base_sequence`, because the operation
+    /// of the step whose `task.step_finished` is the event at `trigger_sequence` changed the
+    /// fact and no reading of it followed. `None` when the key has no active record or another
+    /// record than that one; the record must have been published before the trigger.
+    pub(crate) fn prepare_adjustment_invalidation(
+        &self,
+        ledger: &GlobalLedger,
+        scope: &FactScope,
+        key: &str,
+        base_sequence: u64,
+        trigger_sequence: u64,
+    ) -> RuntimeHostResult<Option<(FactInvalidationEventData, FactTransaction)>> {
+        let Some(stored) = self
+            .active
+            .get(&(scope.clone(), key.to_owned()))
+            .filter(|stored| stored.sequence == base_sequence)
+        else {
+            return Ok(None);
+        };
+        let trigger = original_at(ledger, trigger_sequence)?;
+        let data = FactInvalidationEventData {
+            scope: scope.clone(),
+            key: key.to_owned(),
+            source_snapshot_id: stored.record.source_snapshot_id.clone(),
+            invalidated_at_unix_ms: trigger.timestamp_unix_ms(),
+            invalidated_by_event_id: *trigger.event_id(),
+            invalidated_by_event_type: trigger.event_type(),
+        };
+        if stored.sequence >= trigger_sequence
+            || !actingcommand_contract::is_adjustment_invalidation(&data)
+        {
+            return Err(fact_fatal(
+                SharedCode::FactInvalidationTargetMismatch,
+                HostLocation::CommitFactInvalidation,
+            ));
+        }
+        let published = original_at(ledger, stored.sequence)?;
+        let state = self
+            .state
+            .prepare_fact_projection(&data, published, trigger)
+            .map_err(fact_state_error)?;
+        Ok(Some((data, FactTransaction { state })))
     }
 
     pub(crate) fn at_position(
@@ -1152,10 +1205,11 @@ impl InstanceFactStore {
             )
         })?;
         if active.record.source_snapshot_id != data.source_snapshot_id
-            || !active
+            || !(active
                 .record
                 .invalidate_on
                 .contains(&data.invalidated_by_event_type)
+                || actingcommand_contract::is_adjustment_invalidation(&data))
         {
             return Err(fact_fatal(
                 SharedCode::FactInvalidationTargetMismatch,

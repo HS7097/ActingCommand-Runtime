@@ -666,6 +666,25 @@ catalog entries (§7). No configuration key is added: the queue reads §15's exi
 | OB4 | `ledger.gap_recorded` `record_rejected` and `tail_unconfirmed` (L1) | values | AO-2 | AO-2 | `record_rejected`: its own event id; range and `timestamp` = the refused record's capture time; `record_count` 1; `event_id` and `source` of the refused record; `outcome` `ledger_record_rejected` caused by the refusal's code, with `event_id`, `ledger_source`, `source_lineage`, `source_revision`. `tail_unconfirmed`: at the running writer's open after the import, when the previous owner was not closed cleanly and no imported dump ended sealed; range = last record's time → the open |
 | OB5 | `ledger.health_observed` (L2) | values | AO-2 | AO-2 | `ledger_capture_buffer_busy` and `_overloaded`: `segment_edge`, `count` and `buffer_bytes` in memory; `ledger_capture_spilled`: `segment_edge`, records and bytes spilled (started: the first spill; ended: the whole segment, when the dump file is deleted); every end adds `elapsed_ms`. `ledger_store_revision_skipped`: no edge; `ledger_source`, `source_lineage`, `expected_revision`, `source_revision`. Only the running Runtime's writer reports them; no edge is reported once the close has begun |
 
+### 1.39 Wave 10 slice D2-S3 (#384 D2M §3.6, §6 S3; v1.4.2)
+
+D2-S3 brings its own shapes and writes them; [resource-readings.md](resource-readings.md)
+("Adjustments") and [instance-fact-store.md](instance-fact-store.md) ("Adjustment
+invalidations") are the contract. No new event type and no new member of a persisted record.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D31 | `fact.published` of a resource adjustment write | new rule of an existing record (shape unchanged) | D2-S3 | D2-S3 | one record: the adjusted value at the confirmation frame's capture time, the adjusted record's `expires_at_unix_ms` (and a `ttl_policy` of `expires - observed`, `detector_contract`), the lower of the two confidences, `source_detector` `resource_adjustment:<entry task id>/<adjustment id>`, `source_snapshot_id` `run:<run>/frame:<frame>/<adjustment id>/base:<event id>` (the base's `fact.published`); published in a run's terminal stage 2 in capture-time order with its readings, through `publish_facts` with the `ResourceAdjustment` purpose |
+| D32 | `fact.invalidated` of an adjustment | changed rule of an existing record (shape unchanged) | D2-S3 | D2-S3 | an instance-scoped `resource.*` / `inventory.*` record may be invalidated by a `task.step_finished` it does not list in `invalidate_on` (`is_adjustment_invalidation`): a confirmed adjustment that read no new value drops the key's record from before the run; the other source rules (published before the trigger, trigger before the invalidation, trigger time, trigger instance in the record's scope, tombstone projection) are unchanged and checked by the store, its replay, the history at a position and the state projection alike |
+| D33 | task diagnostic stream (`task-diagnostic.v2`): a confirmed adjustment's outcome is one `error` row (`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the amount's `target_id` or none) on its confirmation frame: `fact_adjustment_skipped` (info), `fact_adjustment_underflow` (warning), and for an amount that gave no reading `contained_task_resource_reading_unresolved` (warning, `reading_id` = the adjustment's id) | new values of an existing member | D2-S3 | D2-S3 | as DS4; an amount's OCR evaluation rows carry the confirmation frame's `frame_id`; schema not bumped |
+| D34 | package format: task `resource_adjustments[] {id, fact_key, operation_id, amount? {target_id, direction: consume \| gain}}` (task schema `0.8`, `0.9`) | new family (resource file format, not a ledger shape) | D2-S3 | resource side (D2-S6) | an older reader refuses the family (`UnknownField`); the `package` interface revision is declared once by A8 |
+
+The codes `fact_adjustment_skipped` (info) and `fact_adjustment_underflow` (warning)
+(runtime-host, ladder class `none`), the contract's declaration reasons `resource_adjustments_*`
+and `resource_adjustment_*` (`declaration_error`), the key and vocabulary `adjustment_reason`
+(`base_missing`, `base_expired`, `newer_observation`, `amount_unresolved`, `after_read_missing`)
+and the wider description of the key `reading_id` are catalog entries, not rows (§7).
+
 ### 1.40 Wave 10 slice OUT-1 (#390, forced compromises O-03, O-04, O-05)
 
 OUT-1 writes no ledger record, wire shape or configuration key, and adds or retires no code.

@@ -612,11 +612,15 @@
     },
     "reading_id": {
       "type": "id",
-      "description": "The id of a contained task's reading mark (resource_readings[].id)."
+      "description": "The id of a contained task's reading mark (resource_readings[].id), or of a resource adjustment whose amount gave no reading (resource_adjustments[].id, Workflow #384 D2-S3)."
     },
     "reading_problem": {
       "type": "vocab:reading_problem",
       "description": "Why a reading mark gave no reading on a frame handed to recognition."
+    },
+    "adjustment_reason": {
+      "type": "vocab:adjustment_reason",
+      "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3)."
     },
     "entry_problem": {
       "type": "vocab:entry_problem",
@@ -2676,6 +2680,26 @@
         },
         "join_timeout": {
           "description": "The recognition had not returned when the run's join timeout ended."
+        }
+      }
+    },
+    "adjustment_reason": {
+      "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3).",
+      "tokens": {
+        "base_missing": {
+          "description": "The key had no current record to adjust."
+        },
+        "base_expired": {
+          "description": "The key's current record had expired."
+        },
+        "newer_observation": {
+          "description": "An observation of the key at or after the confirmation already holds the change."
+        },
+        "amount_unresolved": {
+          "description": "The change the screen shows could not be read; the key's record is dropped."
+        },
+        "after_read_missing": {
+          "description": "No reading of the key followed the confirmation; the key's record is dropped."
         }
       }
     },

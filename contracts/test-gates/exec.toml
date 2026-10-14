@@ -711,6 +711,17 @@ tests = [
 ]
 incident = ["#396"]
 
+# Workflow #384 D2-S3: the resource_adjustments declaration gate refuses an amount that names a constant and an adjustment read after its operation without a mark of its key; an operation that declares adjustments is confirmed on the frame its step finished on and only when its effect is confirmed, each amount is read on that frame (a sign of its direction, the OCR target's floor) and joined before Finalizing; a linear package reads its mark before and after the confirmed operation
+[[gate]]
+key = "53"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s3::d2s3_t15_t40_the_gate_refuses_a_constant_amount_and_an_after_read_without_a_mark",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s3::d2s3_t15_t17_an_amount_is_read_on_the_frame_its_operation_is_confirmed_on",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s3::d2s3_t40_a_change_read_after_its_operation_is_read_before_and_after_it",
+]
+incident = ["#384"]
+
 # Workflow #390 EXEC-2 (FCM E-05, E-06): a page-graph operation's observation window (at most 60 s; the post-input delay keeps its bound) ends on a late popup that is a destination, watches to its end otherwise, offers a frame without a destination to the shared interrupt pages, and in stable mode ends once one destination held or fails with contained_task_observation_stability_unconfirmed; a click's recheck guards one fresh frame before the effect intent, or waits until the guard held on consecutive frames and otherwise refuses with contained_task_input_stability_unconfirmed, a recheck frame taking SR-1's observe-only retries; both are task schema 0.9 page-graph declarations
 [[gate]]
 key = "54"

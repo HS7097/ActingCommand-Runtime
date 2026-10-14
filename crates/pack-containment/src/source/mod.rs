@@ -582,6 +582,7 @@ impl OperationParser {
                 errors.push(error.message);
             }
             validate_resource_readings_bundle(bundle, &self.game, &mut errors);
+            validate_resource_adjustments_bundle(bundle, &mut errors);
             if let Err(error) = validate_task_timeout_bundle(bundle) {
                 errors.push(error.message);
             }
@@ -3148,6 +3149,53 @@ fn validate_resource_readings_bundle(bundle: &Bundle, game: &str, errors: &mut V
                 "{}: /resource_readings/{index}/target_id '{}' is not one declared ocr_targets entry",
                 path.display(),
                 reading.target_id
+            ));
+        }
+    }
+}
+
+/// Workflow #384 D2-S3: the cross-reference of operation `resource_adjustments`. The declaration
+/// gate has already checked each entry, its operation and its reading mark; this adds the
+/// amount's target, one of the task's own `ocr_targets`. Each error names the entry's field
+/// pointer.
+fn validate_resource_adjustments_bundle(bundle: &Bundle, errors: &mut Vec<String>) {
+    let Some(value) = bundle.data.get("resource_adjustments") else {
+        return;
+    };
+    let path = bundle.task_json_path();
+    let adjustments: Vec<actingcommand_contract::ResourceAdjustmentDeclaration> =
+        match serde_json::from_value(value.clone()) {
+            Ok(adjustments) => adjustments,
+            Err(error) => {
+                errors.push(format!(
+                    "{}: /resource_adjustments is invalid: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+    let targets = match ocr_target_declarations(bundle) {
+        Ok(targets) => targets,
+        Err(error) => {
+            errors.push(error.message);
+            return;
+        }
+    };
+    for (index, adjustment) in adjustments.iter().enumerate() {
+        let Some(amount) = &adjustment.amount else {
+            continue;
+        };
+        let declared = targets
+            .iter()
+            .filter(|target| {
+                target.get("id").and_then(Value::as_str) == Some(amount.target_id.as_str())
+            })
+            .count();
+        if declared != 1 {
+            errors.push(format!(
+                "{}: /resource_adjustments/{index}/amount/target_id '{}' is not one declared ocr_targets entry",
+                path.display(),
+                amount.target_id
             ));
         }
     }

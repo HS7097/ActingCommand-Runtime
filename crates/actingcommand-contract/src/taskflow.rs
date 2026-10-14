@@ -834,6 +834,135 @@ pub fn ocr_confidence_milli(confidence: Option<f32>) -> Option<u16> {
         .map(|confidence| (confidence.clamp(0.0, 1.0) * 1_000.0).floor() as u16)
 }
 
+/// The identifier rule of reading marks and adjustments: `[A-Za-z0-9_\-/.:]`, `1..=128` bytes.
+fn resource_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-/.:".contains(&c))
+}
+
+/// The key rule of reading marks and adjustments: a realistic instance fact key.
+fn resource_fact_key(value: &str) -> bool {
+    (value.starts_with("resource.") || value.starts_with("inventory."))
+        && crate::fact::validate_fact_key(value).is_ok()
+}
+
+/// Adjustments one task may declare (Workflow #384 D2-S3), as many as reading marks.
+pub const MAX_RESOURCE_ADJUSTMENTS: usize = MAX_RESOURCE_READINGS;
+
+/// One operation `resource_adjustments` entry (Workflow #384 D2-S3, D2 model §3.6): once the
+/// task's operation `operation_id` is confirmed, the instance fact `fact_key` has changed. The
+/// new value comes only from live recognition. Without `amount` it is a reading mark of the key
+/// that the run reads after the confirmation; with `amount` it is the change the screen shows
+/// on the confirmation frame, added to or subtracted from the key's current record. A package
+/// never declares an amount itself. The declaration never enters an event, artifact or report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceAdjustmentDeclaration {
+    pub id: String,
+    pub fact_key: String,
+    pub operation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<ResourceAdjustmentAmount>,
+}
+
+/// Where an adjustment reads the change the screen shows: one OCR target of the task, and
+/// whether the change is spent or gained. No other source of an amount exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceAdjustmentAmount {
+    pub target_id: String,
+    pub direction: ResourceAdjustmentDirection,
+}
+
+/// Whether an adjustment's amount is subtracted from or added to the key's current value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceAdjustmentDirection {
+    Consume,
+    Gain,
+}
+
+impl ResourceAdjustmentDeclaration {
+    /// The shared rule of one declaration. The declaration gate checks the same rules field by
+    /// field first; each reason names the field it rejects.
+    pub fn validate(&self) -> Result<(), crate::outcome::Code> {
+        if !resource_identifier(&self.id) {
+            return Err(TaskflowCode::ResourceAdjustmentIdInvalid.code());
+        }
+        if !resource_fact_key(&self.fact_key) {
+            return Err(TaskflowCode::ResourceAdjustmentFactKeyInvalid.code());
+        }
+        if !resource_identifier(&self.operation_id) {
+            return Err(TaskflowCode::ResourceAdjustmentOperationIdInvalid.code());
+        }
+        if self
+            .amount
+            .as_ref()
+            .is_some_and(|amount| !resource_identifier(&amount.target_id))
+        {
+            return Err(TaskflowCode::ResourceAdjustmentTargetIdInvalid.code());
+        }
+        Ok(())
+    }
+}
+
+impl ResourceAdjustmentAmount {
+    /// Trims one observed change and parses it as ASCII decimal digits after at most one sign
+    /// of its direction (`+` for a gain, `-` for a consumption), within `0..=2^53-1`. The
+    /// digits are read by the reading parser (`OcrUnsignedIntegerFormat`).
+    pub fn parse(&self, text: &str) -> Result<u64, OcrFieldReason> {
+        let text = text.trim();
+        let sign = match self.direction {
+            ResourceAdjustmentDirection::Consume => '-',
+            ResourceAdjustmentDirection::Gain => '+',
+        };
+        let digits = text.strip_prefix(sign).unwrap_or(text);
+        OcrUnsignedIntegerFormat::AsciiDecimal.parse(digits, 0, MAX_RESOURCE_READING_VALUE)
+    }
+}
+
+/// One task's `resource_adjustments` (Workflow #384 D2-S3): `1..=16` valid entries with unique
+/// ids, each naming one of the task's `operation_ids` and adjusting a key at most once per
+/// operation. An adjustment without `amount` needs a reading mark of its key in `readings`.
+pub fn validate_resource_adjustments(
+    adjustments: &[ResourceAdjustmentDeclaration],
+    readings: Option<&[ResourceReadingDeclaration]>,
+    operation_ids: &[&str],
+) -> Result<(), crate::outcome::Code> {
+    if adjustments.is_empty() || adjustments.len() > MAX_RESOURCE_ADJUSTMENTS {
+        return Err(TaskflowCode::ResourceAdjustmentsCountInvalid.code());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut changes = std::collections::BTreeSet::new();
+    for adjustment in adjustments {
+        adjustment.validate()?;
+        if !operation_ids.contains(&adjustment.operation_id.as_str()) {
+            return Err(TaskflowCode::ResourceAdjustmentOperationIdInvalid.code());
+        }
+        if adjustment.amount.is_none()
+            && !readings
+                .unwrap_or_default()
+                .iter()
+                .any(|reading| reading.fact_key == adjustment.fact_key)
+        {
+            return Err(TaskflowCode::ResourceAdjustmentMarkMissing.code());
+        }
+        if !ids.insert(adjustment.id.as_str()) {
+            return Err(TaskflowCode::ResourceAdjustmentIdDuplicate.code());
+        }
+        if !changes.insert((
+            adjustment.operation_id.as_str(),
+            adjustment.fact_key.as_str(),
+        )) {
+            return Err(TaskflowCode::ResourceAdjustmentFactKeyDuplicate.code());
+        }
+    }
+    Ok(())
+}
+
 impl OcrFieldsDeclaration {
     /// A task without input can only collect fields on the terminal pages of its fields outcome.
     /// Workflow #390 OUT-1 (FCM O-05): it may declare several outcomes, each mapping terminal

@@ -439,6 +439,7 @@ fn a_guard_check_on_a_value_test_that_does_not_hold_refuses_the_input() {
         scheduling_outcome: None,
         post_admission_ocr: None,
         resource_readings: None,
+        resource_adjustments: None,
         stability_termination: None,
         recovery: None,
         defaults: TaskOperationDefaults::default(),

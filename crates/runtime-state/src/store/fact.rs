@@ -367,12 +367,15 @@ fn verify_sources(
         }
         None => !input,
     };
+    // Workflow #384 D2-S3: an adjustment's invalidation names its operation's step as the
+    // trigger, which the record does not list.
+    let adjustment = actingcommand_contract::is_adjustment_invalidation(data);
     if !scope_matches
         || !value.records().any(|record| {
             record.scope == data.scope
                 && record.key == data.key
                 && record.source_snapshot_id == data.source_snapshot_id
-                && record.invalidate_on.contains(&trigger.event_type())
+                && (adjustment || record.invalidate_on.contains(&trigger.event_type()))
         })
     {
         return Err(fact_error(

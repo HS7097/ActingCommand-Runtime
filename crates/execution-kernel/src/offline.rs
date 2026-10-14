@@ -240,8 +240,11 @@ fn simulate(
         post_admission_ocr: OfflinePostAdmissionOcrStatus {
             declared: post_admission_ocr_declared,
             executed: false,
-            // Declared OCR fields and resource readings are both read only by a real run.
-            pending_real_execution: post_admission_ocr_declared || task.has_resource_readings(),
+            // Declared OCR fields, resource readings and resource adjustments (Workflow #384
+            // D2-S3) are all read only by a real run.
+            pending_real_execution: post_admission_ocr_declared
+                || task.has_resource_readings()
+                || task.has_resource_adjustments(),
         },
         recognition: runtime.recognition,
         decision,
