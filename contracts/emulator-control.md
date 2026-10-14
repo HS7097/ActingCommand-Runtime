@@ -494,7 +494,11 @@ of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallbac
   counts, in memory and per instance, the records of warning severity or worse whose outcome code
   (or, for a backend open observation that failed, its entry's open failure code) a
   `stability_warnings` item matches. The item's `count`-th record within its `window_ms`
-  registers a burst, and every window of the instance starts empty again. Not counted: the
+  registers a burst, and every window of the instance starts empty again. The count is of
+  records, not incidents: one failure that commits several matching records counts each of them
+  (nothing is de-duplicated by run, request or incident), and an item that names both
+  `environment_fault` and `stability_warning` (as the default `stability_burst` does) adds
+  records of the two classes up in one count. Not counted: the
   records of an instance a ladder climbs on (its own work), the records of a direct run while
   `rules.direct_runs` is `exempt`, and codes the catalog does not list. The count takes no lock
   but its own and admits nothing on the write path; the lease sweep admits each burst's ladder

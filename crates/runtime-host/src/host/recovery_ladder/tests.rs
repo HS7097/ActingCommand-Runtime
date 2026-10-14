@@ -446,3 +446,40 @@ fn d1_l5_direction_one_counts_routine_warnings_and_errors_only() {
     assert!(registered.is_empty());
     assert_eq!(unclassified, vec!["neutral_unlisted_failure".to_owned()]);
 }
+
+// Workflow #387 D1c-F: the codes that invalid input or a Runtime-internal defect now end with
+// are neither class 5 nor class 6, so three such failures on one instance within the window
+// register no burst and start no ladder: the residual preparation defect (`none`), a request's
+// contract refusal (`none`), a pack swipe's declaration refusal (class 3) and a stability region
+// that does not fit (class 3). The stability sample's frame-data half is class 5 and still counts.
+#[test]
+fn d1cf_three_recoded_failures_on_one_instance_within_the_window_start_no_ladder() {
+    use actingcommand_contract::codes::RuntimeContractCode;
+    use actingcommand_execution_kernel::ExecutionKernelCode;
+
+    let node = instance();
+    let defaults = ladder(serde_json::json!({}));
+    let three = |spelling: &'static str| {
+        [1_000, 2_000, 3_000].map(|at_unix_ms| record(node, at_unix_ms, spelling))
+    };
+    for spelling in [
+        ExecutionKernelCode::InputPlanPreparationFailed.as_str(),
+        RuntimeContractCode::InvalidSegmentedSwipeContract.as_str(),
+        ExecutionKernelCode::ContainedTaskOperationInvalid.as_str(),
+        ExecutionKernelCode::ContainedTaskControlInvalid.as_str(),
+    ] {
+        assert!(
+            bursts(Arc::clone(&defaults), &three(spelling)).is_empty(),
+            "{spelling} registered a burst"
+        );
+    }
+    assert_eq!(
+        bursts(
+            defaults,
+            &three(ExecutionKernelCode::ContainedTaskFrameInvalid.as_str())
+        )
+        .len(),
+        1,
+        "the frame-data half counts as class 5"
+    );
+}
