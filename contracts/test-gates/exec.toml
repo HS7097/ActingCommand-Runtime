@@ -791,7 +791,7 @@ tests = [
 ]
 incident = ["#382 E-5"]
 
-# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the declared bindings
+# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the declared bindings; E-4 G4b: over the shared fixture set EXEC-I6, package bundle --maintenance admits what the Runtime admits and refuses each refused chain under the code the Runtime refuses its run with
 [[gate]]
 key = "12"
 coverage = "Y"
@@ -807,8 +807,11 @@ tests = [
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_refuses_a_duplicate_role_or_a_missing_reference",
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material",
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_declared_bindings",
+    "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_admits_the_fixture_set_the_runtime_admits",
+    "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_refuses_each_fixture_chain_with_the_runtimes_code",
+    "actingcommand-runtime-host::lib::tests::gate_e4::gate_e4_runtime_refuses_each_fixture_chain_with_the_bundles_code",
 ]
-incident = ["#382 E-1"]
+incident = ["#382 E-1", "#382 E-4"]
 
 # Test plan v2.2 E-1 G8: two error frames are similar at 250 changed cells per thousand and different at the next count, a cell changes above a difference of 6, frames of different sizes are different (size_changed) and an undecodable frame is png_invalid
 [[gate]]

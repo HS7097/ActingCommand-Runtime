@@ -15,6 +15,9 @@ mod declaration_exclusions;
 // Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
 #[cfg(test)]
 mod gate_e1;
+// Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
+#[cfg(test)]
+mod gate_e4;
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;
