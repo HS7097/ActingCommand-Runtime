@@ -1421,6 +1421,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_designated_effect_cap_unresolved": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "optional",
+        "count": "optional",
+        "limit_count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #390 OUT-2: a member of a task's designated effect set (pack_operation_id) takes its repeat cap from the instance fact fact_key, and before the run's first step the fact gave no cap: the runtime had no fact snapshot for the run or one of another game or server (no further value), the fact was unreadable (unknown_reason: missing, expired, not a scalar, not an integer), or its integer was outside 0 to limit_count (count). No input was made.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_resource_reading_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

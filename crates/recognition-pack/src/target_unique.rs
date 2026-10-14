@@ -101,8 +101,10 @@ fn template_rect(matched: recognition::TemplateMatch) -> PackRect {
 impl RecognitionEvaluator {
     /// A template target scored by the exact score map of its search region: one that declares
     /// `unique`, or (Workflow #396 REC-7) a `mask`, which scores only the template pixels it
-    /// selects. Its best match and its pass decision follow the ordinary rules on these exact
-    /// scores; a target that declares `unique` and passes is then checked for a second place.
+    /// selects, or (REC-5) `scales`, whose template is resampled by each factor and searched on
+    /// one map per factor. Its best match and its pass decision follow the ordinary rules on these
+    /// exact scores over every map; a target that declares `unique` and passes is then checked
+    /// for a second place on every map.
     pub(crate) fn evaluate_exact_template(
         &self,
         context: &SceneEvaluation<'_>,
@@ -122,8 +124,8 @@ impl RecognitionEvaluator {
             .color_check
             .as_ref()
             .is_some_and(|check| matches!(check.region, PackRegion::TemplateRelative(_)));
-        let map = scene
-            .exact_score_map(
+        let maps = scene
+            .exact_score_maps(
                 template_png,
                 region,
                 self.default_match_metric(),
@@ -133,18 +135,27 @@ impl RecognitionEvaluator {
                     TemplateMatchTimingStage::Exact
                 },
                 mask,
+                &crate::template_scales::searched_factors(target),
                 &mut context.spectra.borrow_mut(),
                 &self.search_clock,
             )
             .map_err(|error| search_error(&target.id, stage, error))?;
         if relative {
-            let (mut evaluation, accepted) =
-                self.joint_color_evaluation(scene, target, JointSearch::Map { map: &map, stage })?;
+            let (mut evaluation, accepted) = self.joint_color_evaluation(
+                scene,
+                target,
+                JointSearch::Map { maps: &maps, stage },
+            )?;
             if let (Some(unique), Some(accepted)) = (unique, accepted) {
-                let second = map
-                    .second_within(accepted, unique.margin_milli, |candidate| {
+                let second = maps
+                    .second_within(accepted.matched, unique.margin_milli, |candidate| {
                         Ok(self
-                            .relative_color_at(scene, target, candidate)?
+                            .relative_color_at(
+                                scene,
+                                target,
+                                candidate.matched,
+                                candidate.scale_milli,
+                            )?
                             .0
                             .is_some_and(|color| color.distance <= color.max_distance))
                     })
@@ -153,11 +164,11 @@ impl RecognitionEvaluator {
                     &mut evaluation,
                     TargetMatchKind::Template,
                     unique,
-                    recognition::score_milli(accepted.score),
+                    recognition::score_milli(accepted.matched.score),
                     second.map(|second| {
                         (
-                            recognition::score_milli(second.score),
-                            template_rect(second),
+                            recognition::score_milli(second.matched.score),
+                            template_rect(second.matched),
                         )
                     }),
                 );
@@ -165,9 +176,10 @@ impl RecognitionEvaluator {
             return Ok(evaluation);
         }
 
-        let best = map
+        let found = maps
             .best()
             .map_err(|error| search_error(&target.id, stage, error))?;
+        let best = found.matched;
         let threshold = target
             .threshold
             .unwrap_or(self.pack.defaults.template_threshold);
@@ -193,6 +205,7 @@ impl RecognitionEvaluator {
                 raw_score: best.raw_score,
                 score: best.score,
                 threshold,
+                scale_milli: target.scales.as_ref().map(|_| found.scale_milli),
             }),
             color,
             ocr: None,
@@ -208,7 +221,7 @@ impl RecognitionEvaluator {
             && evaluation.passed
         {
             // An absolute color check holds for every position alike.
-            let second = map
+            let second = maps
                 .second_within(best, unique.margin_milli, |_| Ok(true))
                 .map_err(|error| search_error(&target.id, stage, error))?;
             apply_uniqueness(
@@ -218,8 +231,8 @@ impl RecognitionEvaluator {
                 recognition::score_milli(best.score),
                 second.map(|second| {
                     (
-                        recognition::score_milli(second.score),
-                        template_rect(second),
+                        recognition::score_milli(second.matched.score),
+                        template_rect(second.matched),
                     )
                 }),
             );

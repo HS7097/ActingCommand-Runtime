@@ -1676,6 +1676,10 @@
     "code_name": {
       "type": "name",
       "description": "An outcome code's name as a lookup was given it; it may name no registered code."
+    },
+    "waited_ms": {
+      "type": "duration_ms",
+      "description": "How long a command's --wait waited for its request before it stopped waiting, in milliseconds."
     }
   },
   "vocabularies": {
@@ -5614,6 +5618,7 @@
     ],
     "command_": [
       "actinglab",
+      "actingctl",
       "contract",
       "device",
       "runtime-host"
@@ -8012,12 +8017,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl could not write its JSON output.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl could not write its JSON output line: serialising the result failed or stdout could not be written. Exit 1.",
+      "common_causes": "stdout closed early by the caller (a broken pipe), or a defect in the result's serialisation.",
+      "handling": "Keep the reader of actingctl's stdout open until it exits; report it when it repeats."
     },
     "actingctl_package_resolution_failed": {
       "category": "error",
@@ -8048,12 +8053,12 @@
         "range_max": "optional",
         "variable": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl was given arguments its usage does not allow.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl was given arguments its usage does not allow: an unknown command or option, a missing or repeated value, or a value out of range. argument and argument_problem name the argument and the rule when one argument is at fault, range_min and range_max the allowed range, and variable an invalid ACTINGCOMMAND_DETAIL. Exit 1.",
+      "common_causes": "A misspelt command or option, or a caller written for another release.",
+      "handling": "Correct the command line; actingctl without arguments prints its usage."
     },
     "actingd_fallback_log_failed": {
       "category": "warning",
@@ -8065,12 +8070,12 @@
         "path": "optional",
         "variable": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A start refusal could not be appended to the fallback log %LOCALAPPDATA%\\ActingCommand\\logs (Workflow #378 A6a, model section 8.2): path names the folder or file, with the OS error as the caused_by link; variable names LOCALAPPDATA when it is not set. A developer line only; actingd still exits by the refusal.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A start refusal could not be appended to the fallback log %LOCALAPPDATA%\\ActingCommand\\logs: path names the folder or file, variable is set when LOCALAPPDATA is not. Only a developer line; the refusal itself is still on stderr.",
+      "common_causes": "LOCALAPPDATA not set for the starting user, or a logs folder that cannot be created or written.",
+      "handling": "Start actingd with stderr redirected to a file, or make the logs folder writable."
     },
     "action_failed": {
       "category": "error",
@@ -8164,12 +8169,12 @@
         "tools_dir": "required",
         "files": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the install root's adb: a distributed binary differs from the pin.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd refused the install root's adb (Workflow #337): a distributed platform-tools binary under <install root>\\tools\\platform-tools differs from the SHA-256 this build pins. adb_path names the adb, aliases the instances that use it, tools_dir the tools folder and files each finding. A damaged installation, so fatal: check-config refuses at stage config_assemble, a start refuses before the ledger opens and the watchdog holds.",
+      "common_causes": "platform-tools replaced by another adb version, or files changed after installation.",
+      "handling": "Reinstall tools\\platform-tools under the install root with acsetup, or set the instances' adb_path to another adb, then start again."
     },
     "adb_install_missing": {
       "category": "fatal",
@@ -8183,12 +8188,12 @@
         "tools_dir": "required",
         "files": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the install root's adb: a distributed binary is missing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd refused the install root's adb (Workflow #337): a distributed platform-tools binary under <install root>\\tools\\platform-tools is missing or cannot be read. adb_path names the adb, aliases the instances that use it, tools_dir the tools folder and files each finding. A damaged installation, so fatal: check-config refuses at stage config_assemble, a start refuses before the ledger opens and the watchdog holds.",
+      "common_causes": "Files removed by antivirus or by hand, or an incomplete installation.",
+      "handling": "Reinstall tools\\platform-tools under the install root with acsetup, or set the instances' adb_path to another adb, then start again."
     },
     "adb_install_pin_invalid": {
       "category": "fatal",
@@ -8199,12 +8204,12 @@
       "values": {
         "path": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The platform-tools pin this build carries (scripts/windows-tools/windows-tool-sources.v1.json, compiled in) cannot be read: it does not decode (its foreign_data_error link), no single component carries distributed_files, an entry is malformed (path), or adb.exe is not listed. A build defect (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The platform-tools pin this build carries (scripts/windows-tools/windows-tool-sources.v1.json, compiled in) cannot be used: it does not decode (the decoder's text is a foreign_data_error link) or does not list the adb among its distributed files. A build defect, so fatal.",
+      "common_causes": "A release built with a broken or incomplete pin file.",
+      "handling": "Install a release whose pin is intact; report the build."
     },
     "adb_path_conflict": {
       "category": "error",
@@ -8218,12 +8223,12 @@
         "other_path": "optional",
         "instances": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared adb_path is not the discovered adb. alias names the configured instance, adb_path the declared adb, other_path the discovered one, and instances the discovered instance.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The failure provider startup records under instance_discovery_conflict when a discovery-bound instance's declared adb_path is not the adb MuMu reports for it: alias names the instance, adb_path the declared adb, other_path the discovered adb and instances what discovery reported.",
+      "common_causes": "An adb_path pointing at another MuMu installation or another adb.",
+      "handling": "Remove adb_path (the discovered or the install root's adb is used) or set it to the discovered adb. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "adb_path_encoding_invalid": {
       "category": "error",
@@ -8237,12 +8242,12 @@
         "other_path": "optional",
         "instances": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the discovered adb path is not UTF-8. alias names the configured instance, other_path the discovered adb (lossy), adb_path the declared adb when one is declared, and instances the discovered instance.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The failure provider startup records when the adb path MuMu reports for a discovery-bound instance is not valid UTF-8: alias names the instance, other_path the discovered adb (converted lossily), adb_path the declared adb when there is one and instances what discovery reported. The start fails as instance_discovery_unavailable.",
+      "common_causes": "MuMu installed under a folder whose name is not representable as UTF-8.",
+      "handling": "Install MuMu under a folder with a plain name, or bind the instance to the install root's adb by leaving adb_path out."
     },
     "agent_context_invalid": {
       "category": "error",
@@ -9160,12 +9165,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a device instance names no application_id.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance names no application_id, or only blanks. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "application_id left out when the instance was added.",
+      "handling": "Set the instance's application_id. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "application_lifecycle_action_id_missing": {
       "category": "error",
@@ -12921,12 +12926,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: bind_host is not an IP address.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration member bind_host is not an IP address. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A host name or a typing error in bind_host.",
+      "handling": "Set bind_host to a loopback IP address such as 127.0.0.1. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "bind_host_not_loopback": {
       "category": "error",
@@ -12935,12 +12940,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: bind_host is not a loopback address.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration member bind_host is an IP address that is not a loopback address; the Runtime listens only on loopback. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "bind_host set to a LAN or wildcard address to reach the Runtime from another machine.",
+      "handling": "Set bind_host to a loopback address such as 127.0.0.1. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "binding_requires_unavailable": {
       "category": "warning",
@@ -13131,18 +13136,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected MuMu installation holds no candidate file for a backend file (adb, capture DLL, MuMuManager). A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selected MuMu installation holds none of the candidate files the resolver checks for a needed backend file (the capture DLL, the adb or MuMuManager.exe; count_kind names which, count 0). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An incomplete or partly removed MuMu installation, or a MuMu release with another folder layout.",
+      "handling": "Repair or reinstall MuMu, or configure the file's path explicitly."
     },
     "candidate_feature_failed": {
       "category": "error",
@@ -13212,18 +13224,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A backend file candidate resolved outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A backend file candidate (capture DLL, adb or MuMuManager.exe) resolved outside the selected MuMu installation root, for example through a link. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A symbolic link or junction inside the MuMu folder that points elsewhere.",
+      "handling": "Remove the link and keep the files inside the MuMu installation, or configure the path explicitly."
     },
     "candidate_production_conflict": {
       "category": "error",
@@ -13759,12 +13778,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's capture_backend is missing or unknown.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance's capture_backend is missing or not a backend name the Runtime knows. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "capture_backend left out, or a typing error in its value.",
+      "handling": "Set capture_backend to one of the documented backends. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "capture_backend_missing": {
       "category": "error",
@@ -13793,12 +13812,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's capture_backend is an automatic choice.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance's capture_backend is an automatic choice (auto or auto_fastest), which the daemon does not accept. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A configuration that relied on automatic capture selection.",
+      "handling": "Name the capture backend explicitly. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "capture_backend_open_failed": {
       "category": "error",
@@ -14111,18 +14130,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): Nemu capture has no MuMu installation identity coordinated with the target and its adb. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Nemu capture has no coordinated MuMu installation identity (folder and DLL) to open with, because the resolution that should have supplied it did not. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A capture backend opened before or without the installation resolution, after an earlier resolution failure.",
+      "handling": "Resolve the earlier MuMu failure (see the instance's other outcomes), then reconnect the instance."
     },
     "capture_pin_material_changed": {
       "category": "error",
@@ -15577,12 +15603,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: policy.catalog_transition is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "policy.catalog_transition's expected_active_catalog_hash is not sha256: followed by 64 lowercase hex digits. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A hash copied without its sha256: prefix, in upper case, or cut short.",
+      "handling": "Copy the active catalog hash as check-config's policy_plan reports it. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "catalog_transition_kind_unknown": {
       "category": "error",
@@ -15591,12 +15617,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: policy.catalog_transition names an unknown kind.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "policy.catalog_transition names a kind other than replace, the only transition kind. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A typing error in kind, or a transition written for another release.",
+      "handling": "Set kind to replace, or remove policy.catalog_transition for the forward-only rule. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "channel_binding_exists": {
       "category": "error",
@@ -15667,12 +15693,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd check-config was given no --config.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd check-config was given no --config. The report carries this outcome; exit 1.",
+      "common_causes": "A caller that omits the configuration path.",
+      "handling": "Run actingd check-config --config <path>."
     },
     "check_config_failed": {
       "category": "error",
@@ -15698,12 +15724,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd check-config was given an unknown, repeated or empty option.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd check-config was given an option other than --config, --config twice, an empty value, or a dangling argument. The report carries this outcome; exit 1.",
+      "common_causes": "A misspelt option or a missing value.",
+      "handling": "Run actingd check-config --config <path>."
     },
     "check_config_passed": {
       "category": "success",
@@ -15712,12 +15738,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config passed (Workflow #378 A6a, check-config v2): the configuration loads, assembles and validates as a start would. What the check noted (an ignored environment override, an unresolved MuMu installation, an unused device binding, a broken standard-pack root, a missing fact reader) is a note link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd check-config passed (check-config v2): the configuration loads, assembles and validates as a start would, and the catalog plan was previewed from the ledger read-only. report holds the details; what the check noted (an ignored environment override, the MuMu resolution, an unused device binding, a broken standard-pack root, a missing fact reader) is a note link.",
+      "common_causes": "The configuration is usable.",
+      "handling": "None; read the note links before committing or starting."
     },
     "check_config_report_encode_failed": {
       "category": "error",
@@ -15726,12 +15752,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd check-config could not encode its report.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd check-config could not encode its report as JSON; the report line then carries only this outcome; exit 1.",
+      "common_causes": "A defect in the report's construction.",
+      "handling": "Report it with the configuration and the build."
     },
     "check_config_unavailable": {
       "category": "warning",
@@ -15756,12 +15782,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd check-config was given too many arguments.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd check-config was given more arguments than --config <path>. The report carries this outcome; exit 1.",
+      "common_causes": "A caller that passes extra arguments.",
+      "handling": "Run actingd check-config --config <path>."
     },
     "cleanup_transfer_remained_destructive": {
       "category": "error",
@@ -16220,6 +16246,27 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "command_wait_expired": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "request_id": "optional",
+        "waited_ms": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A command's --wait (actingctl emulator start, stop, restart and task-run; actinglab after U-3) ended before its request did: the command stopped waiting after waited_ms and the request (operation, request_id when the command knows it) goes on in the Runtime (Workflow #389 MCP-21).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "config_decode_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -16262,12 +16309,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: schema version, state root or salt is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration breaks a top-level rule: schema_version is not the one this build reads, state_root is empty, or secret_fingerprint_salt is outside 16 to 1024 bytes. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A configuration written for another Runtime release, or a hand edit of these members.",
+      "handling": "Correct the member or let acsetup write a configuration for the installed Runtime, then run actingd check-config again."
     },
     "config_key_not_settable": {
       "category": "error",
@@ -16318,12 +16365,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd could not build its configuration manifest: a value it must report is missing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "check-config could not report a value its report must carry from the configuration manifest (a performance pressure streak or a device path entry is missing or of another type). check-config refuses at stage config_assemble.",
+      "common_causes": "A defect: the manifest the assembly built lacks a row the report reads.",
+      "handling": "Report it with the configuration and the build; the configuration itself may be valid."
     },
     "config_manifest_invalid": {
       "category": "error",
@@ -16332,12 +16379,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd could not build its configuration manifest: the manifest is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd could not build its configuration manifest: a value the configuration mechanism resolved has another type than the assembly expects, or a member could not be serialised. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A defect in the assembly or the configuration mechanism.",
+      "handling": "Report it with the configuration and the build."
     },
     "config_manifest_parameters_too_many": {
       "category": "error",
@@ -16386,12 +16433,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd could not build its configuration manifest: a value is out of range.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd could not put a configured integer or duration into its configuration manifest, because it does not fit the manifest's value range. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A configured value far outside any sensible range that no earlier check refused.",
+      "handling": "Use a value within the documented range. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "config_override_base_changed": {
       "category": "warning",
@@ -16498,12 +16545,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration file: it is empty, not a file or larger than its bound.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration file is not a regular file, is empty, or is larger than the bound actingd reads. check-config refuses at stage config_load; a start refuses before the ledger opens.",
+      "common_causes": "A truncated or zero-byte file after an interrupted write, a folder given as --config, or a file that is not an actingd configuration.",
+      "handling": "Restore the configuration file (acsetup --commit-config writes it whole) and run actingd check-config again."
     },
     "config_subsystem_always_on": {
       "category": "info",
@@ -16614,12 +16661,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration file: the file is unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd cannot read the metadata of its configuration file: the path given with --config (or the configuration the install selection names) does not exist or cannot be opened. check-config refuses at stage config_load; a start refuses before the ledger opens.",
+      "common_causes": "A wrong --config path, a configuration file that was moved or deleted, or a folder the process may not read.",
+      "handling": "Pass the path of an existing configuration file, or let acsetup write the configuration again."
     },
     "config_value_invalid": {
       "category": "error",
@@ -16653,18 +16700,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb does not identify the selected MuMu installation root, so adb and Nemu capture cannot share one installation identity. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The configured adb does not identify a MuMu installation root, so it cannot be tied to the installation Nemu capture uses; adb and capture must share one installation identity. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An instance adb_path pointing at a generic adb (for example the install root's platform-tools) while Nemu capture is configured.",
+      "handling": "Use MuMu's own adb for Nemu capture, or choose another capture backend for the instance."
     },
     "connection_mismatch": {
       "category": "error",
@@ -17015,6 +17069,31 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports contained task deadline unavailable.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_designated_effect_cap_unresolved": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "pack_operation_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "optional",
+        "count": "optional",
+        "limit_count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #390 OUT-2: a member of a task's designated effect set (pack_operation_id) takes its repeat cap from the instance fact fact_key, and before the run's first step the fact gave no cap: the runtime had no fact snapshot for the run or one of another game or server (no further value), the fact was unreadable (unknown_reason: missing, expired, not a scalar, not an integer), or its integer was outside 0 to limit_count (count). No input was made.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22132,12 +22211,12 @@
         "path": "optional",
         "device_binding_problem": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the private binding file <state root>/private/device-bindings.json (#398 R1 RD-1b): it cannot be read, is not of its shape and schema, binds an alias or a serial twice, or holds a serial of the wrong form. The value device_binding_problem says which; the start is refused.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd refused the private binding file <state root>\\private\\device-bindings.json (#398 R1 RD-1b): it cannot be read, breaks its shape or schema, or binds an alias or a device twice. path names the file and device_binding_problem the rule. check-config and a start refuse before the ledger opens.",
+      "common_causes": "A hand edit of the private file, a file written by another release, or a file another program holds open.",
+      "handling": "Repair or remove the binding file and bind the devices again through the console or the CLI."
     },
     "device_binding_missing": {
       "category": "error",
@@ -22148,12 +22227,12 @@
       "values": {
         "alias": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The private binding file <state root>/private/device-bindings.json binds no device to a handset instance (#398 R1 RD-1b). check-config refuses; a start registers the instance unavailable (source device_link:unbound) and runs the other instances.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The private binding file <state root>\\private\\device-bindings.json binds no device to a handset instance (alias names it, #398 R1 RD-1b). check-config refuses at stage config_assemble; a start registers the instance unavailable and goes on.",
+      "common_causes": "A handset instance added before its device was bound, or a binding removed.",
+      "handling": "Bind a discovered device to the instance through the console or the CLI, then run actingd check-config again."
     },
     "device_binding_unused": {
       "category": "info",
@@ -22164,12 +22243,12 @@
       "values": {
         "alias": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The private binding file binds an alias that no handset instance of the configuration has (#398 R1 RD-1b); a check-config note, not a failure.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The private binding file binds an alias (alias names it) that no handset instance of the configuration has (#398 R1 RD-1b). check-config reports it as a note link of check_config_passed; nothing is refused.",
+      "common_causes": "A handset instance renamed or removed while its binding stayed.",
+      "handling": "Remove the stale binding, or add the handset instance it was meant for."
     },
     "device_config_invalid": {
       "category": "error",
@@ -22181,12 +22260,12 @@
         "alias": "optional",
         "device_config_problem": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration (#398 R1 RD-3i, RD-1b): an instance's device fields do not fit its device kind: a handset that names an endpoint, a serial or a discovery key, a transport other than usb, a backend its kind does not have (scrcpy on an emulator; DroidCast or Nemu IPC on a handset), or a handset alias longer than 248 bytes. The value device_config_problem says which.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instance's device fields do not fit its device kind (#398 R1): for example a handset that names an endpoint, a serial or a discovery key, or selects a capture backend only emulators have, or an emulator that names scrcpy capture. alias names the instance and device_config_problem the rule. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "An emulator entry copied for a handset, or a backend chosen that the device kind does not have.",
+      "handling": "Correct the instance as device_config_problem says. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "device_diagnostic_owner_mismatch": {
       "category": "error",
@@ -22277,12 +22356,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a device_paths entry is not an existing absolute path.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device_paths entry (nemu_folder, nemu_ipc_dll, droidcast_apk, minitouch_path or maatouch_path) is empty, not absolute, or names no existing file or folder. Nothing is opened. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A relative path, a typing error, or a tool file that was moved, deleted or not installed.",
+      "handling": "Point the entry at an existing absolute path, or remove it to use the default. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "device_state_unreadable": {
       "category": "error",
@@ -22492,18 +22571,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured Nemu capture DLL lies outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The configured Nemu capture DLL lies outside the selected MuMu installation root. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "device_paths.nemu_ipc_dll pointing at a copied DLL or at another installation.",
+      "handling": "Point device_paths.nemu_ipc_dll at the DLL inside the MuMu installation, or remove it to let the resolver find it."
     },
     "dll_version_missing": {
       "category": "error",
@@ -22513,18 +22599,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No Nemu capture DLL matches the MuMu version folder (nx_device/<version>) of the adb or the running executable. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No Nemu capture DLL carries the engine version (nx_device/<version>) of the adb or of the running MuMu executable, so the two cannot be paired. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A capture DLL configured from outside the versioned engine folder, or an engine version whose DLL is missing.",
+      "handling": "Configure the DLL of the engine version in use, or repair the MuMu installation."
     },
     "document_too_large": {
       "category": "error",
@@ -22559,12 +22652,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install transition's drain did not finish before its deadline; the transition aborts and the old owner reopens.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition's drain did not finish before its deadline: the transition aborts and admission reopens on the old owner. The operation is install_transition; the status reports phase aborted with this failure code.",
+      "common_causes": "Work in flight that takes longer than the drain's timeout.",
+      "handling": "Wait until running work finishes, or begin the transition again with a longer timeout."
     },
     "drive_package_invalid": {
       "category": "error",
@@ -23088,12 +23181,12 @@
         "mumu_manager_version": "optional",
         "mumu_root": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup refused the emulator capability profile from discovery. mumu_manager_version is the version discovery reported, mumu_root the configured MuMu folder when one is configured, and the host's refusal is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup refused the emulator capability profile built from MuMuManager discovery: the inventory or status read the Runtime needs is not available. mumu_manager_version is the version discovery reported and mumu_root the configured MuMu folder; the capability admission's refusal is the caused_by link. The start fails.",
+      "common_causes": "A MuMuManager release whose discovery report lacks a capability the Runtime requires.",
+      "handling": "Install a MuMu release the Runtime supports, then start again."
     },
     "emulator_capability_probe_failed": {
       "category": "error",
@@ -23425,12 +23518,12 @@
       "values": {
         "variable": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An ACTINGCOMMAND_* environment variable is set but ignored because allow_env_overrides is off.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An ACTINGCOMMAND_* environment variable (variable names it) is set but not read, because allow_env_overrides is off. check-config reports it as a note link of check_config_passed; the start goes on without it.",
+      "common_causes": "A variable left in the user's or the launcher's environment from earlier tests.",
+      "handling": "Remove the variable, or set allow_env_overrides to true when the override is intended."
     },
     "environment_value_expired": {
       "category": "error",
@@ -26561,12 +26654,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a fixture backend is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A fixture instance's fixture_backend breaks its rules: the alias is invalid, it lists no frame or too many, or max_inputs is above its bound. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "An empty frame list or limits copied from another test setup.",
+      "handling": "Correct the fixture_backend members. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "fixture_backend_missing": {
       "category": "error",
@@ -26575,12 +26668,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a fixture instance has no fixture_backend.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instance is treated as a fixture but has no fixture_backend member. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A fixture instance whose fixture_backend was left out.",
+      "handling": "Add the fixture_backend member, or make the instance a device instance. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "fixture_capture_outside_simulation_scope": {
       "category": "error",
@@ -26609,12 +26702,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a fixture instance names device fields.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A fixture (simulation) instance names a member only a device instance may have, such as application_id, an endpoint, a binding key, a backend or a timeout. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A device instance turned into a fixture without removing its device members.",
+      "handling": "Remove the device members from the fixture instance. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "fixture_execution_scope_forbidden": {
       "category": "error",
@@ -26643,12 +26736,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a fixture frame is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A fixture frame of a valid size cannot be built into a frame. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "Pixel data that the frame builder refuses.",
+      "handling": "Regenerate the fixture frame. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "fixture_frame_size_invalid": {
       "category": "error",
@@ -26657,12 +26750,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a fixture frame's size is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A fixture frame's width and height give no valid RGB size, exceed the per-frame bound, or do not match the length of its pixel data. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A frame whose pixel data was cut or generated for another size.",
+      "handling": "Regenerate the frame with matching width, height and RGB data. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "fixture_monitor_scope_forbidden": {
       "category": "error",
@@ -26691,12 +26784,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: the fixture frames are too large together.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The fixture frames of one instance are larger together than the resident bound. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "Too many or too large fixture frames for one instance.",
+      "handling": "Use fewer or smaller fixture frames. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "float_rejected": {
       "category": "error",
@@ -27531,12 +27624,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: it names the retired governance capability.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration names the retired governance capability member, which this build no longer accepts. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A configuration written for an earlier Runtime release.",
+      "handling": "Remove the retired member (acsetup --commit-config writes a current configuration) and run actingd check-config again."
     },
     "governance_client_not_allowed": {
       "category": "error",
@@ -27685,12 +27778,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held start (actingd --install-held) received no release before its held deadline. The installation transition fails with admission closed; the operation is install_transition.",
-      "common_causes": "The installer stopped, timed out or lost its connection before it sent the release.",
-      "handling": "TBD"
+      "description": "A held start (actingd --install-held) received no release before its deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
+      "common_causes": "The installer stopped, timed out or lost its connection before it released the new Runtime.",
+      "handling": "Let the installer finish or roll back; the previous Runtime is started again by the installer or the watchdog."
     },
     "holder_mismatch": {
       "category": "error",
@@ -27846,12 +27939,12 @@
         "adb_host": "optional",
         "instances": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared host differs from the discovered one. alias names the configured instance, adb_host the declared host, and instances the discovered instance with the host it reported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The failure provider startup records under instance_discovery_conflict when a discovery-bound instance's declared host differs from the host discovery reports: alias names the instance, adb_host the declared host and instances what discovery reported.",
+      "common_causes": "A host kept from an explicit entry or from another machine's configuration.",
+      "handling": "Remove host from the discovery-bound instance or set it to the discovered host. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "host_key_request_invalid": {
       "category": "error",
@@ -28505,12 +28598,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config path invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The --config path a running installed program was given cannot be made absolute.",
+      "common_causes": "An empty or malformed path argument.",
+      "handling": "Pass the path of the configuration the installation selects."
     },
     "install_config_selection_mismatch": {
       "category": "error",
@@ -28525,12 +28618,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config selection mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A program running under an install selection was given a --config that is neither the configuration the selection names nor <install root>\\actingd.config.json, so it refuses rather than run another configuration than the installed one.",
+      "common_causes": "A start or a check that names a copy of the configuration or a configuration of another installation.",
+      "handling": "Pass the selected configuration's path (or <install root>\\actingd.config.json); change the configuration with acsetup --commit-config."
     },
     "install_config_unavailable": {
       "category": "error",
@@ -28565,12 +28658,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment incomplete.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Only one of ACTINGCOMMAND_INSTALL_ROOT and ACTINGCOMMAND_INSTALL_SELECTION is set; a program inherits both or neither.",
+      "common_causes": "A launcher or a shell that sets one variable, or a variable left over in the environment.",
+      "handling": "Set both variables (the installation's launcher does) or neither."
     },
     "install_environment_root_mismatch": {
       "category": "error",
@@ -28585,12 +28678,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment root mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The install root inherited through ACTINGCOMMAND_INSTALL_ROOT is not the root the program resolves for itself.",
+      "common_causes": "A program started with the environment of another installation.",
+      "handling": "Start the program from the installation the environment names, or clear the inherited variables."
     },
     "install_environment_root_unavailable": {
       "category": "error",
@@ -28605,12 +28698,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment root unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The install root inherited through ACTINGCOMMAND_INSTALL_ROOT cannot be resolved.",
+      "common_causes": "A launcher that passes a root that was moved or does not exist.",
+      "handling": "Start the program through the installation's launcher, or unset the variables to read the active selection."
     },
     "install_environment_selection_invalid": {
       "category": "error",
@@ -28625,12 +28718,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install environment selection invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection inherited through ACTINGCOMMAND_INSTALL_SELECTION is not valid Unicode text.",
+      "common_causes": "A launcher that passes a mangled selection.",
+      "handling": "Start the program through the installation's launcher, or clear the inherited variables."
     },
     "install_executable_unavailable": {
       "category": "error",
@@ -28645,12 +28738,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The installation process check refused: install executable unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The installation check cannot resolve the running program's own executable path.",
+      "common_causes": "An OS error, or an executable deleted or renamed while it runs.",
+      "handling": "Start the program again from its installation; report the OS error when it repeats."
     },
     "install_fact_clock_overflow": {
       "category": "error",
@@ -28699,12 +28792,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its --install-held input: it is too long, not UTF-8 or not the held startup's JSON.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd refused its --install-held input: it is longer than 4096 bytes, not UTF-8, or not the held startup's JSON. A start refusal before the ledger opens; exit 1.",
+      "common_causes": "An installer of another release that writes a different held-start shape, or an argument cut or mangled by a launcher.",
+      "handling": "Start the held Runtime with the installer that matches this release."
     },
     "install_identity_encode_failed": {
       "category": "error",
@@ -28799,12 +28892,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input read failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Reading an installation input (the selection, MEMBERS.json, the selected configuration or provider file) failed after it was opened.",
+      "common_causes": "The file is locked by another program, or an I/O error on the install volume.",
+      "handling": "Close the program holding the file and retry; check the volume when it repeats."
     },
     "install_input_size_invalid": {
       "category": "error",
@@ -28960,12 +29053,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes; the other instances run. Recorded once per failed instance as a lifecycle record at stage install_release, linked to the transition's entered record. The self-check's failure is the outcome's caused_by link, for example input_backend_open_failed (ledger revision 3). When every prepared instance failed, the start ends as install_preparation_selfcheck_failed instead and this code is not recorded.",
-      "common_causes": "The instance's device did not answer while the new build prepared it: its adb daemon hung or went offline, or the emulator or phone was stopped or unplugged.",
-      "handling": "Bring the device back, then run actingctl selfcheck for the instance; a passing self-check makes it available again."
+      "description": "An install start (a held start released by the installer) went on although the daemon-start preparation self-check of this instance (instance_id) failed, because at least one other prepared instance passed (INST-1). The instance stays unavailable, as after a failed self-check at a normal start, until a later self-check passes.",
+      "common_causes": "The instance's device did not answer while the new build prepared it.",
+      "handling": "Bring the device back, then run actingctl selfcheck for the instance."
     },
     "install_preparation_not_authorized": {
       "category": "error",
@@ -29000,12 +29093,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1). When some prepared instance passed, the start goes on instead and each failed instance is recorded as install_preparation_instance_unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install start (a held start released by the installer) whose daemon-start preparation self-checks all failed: at least one instance was prepared and none passed, so the new build reached no device. The start ends under this code during install_transition and the transition fails (INST-1).",
+      "common_causes": "Every device stopped or unreachable while the new build prepared, or a new build that cannot capture or touch on this machine.",
+      "handling": "Bring the devices back and run the installation again; when they answer and it still fails, roll back to the previous build."
     },
     "install_previous_drain_unverified": {
       "category": "error",
@@ -29260,12 +29353,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install previous transition mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A held start's previous ticket names another transition than the held start itself; the previous Runtime's drained transition and the new start must share one transition_id.",
+      "common_causes": "An installer that mixes the identities of two transitions.",
+      "handling": "Start the held Runtime with the ticket of the transition that drained the previous one."
     },
     "install_previous_transition_missing": {
       "category": "error",
@@ -29337,12 +29430,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The installation process check refused: install process slot mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The program runs from another slot (or another folder) than the one the active selection names, so it refuses to run with that selection's inputs.",
+      "common_causes": "A program of the unselected slot started after acsetup switched slots, or a shortcut that points into the old slot.",
+      "handling": "Start the program of the selected slot (the installation's launcher does)."
     },
     "install_process_state_root_mismatch": {
       "category": "error",
@@ -29389,12 +29482,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the install selection: it still names a retired vision provider.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The install selection actingd runs under still names a vision provider file, which the vision root replaced (Workflow #360). check-config refuses at stage config_load; a start refuses before the ledger opens.",
+      "common_causes": "The installation was committed by an acsetup older than the vision root and has not been reconfigured since.",
+      "handling": "Run the current acsetup to commit the configuration again, which writes a selection without the provider file."
     },
     "install_release_state_invalid": {
       "category": "error",
@@ -29429,12 +29522,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install root unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation step cannot resolve the install root's canonical path: the slot lock, the active selection or a selection check names a root the OS cannot open.",
+      "common_causes": "The install root was moved, renamed or deleted while a program runs from it, or the path is not accessible to the process.",
+      "handling": "Run the program from its installation, or restore the install root; reinstall when it is gone."
     },
     "install_root_unresolved": {
       "category": "error",
@@ -29525,12 +29618,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot in use.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot lock is held by another process in a way that excludes this one: the installer holds the slot exclusively while it writes it, or programs run from the slot while the installer wants it.",
+      "common_causes": "acsetup preparing or replacing that slot, or a Runtime, console or tool still running from it.",
+      "handling": "Wait for the installer to finish, or stop the programs running from the slot, then retry."
     },
     "install_slot_lock_failed": {
       "category": "error",
@@ -29545,12 +29638,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The OS refused to lock the slot lock file install/slot-<A|B>.lock for a reason other than another holder.",
+      "common_causes": "A file system without lock support, or an OS error.",
+      "handling": "Keep the installation on a local NTFS volume; retry, and report the OS error when it repeats."
     },
     "install_slot_lock_metadata_failed": {
       "category": "error",
@@ -29565,12 +29658,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock metadata failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot lock file was opened and locked, but its metadata cannot be read.",
+      "common_causes": "An OS or file system error on the install volume.",
+      "handling": "Retry; check the install volume when it repeats."
     },
     "install_slot_lock_missing": {
       "category": "error",
@@ -29625,12 +29718,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot lock file install/slot-<A|B>.lock exists but cannot be opened.",
+      "common_causes": "Access denied to the install folder, or a program that holds the lock file open exclusively.",
+      "handling": "Close the program holding the file, check the install folder's permissions, then retry."
     },
     "install_slot_unlock_failed": {
       "category": "error",
@@ -29645,12 +29738,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot unlock failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Releasing a held slot lock explicitly failed; the handle closes anyway, so the slot is free once the process exits.",
+      "common_causes": "An OS error on unlock.",
+      "handling": "None is needed beyond letting the process end; report it when it repeats."
     },
     "install_startup_shut_down": {
       "category": "error",
@@ -29685,12 +29778,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile; the operation is install_transition. The latched failure is the outcome's caused_by link in the ledger (ledger revision 3), and the tokens cause=<code> cause_operation=<operation> on the FATAL line and in the transition's status fact. A restart may succeed, so the watchdog considers a start.",
-      "common_causes": "A ledger write that failed on a request thread while the start was preparing.",
-      "handling": "TBD"
+      "description": "A held or released start stopped before it finished preparing because the Runtime latched a failure meanwhile. The operation is install_transition; the latched failure is the caused_by link. A restart may succeed, so the watchdog considers a start.",
+      "common_causes": "A ledger write or another latched failure during the start's preparation.",
+      "handling": "Read the caused_by link and fix its condition; start again."
     },
     "install_state_root_unresolved": {
       "category": "error",
@@ -29740,12 +29833,12 @@
         "transition_id": "required",
         "phase": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime reports the transition in phase aborted; the transition's failure code, when it has one, is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl install-transition: the Runtime reports the transition in phase aborted: the drain ended and admission reopened on the old owner. transition_id names the transition; the failure code, when the transition has one (drain_timeout), is the caused_by link. Exit 1.",
+      "common_causes": "A drain that did not finish before its deadline, or an Abort action.",
+      "handling": "Wait until running work finishes, or give the drain a longer timeout, then begin a new transition."
     },
     "install_transition_conflict": {
       "category": "error",
@@ -29777,12 +29870,12 @@
         "transition_id": "required",
         "phase": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime reports the transition in phase failed; the transition's failure code is the caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl install-transition: the Runtime reports the transition in phase failed, with admission closed. transition_id names the transition; the transition's failure code is the caused_by link. Exit 1.",
+      "common_causes": "A held or released start that timed out (held_timeout, release_timeout), whose preparation failed, or that a latched failure stopped.",
+      "handling": "Read the caused_by link and the Runtime's log; the installer ends the transition and starts the previous Runtime again."
     },
     "install_transition_receipt_unconfirmed": {
       "category": "error",
@@ -29810,12 +29903,12 @@
         "transition_id": "required",
         "phase": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl install-transition: the Runtime answered the transition action; phase is the phase it reports (a commit receipt reports none).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl install-transition: the Runtime answered the transition action. transition_id names the transition and phase the phase the Runtime reports (draining, drained, held, preparing or released); a commit's receipt, the accepted shutdown, reports no phase. Exit 0.",
+      "common_causes": "An install-transition action the Runtime accepted.",
+      "handling": "None; the installer continues with the next action for the reported phase."
     },
     "install_transition_unknown": {
       "category": "error",
@@ -29845,18 +29938,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu installation root was found (from the configured folder, the running process, the uninstall registry or vendor enumeration). A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "MuMu resolution found no MuMu installation: no configured folder, no running MuMu process, no usable uninstall registry entry and no vendor folder (count_kind installation_roots, count 0). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "MuMu not installed, installed in a folder the resolver does not search, or not running when the resolver relies on its process.",
+      "handling": "Install MuMu, start it, or set mumu_root (or device_paths.nemu_folder) to its installation folder, then run check-config again."
     },
     "installation_ambiguous": {
       "category": "error",
@@ -29866,18 +29966,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one MuMu installation root was found and none was selected explicitly. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "MuMu resolution found more than one MuMu installation root on one resolver rung and cannot choose (count_kind installation_roots, count the number found, install_source the rung). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "Several MuMu installations side by side, or leftover folders of an uninstalled release.",
+      "handling": "Set mumu_root (or device_paths.nemu_folder) to the installation to use, or remove the unused installation."
     },
     "instance_already_selected": {
       "category": "info",
@@ -29922,12 +30029,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's discovery binding key is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instance's discovery binding key is invalid: both instance_index and instance_name are set, instance_name is blank, too long or holds a control character, or a discovery-bound instance also names a serial. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "Both binding keys written for one instance, or a serial kept from an explicit entry.",
+      "handling": "Bind the instance by exactly one of instance_index or instance_name, and drop serial. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_binding_malformed": {
       "category": "error",
@@ -29964,12 +30071,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance declaration is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instances[] entry breaks a rule that needs no discovery: an empty adb_path, host or serial, port 0, a startup_package on a fixture instance, or a device instance without an adb_path outside an install root. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "An empty or zero value written for an endpoint member, or an instance copied from another kind of entry.",
+      "handling": "Correct or remove the member named above in that instance. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_discovery_ambiguous": {
       "category": "error",
@@ -29983,12 +30090,12 @@
         "instance_name": "optional",
         "instances": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found more than one discovered emulator instance for a binding key. alias names the configured instance, instance_name its declared binding key, and instances the discovered candidates.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup found more than one discovered emulator instance with the declared instance_name: alias names the configured instance, instance_name the key and instances the candidates. The start fails.",
+      "common_causes": "Two MuMu instances with the same name.",
+      "handling": "Rename one instance in MuMu, or bind by instance_index instead. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_discovery_conflict": {
       "category": "error",
@@ -29997,12 +30104,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found a declared value that differs from the discovered instance.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup failed because a declared endpoint value of a discovery-bound instance disagrees with what discovery reported; the recorded failure is adb_path_conflict, host_conflict, port_conflict or port_unverifiable with the declared and discovered values. The start fails.",
+      "common_causes": "A declared adb_path, host or port left over from an explicit entry, or a port declared for a stopped instance.",
+      "handling": "Remove the declared adb_path, host and port of the discovery-bound instance, or make them match discovery. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_discovery_no_match": {
       "category": "error",
@@ -30015,12 +30122,12 @@
         "instance_index": "optional",
         "instance_name": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup found no discovered emulator instance for a binding key. alias names the configured instance and instance_index or instance_name its declared binding key.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup found no discovered emulator instance for an instance's binding key: alias names the configured instance and instance_index or instance_name its declared key. The start fails.",
+      "common_causes": "An instance index or name that does not exist in MuMu, or an instance renamed or deleted in MuMu.",
+      "handling": "Correct the instance's instance_index or instance_name to a discovered instance (actingctl emulator discover lists them). Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_discovery_unavailable": {
       "category": "error",
@@ -30250,12 +30357,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance registration is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The execution backend registration of a device instance refused its declaration: the alias, instance id, application identity, touch or capture settings, nemu_app_index pairing or handset binding breaks a registration rule. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "An alias or instance_id that breaks the identifier rules, or a backend combination the registration does not allow.",
+      "handling": "Correct the instance's identifiers and backend members. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "instance_reset_done": {
       "category": "success",
@@ -30448,12 +30555,12 @@
       "values": {
         "count": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl emulator discover: the Runtime listed the emulator's instances; count is how many.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl emulator discover: the Runtime ran one emulator instance discovery and listed the instances; count is how many. Exit 0.",
+      "common_causes": "A discovery of a running Runtime with an emulator provider.",
+      "handling": "None."
     },
     "integer_out_of_range": {
       "category": "error",
@@ -33509,12 +33616,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install timeout.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition timeout is 0 or above 600000 ms.",
+      "common_causes": "A timeout written in seconds, or a caller of another release.",
+      "handling": "Pass timeout_ms from 1 to 600000."
     },
     "invalid_install_transition_id": {
       "category": "error",
@@ -33529,12 +33636,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition id.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition id is empty, longer than 128 bytes, or holds a character other than ASCII letters, digits, '-' and '_'.",
+      "common_causes": "An installer of another release, or a hand-written action.",
+      "handling": "Use a transition id of 1 to 128 ASCII letters, digits, '-' or '_'."
     },
     "invalid_install_transition_origin": {
       "category": "error",
@@ -33549,12 +33656,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition origin.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An InstallTransition request names an origin other than the user through the UI or the CLI; only those may drive an install transition.",
+      "common_causes": "A client that sends the request with another actor or source.",
+      "handling": "Send install transitions from acsetup or actingctl."
     },
     "invalid_install_transition_receipt": {
       "category": "error",
@@ -33569,12 +33676,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition receipt.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A receipt that carries an install transition status is not in state completed, so it breaks the receipt contract.",
+      "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
+      "handling": "Use a client of the same release as the Runtime; report it with both builds."
     },
     "invalid_install_transition_status": {
       "category": "error",
@@ -33589,12 +33696,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install transition status.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An install transition status breaks its rules: admission_closed disagrees with the phase, or the failure code is empty, longer than 128 bytes or not a code spelling.",
+      "common_causes": "A Runtime and a client of incompatible releases, or a defect.",
+      "handling": "Report it with the builds; use a client of the same release as the Runtime."
     },
     "invalid_instance_alias": {
       "category": "error",
@@ -35443,12 +35550,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a performance pressure streak is out of range.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A performance pressure streak (performance.monitor.pressure_start_samples or pressure_end_samples) is an integer outside 1 to 30. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A value of 0 or a value above 30 written for a streak.",
+      "handling": "Set the streak to a value from 1 to 30, or remove it for the default. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "invalid_pressure_skip": {
       "category": "error",
@@ -40482,12 +40589,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An actingd ledger-maintenance pass completed (Workflow #378 A6a); the report's status says which.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An actingd ledger-maintenance pass completed: the report holds the receipt, whose status names the operation's result (for verify, which ledger was verified).",
+      "common_causes": "The maintenance operation did what was asked.",
+      "handling": "None."
     },
     "ledger_maintenance_failed": {
       "category": "error",
@@ -40625,12 +40732,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure (Workflow #378 A6a, N1).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure.",
+      "common_causes": "A ledger open or verify that failed partway.",
+      "handling": "None by itself; handle the failure it is attached to."
     },
     "ledger_opened": {
       "category": "info",
@@ -40654,12 +40761,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start opened its ledger (Workflow #378 A6a, model section 7.4, N1): the open's phases (events read, artifacts and their bytes checked, workers, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start opened its ledger: the open's measures as values (events read, artifacts and their bytes checked, worker threads, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line before runtime_ready.",
+      "common_causes": "Every start.",
+      "handling": "None; long times point at a large ledger or a slow volume."
     },
     "ledger_prefix_beyond_head": {
       "category": "error",
@@ -41445,12 +41552,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the configuration of an offline maintenance command.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An offline actingd maintenance command (ledger-maintenance) refused its configuration: the schema version is not the one this build reads, the state root is empty, or secret_fingerprint_salt is outside 16 to 1024 bytes.",
+      "common_causes": "A configuration written for another Runtime release, or one edited by hand.",
+      "handling": "Use the configuration of the installed Runtime, or commit it again with acsetup --commit-config, then repeat the maintenance command."
     },
     "maintenance_config_missing": {
       "category": "error",
@@ -41459,12 +41566,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance was given no --config.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance was given no --config. The report carries this outcome; exit 1.",
+      "common_causes": "A caller that omits the configuration path.",
+      "handling": "Pass --config <path>."
     },
     "maintenance_deadline_overflow": {
       "category": "error",
@@ -41673,12 +41780,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance was given an unknown operation.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance was given an operation other than dry-run, import, verify, backup or restore. The report carries this outcome; exit 1.",
+      "common_causes": "A misspelt operation.",
+      "handling": "Name one of the five operations."
     },
     "maintenance_option_invalid": {
       "category": "error",
@@ -41687,12 +41794,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance was given an unknown, repeated or empty option.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance was given an option other than --config, --backup, --target or --artifact-root, an option twice, an empty value, or a dangling argument. The report carries this outcome; exit 1.",
+      "common_causes": "A misspelt option or a missing value.",
+      "handling": "Correct the options of the maintenance command."
     },
     "maintenance_path_invalid": {
       "category": "error",
@@ -41781,12 +41888,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance could not encode its receipt.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance could not encode its receipt as JSON; the report line then carries only this outcome; exit 1.",
+      "common_causes": "A defect in the receipt's construction.",
+      "handling": "Report it with the build; run the maintenance again only after checking the ledger with verify."
     },
     "maintenance_recheck_suggested": {
       "category": "info",
@@ -41871,12 +41978,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance was given too few or too many arguments.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd ledger-maintenance was given fewer or more arguments than an operation with its options allows. The report carries this outcome; exit 1.",
+      "common_causes": "A caller that omits the operation or passes extra arguments.",
+      "handling": "Run actingd ledger-maintenance <dry-run|import|verify|backup|restore> --config <path> with the operation's options."
     },
     "malformed_owner_metadata": {
       "category": "error",
@@ -43729,12 +43836,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: mumu_root is empty or not absolute.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration member mumu_root is empty or not an absolute path. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A relative path or an empty string written for the MuMu folder.",
+      "handling": "Set mumu_root to the absolute path of the MuMu installation folder, or remove it to let the Runtime find MuMu. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "navigation_arrival_failed": {
       "category": "error",
@@ -43823,12 +43930,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's nemu_app_index is out of range.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance that pairs Nemu touch with Nemu capture names a nemu_app_index outside the range the Nemu input accepts. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A negative index or one copied from another tool's numbering.",
+      "handling": "Set nemu_app_index to a valid index. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "nemu_app_index_missing": {
       "category": "error",
@@ -44057,12 +44164,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: Nemu touch needs Nemu capture and nemu_app_index.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance selects Nemu touch without Nemu capture or without nemu_app_index; Nemu touch works only paired with Nemu capture. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "touch_backend switched to Nemu while capture_backend stayed another backend, or nemu_app_index left out.",
+      "handling": "Use Nemu capture and set nemu_app_index together with Nemu touch, or choose another touch backend. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "nemu_session_close_failed": {
       "category": "error",
@@ -45875,12 +45982,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start released the previous owner, whose process had exited although its last journal record declared resources in use or unconfirmed (slice #315-B2c-2): owner_pid is its process and at_unix_ms when it started. actingd writes it as a daemon line (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start released the previous owner, whose process had exited although its last journal record declared resources in use or unconfirmed: owner_pid is that process and at_unix_ms when it started. actingd writes it as a daemon line.",
+      "common_causes": "A previous Runtime that ended without a formal close (killed, crashed or powered off) after its process was confirmed gone.",
+      "handling": "None; check why the previous Runtime ended when it was not intended."
     },
     "owner_resource_unconfirmed": {
       "category": "error",
@@ -46614,12 +46721,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: a vision path is not UTF-8.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The failure provider startup records under vision_provider_path_encoding_invalid: a vision path is not valid UTF-8.",
+      "common_causes": "A vision root under a folder whose name is not representable as UTF-8.",
+      "handling": "Move the vision root to a folder with a plain name and set vision.root accordingly."
     },
     "payload_schema_mismatch": {
       "category": "error",
@@ -48652,12 +48759,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: catalog_approval_ids differ from the catalog's approval references.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "policy.catalog_approval_ids is empty, too long, holds duplicates, differs from the approval references the policy catalog documents name, or holds an id the approval record does not accept. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "The catalog documents were updated without updating catalog_approval_ids, or an id was typed by hand.",
+      "handling": "Set catalog_approval_ids to exactly the approval references of the catalog in use. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_catalog_compile_failed": {
       "category": "error",
@@ -48686,12 +48793,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a policy catalog document is empty, not a file or too large.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A policy catalog document is not a regular file, is empty, or is larger than the per-document bound. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A folder named as a document, a truncated or zero-byte file, or a wrong file.",
+      "handling": "Restore the document from the catalog's release and check the path. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_catalog_mismatch": {
       "category": "error",
@@ -48720,12 +48827,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a policy catalog path is empty.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A policy.catalog document path (tasks, pools, activity or timeline) is empty. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A catalog member left empty when the configuration was written.",
+      "handling": "Name each catalog document's path. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_catalog_plan_changed": {
       "category": "error",
@@ -48748,12 +48855,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: reading a policy catalog document failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Reading a policy catalog document failed after its metadata was read. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "The file is locked or removed by another program, or the folder may not be read by the process.",
+      "handling": "Make the document readable to the Runtime's user and run actingd check-config again."
     },
     "policy_catalog_revocation_invalid": {
       "category": "error",
@@ -48782,12 +48889,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: the policy catalog documents are too large together.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The four policy catalog documents (tasks, pools, activity, timeline) are larger together than the bound actingd reads. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A catalog generated with far more entries than intended, or a wrong file named as a catalog document.",
+      "handling": "Check that policy.catalog names the intended documents and reduce the catalog. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_catalog_unavailable": {
       "category": "error",
@@ -50132,12 +50239,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a policy instance names a host the resources lack.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A policy instance names a host_id that policy.resources.hosts does not list. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A host renamed or removed in policy.resources without updating the instances.",
+      "handling": "Add the host to policy.resources.hosts or correct the instance's host_id. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_instance_metadata_untrusted": {
       "category": "error",
@@ -50206,12 +50313,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: the policy instances differ from the configured aliases.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The instances the policy facts declare differ from the aliases of the configured instances. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "An instance added to or removed from instances[] without the same change in the policy facts, or an alias renamed on one side only.",
+      "handling": "Make the policy instance ids and the instance aliases the same set. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_intent_catalog_mismatch": {
       "category": "error",
@@ -50260,12 +50367,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration file: a policy.monitor value is outside its range.",
-      "common_causes": "TBD",
-      "handling": "Correct policy.monitor as contracts/actingd-check-config.md describes it."
+      "description": "A policy.monitor value is outside its range: io_timeout_ms outside 1000 to 60000, retry_limit above 100, retry_backoff_ms outside 1 to 600000, or retry_backoff_max_ms below retry_backoff_ms or above 600000. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A value written in seconds instead of milliseconds, or a maximum backoff below the backoff.",
+      "handling": "Set the policy.monitor values within their ranges, or remove them for the defaults. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "policy_monitor_request_retried": {
       "category": "warning",
@@ -52350,12 +52457,12 @@
         "adb_port": "optional",
         "instances": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port differs from the discovered one. alias names the configured instance, adb_port the declared port, and instances the discovered instance with the port it reported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The failure provider startup records under instance_discovery_conflict when a discovery-bound instance's declared port differs from the port discovery reports: alias names the instance, adb_port the declared port and instances what discovery reported.",
+      "common_causes": "A port kept from an explicit entry, or a MuMu instance whose port changed.",
+      "handling": "Remove port from the discovery-bound instance (discovery supplies it) or set it to the discovered port. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "port_unverifiable": {
       "category": "error",
@@ -52368,12 +52475,12 @@
         "adb_port": "optional",
         "instances": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A provider native failure: the declared port cannot be cross-checked on a stopped instance. alias names the configured instance, adb_port the declared port, and instances the discovered instance, which reported no port.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The failure provider startup records under instance_discovery_conflict when a discovery-bound instance declares a port but its instance is stopped, so discovery reports no port to check it against: alias names the instance, adb_port the declared port and instances what discovery reported (running false).",
+      "common_causes": "A port declared for an instance that was not running at the start.",
+      "handling": "Remove port from the discovery-bound instance (it is then bound pending until started), or start the instance first."
     },
     "ppocr_diagnostic_invalid": {
       "category": "error",
@@ -55611,12 +55718,12 @@
         "device_category": "optional",
         "mumu_root": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup failed in the device layer and the device error names no registered code; device_category names the device failure's category when the device error has one, and a foreign_other_error link carries the device's text. mumu_root names the configured MuMu folder of a failed discovery when one is configured.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup failed in the device layer with a failure that names no registered code of its own (no MuMu resolution reason): device_category names the device failure's category when it has one and mumu_root the configured MuMu folder; the device's own text is a foreign_other_error link. check-config reports the same outcome as a note when the MuMu folder cannot be resolved.",
+      "common_causes": "MuMuManager failing or timing out, an unreadable MuMu folder, or an OS error during discovery.",
+      "handling": "Check that MuMu is installed and MuMuManager runs, set mumu_root when MuMu is not found, then start again; report it when it repeats."
     },
     "provider_startup_failed": {
       "category": "error",
@@ -55646,18 +55753,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version is below the Runtime's minimum supported MuMuManager version. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The version MuMuManager reports is below the Runtime's minimum supported version (a Runtime policy floor, not a vendor minimum). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An old MuMu release.",
+      "handling": "Update MuMu to a supported release."
     },
     "provider_version_unparseable": {
       "category": "error",
@@ -55667,18 +55781,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version did not produce a four-part numeric version. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "MuMuManager's version answer is not a four-part numeric version. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu release whose version output changed, or a damaged MuMuManager answer.",
+      "handling": "Update MuMu to a supported release; report the version text if it repeats."
     },
     "queue_connection_mismatch": {
       "category": "error",
@@ -57223,18 +57344,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A MuMuPlayer uninstall registry entry carries no usable install location, or a value of a type the resolver does not read (install_source registry_uninstall). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A damaged or partial uninstall entry left by an interrupted install or uninstall.",
+      "handling": "Repair or reinstall MuMu, or set mumu_root to the installation folder."
     },
     "registry_source_unavailable": {
       "category": "error",
@@ -57244,18 +57372,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The Windows uninstall registry, a MuMu installation source, cannot be read on this platform. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Windows uninstall registry, one rung of MuMu resolution, cannot be read on this platform (install_source registry_uninstall). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A platform without the Windows registry, or registry access denied.",
+      "handling": "Set mumu_root to the installation folder so the registry is not needed."
     },
     "release_active_history_mismatch": {
       "category": "error",
@@ -59230,12 +59365,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A released start did not finish preparing before its release deadline. The installation transition fails with admission closed; the operation is install_transition.",
-      "common_causes": "A slow preparation, such as the startup recovery of a long ledger.",
-      "handling": "TBD"
+      "description": "A released start did not finish preparing before its release deadline; the transition fails with admission closed and the start ends with it. The operation is install_transition.",
+      "common_causes": "A slow preparation, such as the startup recovery of a long ledger or slow devices, against a short release timeout.",
+      "handling": "Release again with a longer timeout; check the start's log for the slow step."
     },
     "release_transaction_owner_required": {
       "category": "error",
@@ -59954,12 +60089,12 @@
       "layer": "contract",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A completed receipt of a InstallTransition request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
-      "common_causes": "The request succeeded.",
-      "handling": "Nothing to do; the result carries the answer."
+      "description": "The receipt of an InstallTransition request completed: the Runtime performed the action and reports the transition's status (one success code per request kind).",
+      "common_causes": "An install transition action the Runtime accepted.",
+      "handling": "None."
     },
     "request_instance_fact_snapshot_completed": {
       "category": "success",
@@ -60846,12 +60981,12 @@
         "alias": "required",
         "path": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused an instance's resource package: the package loader refused it.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instance's resource_package exists but the contained-task package loader refuses it, as task-run would (alias names the instance, path the package); the loader's refusal is the caused_by link. check-config refuses at stage config_resource_package; a start refuses before the ledger opens.",
+      "common_causes": "A package built for another package format, an incomplete copy, or a path that is neither a file nor a folder.",
+      "handling": "Replace the package with a complete one from its resource release, or point resource_package at the right package. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "resource_package_missing": {
       "category": "error",
@@ -60863,10 +60998,30 @@
         "alias": "required",
         "path": "required"
       },
+      "review": "settled",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An instance's resource_package path does not exist (alias names the instance, path the resolved path). check-config refuses at stage config_resource_package; a start refuses before the ledger opens.",
+      "common_causes": "A relative path resolved against the wrong folder, an empty path, or a package folder that was moved or not yet placed.",
+      "handling": "Place the resource package at the path, or correct instances[].resource_package. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+    },
+    "resource_reading_capacity_fact_key_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused an instance's resource package: the path does not exist.",
+      "description": "Workflow #390 READ-1: a task's resource_readings declaration was refused: a reading mark declares capacity_fact_key, the second reading key that writes the capacity of a fraction, but its value format is not current_capacity or the key is not a resource. or inventory. instance fact key.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -61879,18 +62034,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A resolved backend file (adb, capture DLL) belongs to another MuMu installation root than the selected one. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A resolved backend file (the configured adb, the capture DLL or the folder of a running MuMu executable) belongs to another MuMu installation root than the one selected. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "Two MuMu installations, with the adb or the DLL configured from one and the folder from the other.",
+      "handling": "Configure the adb, the capture DLL and mumu_root from the same MuMu installation."
     },
     "run_decision_invalid": {
       "category": "error",
@@ -61909,6 +62071,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A run decision input breaks a rule.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "run_evidence_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was printed, read from the run's ledger events, as ac_run_evidence answers it (Workflow #389 MCP-6).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -62587,7 +62763,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "ac_stop_run: no run of this server has the handle.",
+      "description": "ac_stop_run: no run of this server has the handle; actingctl run evidence and ac_run_evidence: no contained run has the request_id (request_id) or the run_id given (run_state not_found).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -62599,18 +62775,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path does not identify an installation root. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selected running MuMu executable's path does not show an installation root, so the installation cannot be derived from it (install_source running_process). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "MuMu started from a copied or unusual folder layout.",
+      "handling": "Set mumu_root to the installation folder, or start MuMu from its installation."
     },
     "running_version_missing": {
       "category": "error",
@@ -62620,18 +62803,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path has no MuMu version folder (nx_device/<version>). A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selected running MuMu executable's path has no engine version folder (nx_device/<version>), so the capture DLL cannot be paired with it. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu release with another folder layout, or an executable started from outside the versioned engine folder.",
+      "handling": "Configure the capture DLL explicitly, or start the emulator from its installation."
     },
     "runtime_accept_failed": {
       "category": "error",
@@ -64081,12 +64271,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime halted (Workflow #378 A6a, model section 2.3, M1a; was runtime_fatal): the Runtime error code a receipt projection carries for a condition that latched the host. A latched host answers every later request with an error condition under runtime_halted as its caused_by link, and with a fatal condition as itself.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime halted: a condition latched the host, which answers every later request without doing it. As a receipt's Runtime error code (runtime_code) it says the host is latched; a latched host answers with an error condition under runtime_halted as its caused_by link, and with a fatal condition as itself. A restart clears it.",
+      "common_causes": "A failure the host latches on, such as a lost ledger write or an internal invariant, and every request after it.",
+      "handling": "Read the caused_by link; restart the daemon (the watchdog restarts an error stop), and fix the condition first when it is external."
     },
     "runtime_heartbeat_panicked": {
       "category": "error",
@@ -66891,12 +67081,12 @@
       "values": {
         "pid": "required"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime started and is ready (Workflow #378 A6a, model section 7.4): actingd's daemon line, with its process id.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime started and is ready to answer requests: actingd's daemon line, with pid its process id. It follows the start's ledger_opened, owner_released and scheduling pause lines.",
+      "common_causes": "A successful start.",
+      "handling": "None."
     },
     "runtime_receipt_build_failed": {
       "category": "error",
@@ -67175,12 +67365,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category. Workflow #378 A6a: the contract's, as the watchdog reads it from a start's terminal outcome (panic_unrecovered).",
-      "common_causes": "A defect that panics on every payload of one instance.",
-      "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
+      "description": "In-process recovery failed: a unit rebuilt after a caught panic panicked again before it finished one unit of work, or actingd's main thread panicked. actingd ends with this outcome, carrying the panic_caught links, and exits 1, so the watchdog restarts it; when every start in the watchdog's window ends this way, the watchdog decides panic_unrecovered.",
+      "common_causes": "A defect that panics on every attempt for one instance or one payload.",
+      "handling": "Let the watchdog restart the Runtime; report the panic_caught links with the build."
     },
     "runtime_result_missing": {
       "category": "error",
@@ -67265,12 +67455,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown --wait: the Runtime accepted the shutdown, closed its owner record and its process exited.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl request-shutdown --wait: the Runtime accepted the shutdown, its owner record closed and its process exited within the wait; the result carries the receipt and the shutdown observation. Exit 0.",
+      "common_causes": "A shutdown of a running Runtime that finished in time.",
+      "handling": "None."
     },
     "runtime_shutdown_denied": {
       "category": "error",
@@ -67315,12 +67505,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl request-shutdown: the Runtime accepted the shutdown request.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl request-shutdown: the Runtime accepted the shutdown request; the result carries its receipt. Exit 0. Without --wait, actingctl does not wait for the process to end.",
+      "common_causes": "A shutdown request to a running Runtime.",
+      "handling": "None; pass --wait to wait for the owner to close and the process to exit."
     },
     "runtime_socket_mode_failed": {
       "category": "error",
@@ -67409,12 +67599,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingctl status: the Runtime reported its status.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl status: the Runtime answered its status, which the result carries. Exit 0.",
+      "common_causes": "A status read of a running Runtime.",
+      "handling": "None."
     },
     "runtime_stopped": {
       "category": "info",
@@ -67423,12 +67613,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime stopped (Workflow #378 A6a, model sections 7.4-7.5): the terminal outcome of a requested stop; when a condition stopped it, that condition is the daemon line after it. An accepted shutdown of a held start is a requested stop, with the shutdown as its caused_by link.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime stopped. On a requested stop (a shutdown request, an accepted held-start shutdown) it is the terminal outcome; when a condition stopped the Runtime, that condition follows it as the last daemon line and is the terminal outcome.",
+      "common_causes": "A shutdown request, or a condition that stopped the Runtime.",
+      "handling": "None on a requested stop; otherwise handle the condition on the last line."
     },
     "runtime_stopping": {
       "category": "error",
@@ -69370,12 +69560,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start dropped an instance's scheduling pause because the instance is not registered (Workflow #361 B1). actingd writes it as a daemon line (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start dropped an instance's scheduling pause because the instance (alias) is not registered in the new configuration. actingd writes it as a daemon line.",
+      "common_causes": "An instance removed or renamed in the configuration while it was paused.",
+      "handling": "None; pause the instance again under its new alias if needed."
     },
     "scheduling_pause_epoch_encode_failed": {
       "category": "error",
@@ -69572,12 +69762,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The start restored a scheduling pause (Workflow #361 B1): an instance's with its alias, the global one without; at_unix_ms is since when it holds. actingd writes it as a daemon line (Workflow #378 A6a).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The start restored a scheduling pause that was in force when the previous Runtime stopped: an instance's (alias names it) or the global one (no alias); at_unix_ms is since when it holds. actingd writes it as a daemon line.",
+      "common_causes": "A pause set with actingctl pause or the console before the restart.",
+      "handling": "None; lift it with actingctl resume when scheduling should run."
     },
     "scheduling_pause_revision_mismatch": {
       "category": "error",
@@ -70626,18 +70816,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb is MuMu's shared adb and the installation holds more than one Nemu capture DLL version, so no DLL can be chosen without an explicit one. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The configured adb is MuMu's shared adb, and the installation holds more than one versioned Nemu capture DLL, so the version to pair with it is ambiguous (count_kind dll_versions, count the number found). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu installation that keeps several emulator engine versions.",
+      "handling": "Configure the capture DLL explicitly (device_paths.nemu_ipc_dll) or use the versioned adb of the engine in use."
     },
     "shutdown_wait_journal_unreadable": {
       "category": "error",
@@ -70650,12 +70847,12 @@
         "line": "optional",
         "limit_bytes": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "request-shutdown --wait: the owner journal cannot be read.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl's shutdown wait could not read the owner journal under the state root: path names the file, line the record that does not decode, and the decoder's or the OS error is the caused_by link. Exit 1.",
+      "common_causes": "A journal written by another release, a damaged journal file, or a state root the process may not read.",
+      "handling": "Check the state root the configuration names and its owner journal; run actingctl status to see the Runtime's state."
     },
     "shutdown_wait_timeout": {
       "category": "error",
@@ -70670,12 +70867,12 @@
         "owner_closed": "optional",
         "process_alive": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "request-shutdown --wait: the accepted owner epoch did not close and exit in time.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingctl request-shutdown --wait or install-transition --wait: the accepted owner did not close and exit within timeout_ms. pid and owner_epoch name the owner; owner_closed and process_alive are what the wait last saw, and a failed process probe is the caused_by link. Exit 1.",
+      "common_causes": "Work in flight that takes longer than the wait to drain, a Runtime that hangs while closing, or a wait set too short.",
+      "handling": "Run actingctl status to see whether the Runtime still answers; wait longer, or check the Runtime's log for what holds it."
     },
     "signature_catalog_byte_limit": {
       "category": "error",
@@ -71581,12 +71778,12 @@
       "values": {
         "alias": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration (Workflow #369 S6a): an instance names start_emulator true but has no emulator the daemon can start, because it is a fixture or is not bound by instance_index or instance_name. check-config names the instance as alias.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instance names start_emulator true but has no emulator the daemon can start (Workflow #369 S6a): it is a fixture, or it is not bound by instance_index or instance_name. alias names the instance. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "start_emulator set on an explicit or fixture instance.",
+      "handling": "Bind the instance by instance_index or instance_name, or remove start_emulator. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "start_runtime_already_running": {
       "category": "error",
@@ -73616,12 +73813,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's stuck-recovery cooldown is out of range.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An instance's stuck-recovery cool-down (instances[].stuck_recovery_cooldown_secs, or the recovery_ladder value it falls back to) is outside the range the Runtime accepts. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A cool-down of 0 or above the upper bound, or a negative value.",
+      "handling": "Set the cool-down within the documented range, or remove it for the recovery_ladder default. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "stuck_recovery_instance_unknown": {
       "category": "error",
@@ -74123,18 +74320,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The running MuMu device process of the target instance has no executable path. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The running MuMu device process of the target has no readable executable path, so its installation cannot be derived (count_kind matched_target_processes, count 1). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "The process runs elevated or under another account, so its path cannot be read.",
+      "handling": "Run the emulator and the Runtime as the same user and elevation, or set mumu_root."
     },
     "target_identity_invalid": {
       "category": "error",
@@ -74144,18 +74348,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The target instance's explicit MuMu instance id is invalid. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The target instance's explicit MuMu instance id is out of range. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A negative or too large instance id in the configuration.",
+      "handling": "Correct the instance's MuMu instance id or bind the instance by discovery."
     },
     "target_identity_mismatch": {
       "category": "error",
@@ -74165,18 +74376,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The instance id the target serial implies and the explicit MuMu instance id differ. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The instance id the target's serial implies and the explicit MuMu instance id differ. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An instance id kept after the instance's port changed, or a serial of another instance.",
+      "handling": "Make the endpoint and the instance id name the same MuMu instance, or bind the instance by discovery."
     },
     "target_identity_unavailable": {
       "category": "error",
@@ -74186,18 +74404,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu instance id can be derived for the target instance from its serial. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No MuMu instance id can be derived for the target from its adb serial, and none is configured. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An instance whose serial is not one of MuMu's local port serials, for example a handset or a renamed endpoint.",
+      "handling": "Use the MuMu endpoint MuMu assigns to the instance, bind the instance by discovery, or choose another capture backend."
     },
     "target_match_not_unique": {
       "category": "error",
@@ -74336,18 +74561,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No running MuMu device process matches the target instance (count_kind matched_target_processes, count 0, install_source running_process). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "The emulator instance is stopped, or it runs under another account.",
+      "handling": "Start the emulator instance, then retry."
     },
     "target_process_ambiguous": {
       "category": "error",
@@ -74357,18 +74589,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "More than one running MuMu device process matches the target instance (count_kind matched_target_processes, count a lower bound: count_known false). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "Several MuMu installations or engine versions running the same instance number.",
+      "handling": "Stop the duplicate emulator processes, or set mumu_root to the installation to use."
     },
     "task_cooldown_active": {
       "category": "info",
@@ -75226,12 +75465,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: a timeout is zero or above its bound.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance's timeout (command_timeout_ms, handshake_timeout_ms, shutdown_timeout_ms or tap_hold_ms) is 0 or above its upper bound. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A timeout written in seconds instead of milliseconds, or set to 0.",
+      "handling": "Set the timeout in milliseconds within the bound, or remove it for the default. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "touch_backend_invalid": {
       "category": "error",
@@ -75240,12 +75479,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's touch_backend is missing or unknown.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance's touch_backend is missing or not a backend name the Runtime knows. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "touch_backend left out, or a typing error in its value.",
+      "handling": "Set touch_backend to one of the documented backends. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "touch_backend_must_be_explicit": {
       "category": "error",
@@ -75254,12 +75493,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: an instance's touch_backend is an automatic choice.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A device instance's touch_backend is an automatic choice (auto or auto_fastest), which the daemon does not accept. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A configuration that relied on automatic touch selection.",
+      "handling": "Name the touch backend explicitly. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "transfer_not_safe": {
       "category": "error",
@@ -75919,12 +76158,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd was started without exactly --config <path>.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd was started without exactly --config <path> (or --config <path> --install-held <json>). The daemon line is a start refusal; exit 1.",
+      "common_causes": "A launcher or script that passes other arguments, an empty path, or an unknown subcommand name.",
+      "handling": "Start actingd as actingd --config <path to actingd.config.json>."
     },
     "validation_failed": {
       "category": "error",
@@ -76041,18 +76280,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The adb or the running MuMu executable and the Nemu capture DLL belong to different MuMu version folders. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The adb (or the running MuMu executable) and the Nemu capture DLL carry different engine versions (nx_device/<version>); they must match. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu update that left an older adb or DLL configured, or files configured from two engine versions.",
+      "handling": "Configure the adb and the capture DLL of the same engine version, or remove the explicit paths to let the resolver pair them."
     },
     "vision_config_invalid": {
       "category": "error",
@@ -76061,12 +76307,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: the vision section is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The vision section breaks its rules: execution_provider cuda without a valid cuda_device, cpu with a cuda_device, or an empty root. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "cuda_device left out for cuda, or kept after switching to cpu; root set to an empty string.",
+      "handling": "Name a cuda_device only with cuda, and give root a path or remove it. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "vision_model_folder_invalid": {
       "category": "error",
@@ -76118,12 +76364,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration: it names the retired vision provider manifest.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd's configuration names the retired vision provider manifest, which the vision root replaced (Workflow #360). check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "A configuration written for a Runtime release before the vision root.",
+      "handling": "Remove the member and configure the vision section instead; commit the configuration again with acsetup --commit-config."
     },
     "vision_provider_path_encoding_invalid": {
       "category": "error",
@@ -76132,12 +76378,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup refused a vision path that is not UTF-8.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup refused a vision path (the root, a model or runtime file) that is not valid UTF-8 before recording it; the recorded failure is path_encoding_invalid. The start fails.",
+      "common_causes": "A vision root under a folder whose name is not representable as UTF-8.",
+      "handling": "Move the vision root to a folder with a plain name and set vision.root accordingly. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "vision_provider_unavailable": {
       "category": "error",
@@ -76146,12 +76392,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Provider startup could not build the vision provider from the listed models. The kernel error's code is the caused_by link, relayed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Provider startup could not build the vision provider from the models the vision root lists; the vision provider's refusal is the caused_by link (relayed). The start fails.",
+      "common_causes": "A model folder whose files the provider cannot use, or a runtime library that does not load.",
+      "handling": "Run actingd check-config to list the vision root, repair or remove the model folder, then start again."
     },
     "vision_root_in_program_slot": {
       "category": "error",
@@ -76160,12 +76406,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the vision root: it lies inside a program slot of the install root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The vision root resolves inside a program slot (A or B) of the install root, which the installer replaces on an upgrade. check-config refuses at stage config_vision; a start refuses before the ledger opens.",
+      "common_causes": "vision.root pointing into <install root>\\A or <install root>\\B.",
+      "handling": "Keep the vision root outside the slots (the default is <install root>\\vision). Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
     "vision_root_unavailable": {
       "category": "error",
@@ -76194,12 +76440,12 @@
       "layer": "config",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused the vision root: its ONNX Runtime is unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The vision root lacks a usable ONNX Runtime: ort\\onnxruntime.dll, or for execution_provider cuda the CUDA provider library, is missing or cannot be read. The OS error, when there is one, is the caused_by link. check-config refuses at stage config_vision; a start refuses before the ledger opens.",
+      "common_causes": "An incomplete vision root (the ort folder not copied), cuda configured with a CPU-only runtime, or files removed by antivirus.",
+      "handling": "Restore the ort folder of the vision root (the installer places it), or switch execution_provider to cpu, then run actingd check-config again."
     },
     "watchdog_alive": {
       "category": "info",
@@ -79453,50 +79699,50 @@
     "config_assemble": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: assembling the configuration (v1 token assemble)."
+      "description": "The stage of a check-config refusal that arose while assembling the configuration: its members, instances, device bindings, the install root's adb and the configuration manifest (was the v1 stage token assemble)."
     },
     "config_load": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config and unlock-owner stage: loading the configuration file (v1 token load)."
+      "description": "The stage of a check-config refusal (and an unlock-owner failure) that arose while loading the configuration file and the installation it runs under (was the v1 stage token load)."
     },
     "config_recognition_binding": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: checking the recognition maintenance package bindings (Workflow #384 D2-S2)."
+      "description": "The stage of a check-config refusal that arose while checking the instances' recognition package bindings (Workflow #384 D2-S2)."
     },
     "config_resource_package": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: admitting the resource packages (Workflow #378 A6a; was resource_package)."
+      "description": "The stage of a check-config refusal that arose while admitting the instances' resource packages (Workflow #378 A6a; was resource_package)."
     },
     "config_validate": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: validating the assembled host configuration (v1 token validate)."
+      "description": "The stage of a check-config refusal that arose while validating the assembled host configuration (was the v1 stage token validate)."
     },
     "config_vision": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: listing the vision root (v1 token vision)."
+      "description": "The stage of a check-config refusal that arose while listing the vision root (was the v1 stage token vision)."
     },
     "configure_agent_dispatcher": {
       "owner": "runtime-host",
@@ -80229,10 +80475,10 @@
     "discover_instances": {
       "owner": "contract",
       "layer": "contract",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): discover instances."
+      "description": "The operation of an emulator instance discovery request (actingctl emulator discover, the console's discovery)."
     },
     "discover_runtime": {
       "owner": "runtime-client",
@@ -81309,10 +81555,10 @@
     "install_transition": {
       "owner": "contract",
       "layer": "contract",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): install transition."
+      "description": "The operation of an install transition: an InstallTransition request and the transition it drives (drain, held start, release, commit)."
     },
     "installation_resolve": {
       "owner": "device",
@@ -83317,10 +83563,10 @@
     "policy_state": {
       "owner": "actingd",
       "layer": "config",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: previewing the catalog plan against the ledger."
+      "description": "The stage of a check-config refusal that arose while previewing the catalog plan against the ledger, read-only."
     },
     "poll_queued_lease": {
       "owner": "contract",
@@ -86997,10 +87243,10 @@
     "request_runtime_shutdown": {
       "owner": "contract",
       "layer": "contract",
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): request runtime shutdown."
+      "description": "The operation of a Runtime shutdown request (actingctl request-shutdown, the console, the installer)."
     },
     "require_bound_adb_endpoint": {
       "owner": "runtime-host",

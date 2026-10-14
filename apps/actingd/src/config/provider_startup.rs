@@ -9,6 +9,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     DeviceError, DiscoveredMumuInstance, EmulatorCapability, EmulatorCapabilityAvailability,
     EmulatorCapabilityProfile, MumuDiscoveryReport, MumuEmulatorCapabilityBackend,
+    NemuResolutionContext,
 };
 use actingcommand_execution_kernel::InstanceDiscoveryFailure;
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
@@ -148,12 +149,13 @@ fn bind_discovered_instances(
 }
 
 /// The outcome of a device-layer discovery failure (ledger revision 3): a Nemu resolution's
-/// registered reason, else `provider_native_failed` with the device failure's category, with
-/// the configured `mumu_root`; the device's own text is its `foreign_other_error` link. The
-/// Runtime's summary of the failure (`diagnostic_message`) and the stage are not persisted.
+/// registered reason with the context its resolving step recorded (Workflow #378 A7), else
+/// `provider_native_failed` with the device failure's category, with the configured
+/// `mumu_root`; the device's own text is its `foreign_other_error` link. The Runtime's summary
+/// of the failure (`diagnostic_message`) and the stage are not persisted.
 pub(crate) fn device_failure_outcome(error: &DeviceError, mumu_root: Option<&Path>) -> Outcome {
     let outcome = match (error.nemu_resolution_context(), error.diagnostic()) {
-        (Some(context), _) => Outcome::new(context.reason()),
+        (Some(context), _) => nemu_resolution_outcome(context),
         (None, Some(diagnostic)) => {
             Outcome::new(ActingdCode::ProviderNativeFailed).device_category(diagnostic.category())
         }
@@ -167,6 +169,37 @@ pub(crate) fn device_failure_outcome(error: &DeviceError, mumu_root: Option<&Pat
         Some(native) => outcome.caused_by(native.outcome()),
         None => outcome,
     }
+}
+
+/// Workflow #378 A7 (A6a left the MuMu note's details to A7): a Nemu resolution reason with the
+/// context its resolving step recorded as values, each only when the step recorded it: what it
+/// counted (`count_kind`, `count`, and `count_known`, false for a lower bound), the resolver
+/// rung that chose the installation (`install_source`), and how the adb, the MuMu folder and the
+/// capture DLL were configured (`configured_adb_class`, `explicit_root`, `explicit_dll`).
+fn nemu_resolution_outcome(context: NemuResolutionContext) -> Outcome {
+    let mut outcome = Outcome::new(context.reason());
+    if let Some(kind) = context.count_kind() {
+        outcome = outcome.count_kind(kind);
+    }
+    if let Some(count) = context.count() {
+        outcome = outcome.count(count);
+    }
+    if let Some(known) = context.count_known() {
+        outcome = outcome.count_known(known);
+    }
+    if let Some(source) = context.source() {
+        outcome = outcome.install_source(source);
+    }
+    if let Some(class) = context.configured_adb() {
+        outcome = outcome.configured_adb_class(class);
+    }
+    if let Some(explicit) = context.explicit_root() {
+        outcome = outcome.explicit_root(explicit);
+    }
+    if let Some(explicit) = context.explicit_dll() {
+        outcome = outcome.explicit_dll(explicit);
+    }
+    outcome
 }
 
 /// Admits the capability profile derived from the discovery report (pure, nothing is
@@ -737,6 +770,63 @@ mod tests {
                 "{label}"
             );
             assert!(failure.outcome.causes().is_empty(), "{label}");
+        }
+    }
+
+    // Workflow #378 A7 (M378 §3.3 and §11; A6a left the MuMu note's details to A7): a MuMu
+    // resolution reason, as provider startup records it and check-config notes it, carries the
+    // context its resolving step recorded as values from the key table, each only when the step
+    // recorded it; count_known is false for a lower bound.
+    #[test]
+    fn a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values() {
+        use actingcommand_contract::outcome::Category;
+        use actingcommand_device::{
+            MumuInstallSource, NemuConfiguredAdbClass, NemuResolutionCountKind,
+            NemuResolutionReason,
+        };
+        let cases = [
+            (
+                NemuResolutionReason::TargetProcessAmbiguous,
+                NemuResolutionContext::new(NemuResolutionReason::TargetProcessAmbiguous)
+                    .with_count(NemuResolutionCountKind::MatchedTargetProcesses, 2, true)
+                    .with_source(MumuInstallSource::RunningProcess)
+                    .with_provenance(Some(NemuConfiguredAdbClass::SharedMumu), true, false),
+                json!({
+                    "count_kind": "matched_target_processes",
+                    "count": 2,
+                    "count_known": false,
+                    "install_source": "running_process",
+                    "configured_adb_class": "shared_mumu",
+                    "explicit_root": true,
+                    "explicit_dll": false,
+                }),
+            ),
+            (
+                NemuResolutionReason::InstallationAbsent,
+                NemuResolutionContext::new(NemuResolutionReason::InstallationAbsent)
+                    .with_count(NemuResolutionCountKind::InstallationRoots, 0, false)
+                    .with_source(MumuInstallSource::VendorEnumeration),
+                json!({
+                    "count_kind": "installation_roots",
+                    "count": 0,
+                    "count_known": true,
+                    "install_source": "vendor_enumeration",
+                }),
+            ),
+            (
+                NemuResolutionReason::TargetIdentityMismatch,
+                NemuResolutionContext::new(NemuResolutionReason::TargetIdentityMismatch),
+                json!({}),
+            ),
+        ];
+        for (reason, context, values) in cases {
+            let label = reason.as_str();
+            let error = DeviceError::fatal("neutral resolution failure")
+                .with_nemu_resolution_context_if_absent(context);
+            let outcome = device_failure_outcome(&error, None);
+            assert!(outcome.is(reason), "{label}: {outcome}");
+            assert_eq!(outcome.category(), Category::Error, "{label}");
+            assert_eq!(Value::Object(outcome.values().clone()), values, "{label}");
         }
     }
 }

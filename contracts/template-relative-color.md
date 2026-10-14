@@ -45,7 +45,9 @@ Evaluation searches the declared template ROI in row-major order, using the
 existing grayscale metric and exact scoring implementation. A candidate must meet
 the template threshold and the color condition together. The color rectangle is
 the candidate's top-left plus the declared offset; the entire rectangle must fit
-the original frame. Arithmetic overflow or an out-of-frame rectangle disqualifies
+the original frame. For a template that declares `scales` (Workflow #396 REC-5), the offset,
+width and height scale by the factor the candidate's template was resampled by
+(`resource-declarations.md`, section Task schema `0.9` multi-scale templates). Arithmetic overflow or an out-of-frame rectangle disqualifies
 that candidate without clipping. Color uses the existing mean RGB and Euclidean
 distance predicate with the check's `max_distance`, or `defaults.color_max_distance` when
 it declares none.

@@ -19,6 +19,16 @@ pub enum MumuInstallSource {
     VendorEnumeration,
 }
 
+/// Workflow #378 A7: the `install_source` vocabulary, the value an outcome names the resolver
+/// rung that chose a MuMu installation with.
+impl actingcommand_contract::outcome::VocabularyToken for MumuInstallSource {
+    const VOCABULARY: &'static str = "install_source";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl MumuInstallSource {
     pub fn as_str(self) -> &'static str {
         match self {

@@ -32,6 +32,9 @@ pub use pacing::*;
 // Workflow #383 SH-2 (register §1.25 X7): the display map of a task geometry observation.
 mod display_map;
 pub use display_map::*;
+// Workflow #390 OUT-2: designated effect sets.
+mod designated_effects;
+pub use designated_effects::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -4487,12 +4490,43 @@ impl SchedulingOutcomeMapping {
 pub struct SchedulingOutcomeDeclaration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     designated_operation: Option<String>,
+    /// Workflow #390 OUT-2: a designated effect set (task schema `0.9`), instead of the one
+    /// `designated_operation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    designated_effects: Option<Vec<DesignatedEffectDeclaration>>,
     mappings: Vec<SchedulingOutcomeMapping>,
 }
 
 impl SchedulingOutcomeDeclaration {
     pub fn designated_operation(&self) -> Option<&str> {
         self.designated_operation.as_deref()
+    }
+
+    /// Workflow #390 OUT-2: the designated effect set, when the declaration names one.
+    pub fn designated_effects(&self) -> Option<&[DesignatedEffectDeclaration]> {
+        self.designated_effects.as_deref()
+    }
+
+    /// Whether the declaration names a designated operation or a designated effect set.
+    pub fn has_designated_effect(&self) -> bool {
+        self.designated_operation.is_some() || self.designated_effects.is_some()
+    }
+
+    /// The designated operations of either form, in declaration order.
+    pub fn designated_operations(&self) -> Vec<&str> {
+        match (&self.designated_operation, &self.designated_effects) {
+            (Some(operation), _) => vec![operation.as_str()],
+            (None, Some(effects)) => effects
+                .iter()
+                .map(DesignatedEffectDeclaration::operation_id)
+                .collect(),
+            (None, None) => Vec::new(),
+        }
+    }
+
+    /// Workflow #390 OUT-2: the designated effects as the static reachability checks see them.
+    pub const fn designated_effect_reach(&self) -> DesignatedEffectReach<'_> {
+        DesignatedEffectReach::new(self)
     }
 
     pub fn mappings(&self) -> &[SchedulingOutcomeMapping] {
@@ -4502,6 +4536,15 @@ impl SchedulingOutcomeDeclaration {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         if let Some(operation) = &self.designated_operation {
             validate_task_semantic_label(operation, "designated_operation")?;
+        }
+        if let Some(effects) = &self.designated_effects {
+            if self.designated_operation.is_some() {
+                return Err(SanitizationError::new(
+                    SanitizationCode::InvalidSchedulingOutcomeDeclaration,
+                    "designated_effects",
+                ));
+            }
+            validate_designated_effects(effects)?;
         }
         if self.mappings.is_empty() || self.mappings.len() > 64 {
             return Err(SanitizationError::new(
@@ -4520,7 +4563,7 @@ impl SchedulingOutcomeDeclaration {
                 ));
             }
             if mapping.effect == SchedulingEffectCondition::DesignatedEffectCompleted
-                && self.designated_operation.is_none()
+                && !self.has_designated_effect()
             {
                 return Err(SanitizationError::new(
                     SanitizationCode::InvalidSchedulingOutcomeDeclaration,
@@ -4562,6 +4605,25 @@ pub enum SchedulingEffectEvidence {
         step_index: u32,
         operation_label: String,
     },
+    /// Workflow #390 OUT-2: the run of a designated effect set; one tally per member, in
+    /// declaration order, its count 0 when the member did not complete.
+    DesignatedEffects {
+        effects: Vec<DesignatedEffectTally>,
+    },
+}
+
+impl SchedulingEffectEvidence {
+    /// The mapping condition the evidence selects: a set's run completed a designated effect
+    /// when any member completed.
+    pub fn condition(&self) -> SchedulingEffectCondition {
+        match self {
+            Self::NoDesignatedEffect => SchedulingEffectCondition::NoDesignatedEffect,
+            Self::DesignatedEffectCompleted { .. } => {
+                SchedulingEffectCondition::DesignatedEffectCompleted
+            }
+            Self::DesignatedEffects { effects } => tallies_condition(effects),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4594,13 +4656,18 @@ impl SchedulingDisposition {
 
     fn validate(&self) -> Result<(), SanitizationError> {
         validate_policy_token(&self.outcome_key, "outcome_key")?;
-        if let SchedulingEffectEvidence::DesignatedEffectCompleted {
-            step_index,
-            operation_label,
-        } = &self.effect
-        {
-            validate_task_step(*step_index)?;
-            validate_task_semantic_label(operation_label, "operation_label")?;
+        match &self.effect {
+            SchedulingEffectEvidence::NoDesignatedEffect => {}
+            SchedulingEffectEvidence::DesignatedEffectCompleted {
+                step_index,
+                operation_label,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+            }
+            SchedulingEffectEvidence::DesignatedEffects { effects } => {
+                validate_designated_effect_tallies(effects)?;
+            }
         }
         Ok(())
     }

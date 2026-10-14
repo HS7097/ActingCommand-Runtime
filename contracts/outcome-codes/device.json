@@ -9,18 +9,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu installation root was found (from the configured folder, the running process, the uninstall registry or vendor enumeration). A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "MuMu resolution found no MuMu installation: no configured folder, no running MuMu process, no usable uninstall registry entry and no vendor folder (count_kind installation_roots, count 0). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "MuMu not installed, installed in a folder the resolver does not search, or not running when the resolver relies on its process.",
+      "handling": "Install MuMu, start it, or set mumu_root (or device_paths.nemu_folder) to its installation folder, then run check-config again."
     },
     "installation_ambiguous": {
       "category": "error",
@@ -30,18 +37,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one MuMu installation root was found and none was selected explicitly. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "MuMu resolution found more than one MuMu installation root on one resolver rung and cannot choose (count_kind installation_roots, count the number found, install_source the rung). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "Several MuMu installations side by side, or leftover folders of an uninstalled release.",
+      "handling": "Set mumu_root (or device_paths.nemu_folder) to the installation to use, or remove the unused installation."
     },
     "shared_adb_multiple_dll_versions": {
       "category": "error",
@@ -51,18 +65,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb is MuMu's shared adb and the installation holds more than one Nemu capture DLL version, so no DLL can be chosen without an explicit one. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The configured adb is MuMu's shared adb, and the installation holds more than one versioned Nemu capture DLL, so the version to pair with it is ambiguous (count_kind dll_versions, count the number found). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu installation that keeps several emulator engine versions.",
+      "handling": "Configure the capture DLL explicitly (device_paths.nemu_ipc_dll) or use the versioned adb of the engine in use."
     },
     "configured_adb_identity_unrecognized": {
       "category": "error",
@@ -72,18 +93,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured adb does not identify the selected MuMu installation root, so adb and Nemu capture cannot share one installation identity. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The configured adb does not identify a MuMu installation root, so it cannot be tied to the installation Nemu capture uses; adb and capture must share one installation identity. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An instance adb_path pointing at a generic adb (for example the install root's platform-tools) while Nemu capture is configured.",
+      "handling": "Use MuMu's own adb for Nemu capture, or choose another capture backend for the instance."
     },
     "root_mismatch": {
       "category": "error",
@@ -93,18 +121,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A resolved backend file (adb, capture DLL) belongs to another MuMu installation root than the selected one. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A resolved backend file (the configured adb, the capture DLL or the folder of a running MuMu executable) belongs to another MuMu installation root than the one selected. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "Two MuMu installations, with the adb or the DLL configured from one and the folder from the other.",
+      "handling": "Configure the adb, the capture DLL and mumu_root from the same MuMu installation."
     },
     "dll_outside_root": {
       "category": "error",
@@ -114,18 +149,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The configured Nemu capture DLL lies outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The configured Nemu capture DLL lies outside the selected MuMu installation root. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "device_paths.nemu_ipc_dll pointing at a copied DLL or at another installation.",
+      "handling": "Point device_paths.nemu_ipc_dll at the DLL inside the MuMu installation, or remove it to let the resolver find it."
     },
     "dll_version_missing": {
       "category": "error",
@@ -135,18 +177,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No Nemu capture DLL matches the MuMu version folder (nx_device/<version>) of the adb or the running executable. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No Nemu capture DLL carries the engine version (nx_device/<version>) of the adb or of the running MuMu executable, so the two cannot be paired. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A capture DLL configured from outside the versioned engine folder, or an engine version whose DLL is missing.",
+      "handling": "Configure the DLL of the engine version in use, or repair the MuMu installation."
     },
     "version_mismatch": {
       "category": "error",
@@ -156,18 +205,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The adb or the running MuMu executable and the Nemu capture DLL belong to different MuMu version folders. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The adb (or the running MuMu executable) and the Nemu capture DLL carry different engine versions (nx_device/<version>); they must match. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu update that left an older adb or DLL configured, or files configured from two engine versions.",
+      "handling": "Configure the adb and the capture DLL of the same engine version, or remove the explicit paths to let the resolver pair them."
     },
     "candidate_absent": {
       "category": "error",
@@ -177,18 +233,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected MuMu installation holds no candidate file for a backend file (adb, capture DLL, MuMuManager). A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selected MuMu installation holds none of the candidate files the resolver checks for a needed backend file (the capture DLL, the adb or MuMuManager.exe; count_kind names which, count 0). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An incomplete or partly removed MuMu installation, or a MuMu release with another folder layout.",
+      "handling": "Repair or reinstall MuMu, or configure the file's path explicitly."
     },
     "candidate_outside_root": {
       "category": "error",
@@ -198,18 +261,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A backend file candidate resolved outside the selected MuMu installation root. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A backend file candidate (capture DLL, adb or MuMuManager.exe) resolved outside the selected MuMu installation root, for example through a link. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A symbolic link or junction inside the MuMu folder that points elsewhere.",
+      "handling": "Remove the link and keep the files inside the MuMu installation, or configure the path explicitly."
     },
     "running_executable_topology_invalid": {
       "category": "error",
@@ -219,18 +289,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path does not identify an installation root. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selected running MuMu executable's path does not show an installation root, so the installation cannot be derived from it (install_source running_process). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "MuMu started from a copied or unusual folder layout.",
+      "handling": "Set mumu_root to the installation folder, or start MuMu from its installation."
     },
     "running_version_missing": {
       "category": "error",
@@ -240,18 +317,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The selected running MuMu executable's path has no MuMu version folder (nx_device/<version>). A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selected running MuMu executable's path has no engine version folder (nx_device/<version>), so the capture DLL cannot be paired with it. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu release with another folder layout, or an executable started from outside the versioned engine folder.",
+      "handling": "Configure the capture DLL explicitly, or start the emulator from its installation."
     },
     "target_identity_unavailable": {
       "category": "error",
@@ -261,18 +345,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No MuMu instance id can be derived for the target instance from its serial. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No MuMu instance id can be derived for the target from its adb serial, and none is configured. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An instance whose serial is not one of MuMu's local port serials, for example a handset or a renamed endpoint.",
+      "handling": "Use the MuMu endpoint MuMu assigns to the instance, bind the instance by discovery, or choose another capture backend."
     },
     "target_identity_invalid": {
       "category": "error",
@@ -282,18 +373,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The target instance's explicit MuMu instance id is invalid. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The target instance's explicit MuMu instance id is out of range. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A negative or too large instance id in the configuration.",
+      "handling": "Correct the instance's MuMu instance id or bind the instance by discovery."
     },
     "target_identity_mismatch": {
       "category": "error",
@@ -303,18 +401,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The instance id the target serial implies and the explicit MuMu instance id differ. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The instance id the target's serial implies and the explicit MuMu instance id differ. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An instance id kept after the instance's port changed, or a serial of another instance.",
+      "handling": "Make the endpoint and the instance id name the same MuMu instance, or bind the instance by discovery."
     },
     "target_process_absent": {
       "category": "error",
@@ -324,18 +429,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): No running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "No running MuMu device process matches the target instance (count_kind matched_target_processes, count 0, install_source running_process). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "The emulator instance is stopped, or it runs under another account.",
+      "handling": "Start the emulator instance, then retry."
     },
     "target_process_ambiguous": {
       "category": "error",
@@ -345,18 +457,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): More than one running MuMu device process matches the target instance. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "More than one running MuMu device process matches the target instance (count_kind matched_target_processes, count a lower bound: count_known false). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "Several MuMu installations or engine versions running the same instance number.",
+      "handling": "Stop the duplicate emulator processes, or set mumu_root to the installation to use."
     },
     "target_executable_missing": {
       "category": "error",
@@ -366,18 +485,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The running MuMu device process of the target instance has no executable path. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The running MuMu device process of the target has no readable executable path, so its installation cannot be derived (count_kind matched_target_processes, count 1). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "The process runs elevated or under another account, so its path cannot be read.",
+      "handling": "Run the emulator and the Runtime as the same user and elevation, or set mumu_root."
     },
     "capture_identity_uncoordinated": {
       "category": "error",
@@ -387,18 +513,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): Nemu capture has no MuMu installation identity coordinated with the target and its adb. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Nemu capture has no coordinated MuMu installation identity (folder and DLL) to open with, because the resolution that should have supplied it did not. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A capture backend opened before or without the installation resolution, after an earlier resolution failure.",
+      "handling": "Resolve the earlier MuMu failure (see the instance's other outcomes), then reconnect the instance."
     },
     "provider_version_below_minimum": {
       "category": "error",
@@ -408,18 +541,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version is below the Runtime's minimum supported MuMuManager version. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The version MuMuManager reports is below the Runtime's minimum supported version (a Runtime policy floor, not a vendor minimum). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "An old MuMu release.",
+      "handling": "Update MuMu to a supported release."
     },
     "provider_version_unparseable": {
       "category": "error",
@@ -429,18 +569,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): MuMuManager version did not produce a four-part numeric version. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "MuMuManager's version answer is not a four-part numeric version. A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A MuMu release whose version output changed, or a damaged MuMuManager answer.",
+      "handling": "Update MuMu to a supported release; report the version text if it repeats."
     },
     "registry_source_unavailable": {
       "category": "error",
@@ -450,18 +597,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): The Windows uninstall registry, a MuMu installation source, cannot be read on this platform. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Windows uninstall registry, one rung of MuMu resolution, cannot be read on this platform (install_source registry_uninstall). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A platform without the Windows registry, or registry access denied.",
+      "handling": "Set mumu_root to the installation folder so the registry is not needed."
     },
     "registry_entry_invalid": {
       "category": "error",
@@ -471,18 +625,25 @@
       "uncertain": false,
       "values": {
         "mumu_root": "optional",
+        "count_kind": "optional",
+        "count": "optional",
+        "count_known": "optional",
+        "install_source": "optional",
+        "configured_adb_class": "optional",
+        "explicit_root": "optional",
+        "explicit_dll": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A MuMu resolution step refused (NemuResolutionReason): A MuMuPlayer uninstall registry entry carries no usable install location or an unsupported value type. A failed provider startup discovery adds the configured mumu_root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A MuMuPlayer uninstall registry entry carries no usable install location, or a value of a type the resolver does not read (install_source registry_uninstall). A MuMu resolution reason reaches outcomes where the refusing step runs: check-config's MuMu note (a note link of check_config_passed when the MuMu folder cannot be resolved), provider startup's device failure at a start, and the failure of a capture or input open in a running Runtime. The context the resolution recorded travels as optional values when the emitting path has it: count_kind, count and count_known (what was counted, how many, and whether the count is exact), install_source (which resolver rung chose the installation), configured_adb_class, explicit_root and explicit_dll (how the adb, the MuMu folder and the capture DLL were configured), and mumu_root.",
+      "common_causes": "A damaged or partial uninstall entry left by an interrupted install or uninstall.",
+      "handling": "Repair or reinstall MuMu, or set mumu_root to the installation folder."
     },
     "scrcpy_server_digest_mismatch": {
       "category": "error",

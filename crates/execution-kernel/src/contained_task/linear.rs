@@ -785,7 +785,8 @@ impl TaskProgram {
                     ExecutionKernelCode::ContainedTaskOutcomeDeclarationInvalid.code(),
                 )
             })?;
-            if declaration.designated_operation().is_some() {
+            // Workflow #390 OUT-2: nor a designated effect set.
+            if declaration.has_designated_effect() {
                 return Err(invalid("designated_operation", None));
             }
             for page in declaration
@@ -1005,7 +1006,7 @@ impl PreparedContainedTask {
             runtime,
             ocr_collector,
             Some(plan.target.clone()),
-            dispatched,
+            (dispatched, &[]),
         )
     }
 

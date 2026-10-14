@@ -894,15 +894,18 @@ impl OperationParser {
                     mask,
                     with_unique(
                         &source,
-                        pack_target(
+                        with_scales(
                             &source,
-                            &target_id,
-                            &template_resource_path(&self.root, &bundle.dir, &template)?,
-                            region_to_pack(required_field(&source, "region")?)?,
-                            template_threshold(&source)?,
-                            color_check_to_pack(source.get("color_check"), &target_id)?,
-                            None,
-                        )?,
+                            pack_target(
+                                &source,
+                                &target_id,
+                                &template_resource_path(&self.root, &bundle.dir, &template)?,
+                                region_to_pack(required_field(&source, "region")?)?,
+                                template_threshold(&source)?,
+                                color_check_to_pack(source.get("color_check"), &target_id)?,
+                                None,
+                            )?,
+                        ),
                     ),
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
@@ -937,15 +940,18 @@ impl OperationParser {
                     mask,
                     with_unique(
                         &source,
-                        pack_target(
+                        with_scales(
                             &source,
-                            &target_id,
-                            &template_resource_path(&self.root, &bundle.dir, &template)?,
-                            region_to_pack(required_field(&source, "region")?)?,
-                            template_threshold(&source)?,
-                            color_check_to_pack(source.get("color_check"), &target_id)?,
-                            None,
-                        )?,
+                            pack_target(
+                                &source,
+                                &target_id,
+                                &template_resource_path(&self.root, &bundle.dir, &template)?,
+                                region_to_pack(required_field(&source, "region")?)?,
+                                template_threshold(&source)?,
+                                color_check_to_pack(source.get("color_check"), &target_id)?,
+                                None,
+                            )?,
+                        ),
                     ),
                 );
                 add_first_target(&mut targets, &mut order, target_id, target);
@@ -2344,6 +2350,14 @@ fn pack_target(
     Ok(Value::Object(target))
 }
 
+/// Workflow #396 REC-5: `scales` passes to the pack as declared (pack schema `0.7`).
+fn with_scales(source: &Value, mut target: Value) -> Value {
+    if let (Some(scales), Some(object)) = (source.get("scales"), target.as_object_mut()) {
+        object.insert("scales".to_string(), scales.clone());
+    }
+    target
+}
+
 /// Workflow #396 REC-2: `unique` passes to the pack as declared (pack schema `0.7`).
 fn with_unique(source: &Value, mut target: Value) -> Value {
     if let (Some(unique), Some(object)) = (source.get("unique"), target.as_object_mut()) {
@@ -2842,6 +2856,7 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 || target.get("locate").is_some()
                 || target.get("unique").is_some()
                 || target.get("mask").is_some()
+                || target.get("scales").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7

@@ -41,6 +41,7 @@ file. The following is the member only, not a complete task:
 | the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_readings`; no outcome: `MissingField` @ `/scheduling_outcome` |
 | `id` | `[A-Za-z0-9_\-/.:]`, `1..=128` bytes, unique in the task | `InvalidValue` @ `/resource_readings/<i>/id` |
 | `fact_key` | starts with `resource.` or `inventory.`, satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` |
+| `capacity_fact_key` | optional (Workflow #390 READ-1); only with `value.format` `current_capacity`; the key rule of `fact_key`; unique in the task among every key the task's marks write | `InvalidValue` @ `…/capacity_fact_key` (reason `resource_reading_capacity_fact_key_invalid`, or `resource_reading_fact_key_duplicate`) |
 | `page_id` | an identifier like `id` (not `any`) naming a page the task declares: its entry, target, error or `scheduling_outcome` pages, or a page one of its operations leaves, reaches or passes through (Workflow #384 D2-S2; it was a terminal page only); the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id`; before any input the Runtime refuses a page its detector does not hold (`page_undeclared`) |
 | `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the frame handed to recognition is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
@@ -62,6 +63,42 @@ or non-finite confidence has none) are the only implementations of reading parse
 conversion. Workflow #308 slice 2 reuses both. The declaration type enters no event, artifact
 or report.
 
+### Second reading key
+
+Workflow #390 READ-1 (forced compromise O-08). A `current_capacity` mark reads a fraction such as
+`17/20`; with `capacity_fact_key` it writes both parts, the current value (`17`) as `fact_key`
+and the capacity (`20`) as `capacity_fact_key`:
+
+```json
+{
+  "id": "storage",
+  "fact_key": "resource.storage",
+  "capacity_fact_key": "resource.storage_capacity",
+  "page_id": "home",
+  "target_id": "ocr/storage",
+  "trim": "whitespace_v1",
+  "value": { "type": "unsigned_integer", "min": 0, "max": 999, "format": "current_capacity" },
+  "minimum_confidence_milli": 900,
+  "valid_for_ms": 21600000
+}
+```
+
+The two readings come from one evaluation of the mark's target: one parse, one confidence, one
+frame, the mark's `valid_for_ms`. `min..=max` bounds the current value only; the capacity is
+written as read, and a capacity beyond `2^53-1` makes the mark give no reading (`out_of_range`).
+A mark gives both readings or none: a mark that gives no reading is one miss, which names its
+`fact_key`. Without `capacity_fact_key` a `current_capacity` mark writes the current value alone,
+as before. The two readings are published as two observations, the capacity right after the
+value, like the readings of two marks on one frame: the capacity's `source_snapshot_id` is the
+value's followed by `/capacity` (the record table below). The fact store groups the records of
+one snapshot id into one observation and refuses a second observation under a snapshot id that
+already names an active record (`fact_observation_version_conflict`), so the value and the
+capacity are refreshed, adjusted and invalidated each on its own.
+`ResourceReadingDeclaration::parse_parts` returns both parts; `fact_keys` lists the keys a mark
+writes (its `fact_key`, then its `capacity_fact_key`), which is what "the keys of a
+mark" means everywhere below: a requested key set, an adjustment's mark of its key, the
+recognition maintenance package's marked keys and their checks.
+
 ### Version gate
 
 The family is accepted in task schema `0.8` and `0.9` only; in `0.3`–`0.7` it is
@@ -71,7 +108,10 @@ unchanged; a task without the family parses, derives, simulates and runs exactly
 
 A Runtime older than this family refuses a package that declares it, on both load paths: a
 sealed ZIP and a content directory both pass the same declaration gate, which reports
-`UnknownField` @ `/resource_readings`. Nothing ignores the family silently.
+`UnknownField` @ `/resource_readings`. Nothing ignores the family silently. Likewise a Runtime
+older than Workflow #390 READ-1 refuses a mark that declares `capacity_fact_key`, with
+`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`; the `package` interface revision
+is declared once by A8.
 
 ### Two uses, one declaration
 
@@ -115,8 +155,9 @@ the frames it reaches their pages on:
   its frame, then the text is trimmed and parsed and the confidence converted. A reading holds
   when the parse succeeds and the confidence is present and at least `minimum_confidence_milli`.
   For each frame the kernel then records the in-memory trace `ContainedTaskTrace::ResourceReadings
-  { captured_at, readings, unresolved }`: per reading that holds the declaration, the integer
-  value and the confidence milli; per mark that gave no reading the declaration and its
+  { captured_at, readings, unresolved }`: per reading that holds the declaration, the key it
+  writes, the integer value and the confidence milli (a mark with a second reading key gives two,
+  its value then its capacity); per mark that gave no reading the declaration and its
   `reading_problem` (`empty`, `invalid_integer`, `overflow`, `out_of_range`,
   `region_unresolved`, `provider_failed`, `confidence_missing`, `low_confidence`, and
   `join_timeout` for a recognition that had not returned when the join timeout ended). The
@@ -127,7 +168,8 @@ the frames it reaches their pages on:
   the key stays until its own expiry. A run that fails or is cancelled joins nothing and
   publishes nothing.
 - **A requested key set** (`PreparedContainedTask::run_for_reading_keys`; the scheduler's
-  reading dispatch, D2-S4) reads only the marks of its keys. A `linear_steps` package whose path
+  reading dispatch, D2-S4) reads only the marks of its keys (a mark that writes any key of the
+  set, READ-1, gives all its readings). A `linear_steps` package whose path
   starts on a page, ends on it and returns to it on the way, without optional operations, has
   one segment per return; with a key set, a segment that reaches no page marking one of its keys
   is not run, and the run stays on the entry page it starts and ends on. Any other package runs
@@ -192,14 +234,14 @@ readings.
 | Field | Value |
 | --- | --- |
 | `scope` | `{"kind": "instance", "instance_id": <the run's registered instance alias>}` |
-| `key` | `fact_key` |
+| `key` | `fact_key`; for a mark's capacity, its `capacity_fact_key` (Workflow #390 READ-1; every other field but `source_snapshot_id` is as for the mark's value, `source_detector` included) |
 | `content` | inline `integer`, the reading |
 | `observed_at_unix_ms` | the device capture time of the frame the reading was taken on, in Unix ms. It is wall clock time, the clock domain of the Runtime clock that refuses an observation in the future |
 | `expires_at_unix_ms` | `observed_at_unix_ms + valid_for_ms` |
 | `ttl_policy` | `{"minimum_ms": valid_for_ms, "maximum_ms": valid_for_ms, "source": "detector_contract"}` |
 | `confidence_milli` | the reading's `ocr_confidence_milli` |
 | `source_detector` | `resource_reading:<entry task id>/<reading id>` |
-| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<reading id>`, the canonical `run_<hex>` and `frame_<hex>` ids |
+| `source_snapshot_id` | `run:<run id>/frame:<frame id>/<reading id>`, the canonical `run_<hex>` and `frame_<hex>` ids; for a mark's capacity `run:<run id>/frame:<frame id>/<reading id>/capacity` (Workflow #390 READ-1, `resource_reading_capacity_snapshot_id`) |
 | `schema_version` | `fact.v1` |
 | `resource_bundle_hash` | the lowercase hex SHA-256 of `package:<package_id>`, the admitted package's `package_id` (Workflow #336 PKG-S2, option 丙): a package changed in place keeps the value, two packages never share one, and no package content is hashed |
 | `invalidate_on` | `[]` |
@@ -321,7 +363,7 @@ shows after the operation; the amount is never written in the package.
 | --- | --- | --- |
 | the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_adjustments`; no outcome: `MissingField` @ `/scheduling_outcome` |
 | `id` | the identifier rule of a mark's `id`, unique in the task | `InvalidValue` @ `/resource_adjustments/<i>/id` |
-| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key | `InvalidValue` @ `…/fact_key` |
+| `fact_key` | the key rule of a mark (`resource.` or `inventory.`); one operation adjusts a key at most once; without `amount`, the task has a mark of the key (one that writes it, as `fact_key` or as `capacity_fact_key`) | `InvalidValue` @ `…/fact_key` |
 | `operation_id` | an operation of the task | `InvalidValue` @ `…/operation_id` |
 | `amount` | absent: the new value is read after the operation (a mark of the key); present: `{target_id, direction}` only | an amount source other than `target_id` (a constant, for example): `UnknownField` @ `…/amount/<member>` |
 | `amount.target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; the same target qualification as a mark's (`target_not_ocr`, `target_locates_text`, `target_personal`) | `InvalidValue` @ `…/amount/target_id`; cross-reference: `package_invalid` naming `…/amount/target_id` |
