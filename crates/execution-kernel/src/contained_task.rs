@@ -315,19 +315,20 @@ fn sample_budget_insufficient(
 
 /// Workflow #386 SR-1 (scheduling model §2.4 item 1): admission refuses a task whose declared
 /// sampling (`required_ms`) exceeds the smaller of its step and task timeouts (`limit_ms`);
-/// `operation` names the operation when one operation exceeds it. `error` is the refusal of
+/// `pack_operation_id` is the package's id of the operation when one operation exceeds it (the
+/// outcome key of that name, an id, not a code or a location). `error` is the refusal of
 /// `recognition_sample_budget_invalid` with its developer detail.
 fn sample_budget_invalid(
     error: ContainedTaskError,
     required_ms: u64,
     limit_ms: u64,
-    operation: Option<&str>,
+    pack_operation_id: Option<&str>,
 ) -> ContainedTaskError {
     let outcome = Outcome::new(ExecutionKernelCode::RecognitionSampleBudgetInvalid)
         .required_ms(required_ms)
         .limit_ms(limit_ms);
-    error.with_values(match operation {
-        Some(operation) => outcome.pack_operation_id(operation),
+    error.with_values(match pack_operation_id {
+        Some(pack_operation_id) => outcome.pack_operation_id(pack_operation_id),
         None => outcome,
     })
 }
