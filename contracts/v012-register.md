@@ -619,6 +619,16 @@ the contract. No ledger record type or persisted member is added. host-metrics'
 Configuration keys (§5): the per-instance `start_emulator` row, parsed, checked and reported by
 S6a; S6c reads it.
 
+### 1.45 Slice D1c-H (#387, Alice 10-14: one failure counts once toward direction ①)
+
+D1c-H changes what direction ① counts, which is memory only, and writes one existing optional
+member on one more record; no record type, member, code or key is added.
+[emulator-control.md](emulator-control.md), "Stuck-recovery ladder", is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

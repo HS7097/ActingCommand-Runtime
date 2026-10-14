@@ -490,27 +490,42 @@ of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallbac
   that stage). The current owner remembers only the latest preparation event; a ladder whose
   preparation a later one superseded is suppressed (`preparation_superseded`) while
   `rules.preparation_superseded` is `suppress` (the default), and climbs under `keep`.
-- **Direction ① (`stability_warnings`, M387 §3.4).** As each record is committed, the Runtime
-  counts, in memory and per instance, the records of warning severity or worse whose outcome code
-  (or, for a backend open observation that failed, its entry's open failure code) a
-  `stability_warnings` item matches. The item's `count`-th record within its `window_ms`
-  registers a burst, and every window of the instance starts empty again. The count is of
-  records, not incidents: one failure that commits several matching records counts each of them
-  (nothing is de-duplicated by run, request or incident), and an item that names both
-  `environment_fault` and `stability_warning` (as the default `stability_burst` does) adds
-  records of the two classes up in one count. Not counted: the
-  records of an instance a ladder climbs on (its own work), the records of a direct run while
-  `rules.direct_runs` is `exempt`, and codes the catalog does not list. The count takes no lock
-  but its own and admits nothing on the write path; the lease sweep admits each burst's ladder
-  (trigger `stage: stability_warnings`, the burst's last code, no run, task or preparation) and
-  queues its claim. Its return-home rung takes the recovery package the instance's startup
-  package resolves, as a preparation's ladder does. Windows are memory only: a restart starts
-  every window empty.
+- **Direction ① (`stability_warnings`, M387 §3.4; Workflow #387 D1c-H, Alice 10-14).** As
+  each record is committed, the Runtime counts, in memory and per instance, failures: a record
+  of warning severity or worse whose outcome code a `stability_warnings` item matches counts as
+  part of the failure it belongs to, and one failure counts once, however many matching records
+  it commits. A record's failure is, in this order: the run it belongs to (its `run_id` link);
+  else the request it answers (its `request_id` link); else the failure of the record it entered
+  from (a `runtime.failed` record's `entered_event_id`, followed to the failure that record
+  belongs to); else the record alone. So a lifecycle failure and its cause records, a run's
+  records (`capture.failed`, `runtime.failed`, `task.failed`), a monitor probe's records, a
+  command's records, a preparation's records, and a fence record and the unconfirmed failure it
+  entered from each count once. A failure counts at its first matching record; the item's `count`-th
+  failure within its `window_ms` registers a burst, and every window of the instance starts
+  empty again, while the failures already counted stay counted, so their later records do not
+  count again. An item that names both `environment_fault` and `stability_warning` (as the
+  default `stability_burst` does) counts failures of the two classes in one window. Not counted:
+  a record without an outcome (a backend open observation carries none: an open failure counts
+  through the preparation, capture, input or task record that carries it); the records of an
+  instance a ladder climbs on (its own work); while `rules.direct_runs` is `exempt`, every record
+  committed while manual work holds the instance's key, the set a resource fence treats as manual
+  (a direct task run, a client lease, an application or input command, a Lab operation), under
+  `trigger` they count; and codes the catalog does not list. An emulator control command is not
+  manual work, so its records count, and the connection preparation after an emulator `start` or
+  `restart` still starts its ladder as above (coordinator ruling P1). The count takes no lock but
+  its own: it reads the holder kind the scheduler last reported for the instance's key (the
+  scheduler reports it under its own lock at every grant, transfer, release, expiry and
+  rollback), and it records nothing and admits nothing on the write path. The lease sweep admits
+  each burst's ladder (trigger `stage: stability_warnings`, the burst's last code, no run, task
+  or preparation) and queues its claim. Its return-home rung takes the recovery package the
+  instance's startup package resolves, as a preparation's ladder does.
+  Windows and failures are memory only: a restart starts every window empty.
 - **Resource fence (Workflow #403).** An unconfirmed close of one instance's own resources (an
   application, input or capture backend, or a session close, that could not confirm its
   processes or handles gone) fences that instance instead of ending the whole Runtime. The work
   that met it fails with `instance_resources_fenced` (non-fatal), recorded once as a
-  `runtime.failed` caused by the unconfirmed failure; the instance's policy availability is
+  `runtime.failed` caused by the unconfirmed failure and entering from that failure's record
+  when it has one (`entered_event_id`, Workflow #387 D1c-H); the instance's policy availability is
   withheld, a policy dispatch to it is refused with that code, and its routine claims wait. The
   lease sweep hands the fence to a ladder admitted as every ladder is (trigger
   `stage: resource_fence` with the unconfirmed failure's code, no run, task or preparation, and
