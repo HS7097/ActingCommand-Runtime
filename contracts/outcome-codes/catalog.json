@@ -6613,7 +6613,8 @@
       "actinglab"
     ],
     "perf_": [
-      "runtime-config"
+      "runtime-config",
+      "runtime-host"
     ],
     "performance_": [
       "contract",
@@ -7791,9 +7792,6 @@
     ],
     "instances_": [
       "actingctl"
-    ],
-    "perf_": [
-      "runtime-host"
     ]
   },
   "fragments": {
