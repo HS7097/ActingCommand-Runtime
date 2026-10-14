@@ -50,30 +50,24 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
     assert_eq!(snapshot.catalog.as_ref().expect("catalog").goal_count, 1);
     let current = response.current().expect("current runtime view");
     assert_eq!(current.instances.len(), 1);
-    let current_source = current.source.as_ref().expect("committed current source");
-    assert_eq!(current_source.sequence, current.observed_ledger_position);
-    assert!(current_source.sequence > snapshot.ledger_position);
+    // Workflow #383 AO-4q: the current view is sampled from memory; its source names the
+    // committed head, and the request leaves no record.
+    let current_source = current.source.as_ref().expect("current source");
+    assert_eq!(
+        current_source.ledger_committed_head,
+        current.observed_ledger_position
+    );
+    assert!(current_source.ledger_committed_head >= snapshot.ledger_position);
     let observations = projected_events(
         &mut client,
         EventQuery {
             request_id: Some(request.request_id()),
-            event_type: Some(EventType::CommandValidated),
             ..EventQuery::default()
         },
     );
-    assert_eq!(
-        observations.len(),
-        1,
-        "one state observation for the explicit request"
-    );
-    assert_eq!(observations[0].event_id, current_source.event_id);
-    let ProjectionPayload::Full(payload) = &observations[0].payload else {
-        panic!("current source payload");
-    };
     assert!(
-        matches!(payload.runtime_state(), Some(actingcommand_contract::RuntimeStateFact::Observed {
-        state: actingcommand_contract::RuntimeObservedState::ProjectCurrent { status, fatal }, ..
-    }) if status.owner_epoch() == current.owner_epoch && *fatal == current.fatal)
+        observations.is_empty(),
+        "no state observation for the explicit request"
     );
     assert_eq!(
         snapshot
@@ -248,8 +242,10 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         let current = response.current().expect("current runtime view");
         assert!(current.observed_ledger_position >= snapshot.ledger_position);
         let source = current.source.as_ref().expect("paged current source");
-        assert_eq!(source.sequence, current.observed_ledger_position);
-        assert!(source.sequence > snapshot.ledger_position);
+        assert_eq!(
+            source.ledger_committed_head,
+            current.observed_ledger_position
+        );
         let current_instance = current.instances.first().expect("project instance");
         if page_index == 0 {
             assert!(current_instance.lease_active);

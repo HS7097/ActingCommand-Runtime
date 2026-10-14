@@ -1900,8 +1900,9 @@ pub struct RuntimeDiscoveredInstance {
 }
 
 /// The answer of `RuntimeOperation::DiscoverInstances`: the provider version and every
-/// instance it reported, ordered by index, with the committed observation as `source`. Tool
-/// paths, install roots and the resolution source are not part of it.
+/// instance it reported, ordered by index, with the state source of the discovery as `source`
+/// (Workflow #383 AO-4q: no ledger record). Tool paths, install roots and the resolution source
+/// are not part of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeInstanceDiscovery {

@@ -182,11 +182,9 @@ impl HostShared {
                 },
                 failure_outcome: None,
             }),
-            RuntimeOperation::Status => self.control_plane_status(validated),
+            RuntimeOperation::Status => self.control_plane_status(),
             RuntimeOperation::DiscoverInstances => self.discover_instances(validated),
-            RuntimeOperation::ProjectInterface { request } => {
-                self.project_interface(validated, request)
-            }
+            RuntimeOperation::ProjectInterface { request } => self.project_interface(request),
             RuntimeOperation::ProjectPolicyInputIdentity {
                 as_of_ledger_position,
             } => {
@@ -199,7 +197,7 @@ impl HostShared {
                     self.project_policy_input_identity(*as_of_ledger_position)
                 }
             }
-            RuntimeOperation::MonitorStatus => self.monitor_status(validated),
+            RuntimeOperation::MonitorStatus => self.monitor_status(),
             RuntimeOperation::RuntimeFactSnapshot => {
                 let snapshot = self.runtime_fact_snapshot().map_err(|error| {
                     if error.is_fatal() {

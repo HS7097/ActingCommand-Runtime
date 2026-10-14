@@ -636,7 +636,7 @@ impl ProjectInterfaceSnapshot {
             source.validate().map_err(|_| {
                 ProjectInterfaceError::new(ProjectInterfaceCode::ProjectCurrentSourceInvalid)
             })?;
-            if source.sequence < self.ledger_position {
+            if source.ledger_committed_head < self.ledger_position {
                 return Err(ProjectInterfaceError::new(
                     ProjectInterfaceCode::ProjectCurrentSourceInvalid,
                 ));
@@ -781,7 +781,8 @@ impl ProjectLedgerSnapshot {
     }
 }
 
-/// Runtime state sampled and committed separately from the historical pagination position.
+/// Runtime state sampled separately from the historical pagination position; its source names
+/// the ledger's committed head at the sample (Workflow #383 AO-4q).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectCurrentView {
@@ -799,7 +800,7 @@ impl ProjectCurrentView {
             source.validate().map_err(|_| {
                 ProjectInterfaceError::new(ProjectInterfaceCode::ProjectCurrentSourceInvalid)
             })?;
-            if source.sequence != self.observed_ledger_position {
+            if source.ledger_committed_head != self.observed_ledger_position {
                 return Err(ProjectInterfaceError::new(
                     ProjectInterfaceCode::ProjectCurrentSourceInvalid,
                 ));

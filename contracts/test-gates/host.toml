@@ -484,3 +484,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav6::n6_9_a_scheduled_run_that_ends_end_run_starts_the_ladder_by_pack_logic",
 ]
 incident = ["#387"]
+
+# Status reads append no ledger record, and their state source names the ledger's committed head with or without the two stores' revisions (Workflow #383 AO-4q, AO4-c; register W1)
+[[gate]]
+key = "54"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_383_ao4q::ao4_c_status_reads_append_no_record_and_name_the_committed_head",
+    "actingcommand-contract::lib::runtime_observation::tests::ao4_c_the_state_source_reads_back_with_or_without_the_store_revisions",
+]
+incident = ["#383"]

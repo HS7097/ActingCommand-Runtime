@@ -11,7 +11,6 @@ use actingcommand_contract::codes::{ContractLocation, SharedCode};
 impl HostShared {
     pub(super) fn project_interface(
         &self,
-        validated: &ValidatedRuntimeRequest<'_>,
         request: &ProjectInterfaceRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
         request.negotiate().map_err(|error| {
@@ -78,7 +77,7 @@ impl HostShared {
             ));
         }
         let diagnostics = self.recent_project_diagnostics(ledger_position)?;
-        let (state, source) = self.observe_runtime_state(validated, || {
+        let (state, source) = self.observe_runtime_state(|| {
             let status = self.control_plane_status_projection()?;
             let fatal = self
                 .fatal
@@ -93,7 +92,7 @@ impl HostShared {
                 HostLocation::ProjectStateObservationKind,
             )));
         };
-        let current_ledger_position = source.sequence;
+        let current_ledger_position = source.ledger_committed_head;
         let status = status.with_source(source).map_err(|_| {
             RequestFailure::poison_without_terminal(ledger_error(HostLocation::ProjectStateSource))
         })?;
@@ -339,11 +338,8 @@ impl HostShared {
         })
     }
 
-    pub(super) fn control_plane_status(
-        &self,
-        validated: &ValidatedRuntimeRequest<'_>,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let (state, source) = self.observe_runtime_state(validated, || {
+    pub(super) fn control_plane_status(&self) -> Result<OperationSuccess, RequestFailure> {
+        let (state, source) = self.observe_runtime_state(|| {
             Ok(actingcommand_contract::RuntimeObservedState::ControlPlane {
                 status: self.control_plane_status_projection()?,
             })
@@ -364,9 +360,12 @@ impl HostShared {
         })
     }
 
+    /// Samples a status read from memory (Workflow #383 AO-4q). It appends no ledger record:
+    /// the source names the ledger's committed head, read inside the sampling interval, and the
+    /// interval itself (register W1). The two stores' (lineage, revision) stay absent until
+    /// AO-3 gives the stores their revisions.
     pub(super) fn observe_runtime_state(
         &self,
-        validated: &ValidatedRuntimeRequest<'_>,
         sample: impl FnOnce() -> Result<actingcommand_contract::RuntimeObservedState, RequestFailure>,
     ) -> Result<
         (
@@ -381,48 +380,24 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
         let state = sample()?;
+        let ledger_committed_head = self.ledger.latest_sequence().map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error(HostLocation::RuntimeStateSource))
+        })?;
         let sampled_completed_at_unix_ms = self
             .clock
             .sample()
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
-        let observed = self.append_event(
-            EventSeverity::Info,
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-            self.events.request_links(validated, None, None, None),
-            CommandPayloadDraft::validated_runtime_state(
-                EventAction::RuntimeAction,
-                EffectDisposition::NotPerformed,
-                actingcommand_contract::RuntimeStateFact::Observed {
-                    sampled_started_at_unix_ms,
-                    sampled_completed_at_unix_ms,
-                    state,
-                },
-                AuditInput::new(),
-            ),
-        )?;
-        let Some(actingcommand_contract::RuntimeStateFact::Observed {
+        let source = actingcommand_contract::RuntimeStateSource {
+            instance_facts: None,
+            runtime_facts: None,
+            ledger_committed_head,
             sampled_started_at_unix_ms,
             sampled_completed_at_unix_ms,
-            state,
-        }) = observed.payload().runtime_state()
-        else {
-            return Err(RequestFailure::poison_without_terminal(ledger_error(
-                HostLocation::RuntimeStateObservationMissing,
-            )));
-        };
-        let source = actingcommand_contract::RuntimeStateSource {
-            event_id: *observed.event_id(),
-            sequence: observed.sequence(),
-            sampled_started_at_unix_ms: *sampled_started_at_unix_ms,
-            sampled_completed_at_unix_ms: *sampled_completed_at_unix_ms,
         };
         source.validate().map_err(|_| {
             RequestFailure::poison_without_terminal(ledger_error(HostLocation::RuntimeStateSource))
         })?;
-        let state = state.clone();
         Ok((state, source))
     }
 
@@ -544,11 +519,8 @@ impl HostShared {
         Ok(status)
     }
 
-    pub(super) fn monitor_status(
-        &self,
-        validated: &ValidatedRuntimeRequest<'_>,
-    ) -> Result<OperationSuccess, RequestFailure> {
-        let (state, source) = self.observe_runtime_state(validated, || {
+    pub(super) fn monitor_status(&self) -> Result<OperationSuccess, RequestFailure> {
+        let (state, source) = self.observe_runtime_state(|| {
             let status = lock(self.monitor_registry()?, HostLocation::ReadMonitorRegistry)?
                 .status(self.owner_epoch)
                 .map_err(RequestFailure::poison_without_terminal)?;
