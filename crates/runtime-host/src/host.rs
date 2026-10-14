@@ -1532,6 +1532,8 @@ impl RuntimeHost {
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
             #[cfg(test)]
             worker_panic_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            frame_extent_fault_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -2997,6 +2999,19 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #387 D1c-G: the next contained task frame whose geometry is retained reads a
+    /// zero width (`contained_task_geometry_frame_extent_invalid`). The frame copy of the capture
+    /// pipeline refuses a frame with a zero side before that point, so only this hook reaches it.
+    #[cfg(test)]
+    pub(crate) fn inject_frame_extent_fault_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectTestTaskGeometryFrameExtentFault,
+        )?
+        .frame_extent_fault_for_test
+        .store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// Workflow #369: the instance's holder kind and its waiting claims' kinds, in grant order.
     /// Read under the instance's queue-order lock, as `holds_key` reads a key: a lease
     /// transition changes the scheduler before its outcome record is durable (a release's
@@ -4011,6 +4026,9 @@ struct HostShared {
     instance_workers: Mutex<host_claims::InstanceWorkers>,
     #[cfg(test)]
     worker_panic_for_test: AtomicBool,
+    // Workflow #387 D1c-G, test only: the next task frame's geometry reads a zero width.
+    #[cfg(test)]
+    frame_extent_fault_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the

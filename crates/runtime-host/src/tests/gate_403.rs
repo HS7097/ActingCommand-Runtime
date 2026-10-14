@@ -53,7 +53,7 @@ fn all_events(host: &RuntimeHost) -> Vec<PersistedEvent> {
 }
 
 /// The `runtime.failed` records of the fence code, with the outcome each carries.
-fn fence_records(
+pub(super) fn fence_records(
     events: &[PersistedEvent],
 ) -> Vec<(&PersistedEvent, &actingcommand_contract::outcome::Outcome)> {
     events
@@ -86,7 +86,10 @@ fn lift_records(events: &[PersistedEvent]) -> Vec<(&PersistedEvent, InstanceId, 
 }
 
 /// The resource fence `Status` reports for `instance_alias`.
-fn status_fence(host: &RuntimeHost, instance_alias: &str) -> Option<InstanceResourceFence> {
+pub(super) fn status_fence(
+    host: &RuntimeHost,
+    instance_alias: &str,
+) -> Option<InstanceResourceFence> {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let receipt = host
         .process_request_for_test(
@@ -112,7 +115,7 @@ fn status_fence(host: &RuntimeHost, instance_alias: &str) -> Option<InstanceReso
 }
 
 /// Asserts that `outcome` is the fence of `instance` caused by the unconfirmed failure `cause`.
-fn assert_fence(
+pub(super) fn assert_fence(
     outcome: &actingcommand_contract::outcome::Outcome,
     instance: InstanceId,
     cause: &str,

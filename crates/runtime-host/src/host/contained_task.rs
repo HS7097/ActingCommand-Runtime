@@ -1461,10 +1461,26 @@ impl RuntimeContainedTask<'_> {
         frame_id: IssuedFrameId,
         session: CaptureGeometrySessionRef,
     ) -> Result<(), RequestFailure> {
-        let extent = CaptureExtent::new(frame.width, frame.height).ok_or_else(|| {
-            RequestFailure::poison_without_terminal(task_geometry_error(
-                HostCode::ContainedTaskGeometryFrameExtentInvalid,
-            ))
+        #[cfg(test)]
+        let width = if self
+            .host
+            .frame_extent_fault_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            0
+        } else {
+            frame.width
+        };
+        #[cfg(not(test))]
+        let width = frame.width;
+        // Workflow #387 D1c-G: a frame without an extent ends this run only, with its code, as
+        // the other task geometry failures do (class 5, so it counts toward direction ①); the
+        // Runtime and the other instances go on.
+        let extent = CaptureExtent::new(width, frame.height).ok_or_else(|| {
+            task_geometry_request_failure(
+                task_geometry_error(HostCode::ContainedTaskGeometryFrameExtentInvalid),
+                None,
+            )
         })?;
         self.geometry_frame = Some(TaskGeometryFrame {
             frame_id: *frame_id.transport(),

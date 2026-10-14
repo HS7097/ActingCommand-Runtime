@@ -512,9 +512,13 @@ of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallbac
   `stage: resource_fence` with the unconfirmed failure's code, no run, task or preparation, and
   no trigger item: it starts at `trigger_defaults.start_rung` and respects the cool-down as
   `trigger_defaults.respect_cooldown` says), whose claim waits for the instance's key; a ladder
-  already holding or waiting for the instance decides instead. A fence that manual work met (the
-  instance's key held by a direct task run, a client lease, an application or input command or a
-  Lab operation) starts no ladder and waits for a person at once while `rules.direct_runs` is
+  already holding or waiting for the instance decides instead. A ladder's own ADB check of its
+  instance whose ADB child or pipe it could not confirm gone (the `application_restart` entry
+  probe; the `emulator_restart` readiness wait's boot check and ADB probes) fences that instance
+  the same way (Workflow #387 D1c-G): the rung fails with `instance_resources_fenced`, and the
+  ladder, which holds the instance, goes on and decides at its end. A fence that manual work met
+  (the instance's key held by a direct task run, a client lease, an application or input command
+  or a Lab operation) starts no ladder and waits for a person at once while `rules.direct_runs` is
   `exempt` (M387 B1, coordinator ruling 4 of D1c); under `trigger` it goes to a ladder as a
   routine fence does. Its return-home rung is skipped (`resource_fence`): it never prepares the
   instance again. The application restart rung, after its stop, prepares the instance again on

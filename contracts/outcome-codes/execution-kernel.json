@@ -897,7 +897,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision provider failed or answered invalidly while a contained task package was admitted.",
+      "description": "The vision provider failed or answered invalidly while a contained task package was admitted, or while a run evaluated its pages (home preflight, page evaluation, a shared interrupt check); a page evaluation that fails for any other cause stays contained_task_recognition_failed (Workflow #387 D1c-G).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

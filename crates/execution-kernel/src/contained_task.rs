@@ -66,6 +66,9 @@ mod gate_386_sr1;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
+// Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
+#[cfg(test)]
+mod gate_387_d1cg;
 pub use linear::linear_main_interface;
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -3028,7 +3031,7 @@ impl PreparedContainedTask {
             .result
             .map_err(|error| {
                 ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
+                    page_evaluation_failure_code(page_failed_by_provider(&error)),
                     error.to_string(),
                 )
                 .with_ppocr_diagnostics(error.ppocr_diagnostics())
@@ -3079,6 +3082,7 @@ impl PreparedContainedTask {
                 .collect(),
             Err(error) => error.ppocr_diagnostics(),
         };
+        let failure_code = page_batch_failure_code(&results);
         let evaluations = results
             .map_err(|error| {
                 actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
@@ -3086,11 +3090,8 @@ impl PreparedContainedTask {
             })
             .and_then(require_all_page_evaluations)
             .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
-                    error.to_string(),
-                )
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+                ContainedTaskError::with_detail(failure_code, error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?;
         let matched_pages = evaluations
             .iter()
@@ -3150,7 +3151,8 @@ impl PreparedContainedTask {
     /// Workflow #373 NAV-6: this package's pages `pages` evaluated on `scene` in one scene
     /// evaluation (one read per distinct request, REC-1), as a shared interrupt check evaluates
     /// its feature package: the ids of the pages that matched, in `pages` order. An evaluation
-    /// error is `contained_task_recognition_failed`.
+    /// error is `contained_task_recognition_failed`, or `contained_task_vision_provider_failed`
+    /// when the vision provider failed (Workflow #387 D1c-G).
     pub fn matching_pages_on_scene(
         &self,
         scene: &Scene,
@@ -3161,6 +3163,7 @@ impl PreparedContainedTask {
             self.detector
                 .evaluate_pages_outcomes_in_context(&context, pages)
         };
+        let failure_code = page_batch_failure_code(&results);
         let evaluations = results
             .map_err(|error| {
                 actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
@@ -3168,11 +3171,8 @@ impl PreparedContainedTask {
             })
             .and_then(require_all_page_evaluations)
             .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    SharedCode::ContainedTaskRecognitionFailed.code(),
-                    error.to_string(),
-                )
-                .with_ppocr_diagnostics(error.ppocr_diagnostics())
+                ContainedTaskError::with_detail(failure_code, error.to_string())
+                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
             })?;
         Ok(evaluations
             .into_iter()
@@ -4995,6 +4995,7 @@ impl PreparedContainedTask {
                     .collect(),
                 Err(error) => error.ppocr_diagnostics(),
             };
+            let failure_code = page_batch_failure_code(&results);
             let evaluations = results
                 .map_err(|error| {
                     actingcommand_page_detector::PageDetectorError::fatal(error.to_string())
@@ -5002,11 +5003,8 @@ impl PreparedContainedTask {
                 })
                 .and_then(require_all_page_evaluations)
                 .map_err(|error| {
-                    ContainedTaskError::with_detail(
-                        SharedCode::ContainedTaskRecognitionFailed.code(),
-                        error.to_string(),
-                    )
-                    .with_ppocr_diagnostics(error.ppocr_diagnostics())
+                    ContainedTaskError::with_detail(failure_code, error.to_string())
+                        .with_ppocr_diagnostics(error.ppocr_diagnostics())
                 })?;
             if sampled {
                 // Workflow #386 SR-1 (§2.2): a cancellation ends the run under its own code;
@@ -8238,6 +8236,50 @@ fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> 
         }
     }
     failure
+}
+
+/// Workflow #387 D1c-G: whether a page evaluation failed because the vision provider failed or
+/// answered invalidly, the causes admission reports as `contained_task_vision_provider_failed`
+/// (`contained_task_admission_error`).
+fn page_failed_by_provider(error: &actingcommand_page_detector::PageDetectorError) -> bool {
+    error.failed_target.as_ref().is_some_and(|failed| {
+        matches!(
+            failed.cause.code(),
+            RecognitionPackErrorCode::VisionProviderFailure
+                | RecognitionPackErrorCode::VisionProviderInvalidResponse
+        )
+    })
+}
+
+/// Workflow #387 D1c-G: whether a page of a batch evaluation failed because the vision provider
+/// failed (`page_failed_by_provider`).
+fn pages_failed_by_provider(results: &PageBatchResult) -> bool {
+    let outcomes = match results {
+        Ok(outcomes) => outcomes.as_slice(),
+        Err(error) if page_failed_by_provider(&error.cause) => return true,
+        Err(error) => error.completed.as_slice(),
+    };
+    outcomes
+        .iter()
+        .any(|outcome| outcome.result.as_ref().is_err_and(page_failed_by_provider))
+}
+
+/// Workflow #387 D1c-G (Alice 10-14: a code's class follows its real cause): a run's page
+/// evaluation that failed because the vision provider failed is the class-5
+/// `contained_task_vision_provider_failed`; one that failed for any other cause stays the class-4
+/// `contained_task_recognition_failed`.
+fn page_evaluation_failure_code(provider_failed: bool) -> Code {
+    if provider_failed {
+        ExecutionKernelCode::ContainedTaskVisionProviderFailed.code()
+    } else {
+        SharedCode::ContainedTaskRecognitionFailed.code()
+    }
+}
+
+/// Workflow #387 D1c-G: the code of a page evaluation batch that failed
+/// (`page_evaluation_failure_code`), for the run and for the host's records of the same batch.
+pub fn page_batch_failure_code(results: &PageBatchResult) -> Code {
+    page_evaluation_failure_code(pages_failed_by_provider(results))
 }
 
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {

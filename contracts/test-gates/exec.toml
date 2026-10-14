@@ -665,3 +665,13 @@ tests = [
     "actingcommand-lab::lib::ocr::tests::rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable",
 ]
 incident = ["#396"]
+
+# Workflow #387 D1c-G: a run's page evaluation whose vision provider fails or answers invalidly ends with contained_task_vision_provider_failed (class 5) at the home entry check of one page and of an entry page set, the run's page evaluation and a shared interrupt check; an evaluation that fails for another cause (a located text read that cannot conclude) stays contained_task_recognition_failed (class 4)
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_vision_provider_failure_ends_every_page_evaluation_of_a_run_as_class_5",
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_recognition_that_cannot_conclude_stays_the_class_4_recognition_failure",
+]
+incident = ["#387"]

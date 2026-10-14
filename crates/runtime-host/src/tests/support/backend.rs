@@ -58,6 +58,9 @@ pub(super) struct FakeState {
     // Workflow #403: the error the next application command returns, taken once, so one
     // command can end with an unconfirmed close while later ones succeed.
     application_error: std::sync::Mutex<Option<DeviceError>>,
+    // Workflow #387 D1c-G: the error every ADB baseline probe of the instance returns while it
+    // is set (`probe_adb_baseline`); unset, adbd answers.
+    adb_probe_error: std::sync::Mutex<Option<DeviceError>>,
     input_actions: std::sync::Mutex<Vec<InputAction>>,
     segmented_swipe_plans: std::sync::Mutex<Vec<PreparedSegmentedSwipePlan>>,
     // Workflow #369 review C-2: a discovery-bound instance with emulator control
@@ -888,6 +891,20 @@ impl ExecutionBackendProvider for FakeProvider {
         }
         .expect("fake monitor observation must be valid");
         Ok(observation)
+    }
+
+    // Workflow #387 D1c-G: adbd answers every probe unless the instance's `adb_probe_error` is
+    // set.
+    fn probe_adb_baseline(&self, instance_alias: &str) -> DeviceResult<()> {
+        let error = self.entries.get(instance_alias).and_then(|entry| {
+            entry
+                .state
+                .adb_probe_error
+                .lock()
+                .expect("adb probe error")
+                .clone()
+        });
+        error.map_or(Ok(()), Err)
     }
 
     // Slice #316-B3: the fake device always reports its assigned application in the
