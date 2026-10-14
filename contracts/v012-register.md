@@ -632,6 +632,24 @@ projected outcomes, so it follows them.
 |---|---|---|---|---|---|
 | O1-1 | task schema `0.8` zero-input fields task (`operations: []`): `scheduling_outcome.mappings` | relaxed rule (resource file format, not a ledger shape) | OUT-1 | resource side | one `fields_recorded` mapping whose terminal pages are the fields pages, and any other mappings; every mapping `no_designated_effect`; the target pages are every mapping's terminal pages, no page in two mappings ([ocr-fields.md](ocr-fields.md)); a run that ends on another mapping's page has no OCR observation and no fields report; the `package` interface revision is declared once by A8 |
 
+### 1.41 Wave 10 slice EXEC-2 (#390, forced-compromises mapping E-05, E-06)
+
+EXEC-2 brings the observation window and the input recheck of page-graph operations;
+[resource-declarations.md](resource-declarations.md), "Task schema `0.9` observation windows and
+input rechecks", is the contract. No new event type and no new member of a persisted record: the
+frames of a window or a recheck are recorded as every capture, recognition and guard evaluation
+is, with the existing timing boundaries (`PostconditionWait`, `PageRecognitionWait`), and a step
+finishes with the existing `StepFinished` on the page its window ended on. The kernel uses the
+runtime seams it has (`observation_now`, `step_pacing`, `shared_interrupt`); none is added. The
+codes
+`contained_task_input_stability_unconfirmed` and
+`contained_task_observation_stability_unconfirmed` (execution-kernel, error,
+`pack_logic_mismatch`) are catalog entries, not rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| EX1 | task schema `0.9` operation members `observation_window` (`{until: "window_end", window_ms}` or `{until: "stable", window_ms, frames}`) and `input_recheck` (`{kind: "fresh_frame"}` or `{kind: "stable_frames", frames}`) | new members (resource file format, not a ledger shape) | EXEC-2 | resource side | `window_ms` 1..=60000, `frames` 2..=32 (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); the `package` interface revision is declared once by A8 |
+
 ### 1.45 Slice D1c-H (#387, Alice 10-14: one failure counts once toward direction ①)
 
 D1c-H changes what direction ① counts, which is memory only, and writes one existing optional
