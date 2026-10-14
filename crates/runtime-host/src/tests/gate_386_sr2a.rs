@@ -24,11 +24,16 @@ fn once_a_day_sources() -> CatalogSources {
 
 /// The run ran out of its sampling deadline (SCHED §4.1): a condition code, recoverable.
 fn sampling_ended() -> PolicyExecutionInput {
+    // The values the kernel ends such a run with once its retries are spent (SR-1, §2.1): the
+    // retries made, the observation's window and which observation.
     PolicyExecutionInput::Failed {
         outcome: actingcommand_contract::outcome::Outcome::new(
             actingcommand_execution_kernel::ExecutionKernelCode::RecognitionSampleDeadlineExceeded
                 .code(),
-        ),
+        )
+        .attempts(0_u32)
+        .timeout_ms(std::time::Duration::from_millis(10_000))
+        .stage(actingcommand_execution_kernel::ExecutionKernelLocation::ObservationBeforeInput),
         failure_identity: None,
         class: PolicyFailureClass::Recoverable,
     }
