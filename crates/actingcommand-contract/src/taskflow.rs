@@ -205,50 +205,49 @@ pub fn validate_phased_route(
     {
         return Err(TaskflowCode::TaskPhasesInvalid.code());
     }
-    let designated = scheduling.designated_operation();
-    if designated.is_some_and(|id| {
+    // Workflow #390 OUT-2: every designated operation of either form names one operation and is
+    // not retryable.
+    let designated = scheduling.designated_operations();
+    if designated.iter().any(|id| {
         operations
             .iter()
-            .filter(|operation| operation.id == id)
+            .filter(|operation| operation.id == *id)
             .count()
             != 1
     }) || operations
         .iter()
-        .any(|operation| designated == Some(operation.id) && operation.retryable)
+        .any(|operation| designated.contains(&operation.id) && operation.retryable)
     {
         return Err(TaskflowCode::TaskPhasesDesignatedEffectInvalid.code());
     }
     for entry in entries {
-        validate_phased_route_from(
-            entry, phases, operations, scheduling, designated, &canonical,
-        )?;
+        validate_phased_route_from(entry, phases, operations, scheduling, &canonical)?;
     }
     Ok(())
 }
 
-/// Today's reachability check of a phased route, from one start.
+/// Today's reachability check of a phased route, from one start. Workflow #390 OUT-2: the state
+/// carries the designated effects that completed on the way (a bit mask); a member of a
+/// designated effect set that may have reached its cap is passed over, and the stage's next
+/// operation from the page is followed too.
 fn validate_phased_route_from(
     entry: &TaskPhaseEntry<'_>,
     phases: &[TaskPhase],
     operations: &[TaskPhaseOperation<'_>],
     scheduling: &SchedulingOutcomeDeclaration,
-    designated: Option<&str>,
     canonical: &dyn Fn(&str) -> String,
 ) -> Result<(), crate::outcome::Code> {
+    let reach = scheduling.designated_effect_reach();
     let mut pending =
-        std::collections::VecDeque::from([(entry.phase, canonical(entry.page), false)]);
+        std::collections::VecDeque::from([(entry.phase, canonical(entry.page), 0_u16)]);
     let mut visited = std::collections::BTreeSet::new();
     let mut terminals = 0;
-    while let Some((index, page, effect)) = pending.pop_front() {
-        if !visited.insert((index, page.clone(), effect)) {
+    while let Some((index, page, completed)) = pending.pop_front() {
+        if !visited.insert((index, page.clone(), completed)) {
             continue;
         }
         if index == phases.len() {
-            let condition = if effect {
-                SchedulingEffectCondition::DesignatedEffectCompleted
-            } else {
-                SchedulingEffectCondition::NoDesignatedEffect
-            };
+            let condition = crate::DesignatedEffectReach::condition(completed);
             if scheduling
                 .mappings()
                 .iter()
@@ -268,40 +267,56 @@ fn validate_phased_route_from(
             continue;
         }
         let phase = &phases[index];
-        let eligible = |operation: &&TaskPhaseOperation<'_>| {
-            phase.operations.iter().any(|id| id == operation.id)
-        };
-        let operation = operations
-            .iter()
-            .filter(eligible)
-            .find(|operation| operation.from != "any" && canonical(operation.from) == page)
-            .or_else(|| {
-                operations
-                    .iter()
-                    .filter(eligible)
-                    .find(|operation| operation.from == "any")
-            })
-            .ok_or(TaskflowCode::TaskPhasesUnreachable.code())?;
-        if effect && designated == Some(operation.id) {
-            return Err(TaskflowCode::TaskPhasesDesignatedEffectRepeated.code());
-        }
-        if operation.destinations.is_empty() {
-            return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
-        }
-        let next_effect = effect || designated == Some(operation.id);
-        for destination in &operation.destinations {
-            if destination == "any" {
+        let mut passed_over: Vec<&str> = Vec::new();
+        loop {
+            let eligible = |operation: &&TaskPhaseOperation<'_>| {
+                phase.operations.iter().any(|id| id == operation.id)
+                    && !passed_over.contains(&operation.id)
+            };
+            let operation = operations
+                .iter()
+                .filter(eligible)
+                .find(|operation| operation.from != "any" && canonical(operation.from) == page)
+                .or_else(|| {
+                    operations
+                        .iter()
+                        .filter(eligible)
+                        .find(|operation| operation.from == "any")
+                })
+                .ok_or(TaskflowCode::TaskPhasesUnreachable.code())?;
+            let member = reach.index_of(operation.id);
+            if let Some(member) = member
+                && reach.is_single(member)
+                && completed & crate::DesignatedEffectReach::bit(member) != 0
+            {
+                return Err(TaskflowCode::TaskPhasesDesignatedEffectRepeated.code());
+            }
+            if operation.destinations.is_empty() {
                 return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
             }
-            let destination = canonical(destination);
-            let next_index = index
-                + usize::from(
-                    phase
-                        .target_pages
-                        .iter()
-                        .any(|target| canonical(target) == destination),
-                );
-            pending.push_back((next_index, destination, next_effect));
+            let next_completed = member.map_or(completed, |member| {
+                completed | crate::DesignatedEffectReach::bit(member)
+            });
+            for destination in &operation.destinations {
+                if destination == "any" {
+                    return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
+                }
+                let destination = canonical(destination);
+                let next_index = index
+                    + usize::from(
+                        phase
+                            .target_pages
+                            .iter()
+                            .any(|target| canonical(target) == destination),
+                    );
+                pending.push_back((next_index, destination, next_completed));
+            }
+            match member {
+                Some(member) if reach.may_be_capped(member, completed) => {
+                    passed_over.push(operation.id);
+                }
+                _ => break,
+            }
         }
     }
     if terminals == 0 {
@@ -1038,7 +1053,7 @@ impl OcrFieldsDeclaration {
         };
         if execution_mode != "navigable_route"
             || !stop_on_confirmation
-            || scheduling.designated_operation().is_some()
+            || scheduling.has_designated_effect()
             || scheduling
                 .mappings()
                 .iter()

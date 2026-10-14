@@ -152,6 +152,9 @@ mod gate_389_mcp4;
 // Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): outcome subsets, unproduced
 // outcomes and zero-input packages with several outcomes.
 mod gate_390_out1;
+// Workflow #390 OUT-2 (forced compromises O-01, O-02, S-01): designated effect sets, their
+// counts and caps.
+mod gate_390_out2;
 // Workflow #390 READ-1 (forced compromise O-08): a fraction reading's denominator is published
 // under its second reading key.
 mod gate_390_read1;

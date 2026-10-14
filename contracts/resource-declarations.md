@@ -542,3 +542,65 @@ timeout of it takes the step's observe-only retries ([Business identity, consens
 authoring](business-identity-consensus.md), "Observe-only retries"). The frames of a window and
 of a recheck are recorded as every capture, recognition and guard evaluation is; no record is
 added.
+
+### Task schema `0.9` designated effect sets
+
+Workflow #390 OUT-2 (forced-compromises mapping, rows O-01, O-02, R-03 and S-01). A page-graph
+task's `scheduling_outcome` may name a designated effect set in `designated_effects` instead of
+the one `designated_operation`. Each member is an operation of the task whose effect is a
+designated effect, with an explicit cap on how often it may complete in one run. A loop over a
+counted business step (collect one item, come back, collect the next) declares its step a member
+and leaves the loop through the page's next operation once the cap is reached; the cap, not
+`max_steps`, bounds the loop. An older task schema refuses the member with `UnconsumedField`.
+
+```json
+"scheduling_outcome": {
+  "designated_effects": [
+    {"operation_id": "collect", "max_repeats": 5},
+    {"operation_id": "start", "max_repeats": {"fact_key": "session.example.start.remaining"}},
+    {"operation_id": "confirm"}
+  ],
+  "mappings": [...]
+}
+```
+
+| Rule | Refusal |
+| --- | --- |
+| 1 to 8 members; each `operation_id` names one operation of the task, at most once in the set | `contained_task_outcome_declaration_invalid` |
+| `max_repeats` is absent (once), a constant from 1 to 1,000, or `{"fact_key": <instance fact key>}` | `contained_task_outcome_declaration_invalid` |
+| `designated_effects` and `designated_operation` are not both declared | `contained_task_outcome_declaration_invalid` |
+| the set is a task schema `0.9` declaration (declaration gate: `UnconsumedField`) | `contained_task_outcome_declaration_invalid` |
+| in a phased route, no member is retryable | `contained_task_phases_invalid` |
+
+**Selection.** A member that completed as often as its cap is not selected again: the page's
+operations are chosen as before (the first whose `from` names the page, then the first from
+`any`, within the stage of a phased route), without the capped members. The static reachability
+check follows each path with the members that completed on it: wherever a member may have
+reached its cap (a fact cap may be 0; a constant cap after the member completed), the page's next
+operation is followed too, and a page left without one refuses the task
+(`contained_task_outcome_declaration_incomplete`; in a phased route
+`task_phases_unreachable`). A member may be reached again after its effect; the one
+`designated_operation` still may not.
+
+**Fact caps** (FCM S-01: the decision layer writes the fact, the package reads it). The caps are
+read once, before the run's first step, from the instance's ledger-pinned fact snapshot (the one a
+select step reads): the record of the key must be an unexpired integer from 0 to 1,000. A cap of 0
+means the member does not run. Otherwise the run ends before any input with
+`contained_task_designated_effect_cap_unresolved` (`pack_operation_id`, `fact_key`; with
+`unknown_reason` `fact_missing`, `fact_expired`, `fact_not_scalar` or `type_mismatch`, or with
+`count` and `limit_count` for an integer out of range; neither when the Runtime has no fact
+snapshot for the run).
+
+**Outcome.** The mapping condition `designated_effect_completed` holds when any member completed,
+`no_designated_effect` when none did. The terminal's scheduling disposition records the set's run
+as `{"kind": "designated_effects", "effects": [{"operation_label", "count", "max_repeats"}]}`: one
+tally per member in declaration order, `count` the times its effect completed (0 when it did not)
+and `max_repeats` the cap the run held it to, so a run that did a step n times and one that found
+nothing to do are told apart in the ledger. A member that completed more often than its cap, or
+twice in one step, fails the run's outcome with `contained_task_outcome_designated_effect_duplicate`.
+The policy inputs are unchanged: a catalog reads the mapped outcome key; the counts stay in the
+ledger.
+
+Wherever another rule names a package's designated operation (a recognition package, a
+prerequisite package, a `linear_steps` task, a zero-input fields task), a designated effect set is
+refused the same way, with the same reason token (`designated_operation`).

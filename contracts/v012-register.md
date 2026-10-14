@@ -738,6 +738,22 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.48 Wave 12 slice OUT-2 (#390, forced compromises O-01, O-02, R-03, S-01)
+
+OUT-2 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` designated effect sets") is the contract. A package's designated effects may
+be a set whose members repeat up to an explicit cap (a constant, or an instance fact read before
+the run's first step), and the run's terminal records each member's count beside its cap. No new
+event type, no new member of a persisted record and no configuration key; the policy inputs are
+unchanged (a catalog reads the mapped outcome key). The code
+`contained_task_designated_effect_cap_unresolved` (execution-kernel, error, `declaration_error`)
+is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| O2-1 | package format: task `scheduling_outcome.designated_effects[] {operation_id, max_repeats?}`, `max_repeats` an integer or `{fact_key}` (task schema `0.9`) | new member (resource file format, not a ledger shape) | OUT-2 | resource side | 1 to 8 members, each operation once; a constant cap from 1 to 1,000, absent = 1; a fact cap is an unexpired integer instance fact from 0 to 1,000, read once before the run's first step; not with `designated_operation`; an older task schema refuses it (`UnconsumedField`); the `package` interface revision is declared once by A8 |
+| O2-2 | `task.completed` `TerminalCommitted.scheduling_disposition.effect` (and the same disposition in a scheduling outcome projection's `scheduling_result`): `SchedulingEffectEvidence::DesignatedEffects` (`{"kind": "designated_effects", "effects": [DesignatedEffectTally {operation_label, count, max_repeats}]}`) | new enum value of an existing member | OUT-2 | OUT-2 | written for a run of a package that declares a set: one tally per member in declaration order, `count` the times its effect completed (0 when none), `max_repeats` the cap the run held it to; 1 to 8 tallies, each operation once, `max_repeats` at most 1,000 and `count` at most `max_repeats` (`invalid_scheduling_outcome_declaration`, field `designated_effects`); its mapping condition is `designated_effect_completed` when any count is above 0. A run of a `designated_operation` package keeps `designated_effect_completed` or `no_designated_effect` |
+
 ### 1.50 Wave 12 slice REC-5 (#396, REC-M v1.2.1 §7)
 
 REC-5 brings and writes R5-1 in the task diagnostic stream; R5-2 is resource file format, not a
