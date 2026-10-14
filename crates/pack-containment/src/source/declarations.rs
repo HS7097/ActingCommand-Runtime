@@ -2721,16 +2721,31 @@ impl Declaration<'_> {
             "minimum_confidence_milli",
             "valid_for_ms",
         ];
+        // Workflow #390 READ-1: the optional second reading key of a `current_capacity` mark.
+        let members = [
+            "id",
+            "fact_key",
+            "capacity_fact_key",
+            "page_id",
+            "target_id",
+            "trim",
+            "value",
+            "minimum_confidence_milli",
+            "valid_for_ms",
+        ];
         let mut ids = BTreeSet::new();
         let mut fact_keys = BTreeSet::new();
         for (index, reading) in readings.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
-            let object = self.object(reading, &pointer, &fields)?;
+            let object = self.object(reading, &pointer, &members)?;
             for field in fields {
                 self.required(object, &pointer, field)?;
             }
             for field in ["id", "fact_key", "page_id", "target_id", "trim"] {
                 self.string(&object[field], &child(&pointer, field))?;
+            }
+            if let Some(capacity_fact_key) = object.get("capacity_fact_key") {
+                self.string(capacity_fact_key, &child(&pointer, "capacity_fact_key"))?;
             }
             if serde_json::from_value::<actingcommand_contract::OcrFieldTrim>(
                 object["trim"].clone(),
@@ -2798,6 +2813,9 @@ impl Declaration<'_> {
                 let path: &[&str] = match refused {
                     Some(TaskflowCode::ResourceReadingIdInvalid) => &["id"],
                     Some(TaskflowCode::ResourceReadingFactKeyInvalid) => &["fact_key"],
+                    Some(TaskflowCode::ResourceReadingCapacityFactKeyInvalid) => {
+                        &["capacity_fact_key"]
+                    }
                     Some(TaskflowCode::ResourceReadingPageIdInvalid) => &["page_id"],
                     Some(TaskflowCode::ResourceReadingTargetIdInvalid) => &["target_id"],
                     Some(TaskflowCode::ResourceReadingValueMaxInvalid) => &["value", "max"],
@@ -2822,6 +2840,15 @@ impl Declaration<'_> {
             if !fact_keys.insert(declaration.fact_key) {
                 return Err(self.error(
                     &child(&pointer, "fact_key"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
+            }
+            // Workflow #390 READ-1: the capacity key is a reading key of the task like any other.
+            if let Some(capacity_fact_key) = declaration.capacity_fact_key
+                && !fact_keys.insert(capacity_fact_key)
+            {
+                return Err(self.error(
+                    &child(&pointer, "capacity_fact_key"),
                     ResourceDeclarationReason::InvalidValue,
                 ));
             }

@@ -254,7 +254,9 @@ pub(super) struct JoinedReadingFrame {
 /// Workflow #335 S5b: the instance fact of one reading. The scope is the run's instance, the
 /// observation time the terminal frame's capture time; the TTL is the declared `valid_for_ms`
 /// from the detector contract. `None` for a reading the fact record cannot hold (an integer
-/// beyond `i64`, an expiry beyond `u64`).
+/// beyond `i64`, an expiry beyond `u64`). Workflow #390 READ-1: the key is the reading's own,
+/// so a mark's capacity is written under its `capacity_fact_key`, with the mark's detector and
+/// snapshot.
 fn resource_reading_fact_record(
     readings: &ContainedTaskResourceReadings,
     reading: &ResourceReadingValue,
@@ -267,7 +269,7 @@ fn resource_reading_fact_record(
         scope: FactScope::Instance {
             instance_id: readings.instance_alias.clone(),
         },
-        key: declaration.fact_key.clone(),
+        key: reading.fact_key.clone(),
         content: FactContent::Inline {
             value: ContractFactValue::Integer(i64::try_from(reading.value).ok()?),
         },
@@ -8456,12 +8458,7 @@ impl HostShared {
                         .frames
                         .get(*frame)
                         .and_then(|joined| joined.readings.get(*reading))
-                        .map(|value| {
-                            (
-                                value.declaration.id.as_str(),
-                                value.declaration.fact_key.as_str(),
-                            )
-                        }),
+                        .map(|value| (value.declaration.id.as_str(), value.fact_key.as_str())),
                     PlannedPublication::Adjustment(adjustment) => Some((
                         adjustment.adjustment_id.as_str(),
                         adjustment.fact_key.as_str(),

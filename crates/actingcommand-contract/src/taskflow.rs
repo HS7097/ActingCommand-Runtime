@@ -724,12 +724,18 @@ pub const MAX_RESOURCE_READING_VALUE: u64 = (1 << 53) - 1;
 /// One operation `resource_readings` entry (schema 0.8 and 0.9, Workflow #335 S5), a reading
 /// mark: the integer the Runtime reads from `target_id` on each frame a successful run reaches
 /// the task's page `page_id` on (Workflow #384 D2-S2: any page of the task) and writes as the
-/// instance fact `fact_key`. The declaration never enters an event, artifact or report.
+/// instance fact `fact_key`. Workflow #390 READ-1 (FCM O-08): a `current_capacity` mark that
+/// declares `capacity_fact_key` also writes the capacity (the right-hand part) as that second
+/// instance fact. The declaration never enters an event, artifact or report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceReadingDeclaration {
     pub id: String,
     pub fact_key: String,
+    /// Workflow #390 READ-1: the second reading key of a `current_capacity` mark, which the
+    /// capacity is written as; absent, the capacity is validated and not written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_fact_key: Option<String>,
     pub page_id: String,
     pub target_id: String,
     pub trim: OcrFieldTrim,
@@ -772,6 +778,16 @@ impl ResourceReadingDeclaration {
         {
             return Err(TaskflowCode::ResourceReadingFactKeyInvalid.code());
         }
+        // Workflow #390 READ-1: only a `current_capacity` mark has a capacity to write, under a
+        // key of the mark key rule.
+        if let Some(capacity_fact_key) = &self.capacity_fact_key {
+            let ResourceReadingType::UnsignedInteger { format, .. } = self.value;
+            if format != OcrUnsignedIntegerFormat::CurrentCapacity
+                || !resource_fact_key(capacity_fact_key)
+            {
+                return Err(TaskflowCode::ResourceReadingCapacityFactKeyInvalid.code());
+            }
+        }
         if !identifier(&self.page_id) || self.page_id == "any" {
             return Err(TaskflowCode::ResourceReadingPageIdInvalid.code());
         }
@@ -797,15 +813,43 @@ impl ResourceReadingDeclaration {
     /// Trims and parses one observed text with the declared value type and range. This is the
     /// only reading parser; Workflow #308 slice 2 reuses it.
     pub fn parse(&self, text: &str) -> Result<u64, OcrFieldReason> {
+        self.parse_parts(text).map(|parts| parts.value)
+    }
+
+    /// Workflow #390 READ-1: parses one observed text as [`Self::parse`] does and, for a mark
+    /// that declares `capacity_fact_key`, also returns the capacity, which must fit an exact
+    /// JSON integer (`0..=2^53-1`, else `OutOfRange`); without that key, `capacity` is `None`.
+    pub fn parse_parts(&self, text: &str) -> Result<OcrUnsignedIntegerParts, OcrFieldReason> {
         let text = match self.trim {
             OcrFieldTrim::WhitespaceV1 => text.trim(),
         };
         let ResourceReadingType::UnsignedInteger { min, max, format } = self.value;
-        format.parse(text, min, max)
+        let parts = format.parse_parts(text)?;
+        if parts.value < min || parts.value > max {
+            return Err(OcrFieldReason::OutOfRange);
+        }
+        let capacity = match (&self.capacity_fact_key, parts.capacity) {
+            (None, _) => None,
+            (Some(_), Some(capacity)) if capacity > MAX_RESOURCE_READING_VALUE => {
+                return Err(OcrFieldReason::OutOfRange);
+            }
+            (Some(_), capacity) => capacity,
+        };
+        Ok(OcrUnsignedIntegerParts {
+            value: parts.value,
+            capacity,
+        })
+    }
+
+    /// Workflow #390 READ-1: the instance fact keys the mark writes: `fact_key`, then
+    /// `capacity_fact_key` when it declares one.
+    pub fn fact_keys(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.fact_key.as_str()).chain(self.capacity_fact_key.as_deref())
     }
 }
 
-/// One task's `resource_readings`: 1..=16 valid entries with unique ids and fact keys.
+/// One task's `resource_readings`: 1..=16 valid entries with unique ids and fact keys; every key
+/// a mark writes (Workflow #390 READ-1: its capacity key too) is unique in the task.
 pub fn validate_resource_readings(
     readings: &[ResourceReadingDeclaration],
 ) -> Result<(), crate::outcome::Code> {
@@ -819,7 +863,7 @@ pub fn validate_resource_readings(
         if !ids.insert(reading.id.as_str()) {
             return Err(TaskflowCode::ResourceReadingIdDuplicate.code());
         }
-        if !fact_keys.insert(reading.fact_key.as_str()) {
+        if !reading.fact_keys().all(|key| fact_keys.insert(key)) {
             return Err(TaskflowCode::ResourceReadingFactKeyDuplicate.code());
         }
     }
@@ -926,7 +970,8 @@ impl ResourceAdjustmentAmount {
 
 /// One task's `resource_adjustments` (Workflow #384 D2-S3): `1..=16` valid entries with unique
 /// ids, each naming one of the task's `operation_ids` and adjusting a key at most once per
-/// operation. An adjustment without `amount` needs a reading mark of its key in `readings`.
+/// operation. An adjustment without `amount` needs a reading mark of its key in `readings`
+/// (Workflow #390 READ-1: a mark whose `fact_key` or `capacity_fact_key` it is).
 pub fn validate_resource_adjustments(
     adjustments: &[ResourceAdjustmentDeclaration],
     readings: Option<&[ResourceReadingDeclaration]>,
@@ -942,11 +987,14 @@ pub fn validate_resource_adjustments(
         if !operation_ids.contains(&adjustment.operation_id.as_str()) {
             return Err(TaskflowCode::ResourceAdjustmentOperationIdInvalid.code());
         }
+        // Workflow #390 READ-1: a mark of the key is one that writes it, its capacity key
+        // included.
         if adjustment.amount.is_none()
-            && !readings
-                .unwrap_or_default()
-                .iter()
-                .any(|reading| reading.fact_key == adjustment.fact_key)
+            && !readings.unwrap_or_default().iter().any(|reading| {
+                reading
+                    .fact_keys()
+                    .any(|key| key == adjustment.fact_key.as_str())
+            })
         {
             return Err(TaskflowCode::ResourceAdjustmentMarkMissing.code());
         }

@@ -87,6 +87,9 @@ mod gate_384_d2s2;
 // Workflow #384 D2-S3.
 #[cfg(test)]
 mod gate_384_d2s3;
+// Workflow #390 READ-1: a fraction reading's denominator as a second reading key.
+#[cfg(test)]
+mod gate_390_read1;
 
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
@@ -1875,7 +1878,9 @@ pub enum ContainedTaskTrace {
     },
     /// The readings of one handed-off frame, joined before `Finalizing` in hand-off order: the
     /// marks that held and those that gave no reading (model §3.5). In memory only;
-    /// `captured_at` is that frame's device capture time.
+    /// `captured_at` is that frame's device capture time. Workflow #390 READ-1: a mark that held
+    /// and declares `capacity_fact_key` gives two readings, in mark order, its value then its
+    /// capacity; a mark that gave no reading is one miss.
     ResourceReadings {
         captured_at: SystemTime,
         readings: Vec<ResourceReadingValue>,
@@ -1902,9 +1907,13 @@ pub enum ContainedTaskTrace {
 }
 
 /// One resolved resource reading (Workflow #335 S5a). In memory only; never serialized.
+/// Workflow #390 READ-1: `fact_key` is the key the reading writes, the mark's `fact_key`, or
+/// for the capacity of a `current_capacity` mark its `capacity_fact_key`; such a mark gives
+/// both readings from one evaluation, with one confidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceReadingValue {
     pub declaration: ResourceReadingDeclaration,
+    pub fact_key: String,
     pub value: u64,
     pub confidence_milli: u16,
 }
@@ -2574,13 +2583,14 @@ impl PreparedContainedTask {
     }
 
     /// Workflow #384 D2-S2: the instance fact keys the task's reading marks write, in
-    /// declaration order.
+    /// declaration order (Workflow #390 READ-1: a mark's capacity key after its key).
     pub fn reading_keys(&self) -> Vec<String> {
         self.program
             .resource_readings
             .iter()
             .flatten()
-            .map(|reading| reading.fact_key.clone())
+            .flat_map(|reading| reading.fact_keys())
+            .map(str::to_owned)
             .collect()
     }
 

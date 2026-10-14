@@ -14762,6 +14762,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_reading_capacity_fact_key_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #390 READ-1: a task's resource_readings declaration was refused: a reading mark declares capacity_fact_key, the second reading key that writes the capacity of a fraction, but its value format is not current_capacity or the key is not a resource. or inventory. instance fact key.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "resource_adjustments_count_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
