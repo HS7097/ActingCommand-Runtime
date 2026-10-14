@@ -165,7 +165,7 @@ readings.
 | `source_detector` | `resource_reading:<entry task id>/<reading id>` |
 | `source_snapshot_id` | `run:<run id>/frame:<frame id>/<reading id>`, the canonical `run_<hex>` and `frame_<hex>` ids |
 | `schema_version` | `fact.v1` |
-| `resource_bundle_hash` | a content directory's `sha256`; a sealed ZIP's SHA-256; for a source tree reference, SHA-256 of its prefixed wire JSON |
+| `resource_bundle_hash` | the lowercase hex SHA-256 of `package:<package_id>`, the admitted package's `package_id` (Workflow #336 PKG-S2, option 丙): a package changed in place keeps the value, two packages never share one, and no package content is hashed |
 | `invalidate_on` | `[]` |
 
 The event has source `runtime`, actor `runtime`, origin module `fact-store` and system links.

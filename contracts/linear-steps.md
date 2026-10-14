@@ -456,14 +456,19 @@ field:
   `EntryRecoveryPackageAdmitted` and not yet closed by `EntryRecoveryCompleted` or
   `EntryRecoveryFailed`; with none open it belongs to the dependent package. An
   `EntryRecognition`'s `required_pages` is that package's first step's page alone.
-- The packages of one chain have different package ids, so their content references differ;
-  each run prerequisite package has its own `EntryRecovery { package reference }` record.
+- The packages of one chain have different package ids, and every entry-recovery fact names
+  its layer's package by that id (`package_label`, Workflow #336 PKG-S2); each run
+  prerequisite package has its own `EntryRecovery { package_label }` record.
 - Every package's step indices are a range of their own, as long as its
   `EntryRecoveryCompleted.executed_steps`.
 
 A replayed direct request is answered from its ledger when its `EntryRecoveryPackageAdmitted`
-facts are at most four (three declared, one return-home), all different, each the request's recovery binding or a package of the
-`prerequisite_packages` map; otherwise it is `contained_task_request_recovery_reused`.
+facts are at most four (three declared, one return-home), all different, each the `package_id`
+of a package of the `prerequisite_packages` map or of the request's recovery binding (that
+package admitted again, Workflow #336 PKG-S2); otherwise it is
+`contained_task_request_recovery_reused`. Its `PackageAdmitted` must name the `package_id` of
+the request's package admitted again (it may have changed in place since); another package is
+`contained_task_request_package_reused`.
 
 **Failure codes of the gate.**
 
@@ -634,7 +639,7 @@ linear run is read by older builds.
 
 | When | Existing record | Values |
 |---|---|---|
-| Admission | `PackageAdmitted` | the package reference |
+| Admission | `PackageAdmitted` | the package's `package_id` (`package_label`) and entry task (Workflow #336 PKG-S2: no package digest) |
 | Each capture | the capture records and their evidence | unchanged |
 | Each recognition | `RecognitionStarted`, `RecognitionCompleted` | `candidate_pages` the detector page ids awaited: one or two, or the candidates of a run of optional steps (its optional pages in path order, the skip target last), with the retry decision's own page after them; `matched_page` the passing one, or none (the targets of a frame without a passing page are those of the first candidate, as before) |
 | Step start | `StepStarted` | `step_index` the dispatch index `d`, the operation id, `from_page` the step's detector page id (`<unrecognized>` for the application entry), no phase |

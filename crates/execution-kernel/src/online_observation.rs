@@ -235,10 +235,15 @@ impl PreparedPageObservation {
         })
     }
 
-    /// The caller's reference recorded at admission (Workflow #336 PKG-S1); PKG-S2 replaces
-    /// it with the package's `package_label`.
-    pub fn package_sha256(&self) -> actingcommand_contract::PackageRef {
-        self.bundle.loaded_bundle().package_ref().clone()
+    /// Workflow #336 PKG-S2 (option 丙): the package's `package_id` as its control declares
+    /// it, `None` when the control declares none; the evidence's `package_label`.
+    pub fn package_label(&self) -> Option<String> {
+        self.bundle
+            .loaded_bundle()
+            .control()
+            .and_then(|control| control.get("package_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
     }
 
     pub fn contains_page(&self, page_id: &str) -> bool {

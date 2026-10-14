@@ -2986,3 +2986,6 @@ mod gate_395;
 // Workflow #382 L-5b: replay refuses an eviction intent that carries retired failed-run evidence.
 #[path = "tests/gate_l5b.rs"]
 mod gate_l5b;
+// Workflow #336 PKG-S2: package facts name packages by label and a digest member is not read.
+#[path = "tests/gate_pkg_s2.rs"]
+mod gate_pkg_s2;

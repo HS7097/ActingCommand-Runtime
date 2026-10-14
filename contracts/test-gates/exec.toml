@@ -665,3 +665,14 @@ tests = [
     "actingcommand-lab::lib::ocr::tests::rec6_a_value_test_without_a_model_is_refused_with_lab_ocr_unavailable",
 ]
 incident = ["#396"]
+
+# Workflow #336 PKG-S2 (option 丙): a select step and a truth set without sha256 are admitted and compared as before, the comparison report names the truth set by path only, and a Lab do records its package by package_id while resource restore pairs by that id (same id restores, also changed in place; another id is refused) (M-PKG v1.1 §4.3 S2-T5, S2-T7; key after the wave 9 reservations 51 and 52)
+[[gate]]
+key = "53"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::retry_wiring_tests::s2_t7_a_select_step_without_a_policy_pin_is_admitted",
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::s2_t7_a_truth_set_without_a_pin_is_compared_and_its_report_names_no_pin",
+    "actingcommand-actinglab::runtime_input_proxy::s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id",
+]
+incident = ["#336 PKG-S2"]

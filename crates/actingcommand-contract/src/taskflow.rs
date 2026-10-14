@@ -692,11 +692,28 @@ pub enum ValueTestProblem {
     LowConfidence,
 }
 
+/// A dictionary a field reads, by its task-local path. Workflow #336 PKG-S2 (option 丙, M-PKG
+/// §3.2, D5): a `sha256` the reference may still carry is an [`IgnoredPin`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OcrFieldDictionaryReference {
     pub path: String,
-    pub sha256: String,
+    #[serde(default, rename = "sha256", skip_serializing)]
+    pub ignored_sha256: IgnoredPin,
+}
+
+/// Workflow #336 PKG-S2 (option 丙, M-PKG §3.2, D5): the `sha256` key a resource file may still
+/// carry on a select step's policy, an OCR dictionary reference or a post-admission truth set.
+/// The key is optional and its value, whatever it is, is ignored when read: it is neither
+/// validated nor compared, and never written or echoed. PKG-S1b refuses the key again once the
+/// resource repositories no longer carry it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IgnoredPin;
+
+impl<'de> Deserialize<'de> for IgnoredPin {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer).map(|_| Self)
+    }
 }
 
 /// Readings one task may declare (`contracts/resource-readings.md`).
@@ -919,12 +936,7 @@ impl OcrFieldsDeclaration {
                         || dictionary
                             .path
                             .split('/')
-                            .any(|p| p.is_empty() || p == "." || p == "..")
-                        || dictionary.sha256.len() != 64
-                        || !dictionary
-                            .sha256
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                            .any(|p| p.is_empty() || p == "." || p == "..") =>
                 {
                     return Err(SharedCode::OcrFieldsDictionaryReferenceInvalid.code());
                 }

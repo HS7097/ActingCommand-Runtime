@@ -280,11 +280,13 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
         let task = &mut invalid[task_index].1;
         match case {
             0 => task["post_admission_ocr"]["fields"][0]["target_id"] = json!("missing"),
-            // Workflow #336 PKG-S1 (model M-PKG v1.1 §4.2): the pin is still required and its
-            // format still checked, so a 64-character pin that is not hex is refused.
+            // Workflow #336 PKG-S2 (model M-PKG v1.1 §4.3, D5): a dictionary pin is ignored,
+            // whatever its value; the reference without its path is refused.
             1 => {
-                task["post_admission_ocr"]["fields"][0]["value"]["dictionary"]["sha256"] =
-                    json!("g".repeat(64));
+                task["post_admission_ocr"]["fields"][0]["value"]["dictionary"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("path");
             }
             2 => {
                 task["post_admission_ocr"]["fields"][0]

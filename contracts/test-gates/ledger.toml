@@ -424,3 +424,13 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_l5b::gate_replay_refuses_an_eviction_intent_carrying_failed_run_evidence",
 ]
 incident = ["#382 L-5b"]
+
+# Workflow #336 PKG-S2 (option 丙): a formal root's package facts name packages by label and read back exactly when reopened, a stored admission that carries package_sha256 is refused on opening, and the run recovery view pairs an entry-recovery failure with the later completion of the same package by label (M-PKG v1.1 §4.3 S2-T1, S2-T2)
+[[gate]]
+key = "45"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_pkg_s2::s2_t1_a_run_s_package_facts_read_back_by_label_and_a_digest_member_is_not_read",
+    "actingcommand-ledger::lib::global::tests::gate_pkg_s2::s2_t2_each_layer_names_its_package_and_recovery_pairs_by_label",
+]
+incident = ["#336 PKG-S2"]

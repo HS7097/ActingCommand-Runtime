@@ -568,3 +568,14 @@ tests = [
     "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
 ]
 incident = ["#396"]
+
+# Workflow #336 PKG-S2 (option 丙): a reading's resource_bundle_hash is SHA-256 of package:<package_id> whatever the package's content; a replayed request whose package changed in place is answered from its ledger and one whose path holds another package_id is refused contained_task_request_package_reused; an OCR truth set and dictionary reference without sha256 are admitted (M-PKG v1.1 §4.3 S2-T4, S2-T6, S2-T7; key after the wave 9 reservation 63)
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs2::s2_t4_a_reading_source_names_the_package_id_whatever_its_content",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs2::s2_t6_a_replay_continues_after_an_in_place_change_and_refuses_another_package",
+    "actingcommand-runtime-host::lib::tests::package_pins::s2_t7_ocr_truth_set_and_dictionary_without_a_pin_are_admitted",
+]
+incident = ["#336 PKG-S2"]

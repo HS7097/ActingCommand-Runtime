@@ -979,12 +979,8 @@ fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
         identity: EvidenceExportIdentity {
             run_id: *run_id.transport(),
             correlation_id: *correlation_id.transport(),
-            package: EvidencePackage::new(
-                "sealed-package.zip",
-                "b".repeat(64),
-                PackageVerification::Passed,
-            )
-            .expect("package"),
+            package: EvidencePackage::new("sealed-package.zip", PackageVerification::Passed)
+                .expect("package"),
             task_outcome: TaskOutcome::Success,
             terminal_receipt,
             projection_profile: ProjectionProfile::Forensic,

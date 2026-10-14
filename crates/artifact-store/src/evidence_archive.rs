@@ -26,19 +26,18 @@ pub enum PackageVerification {
     Failed,
 }
 
+/// The package an evidence archive was produced from. Workflow #336 PKG-S2 (option 丙): it is
+/// named by its file name only; no package digest is recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidencePackage {
     file_name: String,
-    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
-    sha256: actingcommand_contract::PackageRef,
     verification: PackageVerification,
 }
 
 impl EvidencePackage {
     pub fn new(
         file_name: impl Into<String>,
-        sha256: impl Into<actingcommand_contract::PackageRef>,
         verification: PackageVerification,
     ) -> ArtifactStoreResult<Self> {
         let file_name = file_name.into();
@@ -55,27 +54,14 @@ impl EvidencePackage {
                 "package file name must be one safe file-name component",
             ));
         }
-        let sha256 = sha256.into();
-        sha256.validate().map_err(|_| {
-            ArtifactStoreError::new(
-                StoreCode::EvidencePackageInvalid.code(),
-                StoreLocation::CreateEvidencePackage.location(),
-                "package reference is invalid",
-            )
-        })?;
         Ok(Self {
             file_name,
-            sha256,
             verification,
         })
     }
 
     pub fn file_name(&self) -> &str {
         &self.file_name
-    }
-
-    pub fn sha256(&self) -> &actingcommand_contract::PackageRef {
-        &self.sha256
     }
 
     pub const fn verification(&self) -> PackageVerification {
@@ -381,7 +367,6 @@ fn validate_manifest(
     }
     let validated_package = EvidencePackage::new(
         manifest.package.file_name(),
-        manifest.package.sha256(),
         manifest.package.verification(),
     )?;
     if validated_package != manifest.package {

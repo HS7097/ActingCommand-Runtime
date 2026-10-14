@@ -1006,16 +1006,13 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             })
             .unwrap();
         let EffectiveConfigurationFacts::EntryRecovery {
-            package_sha256,
+            package_label,
             timing,
         } = &recovery_record.facts
         else {
             unreachable!()
         };
-        assert_eq!(
-            package_sha256,
-            &actingcommand_contract::PackageRef::from(format!("{:x}", Sha256::digest(&recovery)))
-        );
+        assert_eq!(package_label, "fixture01.configuration-recovery");
         assert_eq!(timing.task_timeout.milliseconds, 60_000);
         assert_eq!(timing.step_timeout.milliseconds, 5_000);
         assert_eq!(timing.capture_interval.milliseconds, 50);

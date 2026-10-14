@@ -985,6 +985,252 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     assert_eq!(state.taps.load(Ordering::Acquire), 2);
 }
 
+// Workflow #336 PKG-S2 (option 丙), model M-PKG v1.1 §4.3 S2-T5 (exec gate 53): a Lab `do`
+// records its package by `package_id` only, and `resource restore` pairs the recorded
+// operation with the original package by that id: the same package restores, also when one of
+// its files changed in place; a package with another id is refused.
+#[test]
+fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let source = root.path().join("source");
+    let seed_dir = source.join("ours/operations/seed");
+    fs::create_dir_all(seed_dir.join("assets")).unwrap();
+    fs::create_dir_all(source.join("ours/navigation")).unwrap();
+    let template = Frame::from_pixels(
+        1,
+        1,
+        vec![255, 0, 0],
+        PixelFormat::Rgb8,
+        CaptureBackendName::AdbScreencap,
+    )
+    .unwrap()
+    .encode_png_fast()
+    .unwrap();
+    fs::write(seed_dir.join("assets/HOME.png"), &template).unwrap();
+    let source_task = json!({"schema_version":"0.6","task_id":"seed","game":"neutral","server_scope":["test"],"locale":"en-US",
+        "coordinate_space":{"width":2,"height":2},"defaults":{"template_threshold":0.9,"color_max_distance":0.0},
+        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.0,
+            "color_check":{"region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}}],
+        "color_probes":[{"id":"private-value","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}],
+        "entry_page":"home","target_page":"home","goal":"Explicit neutral author goal",
+        "operations":[{"id":"seed-tap","purpose":"source purpose","from":"home","to":null,"click":{"kind":"point","x":1,"y":1},
+            "guard":{"page_id":"home","target_id":"page/home","expected_rect":{"x":1,"y":1,"width":1,"height":1},"verify_template":"assets/HOME.png"},"consumes":[],"produces":[]}]});
+    fs::write(
+        seed_dir.join("task.json"),
+        serde_json::to_vec(&source_task).unwrap(),
+    )
+    .unwrap();
+    let resources = br#"{"schema_version":"1.0","resources":[],"resource_count":0}"#;
+    fs::write(source.join("ours/operations/resources.json"), resources).unwrap();
+    let projection = br#"{"schema_version":"actingcommand.page-projection-metadata.v1","actions":[],"targets":[{"target_id":"private-value","privacy":"personal","source":"neutral/spec"}],"fields":[],"pages":[]}"#;
+    fs::write(
+        source.join("ours/navigation/neutral.test.projection.json"),
+        projection,
+    )
+    .unwrap();
+    let parsed = actingcommand_resource_tooling::OperationParser::load(
+        &source.join("ours"),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .build_all()
+    .unwrap();
+    // One package by its `package_id` and its task file's bytes.
+    let write_package = |name: &str, package_id: &str, task: Vec<u8>| {
+        let control = serde_json::to_vec(&json!({"schema_version":"Lab-1y.control.v1",
+            "game":"neutral","server":"test","package_id":package_id,
+            "entry_task_id":"seed","execution_mode":"navigable_route","resolution":{"width":2,"height":2}}))
+        .unwrap();
+        let pack = serde_json::to_vec(&parsed.pack).unwrap();
+        let pages = serde_json::to_vec(&parsed.pages).unwrap();
+        let navigation = serde_json::to_vec(&parsed.navigation).unwrap();
+        let path = root.path().join(name);
+        write_zip(
+            &path,
+            &[
+                ("control.json", control.as_slice()),
+                (
+                    "resources/manifest.json",
+                    br#"{"schema_version":"0.3","entry_task_id":"seed"}"#.as_slice(),
+                ),
+                ("resources/operations/seed/task.json", task.as_slice()),
+                (
+                    "resources/operations/seed/assets/HOME.png",
+                    template.as_slice(),
+                ),
+                ("resources/operations/resources.json", resources.as_slice()),
+                (
+                    "resources/recognition/neutral.test.pack.json",
+                    pack.as_slice(),
+                ),
+                (
+                    "resources/recognition/neutral.test.pages.json",
+                    pages.as_slice(),
+                ),
+                (
+                    "resources/navigation/neutral.test.navigation.json",
+                    navigation.as_slice(),
+                ),
+                (
+                    "resources/navigation/neutral.test.projection.json",
+                    projection.as_slice(),
+                ),
+            ],
+        );
+        let hash = format!("{:x}", Sha256::digest(fs::read(&path).unwrap()));
+        (path, hash)
+    };
+    let (original, original_hash) = write_package(
+        "original.zip",
+        "neutral.test.seed",
+        serde_json::to_vec(&source_task).unwrap(),
+    );
+    // The same package with its task file rewritten in place (same declarations, other bytes).
+    let (changed, changed_hash) = write_package(
+        "changed.zip",
+        "neutral.test.seed",
+        serde_json::to_vec_pretty(&source_task).unwrap(),
+    );
+    let (other, other_hash) = write_package(
+        "other.zip",
+        "neutral.test.other",
+        serde_json::to_vec(&source_task).unwrap(),
+    );
+    assert_ne!(original_hash, changed_hash);
+
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"restore-package-label"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: state.clone(),
+            frame_size: 2,
+        }),
+    )
+    .unwrap();
+    let output = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,1",
+            "--capture",
+            "--zip",
+            original.to_str().unwrap(),
+            "--expected-sha256",
+            &original_hash,
+            "--after-page",
+            "neutral/home",
+            "--verbose",
+        ],
+    );
+    assert_eq!(output["data"]["executed"], true);
+    let request_id = output["data"]["req_id"].as_str().unwrap().to_string();
+    let prepared = &output["data"]["operation_record"]["record"]["prepared"];
+    assert_eq!(prepared["package_label"], "neutral.test.seed");
+    for member in ["expected_package_sha256", "actual_package_sha256"] {
+        assert!(prepared.get(member).is_none(), "{member}");
+    }
+    host.close().unwrap();
+    let through = actingcommand_ledger::GlobalLedger::open_evidence(
+        actingcommand_ledger::GlobalLedgerEvidenceConfig::new(&runtime_root),
+        |reference| {
+            Some(
+                actingcommand_artifact_store::verify_projected_read_only(&runtime_root, reference)
+                    .unwrap(),
+            )
+        },
+    )
+    .unwrap()
+    .latest_sequence()
+    .to_string();
+
+    for (repo, package, hash) in [
+        ("restored", &original, &original_hash),
+        ("restored-changed", &changed, &changed_hash),
+    ] {
+        let restored = run_actinglab_json(
+            &config,
+            &runtime_root,
+            &local,
+            [
+                "--json",
+                "resource",
+                "restore",
+                "--repo",
+                root.path().join(repo).to_str().unwrap(),
+                "--state-root",
+                runtime_root.to_str().unwrap(),
+                "--request-id",
+                &request_id,
+                "--through-sequence",
+                &through,
+                "--zip",
+                package.to_str().unwrap(),
+                "--expected-sha256",
+                hash,
+                "--task-id",
+                "restored",
+            ],
+        );
+        assert_eq!(
+            restored["data"]["package_label"], "neutral.test.seed",
+            "{repo}"
+        );
+        assert!(restored["data"].get("package_sha256").is_none(), "{repo}");
+    }
+    let (_, refused) = run_actinglab_failure_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "resource",
+            "restore",
+            "--repo",
+            root.path().join("restored-other").to_str().unwrap(),
+            "--state-root",
+            runtime_root.to_str().unwrap(),
+            "--request-id",
+            &request_id,
+            "--through-sequence",
+            &through,
+            "--zip",
+            other.to_str().unwrap(),
+            "--expected-sha256",
+            &other_hash,
+            "--task-id",
+            "restored",
+        ],
+    );
+    assert_eq!(refused["error"]["code"], "package_invalid");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("package identity mismatch"),
+        "{refused}"
+    );
+    assert!(!root.path().join("restored-other").exists());
+}
+
 #[test]
 fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contracts() {
     let root = TempDir::new().unwrap();
@@ -995,7 +1241,7 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
     let package = root.path().join("observe.zip");
     let frame = root.path().join("frame.png");
     write_zip(&package, &[
-        ("control.json", br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#),
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
         ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
         ("resources/operations/task/task.json", br#"{}"#),
         ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
@@ -1043,9 +1289,15 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
     assert_eq!(output["data"]["state"], "recognized");
     assert_eq!(output["data"]["observation"]["page"], "page");
     assert_eq!(output["data"]["facts"]["target_evaluation_count"], 1);
+    // Workflow #336 PKG-S2: the projection source names its package by `package_id` only.
     assert_eq!(
-        output["data"]["projection_source"]["actual_package_sha256"],
-        expected
+        output["data"]["projection_source"]["package_label"],
+        "neutral.observation"
+    );
+    assert!(
+        output["data"]["projection_source"]
+            .get("actual_package_sha256")
+            .is_none()
     );
     assert!(
         output["data"]["terminal"]["sequence"].as_u64().unwrap()

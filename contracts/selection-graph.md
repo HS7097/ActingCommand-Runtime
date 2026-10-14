@@ -302,7 +302,7 @@ step with `lab_run_select_unsupported`.
 ```json
 {"id": "choose_slot", "from": "list_page", "to": "detail_page",
  "select": {"layout_id": "layout/main_slots",
-            "policy": {"path": "policies/main_slots.json", "sha256": "<64 lowercase hex>"}},
+            "policy": {"path": "policies/main_slots.json"}},
  "guard": {"page_id": "list_page", "target_id": "ui/close",
            "expected_rect": {"x": 1124, "y": 86, "width": 30, "height": 31},
            "verify_template": "assets/close.png"},
@@ -315,10 +315,11 @@ step with `lab_run_select_unsupported`.
   refuses it with `UnconsumedField` at `/operations/<i>/select`.
 - `layout_id` names a candidate layout that the same task declares on the step's `from` page.
 - `policy` is a selection-policy document ([selection-policy.md](selection-policy.md)) at
-  `policies/<name>.json` in the task's directory, with a declared `sha256` (64 lowercase hex
-  digits). Workflow #336 PKG-S1: the `sha256` stays required and format-checked, and nothing
-  compares it with the document's bytes (PKG-S2 makes it optional). The document is part of
-  the package like every task file.
+  `policies/<name>.json` in the task's directory. Workflow #336 PKG-S2 (option 丙): a `sha256`
+  the policy may still declare is optional and ignored, whatever its value: it is neither
+  validated nor compared, and no record carries it (PKG-S1b refuses the key again once the
+  resource repositories no longer carry it). The document is part of the package like every
+  task file.
 - `guard` is required. It may be any guard the parser and admission accept:
   `verify_template`, `color_probe` (a color or a color digest target) or `check`. The rule
   that a `target`, `target_center` or `offset` click needs a template guard does not apply. The
@@ -333,7 +334,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | --- | --- | --- |
 | `select` holds exactly `layout_id` and `policy`, of the right JSON types. | the field | `task.json` |
 | `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
-| `policy` is `{path, sha256}`: a safe task-local `policies/<name>.json` path and 64 lowercase hex digits. | `…/select/policy/path`, `…/select/policy/sha256` | `task.json` |
+| `policy` is `{path}`: a safe task-local `policies/<name>.json` path (an optional `sha256` is ignored). | `…/select/policy/path` | `task.json` |
 | No other effect is declared. | `/operations/<i>/select` | `task.json` |
 | `guard` and `expect_after` are declared (`MissingField`); `unguarded_trusted_coordinate` is not `true`. | `/operations/<i>/guard`, `…/expect_after`, `…/unguarded_trusted_coordinate` | `task.json` |
 | The task declares the layout, and the layout's page is the step's `from` page. | `/operations/<i>/select/layout_id` | `task.json` |
@@ -473,7 +474,6 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `layout_id`, `page_id` | The evaluated layout and its page; equal to the projection's. |
 | `projection` | The full core candidate projection of the step's frame ([candidate-projection.md](candidate-projection.md)), including its `candidate_set_sha256`. |
 | `policy.path` | The package-relative path of the policy document the step declares, `operations/<task>/<declared path>` below the resource root. |
-| `policy.package_sha256` | SHA-256 of the document's bytes in the package, the step's declared `sha256` (64 lowercase hex). |
 | `policy.policy_sha256` | The evaluator's canonical document identity, `sha256:<hex>`. |
 | `policy.policy_id` | The document's `policy_id`. |
 | `fact_snapshot_id`, `input_ledger_position` | The instance fact snapshot the evaluation read and its ledger position. |
@@ -529,9 +529,9 @@ A record is checked when it is written and when it is read:
 
 - the projection is valid and its sealed hash equals the recomputed one; `layout_id` and
   `page_id` equal the projection's;
-- `policy.package_sha256` is 64 lowercase hex, `policy_sha256` and `input_sha256` are
-  `sha256:<hex>`, `fact_snapshot_id` is a token, `input_ledger_position` and `now_unix_ms` are
-  positive;
+- `policy_sha256` and `input_sha256` are `sha256:<hex>`, `fact_snapshot_id` is a token,
+  `input_ledger_position` and `now_unix_ms` are positive; `policy` has no other member
+  (Workflow #336 PKG-S2: a record that carries `policy.package_sha256` is not read);
 - at most 64 verdicts, each for a distinct actionable candidate of the projection;
 - `selected` holds exactly `count` distinct IDs of `ranked` verdicts for a `selected` outcome
   and nothing otherwise; `selected` has a positive count and `insufficient` fewer survivors
