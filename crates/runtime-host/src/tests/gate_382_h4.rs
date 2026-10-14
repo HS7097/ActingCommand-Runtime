@@ -35,13 +35,18 @@ use actingcommand_policy::SchedulingDecisionState;
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
 const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
-/// The policy driver's re-evaluation after the failed run (§6 step 2, W-1 review M-6): its
-/// `FactsChanged`, one default policy cadence cooldown (1 s) after the evaluation that
-/// dispatched the run and after every record the run wrote.
-const RE_EVALUATION_AFTER_MS: u64 = 1_000;
-/// The next dispatch (§6 step 5): past the fixture catalog's longest activity interval (300 s)
-/// and the task's retry backoff (30 s) after the failed run, inside the same activity window.
-const NEXT_DISPATCH_AFTER_MS: u64 = 360_000;
+/// The policy driver's re-evaluation after the failed run (§6 step 2, W-1 review M-6), at the
+/// trigger's next occurrence. The fixture task's trigger is any of an hourly clock (every
+/// 3 600 000 ms from 0) and a `resource.primary` fact this fixture never records. The run's
+/// dispatch served the occurrence at the fixture's instant (an exact hour), so the candidate is
+/// due again from the next one, one hour later; before it the trigger is unknown and there is no
+/// candidate to defer. The occurrence is past the task's retry backoff (30 s) and the activity's
+/// longest interval (300 s), inside the same activity window (08:00-22:00 UTC; the fixture's
+/// instant is 12:00 UTC), and far after every record the run wrote.
+const RE_EVALUATION_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 3_600_000;
+/// The next dispatch (§6 step 5): one default policy cadence cooldown (1 s) after the
+/// re-evaluation, at the same occurrence, which no dispatch has served yet.
+const NEXT_DISPATCH_UNIX_MS: u64 = RE_EVALUATION_UNIX_MS + 1_000;
 
 /// A Runtime clock that moves 1 ms forward at every reading, from the fixture's instant. The
 /// run's records get strictly increasing times, as on a real clock (a fact observed at the same
@@ -230,15 +235,15 @@ fn assert_wait_interrupted(events: &[PersistedEvent], run_lease: LeaseId, reason
     );
 }
 
-/// G8: model-369 §6 steps 2, 5 and 6 (H-1, W-1, S-1; inventory-host G8). The scheduled run fails
-/// while its candidate is still due, and its lease end hands the key to the ladder. The driver's
-/// re-evaluation then defers the candidate `dispatch_instance_held`, naming the ladder as the
-/// holder, and writes no intent. Status reads `lease_active` with at most the ladder's
-/// continuation queued, and none while rung 3 waits for readiness. Until the ladder's own
-/// release nothing is dispatched, rejected or granted on the instance; after it the next
-/// dispatch is admitted and granted. The Runtime clock steps 1 ms a reading from the fixture's
-/// instant (and jumps to the next dispatch), so the evaluations never precede the records they
-/// read.
+/// G8: model-369 §6 steps 2, 5 and 6 (H-1, W-1, S-1; inventory-host G8). The scheduled run
+/// fails, and its lease end hands the key to the ladder. The driver's re-evaluation, at the
+/// trigger's next occurrence while the ladder still holds the instance, then defers the due
+/// candidate `dispatch_instance_held`, naming the ladder as the holder, and writes no intent.
+/// Status reads `lease_active` with at most the ladder's continuation queued, and none while
+/// rung 3 waits for readiness. Until the ladder's own release nothing is dispatched, rejected or
+/// granted on the instance; after it the next dispatch is admitted and granted. The Runtime clock
+/// steps 1 ms a reading from the fixture's instant (and jumps to the next dispatch once the
+/// ladder has released), so the evaluations never precede the records they read.
 #[test]
 fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_its_release() {
     let root = TempDir::new().expect("tempdir");
@@ -268,16 +273,19 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
         .expect_err("the scheduled run fails");
     assert!(!failure.is_fatal(), "{}", failure.code());
 
-    // §6 step 2 (W-1): the re-evaluation defers the held instance's candidate with
+    // §6 step 2 (W-1): the re-evaluation defers the held instance's due candidate with
     // `dispatch_instance_held`, the ladder as its holder (H-1), and writes no intent.
-    let re_evaluation_unix_ms = clock.latest_unix_ms() + RE_EVALUATION_AFTER_MS;
+    assert!(
+        clock.latest_unix_ms() < RE_EVALUATION_UNIX_MS,
+        "the run's records precede the re-evaluation"
+    );
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
             &policy_facts(),
             &policy_resources(),
             EvaluationTime {
-                unix_ms: re_evaluation_unix_ms,
-                monotonic_ms: re_evaluation_unix_ms,
+                unix_ms: RE_EVALUATION_UNIX_MS,
+                monotonic_ms: RE_EVALUATION_UNIX_MS,
             },
             7,
             PolicyTrigger::FactsChanged,
@@ -339,8 +347,13 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     state.android_down.store(false, Ordering::Release);
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
 
-    // §6 step 5: after the ladder's release the next dispatch on the instance is admitted.
-    clock.advance(NEXT_DISPATCH_AFTER_MS);
+    // §6 step 5: after the ladder's release the next dispatch on the instance is admitted. The
+    // Runtime clock moves to it only now, so the ladder's hold never lapsed on it.
+    assert!(
+        clock.latest_unix_ms() < NEXT_DISPATCH_UNIX_MS,
+        "the climb's records precede the next dispatch"
+    );
+    clock.advance(NEXT_DISPATCH_UNIX_MS - clock.latest_unix_ms());
     admit_ladder_run_at(&host, &request, clock.latest_unix_ms());
 
     let events = all_events(&host);
