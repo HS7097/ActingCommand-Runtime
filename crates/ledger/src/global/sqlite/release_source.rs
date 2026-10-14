@@ -12,6 +12,21 @@ const SOURCE_SCHEMA: &str = "actingcommand.release-ledger-source.v1";
 const BASELINE_PAGE_EVENTS: usize = 256;
 const OPERATION: Location = LedgerLocation::VerifyReleaseLedgerSource.location();
 
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    static AFTER_BASELINE_HEAD_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Workflow #381 L1, test hook: `hook` runs once, on this thread, inside the next
+/// [`read_release_baseline_source`] that finds a head, right after the head is read (so the
+/// caller's read snapshot is fixed) and before the first row page. An append made there lands in
+/// the middle of the scan.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn after_release_baseline_head_for_test(hook: Box<dyn FnOnce()>) {
+    AFTER_BASELINE_HEAD_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+}
+
 /// A persistable locator, not a fact or material capability. Every use requires verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -168,6 +183,12 @@ pub fn read_release_baseline_source(
     let Some(head) = read_source_head(database, connection)? else {
         return Ok(None);
     };
+    #[cfg(any(test, feature = "test-hooks"))]
+    {
+        if let Some(hook) = AFTER_BASELINE_HEAD_HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
     let mut after = 0;
     let mut previous = None;
     let mut artifact_count = 0_u64;
