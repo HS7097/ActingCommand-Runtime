@@ -148,7 +148,23 @@ Capture, local computation and ledger costs use the same absolute deadline witho
 duration allowance. Execution also checks remaining time; bounded waits
 are recorded as page-recognition waits and actual backend time as recognition evaluation.
 No sample delay occurs after an input Intent. The final tap still uses the normal fenced input
-path. A consumer without the sampling checkpoint explicitly refuses sampled task execution.
+path. A consumer that does not sample (`sampling_supported`) explicitly refuses sampled task
+execution; the sampling checkpoint only reports a cancellation, under its own code.
+
+**Observe-only retries (Workflow #386 SR-1).** An observation (a capture with its samples and
+recognition) whose sampling runs past its window is made again in a new window of the same
+length, within the task deadline, without repeating any input: before the input the step's frame
+is captured and guarded or selected again (a selection writes another record; `StepStarted` is
+not written again), after the input the wait for the destination observes again. The number of
+retries is the step's pacing, `scheduling.recognition.sample_timeout_retries` (default 2) plus
+the pacing curve's extra retries once performance pacing provides them. Once they are spent
+the run ends with `recognition_sample_deadline_exceeded` or `candidate_sample_deadline_exceeded`
+and `attempts` (the retries made), `timeout_ms` (the window) and `stage` (which observation:
+`observation_entry`, `observation_before_input`, `observation_after_input` or
+`observation_page_wait`). A new window whose remaining task time cannot hold the recognition
+ends before any capture with `recognition_sample_budget_insufficient` or
+`candidate_sample_budget_insufficient` (`required_ms`, `remaining_ms`). The one sampling
+deadline check before an input precedes its effect intent.
 
 The kernel captures one bounded frame transaction for page detection, required-home checks
 and input guards; it checks geometry and cancellation between captures and records each

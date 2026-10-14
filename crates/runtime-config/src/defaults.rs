@@ -5,12 +5,13 @@
 //! shipped beside the example configuration. It is parsed by its own structure, with no
 //! top-level required member; a member without parsing code is refused. Each section adds its
 //! own member here (D1b ships the mechanism; D1c adds `recovery_ladder` and `host_claims`;
-//! Workflow #385 P-c adds `performance`).
+//! Workflow #385 P-c adds `performance`; Workflow #386 SR-1 adds `scheduling`).
 
 use crate::host_claims::HostClaimsFile;
 use crate::performance::PerformanceFile;
 use crate::recovery_ladder::RecoveryLadderFile;
 use crate::resolve::member;
+use crate::scheduling::SchedulingFile;
 use crate::table::find_row;
 use crate::value::parse_value;
 use actingcommand_contract::FactScalar;
@@ -35,6 +36,8 @@ pub struct DefaultsFile {
     pub host_claims: Option<HostClaimsFile>,
     #[serde(default)]
     pub performance: Option<PerformanceFile>,
+    #[serde(default)]
+    pub scheduling: Option<SchedulingFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

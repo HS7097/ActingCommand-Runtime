@@ -509,3 +509,14 @@ tests = [
     "actingcommand-actingd::process::tc_2_tc_5_a_broken_performance_rule_refuses_check_config_and_the_start_with_exit_one",
 ]
 incident = ["#385"]
+
+# Workflow #386 SR-1 and #405: every scheduling key has its model default and is settable; values that break a rule are refused at start (host blackout entries as blackout_config_invalid with their member) and through an instruction; an instance's random delay is checked as the pair in effect
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c1_every_scheduling_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c2_scheduling_values_that_break_a_rule_are_refused",
+    "actingcommand-runtime-config::lib::scheduling_tests::sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect",
+]
+incident = ["#386", "#405"]

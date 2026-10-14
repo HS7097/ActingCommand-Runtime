@@ -5,7 +5,9 @@
 //! instruction may change it while the Runtime runs, which slice reads it and since when. D1b
 //! fixes the format; each section adds its rows in its own file (§5.1).
 
-use crate::{existing, host_claims, instance, performance, recovery_ladder, standard_packs};
+use crate::{
+    existing, host_claims, instance, performance, recovery_ladder, scheduling, standard_packs,
+};
 
 /// The type of a key's value (§5.5 `type`). A decimal, a list and an object are reported in
 /// `config.parameters` as canonical JSON text, since a fact scalar has no such type (§5.5).
@@ -152,7 +154,7 @@ pub fn assembly_rows() -> &'static [KeyRow] {
 /// The rows of the sections this crate resolves and renders (§5.1), one file each: their file
 /// layer, defaults file and section defaults. The section-level keys come before the
 /// per-instance section whose defaults they are.
-fn mechanism_sections() -> [&'static [KeyRow]; 8] {
+fn mechanism_sections() -> [&'static [KeyRow]; 9] {
     let [monitor, responsiveness, pacing, calibration] = performance::sections();
     [
         recovery_ladder::ROWS,
@@ -162,13 +164,15 @@ fn mechanism_sections() -> [&'static [KeyRow]; 8] {
         responsiveness,
         pacing,
         calibration,
+        scheduling::ROWS,
         instance::ROWS,
     ]
 }
 
 /// The rows whose values this crate resolves and renders, in manifest order (§5.1): the
 /// `recovery_ladder`, `host_claims` and `standard_packs` sections (D1c), the `performance`
-/// section (Workflow #385 P-c), then the per-instance section (D1b).
+/// section (Workflow #385 P-c), the `scheduling` section (Workflow #386 SR-1), then the
+/// per-instance section (D1b).
 pub fn mechanism_rows() -> Vec<KeyRow> {
     mechanism_sections()
         .into_iter()

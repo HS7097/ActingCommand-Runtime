@@ -168,6 +168,10 @@ pub(super) struct ActingdConfigFile {
     recovery_ladder: Option<actingcommand_runtime_config::RecoveryLadderFile>,
     #[serde(default)]
     host_claims: Option<actingcommand_runtime_config::HostClaimsFile>,
+    /// Workflow #386 SR-1: the scheduling rules (`scheduling.*`), each member optional; the
+    /// defaults file holds every default.
+    #[serde(default)]
+    scheduling: Option<actingcommand_runtime_config::SchedulingFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -808,6 +812,10 @@ struct InstanceConfig {
     /// `1..=86400`).
     #[serde(default)]
     stuck_recovery_cooldown_secs: Option<u32>,
+    /// Workflow #405 (parsed by #386 SR-1): the instance's own random delay
+    /// (`scheduling.random_delay.*`); a member it leaves out is the `scheduling` section's.
+    #[serde(default)]
+    scheduling: Option<actingcommand_runtime_config::InstanceSchedulingFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// The daemon-level `device_paths`, copied in by `assemble` so a deferred instance
@@ -1270,6 +1278,11 @@ impl ActingdConfigFile {
                 actingcommand_runtime_config::STUCK_RECOVERY_COOLDOWN_SECS.to_owned(),
                 serde_json::json!(instance.stuck_recovery_cooldown_secs),
             );
+            members.insert(
+                actingcommand_runtime_config::scheduling::SECTION.to_owned(),
+                serde_json::to_value(&instance.scheduling)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
             instance_members.push(serde_json::Value::Object(members));
             instance_ids.push(instance_id);
             if let Some(path) = instance.resource_package.take() {
@@ -1360,6 +1373,8 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "performance": serde_json::to_value(&self.performance)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "scheduling": serde_json::to_value(&self.scheduling)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
             .standard_packs
@@ -1375,8 +1390,8 @@ impl ActingdConfigFile {
             .transpose()?;
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
         // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections; P-c:
-        // the `performance` section; then the per-instance section), from the members the file
-        // named.
+        // the `performance` section; #386 SR-1: `scheduling`; then the per-instance section), from
+        // the members the file named.
         let (_, defaults) = actingcommand_runtime_config::DefaultsFile::shipped()
             .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
         let mechanism_parameters = actingcommand_runtime_config::render_parameters(

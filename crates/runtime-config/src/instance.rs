@@ -4,11 +4,17 @@
 //! in the file the member of the `instances[]` entry with that `instance_id`. D1b hangs the two
 //! existing stuck-recovery members here, settable while the Runtime runs; D1c gives them the
 //! `recovery_ladder` section's `enabled` and `cooldown_secs` in effect as their defaults (§5.5
-//! `section:`, §2.1 row 18b).
+//! `section:`, §2.1 row 18b). Workflow #405 (coordinator's order to #386 SR-1, 2026-10-14): each
+//! instance's own random delay, `scheduling.random_delay.enabled`, `min_ms` and `max_ms`, in its
+//! entry's `scheduling` member, defaulting to the `scheduling` section's keys of the same name;
+//! parsed and checked only, no slice reads them yet.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder;
+use crate::scheduling::{
+    self, DELAY, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
+};
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
 };
@@ -43,14 +49,48 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "D1c",
         since: "0.12.0",
     },
+    random_delay_row(RANDOM_DELAY_ENABLED, ValueType::Boolean, KeyRange::Any),
+    random_delay_row(RANDOM_DELAY_MIN_MS, ValueType::DurationMs, DELAY),
+    random_delay_row(RANDOM_DELAY_MAX_MS, ValueType::DurationMs, DELAY),
 ];
 
-/// The whole-section check of one instance (§5.3): its two members together form valid
-/// stuck-recovery settings. A member the section does not carry is not checked.
+/// Workflow #405: one instance's random delay member, named as the section-level key whose value
+/// in effect is its default.
+const fn random_delay_row(member: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        name: KeyName::PerInstance(member),
+        file_path: FilePath::InstanceMember,
+        value_type,
+        range,
+        default: DefaultSource::Section(member),
+        settable: Settable::Yes,
+        reader: "#405",
+        since: "0.12.0",
+    }
+}
+
+/// The whole-section check of one instance (§5.3): its two stuck-recovery members together form
+/// valid stuck-recovery settings, and (Workflow #405) its random delay's `min_ms` is at most its
+/// `max_ms` as both are in effect, each its own or the section's. A member the section does not
+/// carry is not checked.
 pub(crate) fn check_instance(
     instance: &str,
     value: impl Fn(&str) -> Option<FactScalar>,
 ) -> Result<(), ConfigFailure> {
+    let delay_keys = [
+        RANDOM_DELAY_ENABLED,
+        RANDOM_DELAY_MIN_MS,
+        RANDOM_DELAY_MAX_MS,
+    ]
+    .map(|member| instance_key(instance, member));
+    if delay_keys.iter().all(|key| value(key).is_some()) {
+        let read = |key: &str| value(key);
+        let [enabled, min_ms, max_ms] = &delay_keys;
+        scheduling::random_delay(
+            &scheduling::Reader { value: &read },
+            [enabled.as_str(), min_ms.as_str(), max_ms.as_str()],
+        )?;
+    }
     let enabled_key = instance_key(instance, STUCK_RECOVERY);
     let cooldown_key = instance_key(instance, STUCK_RECOVERY_COOLDOWN_SECS);
     let failed = |key: &str| ConfigFailure::invalid_value(key, ConfigValueProblem::SectionCheck);

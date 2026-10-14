@@ -491,7 +491,7 @@ None of these codes triggers the recovery ladder.
 | Key | Default | Meaning |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | 2 | Base number of observe-only retries of a timed-out observation |
-| `scheduling.rerun.condition_codes` | the eight codes above | Codes that end a run by a condition; read only at live settlement |
+| `scheduling.rerun.condition_codes` | the eight codes above, as far as the catalog lists them | Codes that end a run by a condition; read only at live settlement. Every entry is a code the catalog lists and has not retired; `perf_run_yielded` and `perf_hold_expired` join the defaults file with the performance slices that register them |
 | `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read only at live settlement |
 | `scheduling.rerun.resume_stage` | S2 | Highest pacing stage at which an owed rerun runs |
 | `scheduling.rerun.resume_settle_ms` | 60,000 | How long the stage must stay at or below the resume stage |
@@ -503,8 +503,9 @@ None of these codes triggers the recovery ladder.
 | `scheduling.pack_admission.suspend_codes` | `["recognition_sample_budget_invalid"]` | Admission codes that suspend a task package |
 
 The defaults live in `distribution/windows/actingd.defaults.json` (Workflow #387) and arrive
-with the code that parses the keys: slice SR-1 parses the `recognition` and `rerun` keys and
-slice SR-3 the `pack_admission` keys. check-config lists each key with its effective value and
+with the code that parses the keys: slice SR-1 parses the `recognition` and `rerun` keys (and
+every other `scheduling` key of v0.12.0, [runtime-config.md](runtime-config.md)) and slice
+SR-3 the `pack_admission` keys. check-config lists each key with its effective value and
 source in `config_manifest.parameters`. A key the key table marks settable can also be changed
 while the Runtime runs (Workflow #387, `ConfigureSettings`); the others change through the
 configuration file and a restart.

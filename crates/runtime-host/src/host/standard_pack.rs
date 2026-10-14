@@ -761,7 +761,7 @@ impl RuntimeContainedTask<'_> {
                 &pack.package_id,
                 role,
                 NavigationProblem::AdmissionFailed,
-                Some(error.code().outcome()),
+                Some(error.outcome()),
             )
         })
     }
@@ -951,7 +951,7 @@ impl RuntimeContainedTask<'_> {
             Err(error) => {
                 // The layer's own failure code is carried out unchanged (§6.3).
                 let code = match &error {
-                    ContainedTaskRunError::Task(error) => error.code().outcome(),
+                    ContainedTaskRunError::Task(error) => error.outcome(),
                     ContainedTaskRunError::Boundary(failure)
                     | ContainedTaskRunError::NonfatalOperation(failure) => failure.error.outcome(),
                 };

@@ -415,7 +415,9 @@ pub struct LadderConfig {
     digest: String,
 }
 
-/// Whether the embedded catalog lists a code, and how.
+/// Whether the embedded catalog lists a code, and how (also read by the `performance` section's
+/// calibration check, Workflow #385 P-c, and the `scheduling` section's code lists, Workflow #386
+/// SR-1).
 pub(crate) enum Listed {
     Active,
     Retired,
