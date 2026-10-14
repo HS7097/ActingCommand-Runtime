@@ -7,7 +7,7 @@
 
 use super::CliOutcome;
 use actingcommand_lab::{ExternallyVerifiedBundle, LabOcr};
-use actingcommand_recognition_pack::RecognitionEvaluator;
+use actingcommand_recognition_pack::{RecognitionEvaluator, RecognitionTarget};
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
@@ -30,6 +30,23 @@ pub(super) fn require_pages(resources: &ExternallyVerifiedBundle) -> CliOutcome<
         (Some(evaluator), Some(detector)) => lab_ocr().require_pages(evaluator.pack(), detector),
         _ => Ok(()),
     }
+}
+
+/// Workflow #308 SEL-L6a: refuses when OCR is unavailable and the bundle's recognition pack
+/// declares an OCR target. A whole-package replay may evaluate any target of its pack: page
+/// detection, guards, select steps, post-admission fields and resource readings.
+pub(super) fn require_package(resources: &ExternallyVerifiedBundle) -> CliOutcome<()> {
+    let Some(evaluator) = resources.loaded_bundle().evaluator() else {
+        return Ok(());
+    };
+    let pack = evaluator.pack();
+    lab_ocr().require(
+        pack,
+        pack.targets.iter().filter_map(|target| match target {
+            RecognitionTarget::Ocr(target) => Some(target.id.as_str()),
+            _ => None,
+        }),
+    )
 }
 
 /// The OCR state an offline command reports: available on the CPU with its vision root, or

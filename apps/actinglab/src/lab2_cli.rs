@@ -100,11 +100,27 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let (outcome, recovery_hint) = observation::detect(resources, &loaded_scene.scene)?;
     let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
     let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
+    // Workflow #308 SEL-L6a (FCM T-03): the page's operations with several destinations follow
+    // its navigation edges, with every page they may reach.
     let actions = view
         .edges
         .iter()
         .filter(|edge| outcome.matched && edge.from_page == outcome.page)
         .map(navigation_edge_json)
+        .chain(
+            view.multi_destination
+                .iter()
+                .filter(|operation| outcome.matched && operation.from_page == outcome.page)
+                .map(|operation| {
+                    json!({
+                        "id": operation.id,
+                        "task_id": operation.task_id,
+                        "from_page": operation.from_page,
+                        "to_pages": operation.to_pages,
+                        "click": operation.click
+                    })
+                }),
+        )
         .collect::<Vec<_>>();
     let (observation, ocr_not_evaluated) = observation::build(
         &view,

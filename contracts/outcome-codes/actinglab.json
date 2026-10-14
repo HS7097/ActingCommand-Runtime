@@ -34,6 +34,76 @@
       "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b).",
       "common_causes": "A package whose candidate layouts project large candidate sets on the observed page.",
       "handling": "Ask for the Normal view with --verbose (MCP: verbose true)."
+    },
+    "replay_run_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay --frames replayed the whole package over the frame sequence and the replayed run did not complete. The details carry the replay (entry check, steps, recognitions) and, as end.outcome, the outcome the run ended with; offline_fixture_exhausted when the run needed a frame after the last one of the sequence. Nothing was executed; the exit code is that of a usage refusal, so a CI job fails on it.",
+      "common_causes": "The package no longer recognizes a recorded page or guard; the sequence ends before the run does; a select step chose nothing with the given facts.",
+      "handling": "Read end.outcome and the last step of the details; fix the package or record a sequence that reaches the run's end."
+    },
+    "replay_frames_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay --frames could not list the --frames directory or one of its entries.",
+      "common_causes": "The path does not exist, is not a directory, or is not readable.",
+      "handling": "Name a readable directory of PNG frames."
+    },
+    "replay_frames_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The --frames directory of actinglab replay holds an entry that is not a PNG file (a subdirectory, a link or a file without the .png extension). Every entry of the directory is a frame, replayed in file-name order.",
+      "common_causes": "Other files were saved beside the frames.",
+      "handling": "Keep only the PNG frames in the directory."
+    },
+    "replay_facts_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay could not open or read the --facts file.",
+      "common_causes": "The path does not exist or is not readable.",
+      "handling": "Name a readable file."
+    },
+    "replay_facts_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The --facts file of actinglab replay is not one complete instance fact answer of a Runtime: the result of actingctl facts --instance or of MCP ac_facts with scope instance (scope, read_at_unix_ms, snapshot, records_total, records_kept), read without key_prefix so that it holds every record, with a valid snapshot, within 4 MiB.",
+      "common_causes": "The answer was read with --key-prefix, is of another scope, or was edited.",
+      "handling": "Read the instance's facts again without a key prefix and save the answer unchanged."
     }
   }
 }

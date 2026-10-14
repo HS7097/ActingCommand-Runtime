@@ -17,6 +17,7 @@ pub(super) struct ObservationResources {
     pub metadata: actingcommand_contract::page_projection::VerifiedProjectionMetadata,
     pub edges: Vec<super::NavigationEdge>,
     pub operations: Vec<PageOperation>,
+    pub multi_destination: Vec<MultiDestinationOperation>,
     pub controls: Vec<super::ControlPoint>,
     pub pages: actingcommand_page_detector::PageSet,
 }
@@ -27,6 +28,18 @@ pub(super) struct PageOperation {
     pub page: String,
     pub purpose: String,
     pub input: super::SemanticInput,
+}
+
+/// Workflow #308 SEL-L6a (FCM T-03): a click operation whose `to` is a page set. A navigation
+/// edge has one destination, so the generated navigation keeps no such operation; observe
+/// lists it from the task file with its pages as the page set names them and its declared
+/// click.
+pub(super) struct MultiDestinationOperation {
+    pub id: String,
+    pub task_id: String,
+    pub from_page: String,
+    pub to_pages: Vec<String>,
+    pub click: serde_json::Value,
 }
 
 pub(super) fn observation_resources(
@@ -118,9 +131,71 @@ pub(super) fn observation_resources(
         metadata,
         edges,
         operations,
+        multi_destination: multi_destination_operations(bundle)?,
         controls,
         pages,
     })
+}
+
+/// The click operations of every task file of `bundle` whose `to` is a page set; an application
+/// effect and a select step are not clicks, as the generated navigation leaves them out too.
+fn multi_destination_operations(
+    bundle: &actingcommand_pack_containment::LoadedBundle,
+) -> CliOutcome<Vec<MultiDestinationOperation>> {
+    let prefix = format!(
+        "{}/operations/",
+        bundle.resource_root().trim_end_matches('/')
+    );
+    let mut listed = Vec::new();
+    for path in bundle
+        .entry_paths()
+        .filter(|path| path.starts_with(&prefix) && path.ends_with("/task.json"))
+    {
+        let task = bundle
+            .entry(path)
+            .map(serde_json::from_slice::<serde_json::Value>)
+            .transpose()
+            .map_err(|error| CliError::package_invalid(format!("{path}: {error}")))?
+            .ok_or_else(|| CliError::package_invalid(format!("{path} is not readable")))?;
+        let Some(operations) = task.get("operations").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for operation in operations {
+            let Some(serde_json::Value::Array(to)) = operation.get("to") else {
+                continue;
+            };
+            let effect = |name: &str| operation.get(name).is_some_and(|value| !value.is_null());
+            if effect("application") || effect("select") {
+                continue;
+            }
+            let game = super::required_string_field(&task, "game")?;
+            // A page names its game unless it already does, as the packaged page set does.
+            let page = |anchor: &str| {
+                if anchor == "any" || anchor.contains('/') {
+                    anchor.to_string()
+                } else {
+                    format!("{game}/{anchor}")
+                }
+            };
+            listed.push(MultiDestinationOperation {
+                id: super::required_string_field(operation, "id")?.to_string(),
+                task_id: super::required_string_field(&task, "task_id")?.to_string(),
+                from_page: page(super::required_string_field(operation, "from")?),
+                to_pages: to
+                    .iter()
+                    .map(|anchor| {
+                        anchor.as_str().map(page).ok_or_else(|| {
+                            CliError::package_invalid(format!(
+                                "{path}: a page of operation to must be text"
+                            ))
+                        })
+                    })
+                    .collect::<CliOutcome<Vec<_>>>()?,
+                click: super::required_value_field(operation, "click")?.clone(),
+            });
+        }
+    }
+    Ok(listed)
 }
 
 /// Workflow #396 LAB-3: every bundle evaluates OCR with actinglab's OCR provider, the

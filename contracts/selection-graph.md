@@ -450,6 +450,17 @@ and the decision fingerprint binds it, only when a select step was evaluated; ev
 result and fingerprint is unchanged. The kernel's `dry_run_select` evaluates one select step on
 one saved frame with given facts and instant, for the `actinglab select` tool of a later slice.
 
+`actinglab replay --package <path> --frames <directory> [--facts <file>]` (Workflow #308
+SEL-L6a) replays the whole package over a saved frame sequence, the PNG files of the directory
+in file-name order, with the production interpreter. Every capture takes the next frame: a
+select step's confirmation frame is the frame after the one it was evaluated on, and every
+sample of a multi-frame consensus is a frame of its own. A select step evaluates the snapshot of
+`--facts`, the instance answer of `actingctl facts --instance` or MCP `ac_facts` read without a
+key prefix (`replay_facts_invalid` otherwise), at that answer's `read_at_unix_ms`; without
+`--facts` it evaluates the empty offline snapshot at the instant the replay started. The replay
+reports each step's decision record, its inputs, which perform nothing, and the page it reached;
+a run that does not complete exits with `replay_run_refused`, its end's outcome in the details.
+
 ## Records
 
 ### `task.selection_evaluated`
