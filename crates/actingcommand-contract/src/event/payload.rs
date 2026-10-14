@@ -1927,6 +1927,15 @@ pub enum RuntimeLifecyclePhase {
     StandardPackRead {
         outcome: Outcome,
     },
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.2, §4.3, §4.7): the wired device link of a handset
+    /// changed, or the device-link watch did. `outcome` is `device_link_waiting` (warning; the
+    /// handset left `device`, linked to its instance), `device_link_restored` (info; it is back
+    /// and its preparation passed, linked to its instance), `device_watch_restarted` (warning)
+    /// or `device_watch_failed` (error; every handset is then `unwatched`), the last two with
+    /// system links. No value names a device serial: a handset is its label `handset:<alias>`.
+    DeviceLinkObserved {
+        outcome: Outcome,
+    },
     /// Workflow #383 (register L5): the stores and the decision memory were loaded from the
     /// tagged records and opened new lineages; the base record of each new lineage, one entry
     /// per store. Register X4: `outcome` is the load's report (`ledger_tagged_state_loaded`,
@@ -1976,7 +1985,8 @@ impl RuntimeLifecyclePayload {
             | RuntimeLifecyclePhase::TaggedStateLoaded { outcome, .. }
             | RuntimeLifecyclePhase::TaggedStateEnabled { outcome } => outcome.as_ref(),
             RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
-            RuntimeLifecyclePhase::StandardPackRead { outcome } => Some(outcome),
+            RuntimeLifecyclePhase::StandardPackRead { outcome }
+            | RuntimeLifecyclePhase::DeviceLinkObserved { outcome } => Some(outcome),
             _ => None,
         }
     }

@@ -20704,6 +20704,134 @@
       "description": "An input request names an action this build decodes but does not perform: the single-touch path drag (InputAction::SingleTouchPathDragV1) is reserved until Workflow #406 T-3. The request is refused before any effect; nothing reaches the device.",
       "common_causes": "A client built for a later Runtime sent the path drag to this build.",
       "handling": "Send the action to a Runtime that performs it, or use a supported input action."
+    },
+    "device_link_lost": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "device_label": "optional",
+        "device_link_state": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run, or a climbing recovery ladder, ended because the handset's wired device link left device (#398 R1 RD-2, model-398 section 4.4, 4.5): the device failure the run met is its caused_by link and no input follows. The default recovery_ladder.exclude_codes lists it: a cable is not something the ladder can fix.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_link_waiting": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "optional",
+        "device_link_state": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset left device (#398 R1 RD-2, model-398 section 4.2): its availability is withdrawn under device_link:<state>, device.link and device.connected are recorded, its retained session is closed and the Runtime waits for the link. Recorded once per state.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_link_restored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset is back at device and the preparation queued after device_link.settle_ms passed (#398 R1 RD-2, model-398 section 4.3): it is available again and device.connected is true.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_watch_restarted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_watch_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The device-link watch, the Runtime's one adb track-devices process, ended and was started again within its restart budget (#398 R1 RD-2, model-398 section 4.3).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_watch_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "device_watch_problem": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The device-link watch could not start, read an output of unknown shape, or ended more often within device_link.watch.restart_window_ms than device_link.watch.restart_limit allows (#398 R1 RD-2, model-398 section 4.3): every handset is unwatched and unavailable, emulators go on, and a person's self-check of a handset starts the watch again.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_link_reconnect_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "device_label": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The one adb reconnect of an offline handset's transport (device_link.offline_action = kick_once) failed (#398 R1 RD-2, model-398 section 4.3); the Runtime waits for the link as under wait. adb's text is the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -27299,6 +27427,62 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: record configured approval."
+    },
+    "device_link_watch": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: start, read, restart or stop the device-link watch of the bound handsets (Workflow #398 RD-2)."
+    },
+    "device_link_apply": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: apply a handset's device-link change or a timer of its restore (Workflow #398 RD-2)."
+    },
+    "device_link_restore": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: queue and run a handset's preparation on a self-check claim after its link came back (Workflow #398 RD-2)."
+    },
+    "device_link_session_close": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: close the session retained for a handset that left device (Workflow #398 RD-2)."
+    },
+    "device_link_reconnect": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the one adb reconnect of an offline handset's transport (Workflow #398 RD-2)."
+    },
+    "device_link_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: read a handset's device-link state (Workflow #398 RD-2)."
+    },
+    "device_link_run": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: end a run whose device failed while its handset is not at device with device_link_lost (Workflow #398 RD-2)."
     }
   }
 }

@@ -1375,6 +1375,35 @@ pub struct ProviderDiscoveredInstance {
     pub android_version: Option<String>,
 }
 
+/// Workflow #398 RD-2 (model-398 v1.1 §4.1): one event of the device-link watch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceLinkWatchEvent {
+    /// The adb server's device list changed: the link state of every bound handset the watch
+    /// covers, by its instance alias (a handset the list does not name is `absent`).
+    Links(BTreeMap<String, actingcommand_contract::DeviceLinkState>),
+    /// The watch's process ended, or its output closed.
+    Ended,
+    /// The watch's output has a shape the parser does not know.
+    ProtocolInvalid,
+}
+
+/// Workflow #398 RD-2 (model-398 v1.1 §4.1): the device-link watch of a provider's bound
+/// handsets, one `adb track-devices` process. It is event driven: nothing polls the devices.
+pub trait DeviceLinkWatch: Send {
+    /// Blocks until the next event. After `Ended` or `ProtocolInvalid` the watch is over.
+    fn next_event(&mut self) -> DeviceLinkWatchEvent;
+
+    /// What ends the watch from another thread: a blocked `next_event` then returns `Ended`.
+    fn stopper(&self) -> Arc<dyn DeviceLinkWatchStop>;
+}
+
+/// Ends a device-link watch from another thread.
+pub trait DeviceLinkWatchStop: Send + Sync {
+    /// Ends the watch's process; later calls do nothing. An error is a stop that could not be
+    /// confirmed.
+    fn stop(&self) -> DeviceResult<()>;
+}
+
 /// Typed refusal of an on-demand instance discovery. `code` is one of the startup discovery
 /// codes (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`); `error`
 /// keeps the native device detail.
@@ -1562,6 +1591,23 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
         None
+    }
+
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.1): opens the device-link watch of the provider's
+    /// bound handsets, one `adb track-devices` process. `None` when the provider registers no
+    /// bound handset: then no watch process runs (§12 RD-2-T9). Providers without handsets keep
+    /// this default.
+    fn open_device_link_watch(&self) -> DeviceResult<Option<Box<dyn DeviceLinkWatch>>> {
+        Ok(None)
+    }
+
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.3, `device_link.offline_action = kick_once`): one
+    /// `adb -s <serial> reconnect` of the bound handset `instance_alias`: it kicks that one
+    /// transport and touches no other device. Providers without handsets keep this refusal.
+    fn reconnect_handset(&self, _instance_alias: &str) -> DeviceResult<()> {
+        Err(DeviceError::fatal(
+            "handset reconnect unsupported by this provider",
+        ))
     }
 
     fn observe_monitor(

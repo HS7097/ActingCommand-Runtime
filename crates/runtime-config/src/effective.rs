@@ -7,12 +7,15 @@
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
+use crate::device_link::DeviceLinkConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::SchedulingConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
-use crate::{host_claims, instance, ledger_observer, performance, recovery_ladder, scheduling};
+use crate::{
+    device_link, host_claims, instance, ledger_observer, performance, recovery_ladder, scheduling,
+};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
@@ -395,6 +398,12 @@ impl EffectiveConfig {
         LedgerObserverConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #398 RD-2: the `device_link` section in effect, read and checked whole
+    /// (model-398 §4.6); the host reads it at every link change and watch restart.
+    pub fn device_link(&self) -> Result<DeviceLinkConfig, ConfigFailure> {
+        DeviceLinkConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -535,6 +544,9 @@ impl EffectiveConfig {
         }
         if sections.contains(ledger_observer::SECTION) {
             self.ledger_observer()?;
+        }
+        if sections.contains(device_link::SECTION) {
+            self.device_link()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

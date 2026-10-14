@@ -188,6 +188,10 @@ pub(super) struct ActingdConfigFile {
     /// §15), each member optional; the defaults file holds every default.
     #[serde(default)]
     ledger_observer: Option<actingcommand_runtime_config::LedgerObserverFile>,
+    /// Workflow #398 RD-2: the wired device link of a handset (`device_link.*`, model-398 §4.6),
+    /// each member optional; the defaults file holds every default.
+    #[serde(default)]
+    device_link: Option<actingcommand_runtime_config::DeviceLinkFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1505,6 +1509,8 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "lab_module_authoring": self.lab_module_authoring,
             "lab_module_debugging": self.lab_module_debugging,
+            "device_link": serde_json::to_value(&self.device_link)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
             .standard_packs

@@ -73,6 +73,15 @@ fn d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration(
             },
             Some(LadderInvariant::Blackout),
         ),
+        (
+            // Board #387 ruling A9 (Alice 10-13): a handset whose link left `device`.
+            "A9: the device link is not device",
+            LadderFacts {
+                device_linked: false,
+                ..LadderFacts::PASSING
+            },
+            Some(LadderInvariant::DeviceLinkLost),
+        ),
         ("no rule holds", LadderFacts::PASSING, None),
     ];
     for (case, facts, expected) in rows {
@@ -94,6 +103,8 @@ fn d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration(
             HostCode::RecoveryAdmissionDenied,
         ),
         (LadderInvariant::Paused, HostCode::RecoveryAdmissionDenied),
+        // A9: the climb is interrupted by the lost link, so it ends at warning (A8).
+        (LadderInvariant::DeviceLinkLost, HostCode::DeviceLinkLost),
     ] {
         assert_eq!(
             invariant.interruption(),

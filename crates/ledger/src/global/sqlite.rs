@@ -1367,7 +1367,8 @@ fn column(row: &SqlRow, position: usize) -> GlobalLedgerResult<SqlValue> {
     })
 }
 
-/// Workflow #383 AO-1: the outcome a test gate's fault gives the attempt in progress.
+/// Workflow #383 AO-1: the outcome a test gate's fault gives the attempt in progress
+/// (Workflow #382 L-3, LED-I1: also a COMMIT failure whose transaction did not take effect).
 #[cfg(any(test, feature = "test-hooks"))]
 fn injected_fault(
     fault: crate::write_fault::InjectedFault,
@@ -1396,6 +1397,15 @@ fn injected_fault(
             Err(error) => JointCommit::CommitFailed(sql_error(
                 error,
                 LedgerLocation::CommitSqliteEvent.location(),
+            )),
+        },
+        // Workflow #382 L-3 (LED-I1): the COMMIT reports the failure and the transaction did not
+        // take effect; the outcome stays uncertain to the writer, as a real COMMIT failure is.
+        InjectedFault::CommitFailedUncommitted => match transaction.rollback() {
+            Ok(()) => JointCommit::CommitFailed(full_disk()),
+            Err(error) => JointCommit::CommitFailed(sql_error(
+                error,
+                LedgerLocation::RollbackJointEvent.location(),
             )),
         },
         InjectedFault::Integrity => {
@@ -3250,6 +3260,9 @@ fn read_rows_bound(
                 )
             })?);
         }
+        // Workflow #382 L-3 (LED-I5): counts the row on this thread while a counter runs.
+        #[cfg(test)]
+        crate::read_count::row_read(sql, &values);
         result.push(values);
     }
     Ok(result)
@@ -3323,6 +3336,9 @@ where
 {
     let budget = raw.budget;
     let bytes = raw.bytes;
+    // Workflow #382 L-3 (LED-I5): counts the material files the verifier is asked to open.
+    #[cfg(test)]
+    let verifier = &mut crate::read_count::counting_material(verifier);
     let VerifiedSnapshotRecords {
         records,
         head_hash: hash,
@@ -3346,6 +3362,9 @@ where
 {
     let budget = raw.budget;
     let bytes = raw.bytes;
+    // Workflow #382 L-3 (LED-I5): counts the material files the verifier is asked to open.
+    #[cfg(test)]
+    let verifier = &mut crate::read_count::counting_material(verifier);
     let VerifiedSnapshotRecords {
         records,
         metadata,

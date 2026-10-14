@@ -19,6 +19,9 @@ mod drive;
 mod drive_api;
 mod env_api;
 mod env_detection;
+// Test plan v2.2 E-5 G6 (exec key 35): record stop over a synthetic recording.
+#[cfg(test)]
+mod gate_e5_record_stop;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

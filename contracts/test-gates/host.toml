@@ -749,3 +749,28 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_out2::out2_a_run_of_a_designated_effect_set_records_each_count_and_its_cap",
 ]
 incident = ["#390 O-01", "#390 O-02", "#390 S-01"]
+
+# Workflow #398 RD-2 (model-398 v1.1 §4, §12 rows RD-2-T1 to T10 and T12; board #387 ruling A9): the adb track-devices decoder gives whole device lists and refuses an output of unknown shape; only a bound handset opens the one watch process; an idle handset that leaves device is unavailable under device_link:<state> with device.link, device.connected false and one device_link_waiting per state, and unauthorized only waits; back at device its preparation is queued after device_link.settle_ms and restores it with device_link_restored; a run whose device fails after the cable left ends with device_link_lost caused by the device failure and sends no input; offline sends one reconnect per episode only under kick_once; a flapping link is prepared once; the watch restarts by its backoff until the window's limit, then every handset is unwatched; a failed restore preparation is tried again after each retry wait; the device_link keys carry the model defaults and refuse broken values; a link that left device interrupts a climbing ladder (A9)
+[[gate]]
+key = "78"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::tests::gate_398_rd2::rd2_t1_frames_decode_into_whole_lists_in_one_read_or_across_reads",
+    "actingcommand-device::lib::tests::gate_398_rd2::rd2_t1_adb_state_words_give_their_link_states",
+    "actingcommand-device::lib::tests::gate_398_rd2::rd2_t1_an_output_of_unknown_shape_is_protocol_invalid",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t9_only_a_bound_handset_opens_the_watch",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t2_t6_an_idle_handset_that_leaves_device_waits_once_per_state_and_is_unavailable",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restored",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lost",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t2_leaving_device_waits_once_per_state_and_holds_the_handset",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t3_the_preparation_is_queued_only_after_the_settle_wait",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t5_offline_sends_one_reconnect_per_episode_only_under_kick_once",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t6_unauthorized_only_waits",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t7_a_link_that_flaps_faster_than_the_settle_wait_is_prepared_once",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t8_the_watch_restarts_by_its_backoff_until_the_window_s_limit",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t10_a_failed_preparation_is_tried_again_after_each_retry_wait_until_they_are_used",
+    "actingcommand-runtime-config::lib::device_link_tests::rd2_keys_every_device_link_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::device_link_tests::rd2_keys_device_link_values_that_break_a_rule_are_refused",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
+]
+incident = ["#398", "#387 A9"]

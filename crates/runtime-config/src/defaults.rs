@@ -6,8 +6,9 @@
 //! top-level required member; a member without parsing code is refused. Each section adds its
 //! own member here (D1b ships the mechanism; D1c adds `recovery_ladder` and `host_claims`;
 //! Workflow #385 P-c adds `performance`; Workflow #386 SR-1 adds `scheduling`; Workflow #383
-//! AO-1 adds `ledger_observer`).
+//! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`).
 
+use crate::device_link::DeviceLinkFile;
 use crate::host_claims::HostClaimsFile;
 use crate::ledger_observer::LedgerObserverFile;
 use crate::performance::PerformanceFile;
@@ -47,6 +48,8 @@ pub struct DefaultsFile {
     pub lab_module_authoring: Option<bool>,
     #[serde(default)]
     pub lab_module_debugging: Option<bool>,
+    #[serde(default)]
+    pub device_link: Option<DeviceLinkFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

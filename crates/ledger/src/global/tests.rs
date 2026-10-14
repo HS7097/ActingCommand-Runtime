@@ -66,6 +66,11 @@ fn idle_writer_health_needs_no_command_sender_or_new_fact() {
         .expect("normal close retains writer ownership");
 }
 
+// Workflow #382 L-3 (test plan §4 #12, LED-R7): the one bound of the barrier waits of the three
+// tests below that replaced fixed sleeps. A wait returns as soon as its message arrives; the
+// bound only ends a broken run.
+const BARRIER_WAIT: Duration = Duration::from_secs(30);
+
 #[test]
 fn idle_writer_health_reports_exit_without_business_commands() {
     let temp = TempDir::new().expect("temp");
@@ -79,13 +84,32 @@ fn idle_writer_health_reports_exit_without_business_commands() {
             error: terminal.clone(),
         })
         .expect("inject terminal failure");
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while !ledger.writer.as_ref().expect("writer handle").is_finished() {
+    // The ledger's own end barrier: the writer closes the capture queue when its loop ends, and
+    // the barrier's wait wakes then. No record carries this capture number, so the wait ends
+    // only through the writer's end.
+    let queue = Arc::clone(&ledger.queue);
+    let (ended_sender, ended) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = ended_sender.send(queue.wait_done(u64::MAX));
+    });
+    assert_eq!(
+        ended
+            .recv_timeout(BARRIER_WAIT)
+            .expect("the writer ends its loop"),
+        Err(Outcome::new(LedgerCode::WriterUnavailable))
+    );
+    // `check_writer_health` reads the end from the join handle: `is_finished` turns true once the
+    // writer thread's closure has returned, which follows the queue close with no I/O left (the
+    // store was dropped before it). std has no blocking wait on that short of `join`, which
+    // would take the handle the check reads, so only this return is awaited, without sleeping.
+    let writer = ledger.writer.as_ref().expect("writer handle");
+    let deadline = Instant::now() + BARRIER_WAIT;
+    while !writer.is_finished() {
         assert!(
             Instant::now() < deadline,
-            "writer must exit within one second"
+            "the ended writer's thread returns"
         );
-        thread::sleep(Duration::from_millis(1));
+        thread::yield_now();
     }
 
     let error = ledger.check_writer_health().expect_err("writer has exited");
@@ -158,15 +182,34 @@ fn recognition_id() -> IssuedRecognitionId {
 #[test]
 fn open_never_returns_with_a_detached_future_owner() {
     let temp = TempDir::new().expect("temp");
-    let started = Instant::now();
+    let open_config = config(&temp, "writer-delayed");
+    let (entered_sender, entered) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let (opened_sender, opened) = mpsc::channel();
+    // The store open signals that it runs and then waits for the test's release.
+    let opener = thread::spawn(move || {
+        let result = GlobalLedger::open_with_store(open_config, move |config| {
+            entered_sender.send(()).expect("store open entered");
+            released.recv().expect("store open released");
+            SegmentStore::open(config)
+        });
+        let _ = opened_sender.send(result);
+    });
 
-    let ledger = GlobalLedger::open_with_store(config(&temp, "writer-delayed"), |config| {
-        thread::sleep(Duration::from_millis(100));
-        SegmentStore::open(config)
-    })
-    .expect("delayed store open must finish before return");
+    entered
+        .recv_timeout(BARRIER_WAIT)
+        .expect("the store open runs");
+    assert!(
+        matches!(opened.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "open must not return while its store open runs"
+    );
+    release.send(()).expect("release the store open");
+    let ledger = opened
+        .recv_timeout(BARRIER_WAIT)
+        .expect("open returns once its store open finished")
+        .expect("delayed store open must finish before return");
+    opener.join().expect("opener thread");
 
-    assert!(started.elapsed() >= Duration::from_millis(90));
     ledger.close().expect("close delayed writer");
     let replacement = GlobalLedger::open(config(&temp, "writer-after-delay"))
         .expect("replacement writer must open immediately");
@@ -2617,8 +2660,10 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
             response: prefill_response,
         })
         .expect("fill queue");
+    // The hand-built writer holds the full queue until the test releases it.
+    let (release, released) = mpsc::channel::<()>();
     let writer = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
+        released.recv().expect("writer released");
         let _ = receiver.recv().expect("prefill");
         if let WriterCommand::Shutdown { response } = receiver.recv().expect("shutdown") {
             response.send(Ok(())).expect("shutdown response");
@@ -2644,13 +2689,22 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         queue,
         spill: None,
     };
+    let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
     thread::spawn(move || {
+        let _ = closing_sender.send(());
         let _ = done_sender.send(ledger.close());
     });
 
+    // The close begins while the writer still holds the full queue, so it cannot be answered yet.
+    closing.recv_timeout(BARRIER_WAIT).expect("close begins");
+    assert!(
+        matches!(done_receiver.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "close must wait while the ingress queue is full"
+    );
+    release.send(()).expect("release the writer");
     let result = done_receiver
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(BARRIER_WAIT)
         .expect("close must not deadlock");
 
     result.expect("close");
@@ -3010,3 +3064,13 @@ mod gate_pkg_s3;
 // Workflow #383 AO-2 (ledger observer §7, §8, §10, §11.1).
 #[path = "tests/gate_383_ao2.rs"]
 mod gate_383_ao2;
+// Workflow #382 L-3 G5 (LED-I1): an uncertain COMMIT of a joint record stops the writer with its
+// readback classification.
+#[path = "tests/gate_l3_g5.rs"]
+mod gate_l3_g5;
+// Workflow #382 L-3 G8 (LED-I3, LED-I8): the subscription contracts on the SQLite store.
+#[path = "tests/gate_l3_g8.rs"]
+mod gate_l3_g8;
+// Workflow #382 L-3 G9 (LED-I5): the formal open reads each row once and no material.
+#[path = "tests/gate_l3_g9.rs"]
+mod gate_l3_g9;

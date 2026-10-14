@@ -827,6 +827,33 @@ impl RuntimeHostError {
         self
     }
 
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.4; spec §5, the condition is the result): this
+    /// device failure as the condition that ended its work, the handset's device link no longer
+    /// `device`: `device_link_lost` on top with the handset's label and link state, and this
+    /// failure, as it was, its `caused_by` link. The lost link explains the device failure, as
+    /// an unreachable adb does (`adb_unreachable_capture`): the projection keeps its code and
+    /// is nonfatal, unless a resource close stayed unconfirmed. The instance, resources and
+    /// diagnostics it carries stay as they were.
+    pub(crate) fn into_device_link_lost(
+        mut self,
+        device_label: &str,
+        state: actingcommand_contract::DeviceLinkState,
+    ) -> Self {
+        let cause = self.outcome();
+        self.code = HostErrorCode::Registered(HostCode::DeviceLinkLost.into());
+        let outcome = self
+            .code_outcome()
+            .device_label(device_label)
+            .device_link_state(state);
+        self.lifecycle.outcome_values = Some(outcome);
+        self.lifecycle.notes.clear();
+        self.lifecycle.caused_by = Some(cause);
+        if self.lifecycle.resource_quiescence != Some(ResourceQuiescence::Unconfirmed) {
+            self.projection.fatal = false;
+        }
+        self
+    }
+
     /// This error with the failure behind it as the `caused_by` link of its outcome (ledger
     /// revision 3), in place of that failure's text.
     pub(crate) fn with_caused_by(mut self, cause: Outcome) -> Self {

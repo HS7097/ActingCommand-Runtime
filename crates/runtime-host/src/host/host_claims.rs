@@ -18,6 +18,7 @@
 //! and the worker carries on with fresh state. A second panic before the rebuilt worker
 //! finished one payload marks the Runtime fatal with `runtime_restart_required`.
 
+use super::device_link::PendingLinkRestore;
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::startup_package::PendingStartupPackage;
 use super::*;
@@ -34,6 +35,9 @@ const HOST_CLAIM_ADMISSION_POLL: Duration = Duration::from_millis(100);
 pub(super) enum HostClaimWork {
     StartupPackage(PendingStartupPackage),
     RecoveryLadder(Box<PendingRecoveryLadder>),
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.3): the preparation of a handset whose link came
+    /// back to `device`, on a self-check claim.
+    LinkRestore(PendingLinkRestore),
 }
 
 impl HostClaimWork {
@@ -41,6 +45,8 @@ impl HostClaimWork {
         match self {
             Self::StartupPackage(_) => "startup_package",
             Self::RecoveryLadder(_) => "recovery_ladder",
+            // The payload runs the registered host operation of a link's restore.
+            Self::LinkRestore(_) => HostLocation::DeviceLinkRestore.as_str(),
         }
     }
 }
@@ -155,6 +161,7 @@ impl HostShared {
         match work {
             HostClaimWork::StartupPackage(pending) => self.run_startup_claim(&pending, key),
             HostClaimWork::RecoveryLadder(pending) => self.run_recovery_ladder(&pending, key),
+            HostClaimWork::LinkRestore(pending) => self.run_link_restore(&pending, key),
         }
     }
 
@@ -171,6 +178,7 @@ impl HostShared {
                 )
                 .with_causation_id(pending.causation_id),
             HostClaimWork::RecoveryLadder(pending) => pending.links().clone(),
+            HostClaimWork::LinkRestore(pending) => pending.links.clone(),
         })
     }
 

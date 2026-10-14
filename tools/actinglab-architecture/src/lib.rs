@@ -1605,9 +1605,17 @@ pub const ADB_READ_ONLY: &[&str] = &[
     "run",
 ];
 
-/// Public `Adb` connection-time commands of backend opening, under the open-phase authority.
-/// Every other public `Adb` method is an input write.
-pub const ADB_OPEN_PHASE: &[&str] = &["connect", "forward", "shell_spawn", "push", "chmod"];
+/// Public `Adb` connection-time commands of backend opening, and the link watch's host-side
+/// transport kick `reconnect` (Workflow #398 RD-2, model-398 §4.3), under the open-phase
+/// authority. Every other public `Adb` method is an input write.
+pub const ADB_OPEN_PHASE: &[&str] = &[
+    "connect",
+    "forward",
+    "shell_spawn",
+    "push",
+    "chmod",
+    "reconnect",
+];
 
 /// Kernel owners whose `input*` and `control_application*` entries are input writes.
 pub const KERNEL_WRITE_OWNERS: &[&str] = &[

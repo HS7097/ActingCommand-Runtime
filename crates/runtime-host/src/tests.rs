@@ -166,9 +166,13 @@ mod gate_390_read1;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
+// Workflow #398 RD-2: a handset's wired device link through the host.
+mod gate_398_rd2;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
 mod gate_epoch_close;
+// Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
+mod gate_e4;
 mod gate_p0;
 mod home_entry;
 mod input;

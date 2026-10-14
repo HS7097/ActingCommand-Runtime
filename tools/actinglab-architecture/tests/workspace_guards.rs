@@ -3339,6 +3339,21 @@ fn b1_pure_decision_modules_hold_no_side_effect_authority_in_production_items() 
             inspect_pure_decision_source(&path, &source)
                 .unwrap_or_else(|error| panic!("scan {path} for side effects: {error}")),
         );
+        // Workflow #382 P-3 (test plan v2.2 §4 #27): the tokens the retired evaluator purity
+        // tests of policy and selection-policy banned beyond the item scan. The lease
+        // authority is the scheduler's, so the policy crates name no lease token, and no
+        // pure decision step sleeps.
+        if !path.starts_with("crates/scheduler/") {
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production source");
+            for forbidden in ["LeaseToken", "std::thread::sleep"] {
+                if production.contains(forbidden) {
+                    violations.push(format!("{path}: {forbidden}"));
+                }
+            }
+        }
     }
     assert!(
         violations.is_empty(),
@@ -5088,6 +5103,8 @@ const HOST_SPLIT: &[HostModule] = &[
         ],
     },
     host_module("device_diagnostic", &["HostShared"]),
+    // Workflow #398 RD-2: the handsets' device links, their watch, wait and restore.
+    host_module("device_link", &["HostShared"]),
     host_module("emulator_instance", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),

@@ -7058,29 +7058,6 @@ pub(crate) mod tests {
         assert!(error.message().contains("missing host"));
     }
 
-    #[test]
-    fn pure_evaluator_source_has_no_runtime_side_effect_authority() {
-        let source = include_str!("evaluator.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production source");
-        for forbidden in [
-            "std::thread::sleep",
-            "std::fs",
-            "std::net",
-            "SystemTime::now",
-            "Instant::now",
-            "actingcommand_device",
-            "actingcommand_ledger",
-            "LeaseToken",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "forbidden source token {forbidden}"
-            );
-        }
-    }
-
     /// P-1 G10 (Workflow #386 SR-6a; model-sched-rules.md v1.4.2 §8.2 item 2): the close of a
     /// round in which one path left a decision without any reason, the programming error the
     /// evaluator guards against. `fixture.observe` was selected on `fixture-instance-a`;

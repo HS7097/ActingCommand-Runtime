@@ -13,6 +13,9 @@
 pub mod artifacts;
 pub mod codes;
 pub mod ffi;
+// Test plan v2.2 E-1 G9 (exec key 25): the model folder listing.
+#[cfg(test)]
+mod gate_e1;
 pub mod models;
 
 use actingcommand_contract::outcome::Outcome;

@@ -16,6 +16,8 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod tests {
     mod gate_381b;
     mod gate_398_rd1a;
+    // Workflow #398 RD-2: the `adb track-devices` decoder (test row RD-2-T1).
+    mod gate_398_rd2;
     mod gate_398_rd5a;
 }
 
@@ -31,6 +33,7 @@ pub mod emulator;
 pub mod error;
 mod frame_memory;
 pub mod input;
+mod link_watch;
 pub mod maatouch;
 pub mod minitouch;
 mod mumu;
@@ -53,6 +56,7 @@ pub use emulator::*;
 pub use error::*;
 pub use frame_memory::*;
 pub use input::*;
+pub use link_watch::*;
 pub use maatouch::*;
 pub use minitouch::*;
 pub use mumu::MumuInstallSource;

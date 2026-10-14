@@ -10,6 +10,9 @@
 //! Workflow #383 AO-2: the gate also lists the batches the ledger committed (their sequences and
 //! whether they were FULL synced), and may hold the spill thread before each spill write, as a
 //! slow disk would, until the test releases it.
+//!
+//! Workflow #382 L-3 (LED-I1): an attempt may also report a failure at its COMMIT while its
+//! transaction did not take effect, the other side of an uncertain COMMIT.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -47,6 +50,9 @@ pub(crate) enum InjectedFault {
     FailBeforeCommit,
     /// The attempt commits, then reports a failure.
     CommitThenFail,
+    /// Workflow #382 L-3 (LED-I1): the attempt reports a failure at its COMMIT, and its
+    /// transaction did not take effect (it is rolled back).
+    CommitFailedUncommitted,
     /// The store reports an integrity failure.
     Integrity,
 }
@@ -97,6 +103,12 @@ impl LedgerWriteFaultGate {
     /// The next `count` write attempts commit and then report a failure.
     pub fn commit_then_fail(&self, count: usize) {
         self.queue(InjectedFault::CommitThenFail, count);
+    }
+
+    /// Workflow #382 L-3 (LED-I1): the next `count` write attempts report a failure at their
+    /// COMMIT while their transaction does not take effect.
+    pub fn commit_fails_uncommitted(&self, count: usize) {
+        self.queue(InjectedFault::CommitFailedUncommitted, count);
     }
 
     /// The next `count` write attempts meet an integrity failure of the store.

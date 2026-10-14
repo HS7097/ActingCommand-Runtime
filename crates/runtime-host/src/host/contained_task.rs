@@ -6346,6 +6346,28 @@ impl HostShared {
             // Workflow #373 NAV-6: the run's steps include those of its interrupt layers.
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         };
+        // Workflow #398 RD-2 (model-398 v1.1 §4.4): a device failure met while the instance's
+        // handset is no longer `device` ends the run with `device_link_lost`, the device failure
+        // its `caused_by` link; the run sends nothing more to the device. The lost link explains
+        // the failure, so a device failure the device layer called fatal no longer poisons the
+        // Runtime (only this handset's run ends); a select record's poison below still joins.
+        if let Err(
+            ContainedTaskRunError::Boundary(failure)
+            | ContainedTaskRunError::NonfatalOperation(failure),
+        ) = &mut execution
+            && let Some(lost) = self
+                .device_link_lost(control.instance_id, &failure.error)
+                .map_err(RequestFailure::poison_without_terminal)?
+        {
+            failure.poison_runtime = lost.is_fatal();
+            // A scheduled run's terminal outcome is its task failure's: the lost link, which
+            // pauses no task by itself.
+            if let Some(evidence) = &mut failure.task_failure {
+                evidence.outcome = lost.outcome();
+                evidence.severe = lost.is_fatal();
+            }
+            *failure.error = lost;
+        }
         // Workflow #308: a select record that could not be written after the confirmation
         // capture ended the run is already in the ledger as its own failure; the run's failure
         // keeps its code, carries its poison, and joins it only when the ledger refused it.

@@ -215,6 +215,15 @@ It reads the instance's active record of scope `instance { instance_id:
   `source_snapshot_id` `device_link:unbound` (the device link's state, beside
   `backend_selfcheck:`), unless that record is already in effect; a passing
   self-check never restores it.
+- Workflow #398 RD-2 (model-398 v1.1 §4.2, §4.3): a bound handset whose wired
+  device link is not `device` is unavailable whatever its self-check says,
+  under `source_snapshot_id` `device_link:<state>` (`absent`, `offline`,
+  `unauthorized`, `no_permissions`, `other`, `unwatched`; same detector),
+  unless that record is already in effect. Leaving `device` for a state adb
+  reports also drops the handset's self-check facts, so it becomes available
+  again only when the link is `device` again and the restore preparation (or a
+  person's self-check) records passing opens; that restores the seed as a
+  `backend_selfcheck:` withdrawal is restored.
 
 **Lifecycle.** At startup every device self-checked policy instance starts
 unavailable (`backend_selfcheck:unchecked`, published right before its
