@@ -1007,6 +1007,8 @@ crate::outcome_codes! {
         ResourceReadingsCountInvalid => "resource_readings_count_invalid": error / declaration_error,
         ResourceReadingIdDuplicate => "resource_reading_id_duplicate": error / declaration_error,
         ResourceReadingFactKeyDuplicate => "resource_reading_fact_key_duplicate": error / declaration_error,
+        // Workflow #390 READ-1: a mark's second reading key, the capacity of a fraction.
+        ResourceReadingCapacityFactKeyInvalid => "resource_reading_capacity_fact_key_invalid": error / declaration_error,
         // Workflow #384 D2-S3: the `resource_adjustments` declaration.
         ResourceAdjustmentsCountInvalid => "resource_adjustments_count_invalid": error / declaration_error,
         ResourceAdjustmentIdInvalid => "resource_adjustment_id_invalid": error / declaration_error,

@@ -738,6 +738,19 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.54 Wave 12 slice READ-1 (#390, forced-compromises mapping O-08)
+
+READ-1 lets a fraction reading write its capacity as a second reading key;
+[resource-readings.md](resource-readings.md), "Second reading key", is the contract. No new event
+type and no new member of a persisted record: the capacity is one more `fact.published` of the
+existing shape. The contract's declaration reason `resource_reading_capacity_fact_key_invalid`
+(`declaration_error`) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
+| RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`, `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>`) as the mark's value record of the same frame |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

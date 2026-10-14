@@ -198,7 +198,9 @@ groups of exactly three digits. Thus `1,234,567` resolves to `1234567`; `1234`, 
 
 `current_capacity` accepts exactly two nonempty ASCII decimal strings separated by one
 `/`. Both components must fit `u64`; only the current (left) value is returned and checked
-against `min..=max`. Capacity is validated but is not an output, a range bound or a divisor.
+against `min..=max`. Capacity is validated but is not a field output, a range bound or a divisor;
+a reading mark may write it as its second reading key (`capacity_fact_key`, Workflow #390
+READ-1, [resource-readings.md](resource-readings.md), "Second reading key").
 Zero capacity and a current value greater than capacity are legal. `17/20` resolves to
 `17`; `17/20x`, `17/ 20` and a capacity overflow fail. Leading zeros follow the ordinary
 ASCII decimal rule on both sides.
@@ -219,10 +221,10 @@ v0.11.3 or later; an older Runtime refuses its program at admission.
 
 The contract owner's pure `OcrUnsignedIntegerFormat::parse` entry is shared by execution
 and official client value verification. Its `parse_parts` (Workflow #396 REC-6) returns both
-parts without a range check: the value, and for `current_capacity` the capacity, which only a
-value test reads; `parse` checks the value against the range, and fields and readings keep
-their output. It retains the original raw/trimmed text,
-ROI/FrameId binding, observation budgets and existing field value/reason types; parsing
+parts without a range check: the value, and for `current_capacity` the capacity, which a value
+test reads and (Workflow #390 READ-1) a reading mark with `capacity_fact_key` writes; `parse`
+checks the value against the range, and fields keep their output. It retains the original
+raw/trimmed text, ROI/FrameId binding, observation budgets and existing field value/reason types; parsing
 does not invoke OCR or create another observation or ledger event.
 
 The other value type is:
