@@ -1045,6 +1045,12 @@ impl HostShared {
             match self.await_adb_baseline(&rebound) {
                 Ok(waited_ms) => waited_ms,
                 Err(error) => {
+                    // Workflow #387 D1c-G: an adb child or pipe of this wait left unconfirmed
+                    // belongs to this instance: it fences the instance and the action fails with
+                    // the fence; only where no fence may take it is it the Runtime's fatal.
+                    let error = self
+                        .settle_unconfirmed_adb(error, instance_id, links.clone())
+                        .unwrap_or_else(|fatal| fatal);
                     return Err(self.control_failed(
                         mode,
                         links,
@@ -1431,7 +1437,8 @@ impl HostShared {
     /// the milliseconds waited; the probes themselves are not recorded, the wait is part of
     /// the receipt's `elapsed_ms`. A timeout is `emulator_control_adb_not_ready`
     /// (`backend_operation_failed`) whose native detail carries the port, the wait and the
-    /// last ADB error.
+    /// last ADB error. A probe whose adb child or pipe cleanup is unconfirmed ends the wait with
+    /// that failure, which the caller settles (Workflow #387 D1c-G, `settle_unconfirmed_adb`).
     fn await_adb_baseline(&self, rebound: &RegisteredInstance) -> RuntimeHostResult<u64> {
         let started = Instant::now();
         let deadline = started + ADB_BASELINE_WAIT;

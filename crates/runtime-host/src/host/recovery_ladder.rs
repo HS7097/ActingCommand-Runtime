@@ -406,6 +406,9 @@ enum RestartEntry {
         skip: RecoveryRungSkipReason,
         refused: &'static str,
     },
+    /// The entry's ADB probe left its cleanup unconfirmed and fenced the instance (Workflow
+    /// #387 D1c-G): the rung fails with `fence`, the fence's code, without touching the game.
+    Fenced { fence: &'static str },
     /// Stop the assigned application, then run the startup package.
     Stop,
     /// The startup package cannot be admitted, its prerequisite chain is refused, or it is
@@ -2107,6 +2110,12 @@ impl HostShared {
             RestartEntry::Unavailable { skip, refused } => {
                 return Ok(unavailable_entry(&pending.config.rules, skip, refused));
             }
+            RestartEntry::Fenced { fence } => {
+                return Ok(RungAttempt::Failed {
+                    run_id: None,
+                    reason: fence,
+                });
+            }
             RestartEntry::Stop => true,
             RestartEntry::RunOnly => false,
         };
@@ -2201,7 +2210,11 @@ impl HostShared {
             &|| self.fatal.is_shutdown_requested(),
         ) {
             if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
-                return Err(RuntimeHostError::execution(LADDER_OPERATION, &error));
+                let fence = self.fence_recovery_adb(
+                    pending,
+                    RuntimeHostError::execution(LADDER_OPERATION, &error),
+                )?;
+                return Ok(RestartEntry::Fenced { fence });
             }
             return Ok(RestartEntry::Unavailable {
                 skip: RecoveryRungSkipReason::AdbUnavailable,
@@ -2209,6 +2222,23 @@ impl HostShared {
             });
         }
         Ok(RestartEntry::Stop)
+    }
+
+    /// Workflow #403, #387 D1c-G: an ADB child or pipe cleanup left unconfirmed by the ladder's
+    /// own ADB check (the rung 2 entry probe, the readiness wait's boot check and probes) belongs
+    /// to the instance the ladder climbs on: it fences that instance as every unconfirmed close
+    /// of its own resources does (`settle_unconfirmed_resources`: one `instance_resources_fenced`
+    /// caused by `error`, `settle_unconfirmed_adb`), and the rung fails with the fence's code;
+    /// the ladder goes on. Only what the contract keeps whole-Runtime (resources no registered
+    /// instance owns, a ledger failure, a shutdown) retains the owner and ends the Runtime: that
+    /// fatal is returned.
+    fn fence_recovery_adb(
+        &self,
+        pending: &PendingRecoveryLadder,
+        error: RuntimeHostError,
+    ) -> RuntimeHostResult<&'static str> {
+        self.settle_unconfirmed_adb(error, pending.instance_id, pending.links.clone())
+            .map(|fence| fence.code())
     }
 
     /// Workflow #369-2: force-stops the instance's assigned application as a host-minted
@@ -2504,7 +2534,11 @@ impl HostShared {
             {
                 return Ok(Err(reason));
             }
-            if self.recovery_android_booted(pending)? {
+            let booted = match self.recovery_android_booted(pending)? {
+                Ok(booted) => booted,
+                Err(fenced) => return Ok(Err(fenced)),
+            };
+            if booted {
                 prepared = true;
                 let admission = match held.take() {
                     Some(admission) => admission,
@@ -2529,8 +2563,14 @@ impl HostShared {
                     });
                 }
                 drop(admission);
-                if !recoverable && !self.recovery_adb_unanswered(pending)? {
-                    return Ok(Err(HostCode::RecoveryEnvironmentNotReady.as_str()));
+                if !recoverable {
+                    match self.recovery_adb_unanswered(pending)? {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Ok(Err(HostCode::RecoveryEnvironmentNotReady.as_str()));
+                        }
+                        Err(fenced) => return Ok(Err(fenced)),
+                    }
                 }
             }
             drop(held.take());
@@ -2559,35 +2599,47 @@ impl HostShared {
 
     /// Workflow #369-1 (review M5): Android has booted once it reports a resumed activity
     /// (read-only, through the ADB baseline; no session is opened). An ADB failure is a "not
-    /// yet"; one whose child or pipe cleanup is unconfirmed poisons the host, as the
-    /// foreground gate does.
-    fn recovery_android_booted(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
+    /// yet"; one whose child or pipe cleanup is unconfirmed fences the instance (Workflow #387
+    /// D1c-G, `fence_recovery_adb`): `Err` with the fence's code, which fails the rung.
+    fn recovery_android_booted(
+        &self,
+        pending: &PendingRecoveryLadder,
+    ) -> RuntimeHostResult<Result<bool, &'static str>> {
         match self
             .execution()?
             .observe_foreground_application(&pending.instance_alias)
         {
-            Ok(observation) => Ok(observation.foreground.is_some()),
+            Ok(observation) => Ok(Ok(observation.foreground.is_some())),
             Err(error) => {
                 if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    return Err(recovery_adb_fault(pending, &error));
+                    return self
+                        .fence_recovery_adb(pending, recovery_adb_fault(pending, &error))
+                        .map(Err);
                 }
-                Ok(false)
+                Ok(Ok(false))
             }
         }
     }
 
-    /// Workflow #369-1 (review M3): whether the ADB baseline fails to answer one probe now.
-    fn recovery_adb_unanswered(&self, pending: &PendingRecoveryLadder) -> RuntimeHostResult<bool> {
+    /// Workflow #369-1 (review M3): whether the ADB baseline fails to answer one probe now. One
+    /// whose child or pipe cleanup is unconfirmed fences the instance (Workflow #387 D1c-G):
+    /// `Err` with the fence's code.
+    fn recovery_adb_unanswered(
+        &self,
+        pending: &PendingRecoveryLadder,
+    ) -> RuntimeHostResult<Result<bool, &'static str>> {
         match self
             .execution()?
             .probe_adb_baseline(&pending.instance_alias)
         {
-            Ok(()) => Ok(false),
+            Ok(()) => Ok(Ok(false)),
             Err(error) => {
                 if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
-                    return Err(recovery_adb_fault(pending, &error));
+                    return self
+                        .fence_recovery_adb(pending, recovery_adb_fault(pending, &error))
+                        .map(Err);
                 }
-                Ok(true)
+                Ok(Ok(true))
             }
         }
     }
@@ -2622,8 +2674,15 @@ impl HostShared {
             {
                 Ok(()) => break,
                 Err(error) => {
+                    // Workflow #387 D1c-G: an unconfirmed cleanup fences the instance and ends
+                    // the rung with the fence's code.
                     if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
-                        return Err(RuntimeHostError::execution(LADDER_OPERATION, &error));
+                        return self
+                            .fence_recovery_adb(
+                                pending,
+                                RuntimeHostError::execution(LADDER_OPERATION, &error),
+                            )
+                            .map(Some);
                     }
                     thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
                 }
@@ -2900,7 +2959,8 @@ fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
 }
 
 /// Workflow #369-1: an ADB child or pipe cleanup left unconfirmed during a readiness check is
-/// a host fault (as in the foreground gate), not a "not yet".
+/// not a "not yet". Workflow #387 D1c-G: it is the unconfirmed failure the instance's fence is
+/// caused by (`fence_recovery_adb`); only where no fence may take it is it the Runtime's fatal.
 fn recovery_adb_fault(
     pending: &PendingRecoveryLadder,
     error: &actingcommand_device::DeviceError,

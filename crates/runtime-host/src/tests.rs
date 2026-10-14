@@ -138,6 +138,9 @@ mod gate_387_d1b;
 mod gate_387_d1c;
 // Workflow #387 D1c-F: a direct input's invalid segmented swipe is refused by its contract.
 mod gate_387_d1cf;
+// Workflow #387 D1c-G: a ladder's unconfirmed ADB cleanup fences its instance, a frame without
+// an extent ends only its run, a vision provider failure starts no ladder at once.
+mod gate_387_d1cg;
 // Workflow #389 MCP-4, register W2: the instance fact read records nothing.
 mod gate_389_mcp4;
 mod gate_392_daa;

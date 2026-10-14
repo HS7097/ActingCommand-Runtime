@@ -2115,6 +2115,7 @@ pub(crate) mod test_spellings {
             InjectTestPolicyOutcomeProjectionFailure => "inject_test_policy_outcome_projection_failure",
             InjectTestPolicyOutcomeProjectionPosition => "inject_test_policy_outcome_projection_position",
             InjectTestSchedulingTerminalAppendFailure => "inject_test_scheduling_terminal_append_failure",
+            InjectTestTaskGeometryFrameExtentFault => "inject_test_task_geometry_frame_extent_fault",
             InstallContainedTaskCheckpointTestHook => "install_contained_task_checkpoint_test_hook",
             InstallPolicyOutcomeTransitionTestHook => "install_policy_outcome_transition_test_hook",
             InstallQueueOperationTestHook => "install_queue_operation_test_hook",

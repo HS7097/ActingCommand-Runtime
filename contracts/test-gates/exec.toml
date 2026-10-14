@@ -734,3 +734,13 @@ tests = [
     "actingcommand-lab::lib::ports::d1cf_tests::d1cf_the_lab_port_refuses_a_segmented_swipe_before_any_port_opens",
 ]
 incident = ["#387"]
+
+# Workflow #387 D1c-G: a run's page evaluation whose vision provider fails or answers invalidly ends with contained_task_vision_provider_failed (class 5) at the home entry check of one page and of an entry page set, the run's page evaluation and a shared interrupt check; an evaluation that fails for another cause (a located text read that cannot conclude) stays contained_task_recognition_failed (class 4)
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_vision_provider_failure_ends_every_page_evaluation_of_a_run_as_class_5",
+    "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_recognition_that_cannot_conclude_stays_the_class_4_recognition_failure",
+]
+incident = ["#387"]

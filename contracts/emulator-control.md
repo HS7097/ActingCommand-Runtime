@@ -231,7 +231,9 @@ only its remaining budget, checks shutdown before spawn, during process polling 
 success, and the next poll/sleep shares that deadline. The existing bounded process/pipe
 cleanup remains mandatory and can finish after the execution deadline; no late success or
 hard FFI cancellation is claimed. Original command errors and unconfirmed cleanup survive;
-unconfirmed resource closure remains fatal. Other callers retain their default command
+an unconfirmed cleanup of the wait's own ADB child or pipe fences the instance and fails the
+action with `instance_resources_fenced` ("Resource fence" below, Workflow #387 D1c-G); it ends
+the Runtime only where no fence may take it. Other callers retain their default command
 timeouts; the client receipt budgets are in "Client and CLI". A timeout fails typed with
 `emulator_control_adb_not_ready` (`backend_operation_failed`, receipt state `failed`, effect
 `indeterminate`; native detail carries the alias, the port, the milliseconds waited and the
@@ -531,9 +533,17 @@ of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallbac
   `stage: resource_fence` with the unconfirmed failure's code, no run, task or preparation, and
   no trigger item: it starts at `trigger_defaults.start_rung` and respects the cool-down as
   `trigger_defaults.respect_cooldown` says), whose claim waits for the instance's key; a ladder
-  already holding or waiting for the instance decides instead. A fence that manual work met (the
-  instance's key held by a direct task run, a client lease, an application or input command or a
-  Lab operation) starts no ladder and waits for a person at once while `rules.direct_runs` is
+  already holding or waiting for the instance decides instead. An ADB check of one instance's
+  own whose ADB child or pipe could not be confirmed gone fences that instance the same way
+  (Workflow #387 D1c-G): a ladder's checks (the `application_restart` entry probe; the
+  `emulator_restart` readiness wait's boot check and ADB probes), the startup package's ADB probe
+  (a startup run, a rung's startup run, a return-home run), the foreground gate's ADB query
+  (`contracts/application-lifecycle.md`) and the ADB wait after an emulator `start` or `restart`
+  ("ADB baseline" above). The work that met it fails with `instance_resources_fenced`; a rung
+  that met it fails, and the ladder, which holds the instance, goes on and decides at its end.
+  A fence that manual work met
+  (the instance's key held by a direct task run, a client lease, an application or input command
+  or a Lab operation) starts no ladder and waits for a person at once while `rules.direct_runs` is
   `exempt` (M387 B1, coordinator ruling 4 of D1c); under `trigger` it goes to a ladder as a
   routine fence does. Its return-home rung is skipped (`resource_fence`): it never prepares the
   instance again. The application restart rung, after its stop, prepares the instance again on

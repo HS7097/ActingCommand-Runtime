@@ -3680,7 +3680,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task geometry frame extent invalid.",
+      "description": "A contained task frame whose task geometry is retained has no extent (a zero width or height). Only that run ends, with this code; the Runtime and the other instances go on (Workflow #387 D1c-G).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
