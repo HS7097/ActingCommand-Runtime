@@ -1063,7 +1063,13 @@ impl Invocation {
                     state_root = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
                 "--instance" => {
-                    instance = Some(require_text(&arguments, &mut index)?);
+                    // An empty alias names no instance: a usage error, never the global scope
+                    // that a pause or resume without `--instance` means (Fail Loud).
+                    let alias = require_text(&arguments, &mut index)?;
+                    if alias.is_empty() {
+                        return Err(ActingctlError::Usage);
+                    }
+                    instance = Some(alias);
                 }
                 "--interval-ms" => {
                     interval_ms = Some(require_u64(&arguments, &mut index)?);
