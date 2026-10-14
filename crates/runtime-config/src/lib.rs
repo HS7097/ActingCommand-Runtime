@@ -81,8 +81,8 @@ pub fn annotate_settable(
 mod ladder_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
-mod scheduling_tests;
-#[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod scheduling_tests;
 #[cfg(test)]
 mod tests;
