@@ -678,6 +678,8 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
+    // one-off (red proof 2, P-3): a pure decision step sleeps.
+    std::thread::sleep(std::time::Duration::ZERO);
     // Stored resource target policies are read before the time-validity projection, so a
     // timeline reset never silently withdraws one (Workflow #308 RT-S1b).
     let target_policies = crate::resource_targets::instance_target_policies(facts, time)?;
