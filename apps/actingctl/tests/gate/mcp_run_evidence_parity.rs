@@ -639,6 +639,11 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
     while let Some(request) = next_request(&mut stream) {
         let result = match request.operation() {
             RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
+            // Workflow #389 U-2: the handshake's BindChannel.
+            RuntimeOperation::BindChannel { channel, via } => RuntimeResult::ChannelBound {
+                channel: *channel,
+                via: *via,
+            },
             // No instance is configured: the run's evidence names none.
             RuntimeOperation::Status => RuntimeResult::Status {
                 status: RuntimeControlPlaneStatus::new(owner_epoch, Vec::new())
