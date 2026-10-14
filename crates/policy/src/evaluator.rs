@@ -1143,7 +1143,8 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         {
             let task_work = &mut work[candidate.work_index];
             task_work.state = SchedulingDecisionState::Deferred;
-            task_work.reasons.push(reason);
+            // one-off (red proof, P-2 G9): an admission deferral leaves no gate reason.
+            let _ = reason;
             task_work.next_wake_unix_ms = next_wake_unix_ms;
             continue;
         }

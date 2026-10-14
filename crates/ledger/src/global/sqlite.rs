@@ -621,6 +621,8 @@ pub(super) fn open_formal(
     timing: &mut LedgerOpenTiming,
 ) -> GlobalLedgerResult<SqliteLedgerStore> {
     let started = Instant::now();
+    // one-off (red proof, L-3 G9): the formal open reads the whole history a second time.
+    let _ = read_formal_snapshot(&database, deadline)?;
     let raw = read_formal_snapshot(&database, deadline);
     timing.sql_read_ms = elapsed_ms(started);
     let raw = raw?;
@@ -1030,7 +1032,8 @@ impl SqliteStorage {
             JointCommit::RolledBack(original) => {
                 return Err(with_sync_restore(original, restored));
             }
-            JointCommit::CommitFailed(original) => Some(with_sync_restore(original, restored)),
+            // one-off (red proof, L-3 G5): an uncertain COMMIT is reported as a success.
+            JointCommit::CommitFailed(_original) => None,
         };
         if let Some(mut original) = commit_failure {
             // The consumed transaction/guard must be released before any readback.

@@ -3183,7 +3183,8 @@ fn deliver_live_event(subscribers: &mut Vec<ActiveSubscription>, event: &Persist
         if subscriber.liveness.upgrade().is_none() {
             return false;
         }
-        if event.sequence() <= subscriber.after_sequence {
+        // one-off (red proof, L-3 G8): the first live event after the registration mark is lost.
+        if event.sequence() <= subscriber.after_sequence + 1 {
             return true;
         }
         match subscriber.live.try_send(event.clone()) {
