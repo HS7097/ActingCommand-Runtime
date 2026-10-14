@@ -788,7 +788,14 @@ fn n6_2_a_broken_game_root_never_stops_the_runtime() {
 /// a layer of the run (`role: interrupt_handler`), and the step goes on waiting with its own
 /// budget: the handling (its 800 ms `post_delay_ms` alone is longer than the step's 600 ms
 /// budget) is not counted, so the destination that shows later than the budget after the step's
-/// input still confirms the step.
+/// input still confirms the step, after frames of the step's own wait that show no page of the
+/// run.
+///
+/// The step's budget is wall-clock time and only the handling is paused, so every frame of the
+/// step's own wait (each one captured, stored, recorded and checked against the interrupt pages)
+/// spends it. The wait therefore sees a few such frames, not many: with ten, a loaded CI runner
+/// spent the 600 ms on them alone and the step ended `contained_task_step_unconfirmed` (CI run
+/// 38603013861), although nothing of the handling was counted.
 #[test]
 fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
     let state = Arc::new(FakeState::default());
@@ -816,15 +823,16 @@ fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
             1
         )]));
     // After the run's input the notice covers the page; after the handler's input the page is
-    // dark (the handler's destination) for ten captures, then `home` shows. Captures are
-    // counted, the clock is not read (test plan v2.2 §2.1 guard 3).
+    // dark (the handler's destination) for three captures, the handler's own frame and then the
+    // step's own wait, then `home` shows. Captures are counted, the clock is not read (test plan
+    // v2.2 §2.1 guard 3).
     let dark_from = std::sync::Mutex::new(None::<usize>);
     script(&state, move |capture, inputs| match inputs {
         0 => frame(RED, None),
         1 => frame(RED, Some(Overlay::Notice)),
         _ => {
             let first = *dark_from.lock().expect("dark from").get_or_insert(capture);
-            if capture < first + 10 {
+            if capture < first + 3 {
                 frame(BLACK, None)
             } else {
                 frame(BLUE, None)
@@ -853,6 +861,29 @@ fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
     assert_eq!(admitted, 1);
     assert_eq!(completed, ["neutral/dim"]);
     assert!(failed.is_empty());
+    // The step went on waiting after the handling: its own frames after the handled record show
+    // no page of the run (the handler's dark destination) before the first one on `home`.
+    let after_handling = run
+        .facts()
+        .into_iter()
+        .skip_while(|fact| !matches!(fact, TaskSemanticFact::InterruptHandled { .. }))
+        .filter_map(|fact| match fact {
+            TaskSemanticFact::RecognitionCompleted { matched_page, .. } => {
+                Some(matched_page.as_deref())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let waited = after_handling
+        .iter()
+        .take_while(|page| page.is_none())
+        .count();
+    assert!(waited >= 1, "{after_handling:?}");
+    assert_eq!(
+        after_handling.get(waited),
+        Some(&Some("neutral/home")),
+        "{after_handling:?}"
+    );
 }
 
 /// N6-4: no page of the page-graph run matches (it would end with `contained_task_page_unknown`)
