@@ -12171,13 +12171,21 @@ impl EventPayload {
         if let Self::Input(InputPayload::Intent(intent)) = self {
             intent.validate()?;
         }
-        match self {
-            Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
-                return Err(SanitizationError::new(
-                    SanitizationCode::InvalidTaskSemanticPayload,
-                    "task_semantic_fact",
-                ));
+        // Register X8 (Workflow #383 SH-2): a stored geometry observation whose phase does not
+        // fit its frame, trigger and original failure is refused with the phase rule's own code,
+        // as the writer refuses it; any other refusal of a task semantic fact stays the generic one.
+        if let Self::Task(TaskPayload::Semantic(value)) = self
+            && let Err(error) = value.validate()
+        {
+            if error.code() == SanitizationCode::InvalidTaskGeometryPhase.code() {
+                return Err(error);
             }
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidTaskSemanticPayload,
+                "task_semantic_fact",
+            ));
+        }
+        match self {
             Self::Ledger(LedgerPayload::Recovered(recovery))
                 if recovery.segment_index == Some(0) =>
             {
