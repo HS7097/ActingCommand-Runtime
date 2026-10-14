@@ -1064,7 +1064,6 @@ pub(super) fn validate_resource_packages(
 }
 
 pub(super) struct PolicyBootstrap {
-    pub(super) state_root: PathBuf,
     pub(super) catalog_approval_ids: Vec<String>,
     pub(super) catalog: CatalogSources,
     /// Workflow #361 A: the configured `replace` transition, if any.
@@ -1464,7 +1463,6 @@ impl ActingdConfigFile {
             policy.validate_registry_modes(&provider)?;
             policy.validate_instance_identities(&configured_aliases)?;
         }
-        let policy_state_root = self.state_root.clone();
         let policy_cadence = PolicyCadence::default();
         let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
             (
@@ -1621,7 +1619,6 @@ impl ActingdConfigFile {
                 .with_procedure_manifest(policy.procedure_manifest)
                 .with_scheduled_procedures(policy.scheduled_tasks.keys().cloned());
             Some(PolicyBootstrap {
-                state_root: policy_state_root,
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
                 catalog_transition: policy.catalog_transition,

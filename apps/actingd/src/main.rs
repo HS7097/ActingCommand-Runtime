@@ -2446,7 +2446,6 @@ mod tests {
         )
         .expect("start formal-provider runtime");
         let policy = PolicyBootstrap {
-            state_root: root.path().to_path_buf(),
             catalog_approval_ids: vec!["approval:fixture-a".to_string()],
             catalog,
             catalog_transition: None,
