@@ -5149,6 +5149,9 @@ const HOST_SPLIT: &[HostModule] = &[
                     "host/observation.rs",
                     "host/recovery_ladder.rs",
                     "host/resource_close.rs",
+                    // Workflow #387 D1c-G: `settle_unconfirmed_adb`, the one settlement of an
+                    // unconfirmed ADB check of an instance's own, settles here too.
+                    "host/resource_fence.rs",
                 ],
                 delegates: &[
                     "forget_unconfirmed_instance_close",

@@ -38,7 +38,8 @@ use std::collections::btree_map::Entry;
 /// Where a fence stands.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FenceStage {
-    /// Fenced; the lease sweep has not handed it to a ladder or a person yet.
+    /// Fenced; the lease sweep has not handed it to a ladder or a person yet (nor has the end
+    /// of a ladder that held the instance when it was fenced).
     Pending,
     /// A recovery ladder holds or waits for the instance; its end decides.
     Ladder,
@@ -420,6 +421,12 @@ impl HostShared {
     }
 
     /// A ladder of `instance_id` ended: a fence it held without lifting now waits for a person.
+    /// Workflow #387 D1c-G: so does a fence made while the ladder held the instance (one of its
+    /// own ADB checks, say) that the sweep has not handed on yet: the ladder holding the
+    /// instance decides it at its end, whether or not a sweep tick fell inside the climb. Left
+    /// `Pending`, a later tick would either start a second ladder for it, or, while the ladder
+    /// still holds the key before its release, hand it to this ladder after its decision, so
+    /// that it never waits for a person.
     pub(super) fn resource_fence_awaits_person(
         &self,
         instance_id: InstanceId,
@@ -428,9 +435,7 @@ impl HostShared {
             &self.resource_fences,
             HostLocation::HandResourceFencesToLadders,
         )?;
-        if let Some(fence) = fences.get_mut(&instance_id)
-            && fence.stage == FenceStage::Ladder
-        {
+        if let Some(fence) = fences.get_mut(&instance_id) {
             fence.stage = FenceStage::Person;
         }
         Ok(())
