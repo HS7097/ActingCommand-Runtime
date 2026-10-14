@@ -261,7 +261,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -274,6 +274,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_codes_parity::gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
 ]
 incident = ["#389"]
 
@@ -359,6 +360,16 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
 ]
 incident = ["#389 MCP-14"]
+
+# actingctl run evidence and ac_run_evidence refuse a request without exactly one of request_id and run_id, a malformed one and a page out of its range, naming the argument, and answer run_unknown with the request_id given for a run nobody has; ac_run_evidence cuts a page over the output budget to its first whole steps, truncated, and next_step reads on from the first step not answered (Workflow #389 MCP-6)
+[[gate]]
+key = "51"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code",
+    "actingcommand-actingctl::bin:actingctl::mcp::run_evidence::tests::a_page_over_the_output_budget_is_cut_to_whole_steps_with_truncated_and_next_step",
+]
+incident = ["#389 MCP-6"]
 
 # A MuMu resolution reason, as provider startup records it and check-config notes it, carries the context its resolving step recorded as values: what was counted, how many and whether exactly, the resolver rung, and how the adb, the MuMu folder and the capture DLL were configured (Workflow #378 A7; key after the wave 12 reservations apps 50 to 53)
 [[gate]]

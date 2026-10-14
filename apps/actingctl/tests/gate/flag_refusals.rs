@@ -19,6 +19,8 @@ const ROOT: &str = "{root}";
 const STRAY: &str = "extra";
 const PACKAGE_REF: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const QUERY: &str = r#"{"action":"query","transition_id":"transition-flags"}"#;
+// A request_id as the Runtime mints it (Workflow #389 MCP-6, `run evidence`).
+const REQUEST_ID: &str = "request_0123456789abcdef0123456789abcdef";
 
 // Where a subcommand prints its refusal.
 #[derive(Clone, Copy)]
@@ -351,6 +353,23 @@ const CLIENT: &[Subcommand] = &[
         &["codes", "--prefix", "outcome_", "--limit", "5"],
         &["--state-root", ROOT],
         &["--limit", "5"],
+    ),
+    // Workflow #389 MCP-6: `run evidence` and its page flags.
+    result(
+        &[
+            "run",
+            "evidence",
+            "--state-root",
+            ROOT,
+            "--request-id",
+            REQUEST_ID,
+            "--from-step",
+            "1",
+            "--limit",
+            "5",
+        ],
+        &["--instance", "neutral.instance"],
+        &["--from-step", "1"],
     ),
 ];
 
