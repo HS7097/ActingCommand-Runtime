@@ -549,3 +549,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_383_sh1::h1_the_host_refuses_the_reserved_path_drag_before_any_effect",
 ]
 incident = ["#383 SH-1"]
+
+# Workflow #396 REC-6: a value test's task diagnostic row carries its sides, comparison and result, a skipped page target row carries skipped, and both round-trip (REC-6's test in the host crate; key after the wave 8 reservations 59 to 61)
+[[gate]]
+key = "62"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::task_diagnostic::tests::a_value_test_row_and_a_skipped_page_target_row_round_trip",
+]
+incident = ["#396"]

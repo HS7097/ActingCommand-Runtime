@@ -643,3 +643,24 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::resource_validate_excludes_declared_regression_cases_and_refuses_unknown_json_elsewhere",
 ]
 incident = []
+
+# Workflow #396 REC-6: located text decides a page rule; a page its immediate targets rule out skips its lazy targets (located text, value tests) without a provider call, and pages told apart by lazy targets match as a full evaluation does; value tests compare (seven ops, mul and add, parses, clock_hms, whitespace_all_v1 with both parts of current_capacity) and name an unreadable side or an unmet comparison; a value test is refused in forbidden; a page that collects OCR gates on any backend, the gate's observation of a field or reading target is the one its frame collects, and the page-gate refusal is retired; a guard check on an unmet value test refuses the input
+[[gate]]
+key = "50"
+coverage = "Y"
+tests = [
+    "actingcommand-page-detector::lib::lazy_tests::a_locate_target_in_required_matches_the_page_only_with_its_text",
+    "actingcommand-page-detector::lib::lazy_tests::a_page_ruled_out_by_its_immediate_targets_skips_its_lazy_targets_without_a_provider_call",
+    "actingcommand-page-detector::lib::lazy_tests::pages_told_apart_only_by_lazy_targets_match_as_a_full_evaluation_does",
+    "actingcommand-page-detector::lib::lazy_tests::a_value_test_in_forbidden_is_refused_directly_or_as_a_check_member",
+    "actingcommand-recognition-pack::lib::value_test::tests::each_comparison_holds_or_fails_with_value_test_not_met",
+    "actingcommand-recognition-pack::lib::value_test::tests::the_right_side_is_another_read_value_times_mul_plus_add",
+    "actingcommand-recognition-pack::lib::value_test::tests::parses_with_clock_hms_holds_for_a_time_and_names_a_malformed_one",
+    "actingcommand-recognition-pack::lib::value_test::tests::whitespace_all_v1_reads_both_parts_of_a_spaced_current_capacity",
+    "actingcommand-recognition-pack::lib::value_test::tests::a_side_that_cannot_be_read_fails_with_value_test_unresolved_naming_side_and_problem",
+    "actingcommand-execution-kernel::lib::contained_task::value_test_tests::a_page_that_collects_ocr_gates_on_any_backend_and_the_page_gate_refusal_is_retired",
+    "actingcommand-execution-kernel::lib::contained_task::value_test_tests::a_page_gate_and_the_fields_of_its_frame_share_one_provider_observation",
+    "actingcommand-execution-kernel::lib::contained_task::value_test_tests::a_page_gate_and_the_readings_of_its_terminal_frame_share_one_provider_observation",
+    "actingcommand-execution-kernel::lib::contained_task::value_test_tests::a_guard_check_on_a_value_test_that_does_not_hold_refuses_the_input",
+]
+incident = ["#396"]

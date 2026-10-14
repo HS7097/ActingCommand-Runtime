@@ -1099,6 +1099,7 @@ impl SceneEvaluation<'_> {
                     nn: None,
                     color_digest: None,
                     composite: None,
+                    value_test: None,
                     failure: None,
                     uniqueness: None,
                     message: template_message(template_ok, color_ok),
@@ -1513,10 +1514,9 @@ fn confidence_milli(
         TargetKind::Ocr => ocr_confidence_milli(evaluation),
         TargetKind::Nn => nn_score_milli(evaluation),
         TargetKind::Color | TargetKind::ColorDigest | TargetKind::Composite => Ok(None),
-        TargetKind::ClickOnly => Err(CandidateProjectionFailure::unmeasurable(
-            evaluation,
-            "cannot be evaluated",
-        )),
+        TargetKind::ClickOnly | TargetKind::ValueTest => Err(
+            CandidateProjectionFailure::unmeasurable(evaluation, "cannot be evaluated"),
+        ),
     }
 }
 
@@ -1539,7 +1539,7 @@ fn measure_milli(evaluation: &TargetEvaluation) -> Result<Option<i64>, Candidate
         }
         TargetKind::Ocr => ocr_confidence_milli(evaluation),
         TargetKind::Nn => nn_score_milli(evaluation),
-        TargetKind::Composite | TargetKind::ClickOnly => Err(
+        TargetKind::Composite | TargetKind::ClickOnly | TargetKind::ValueTest => Err(
             CandidateProjectionFailure::unmeasurable(evaluation, "has no measure"),
         ),
     }
@@ -2135,7 +2135,8 @@ fn validate_placed_feature(
         Some(
             RecognitionTarget::Nn(_)
             | RecognitionTarget::Composite(_)
-            | RecognitionTarget::ClickOnly(_),
+            | RecognitionTarget::ClickOnly(_)
+            | RecognitionTarget::ValueTest(_),
         ) => errors.push(format!(
             "{target_pointer}: target '{target_id}' cannot be read at an offset; such a feature reads a template, color, color_digest or ocr target"
         )),

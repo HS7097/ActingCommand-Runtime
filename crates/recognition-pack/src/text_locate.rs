@@ -386,6 +386,7 @@ impl RecognitionEvaluator {
                 nn: None,
                 color_digest: None,
                 composite: None,
+                value_test: None,
                 failure,
                 uniqueness: None,
                 message,
@@ -405,8 +406,9 @@ impl RecognitionEvaluator {
     }
 
     /// Adds what `target_id` reads to one consumer's static text-read count: a locate OCR
-    /// target, or the locate members of a check. Each distinct request counts once; a
-    /// template-relative region is its own request. Another target reads nothing here.
+    /// target, the sides of a value test (Workflow #396 REC-6), or those members of a check.
+    /// Each distinct request counts once; a template-relative region is its own request.
+    /// Another target reads nothing here.
     pub fn count_text_reads(
         &self,
         count: &mut TextReadCount,
@@ -416,10 +418,9 @@ impl RecognitionEvaluator {
             .pack
             .coordinate_space
             .map(|space| (space.width, space.height));
-        let mut add = |target: &OcrTarget| -> Result<(), TextReadBudgetOverrun> {
-            let Some(locate) = &target.locate else {
-                return Ok(());
-            };
+        let mut add = |target: &OcrTarget,
+                       blocks: OcrProviderBlocks|
+         -> Result<(), TextReadBudgetOverrun> {
             let (region, area) = match (&target.region, frame) {
                 (PackRegion::Rect(rect), _) => (StaticTextRegion::Rect(*rect), rect_area(*rect)),
                 (PackRegion::Keyword(value), Some((width, height))) if value == "full_frame" => (
@@ -456,7 +457,7 @@ impl RecognitionEvaluator {
                 model_sha256: target.model_sha256.clone(),
                 languages: target.languages.clone(),
                 timeout_ms: target.timeout_ms,
-                blocks: locate.provider_blocks(),
+                blocks,
             };
             if count.reads.contains(&read) {
                 return Ok(());
@@ -482,17 +483,40 @@ impl RecognitionEvaluator {
             count.reads.insert(read);
             Ok(())
         };
+        let mut reads = |target: &RecognitionTarget| -> Result<(), TextReadBudgetOverrun> {
+            match target {
+                RecognitionTarget::Ocr(target) => match &target.locate {
+                    Some(locate) => add(target, locate.provider_blocks()),
+                    None => Ok(()),
+                },
+                RecognitionTarget::ValueTest(test) => {
+                    let right = match &test.right {
+                        Some(crate::ValueTestRight::Operand(operand)) => {
+                            Some(operand.target_id.as_str())
+                        }
+                        _ => None,
+                    };
+                    for side in std::iter::once(test.left.target_id.as_str()).chain(right) {
+                        if let Ok(RecognitionTarget::Ocr(target)) = self.target(side) {
+                            add(target, OcrProviderBlocks::Implicit)?;
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        };
         match self.target(target_id) {
-            Ok(RecognitionTarget::Ocr(target)) => add(target),
             Ok(RecognitionTarget::Composite(composite)) => {
                 for member in &composite.members {
-                    if let Ok(RecognitionTarget::Ocr(target)) = self.target(member) {
-                        add(target)?;
+                    if let Ok(target) = self.target(member) {
+                        reads(target)?;
                     }
                 }
                 Ok(())
             }
-            _ => Ok(()),
+            Ok(target) => reads(target),
+            Err(_) => Ok(()),
         }
     }
 
@@ -670,7 +694,7 @@ pub(crate) struct LocateRefusal {
     pub(crate) explanation: String,
 }
 
-fn refuse(
+pub(crate) fn refuse(
     pointer: String,
     reason: ResourceDeclarationReason,
     explanation: impl Into<String>,
@@ -682,7 +706,7 @@ fn refuse(
     })
 }
 
-fn pointer_token(token: &str) -> String {
+pub(crate) fn pointer_token(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
 

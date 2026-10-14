@@ -88,13 +88,16 @@ threshold that was applied.
 | Page rules `required`, `any_of`, `optional`, `forbidden` | Yes | Yes |
 | Operation guard | Yes, with `guard.check` | Yes, with `guard.color_probe` |
 | `target`, `target_center` and `offset` clicks | No | No |
-| Page gating post-admission OCR | Only when every member is a template, color or color digest target | Yes |
+| Page gating post-admission OCR | Yes (Workflow #396 REC-6: any backend) | Yes |
 | OCR field `target_id`, OCR relative anchor, navigation `target_center` | No | No |
 | Lab observe, is-visible, probe `ObserveTargets` | Yes, without geometry | Yes, without geometry |
 | Lab `wait --stable` | Rejected explicitly | Yes, by its region |
 
-A post-admission OCR field target is never referenced by a page, directly or as a member of
-a composite the page references.
+Workflow #396 REC-6: a page may reference a post-admission OCR field or reading target,
+directly or as a member of a composite the page references; the gate's observation of the
+frame is the field's or reading's. A composite may hold a value test
+(`resource-declarations.md`, section Task schema `0.9` value tests), and then is never in
+`forbidden`.
 
 A `target` or `offset` click takes its box from a template guard (`guard.verify_template`)
 or, from task schema `0.9`, from a located-text guard (`guard.verify_text`, `ocr-fields.md`,
@@ -113,8 +116,8 @@ target without a region, and a color digest target with its declared region.
 - A node's recognition slot names a check ID; checks replace custom recognition.
 - A direct hit is a node without a check.
 - Inversion belongs to the gate.
-- Numeric gates on OCR field values, such as a value at or above a threshold, are not part
-  of v0.9. They are a registered gap, not an implied behavior.
+- Numeric gates on read values, such as a value at or above a threshold, are value tests
+  (Workflow #396 REC-6, `resource-declarations.md`, section Task schema `0.9` value tests).
 
 ## Candidate layouts
 

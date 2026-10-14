@@ -7,9 +7,13 @@ mod text_read_tests;
 // Workflow #396 REC-2.
 #[cfg(test)]
 mod unique_tests;
+// Workflow #396 REC-6.
+#[cfg(test)]
+mod lazy_tests;
 
 pub use codes::PageDetectorCode;
 
+use actingcommand_contract::TaskDiagnosticTargetSkip;
 use actingcommand_contract::outcome::Code;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
@@ -260,9 +264,13 @@ pub struct PageTargetEvaluation {
     pub group_index: Option<usize>,
     pub target_index: usize,
     pub evaluation: TargetEvaluation,
+    /// Workflow #396 REC-6: a lazy target the page recognition did not evaluate because the
+    /// page could no longer match; it did not pass and its `evaluation` carries no evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<TaskDiagnosticTargetSkip>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum PageTargetRole {
     Required,
     AnyOf,
@@ -391,7 +399,8 @@ impl PageDetector {
                     | TargetKind::Ocr
                     | TargetKind::Nn
                     | TargetKind::ColorDigest
-                    | TargetKind::Composite => {}
+                    | TargetKind::Composite
+                    | TargetKind::ValueTest => {}
                     TargetKind::ClickOnly => {
                         return Err(PageDetectorError::fatal(format!(
                             "page definition references click-only target: {target_id}"
@@ -407,6 +416,25 @@ impl PageDetector {
                         Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
                             declaration_file: "recognition.pages.json".to_string(),
                             field_path: format!("/pages/{page_index}"),
+                            schema_version: Some(self.page_set.schema_version.clone()),
+                            reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                        }));
+                    return Err(error);
+                }
+            }
+            // Workflow #396 REC-6: a value test that cannot read does not pass, which in
+            // `forbidden` would let the page match unseen; it is refused there, directly or as
+            // a member of a check.
+            for (forbidden_index, target_id) in page.forbidden.iter().enumerate() {
+                if evaluator.tests_values(target_id) {
+                    let mut error = PageDetectorError::fatal(format!(
+                        "page '{}' forbids '{target_id}', which tests values",
+                        page.id
+                    ));
+                    error.declaration_issue =
+                        Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                            declaration_file: "recognition.pages.json".to_string(),
+                            field_path: format!("/pages/{page_index}/forbidden/{forbidden_index}"),
                             schema_version: Some(self.page_set.schema_version.clone()),
                             reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
                         }));
@@ -706,38 +734,80 @@ impl PageDetector {
         self.evaluate_page_in_context(&evaluator.scene_context(scene), page)
     }
 
+    /// Workflow #396 REC-6: the page's immediate targets are evaluated first, in the declared
+    /// order `required`, `any_of`, `optional`, `forbidden`. Its lazy targets (located text, value
+    /// tests and checks holding them) follow in the order `required`, `any_of`, `forbidden`,
+    /// `optional`, and only while the page can still match: once an immediate `required` target
+    /// failed, an `any_of` group of immediate targets all failed, an immediate `forbidden`
+    /// target passed, or a lazy `required` target failed, every remaining lazy target is
+    /// skipped (not passed, no provider call). The match is the one a full evaluation gives.
     pub fn evaluate_page_in_context(
         &self,
         context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
         page: &PageDefinition,
     ) -> PageDetectorResult<PageEvaluation> {
-        let required_results =
-            evaluate_targets(context, &page.required, PageTargetRole::Required, None)?;
-        let any_of_results = evaluate_any_of_groups(context, &page.any_of)
-            .map_err(|error| error.after(required_results.clone()))?;
-        let optional_results =
-            evaluate_targets(context, &page.optional, PageTargetRole::Optional, None).map_err(
-                |error| {
-                    error.after(
-                        required_results
-                            .iter()
-                            .chain(any_of_results.iter().flatten())
-                            .cloned(),
-                    )
-                },
-            )?;
-        let forbidden_results =
-            evaluate_targets(context, &page.forbidden, PageTargetRole::Forbidden, None).map_err(
-                |error| {
-                    error.after(
-                        required_results
-                            .iter()
-                            .chain(any_of_results.iter().flatten())
-                            .chain(optional_results.iter())
-                            .cloned(),
-                    )
-                },
-            )?;
+        let evaluator = context.evaluator();
+        let required = target_slots(&page.required, PageTargetRole::Required, None);
+        let any_of = page
+            .any_of
+            .iter()
+            .enumerate()
+            .flat_map(|(group_index, group)| {
+                target_slots(group, PageTargetRole::AnyOf, Some(group_index))
+            })
+            .collect::<Vec<_>>();
+        let optional = target_slots(&page.optional, PageTargetRole::Optional, None);
+        let forbidden = target_slots(&page.forbidden, PageTargetRole::Forbidden, None);
+        let lazy = |target_id: &str| evaluator.evaluates_lazily(target_id);
+
+        let mut evaluation = PageTargets::default();
+        let mut ruled_out = false;
+        let mut passed_groups = HashSet::new();
+        for &(slot, target_id) in required
+            .iter()
+            .chain(any_of.iter())
+            .chain(optional.iter())
+            .chain(forbidden.iter())
+            .filter(|&&(_, target_id)| !lazy(target_id))
+        {
+            let passed = evaluation.evaluate(context, slot, target_id)?;
+            ruled_out |= (slot.role == PageTargetRole::Required && !passed)
+                || (slot.role == PageTargetRole::Forbidden && passed);
+            if slot.role == PageTargetRole::AnyOf && passed {
+                passed_groups.extend(slot.group_index);
+            }
+        }
+        ruled_out |= page.any_of.iter().enumerate().any(|(group_index, group)| {
+            group.iter().all(|target_id| !lazy(target_id)) && !passed_groups.contains(&group_index)
+        });
+        for &(slot, target_id) in required
+            .iter()
+            .chain(any_of.iter())
+            .chain(forbidden.iter())
+            .chain(optional.iter())
+            .filter(|&&(_, target_id)| lazy(target_id))
+        {
+            if ruled_out {
+                evaluation.skip(evaluator, slot, target_id)?;
+                continue;
+            }
+            let passed = evaluation.evaluate(context, slot, target_id)?;
+            ruled_out |= slot.role == PageTargetRole::Required && !passed;
+        }
+        let required_results = evaluation.in_order(&required);
+        let any_of_results = (0..page.any_of.len())
+            .map(|group_index| {
+                evaluation.in_order(
+                    &any_of
+                        .iter()
+                        .filter(|(slot, _)| slot.group_index == Some(group_index))
+                        .copied()
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let optional_results = evaluation.in_order(&optional);
+        let forbidden_results = evaluation.in_order(&forbidden);
 
         let required_passed = count_passed(&required_results);
         let any_of_passed = count_passed_groups(&any_of_results);
@@ -916,51 +986,138 @@ fn validate_page_definition(page: &PageDefinition) -> PageDetectorResult<()> {
     Ok(())
 }
 
-fn page_target_ids(page: &PageDefinition) -> impl Iterator<Item = &str> {
-    page.required
-        .iter()
-        .chain(page.any_of.iter().flatten())
-        .chain(page.optional.iter())
-        .chain(page.forbidden.iter())
-        .map(String::as_str)
+/// Where a target stands in its page definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TargetSlot {
+    role: PageTargetRole,
+    group_index: Option<usize>,
+    target_index: usize,
 }
 
+/// The slots of one role's targets (or of one `any_of` group), in declaration order.
+fn target_slots(
+    targets: &[String],
+    role: PageTargetRole,
+    group_index: Option<usize>,
+) -> Vec<(TargetSlot, &str)> {
+    targets
+        .iter()
+        .enumerate()
+        .map(|(target_index, target_id)| {
+            (
+                TargetSlot {
+                    role,
+                    group_index,
+                    target_index,
+                },
+                target_id.as_str(),
+            )
+        })
+        .collect()
+}
+
+/// One page's target results by slot, and the results in evaluation order that a failed
+/// evaluation reports as completed (Workflow #396 REC-6).
+#[derive(Default)]
+struct PageTargets {
+    by_slot: HashMap<TargetSlot, PageTargetEvaluation>,
+    completed: Vec<PageTargetEvaluation>,
+}
+
+impl PageTargets {
+    /// Evaluates one target; whether it passed. An evaluation error is the page's error, with
+    /// the targets evaluated before it.
+    fn evaluate(
+        &mut self,
+        context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
+        slot: TargetSlot,
+        target_id: &str,
+    ) -> PageDetectorResult<bool> {
+        let evaluation = match context.evaluate_target(target_id) {
+            Ok(evaluation) => evaluation,
+            Err(cause) => {
+                let mut error = pack_error(cause.clone());
+                error.completed_targets = self.completed.clone();
+                error.failed_target = Some(Box::new(PageTargetFailure {
+                    target_id: target_id.to_owned(),
+                    role: slot.role,
+                    group_index: slot.group_index,
+                    target_index: slot.target_index,
+                    cause,
+                }));
+                return Err(error);
+            }
+        };
+        let result = PageTargetEvaluation {
+            target_id: target_id.to_owned(),
+            role: slot.role,
+            passed: evaluation.passed,
+            message: evaluation.message.clone(),
+            group_index: slot.group_index,
+            target_index: slot.target_index,
+            evaluation,
+            skipped: None,
+        };
+        let passed = result.passed;
+        self.completed.push(result.clone());
+        self.by_slot.insert(slot, result);
+        Ok(passed)
+    }
+
+    /// Records a lazy target the page recognition leaves unevaluated: not passed, no evidence.
+    fn skip(
+        &mut self,
+        evaluator: &RecognitionEvaluator,
+        slot: TargetSlot,
+        target_id: &str,
+    ) -> PageDetectorResult<()> {
+        let kind = evaluator
+            .target_kind(target_id)
+            .map_err(|cause| pack_error(cause).after(self.completed.iter().cloned()))?;
+        self.by_slot.insert(
+            slot,
+            PageTargetEvaluation {
+                target_id: target_id.to_owned(),
+                role: slot.role,
+                passed: false,
+                message: "skipped: the page cannot match".to_string(),
+                group_index: slot.group_index,
+                target_index: slot.target_index,
+                evaluation: TargetEvaluation::not_evaluated(target_id, kind),
+                skipped: Some(TaskDiagnosticTargetSkip::PageUnmatched),
+            },
+        );
+        Ok(())
+    }
+
+    /// The results of `slots`, in their order.
+    fn in_order(&mut self, slots: &[(TargetSlot, &str)]) -> Vec<PageTargetEvaluation> {
+        slots
+            .iter()
+            .filter_map(|(slot, _)| self.by_slot.remove(slot))
+            .collect()
+    }
+}
+
+/// One role's targets evaluated in order through `PageTargets` (the unit tests' view of one
+/// page rule list).
+#[cfg(test)]
 fn evaluate_targets(
     context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
     target_ids: &[String],
     role: PageTargetRole,
     group_index: Option<usize>,
 ) -> PageDetectorResult<Vec<PageTargetEvaluation>> {
-    let mut results = Vec::new();
-    for (target_index, target_id) in target_ids.iter().enumerate() {
-        let evaluation = match context.evaluate_target(target_id) {
-            Ok(evaluation) => evaluation,
-            Err(cause) => {
-                let mut error = pack_error(cause.clone());
-                error.completed_targets = results;
-                error.failed_target = Some(Box::new(PageTargetFailure {
-                    target_id: target_id.clone(),
-                    role,
-                    group_index,
-                    target_index,
-                    cause,
-                }));
-                return Err(error);
-            }
-        };
-        results.push(PageTargetEvaluation {
-            target_id: target_id.clone(),
-            role,
-            passed: evaluation.passed,
-            message: evaluation.message.clone(),
-            group_index,
-            target_index,
-            evaluation,
-        });
+    let slots = target_slots(target_ids, role, group_index);
+    let mut targets = PageTargets::default();
+    for &(slot, target_id) in &slots {
+        targets.evaluate(context, slot, target_id)?;
     }
-    Ok(results)
+    Ok(targets.in_order(&slots))
 }
 
+/// Every `any_of` group evaluated in order, as `evaluate_targets`.
+#[cfg(test)]
 fn evaluate_any_of_groups(
     context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
     groups: &[Vec<String>],
@@ -972,6 +1129,15 @@ fn evaluate_any_of_groups(
         results.push(evaluated);
     }
     Ok(results)
+}
+
+fn page_target_ids(page: &PageDefinition) -> impl Iterator<Item = &str> {
+    page.required
+        .iter()
+        .chain(page.any_of.iter().flatten())
+        .chain(page.optional.iter())
+        .chain(page.forbidden.iter())
+        .map(String::as_str)
 }
 
 fn count_passed(results: &[PageTargetEvaluation]) -> usize {

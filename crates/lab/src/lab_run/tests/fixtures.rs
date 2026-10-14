@@ -134,6 +134,7 @@ fn color_target_evaluation(id: &str, mean: [u8; 3], passed: bool) -> TargetEvalu
             "color failed".to_string()
         },
         failure: None,
+        value_test: None,
         uniqueness: None,
     }
 }

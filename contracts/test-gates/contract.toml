@@ -431,3 +431,12 @@ tests = [
     "actingcommand-contract::lib::event::tests::sh1::h1_the_reserved_path_drag_decodes_validates_and_redacts",
 ]
 incident = ["#383 SH-1"]
+
+# Workflow #396 REC-6: a value test whose side reads a personal OCR target is personal, as is a check holding it, and its evidence is redacted in the projection (REC-6's tests in the contract crate; key after the wave 8 reservations K19 and K20)
+[[gate]]
+key = "K21"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::page_projection::tests::a_value_test_reading_a_personal_target_is_personal_and_its_evidence_is_redacted",
+]
+incident = ["#396"]

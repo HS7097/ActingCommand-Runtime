@@ -56,6 +56,7 @@ pub(super) fn detect(
                         group_index: target.actual.group_index,
                         target_index: target.actual.target_index,
                         evaluation: target.actual.evaluation,
+                        skipped: target.actual.skipped,
                     })
                 })
                 .collect::<CliOutcome<Vec<_>>>()?;
@@ -275,13 +276,14 @@ fn resolve(
             target_id: target_id.clone(),
             reason: NotEvaluatedReason::DynamicTarget,
         },
-        // A digest or composite is evaluated like a color target and, having no template
-        // match, gives no geometry. Workflow #396 LAB-3: so is an OCR target, with the Runtime's
+        // A digest, composite or value test (Workflow #396 REC-6) is evaluated like a color
+        // target and, having no template match, gives no geometry. Workflow #396 LAB-3: so is an OCR target, with the Runtime's
         // OCR provider; a composite with an OCR member is refused without an OCR model.
         TargetKind::Template
         | TargetKind::Color
         | TargetKind::ColorDigest
         | TargetKind::Composite
+        | TargetKind::ValueTest
         | TargetKind::Ocr => {
             ocr.require(evaluator.pack(), [target_id.as_str()])?;
             let evaluated = evaluator

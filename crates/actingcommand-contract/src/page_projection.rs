@@ -136,7 +136,8 @@ pub struct ProjectionCatalog {
     pub pages: BTreeSet<String>,
     field_privacy: BTreeMap<FieldKey, Privacy>,
     relative_anchors: BTreeMap<String, String>,
-    /// Composite checks and the members they evaluate.
+    /// Composite checks and the members they evaluate, and value tests (Workflow #396 REC-6)
+    /// and the OCR targets their sides read.
     composite_members: BTreeMap<String, Vec<String>>,
 }
 
@@ -247,6 +248,18 @@ impl ProjectionCatalog {
                     })
                     .collect::<LabResult<Vec<_>>>()?;
                 catalog.composite_members.insert(id(target, "id")?, members);
+            }
+            // Workflow #396 REC-6: a value test evaluates the OCR targets its sides read.
+            if target.get("type").and_then(Value::as_str) == Some("value_test") {
+                let mut operands = vec![id(&target["left"], "target_id")?];
+                if let Some(right) = target.get("right")
+                    && right.get("target_id").is_some()
+                {
+                    operands.push(id(right, "target_id")?);
+                }
+                catalog
+                    .composite_members
+                    .insert(id(target, "id")?, operands);
             }
         }
         for page in rows(pages, "pages")? {
@@ -482,22 +495,31 @@ impl VerifiedProjectionMetadata {
         if !self.catalog.targets.contains(target) {
             return None;
         }
-        // A composite evaluates its members, so a personal member makes the composite personal.
-        let personal = self.classified_personal(target)
-            || self
-                .catalog
-                .composite_members
-                .get(target)
-                .is_some_and(|members| {
-                    members
-                        .iter()
-                        .any(|member| self.classified_personal(member))
-                });
+        // A composite evaluates its members, and a value test the OCR targets its sides read
+        // (Workflow #396 REC-6), so a personal member makes the target personal; a composite's
+        // value test member counts with its own sides.
+        let personal = self.evaluated_personal(target, 2);
         Some(if personal {
             Privacy::Personal
         } else {
             Privacy::Public
         })
+    }
+
+    /// A personal classification of the target, or of a target it evaluates (a composite's
+    /// members, a value test's sides), up to `depth` levels down.
+    fn evaluated_personal(&self, target: &str, depth: u8) -> bool {
+        self.classified_personal(target)
+            || (depth > 0
+                && self
+                    .catalog
+                    .composite_members
+                    .get(target)
+                    .is_some_and(|members| {
+                        members
+                            .iter()
+                            .any(|member| self.evaluated_personal(member, depth - 1))
+                    }))
     }
 
     /// A personal classification on the target, a field bound to it, or a target sharing its
@@ -1225,6 +1247,68 @@ mod tests {
         facts.push(json!({"raw":"x".repeat(64 * 1024)}), 3).unwrap();
         facts.validate().unwrap();
         assert_eq!(facts.omitted_target_evaluation_count, 5);
+    }
+
+    // Workflow #396 REC-6: a value test evaluates the OCR targets its sides read, so a personal
+    // side makes the value test, and a check holding it, personal; its evidence is redacted.
+    #[test]
+    fn a_value_test_reading_a_personal_target_is_personal_and_its_evidence_is_redacted() {
+        for personal in [false, true] {
+            let mut references = ProjectionCatalog::from_resources(
+                &json!({"coordinate_space": {"width": 100, "height": 100}, "targets": [
+                    {"id": "anchor"},
+                    {"id": "count", "type": "ocr"},
+                    {"id": "check/count", "type": "value_test", "op": "gt",
+                     "left": {"target_id": "count"}, "right": {"const": 0}},
+                    {"id": "check/any", "type": "composite", "members": ["anchor", "check/count"]}
+                ]}),
+                &json!({"pages": [{"id": "home"}]}),
+                &json!({}),
+            )
+            .unwrap();
+            references
+                .add_operation_fields(&json!({"task_id": "task", "post_admission_ocr": {
+                "mode": "fields_v1",
+                "fields": [{"id": "count", "target_id": "count",
+                            "privacy": if personal {"personal"} else {"public"}}]}}))
+                .unwrap();
+            let metadata = VerifiedProjectionMetadata::unannotated(references);
+            let expected = Some(if personal {
+                Privacy::Personal
+            } else {
+                Privacy::Public
+            });
+            assert_eq!(metadata.target_privacy("check/count"), expected);
+            assert_eq!(metadata.target_privacy("check/any"), expected);
+            assert_eq!(metadata.target_privacy("anchor"), Some(Privacy::Public));
+
+            let mut source = input();
+            source.fields.push(FieldInput {
+                target_id: "check/count".into(),
+                field: None,
+                parsed: false,
+                raw_text: None,
+                value: Some(
+                    json!({"evaluations": [{"evaluation_index": 0, "evaluation": {
+                        "kind": "value_test", "passed": true,
+                        "value_test": {"left": {"target_id": "count", "raw_text": "private-7",
+                                                "value": 7},
+                                       "op": "gt", "right": {"kind": "const", "const": 0},
+                                       "passed": true}
+                    }}]}),
+                ),
+                detail: None,
+                privacy: None,
+            });
+            let output = project(source, &metadata).unwrap();
+            assert_eq!(output.fields[0]["redacted"], personal);
+            assert_eq!(
+                serde_json::to_string(&output)
+                    .unwrap()
+                    .contains("private-7"),
+                !personal
+            );
+        }
     }
 
     fn catalog() -> ProjectionCatalog {

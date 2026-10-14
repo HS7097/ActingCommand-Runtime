@@ -153,7 +153,8 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskPostAdmissionOcrPageGateMissing => "contained_task_post_admission_ocr_page_gate_missing": error / declaration_error,
         ContainedTaskPostAdmissionOcrPageGateInvalid => "contained_task_post_admission_ocr_page_gate_invalid": error / declaration_error,
         ContainedTaskPostAdmissionOcrTargetInvalid => "contained_task_post_admission_ocr_target_invalid": error / declaration_error,
-        ContainedTaskPostAdmissionOcrTargetInPageGate => "contained_task_post_admission_ocr_target_in_page_gate": error / declaration_error,
+        // Workflow #396 REC-6 retired `contained_task_post_admission_ocr_target_in_page_gate`:
+        // a page gate may name the targets its page collects.
         ContainedTaskPostAdmissionOcrTargetOutOfBounds => "contained_task_post_admission_ocr_target_out_of_bounds": error / declaration_error,
         ContainedTaskPostAdmissionOcrTruthMissing => "contained_task_post_admission_ocr_truth_missing": error / declaration_error,
         ContainedTaskPostAdmissionOcrTruthInvalid => "contained_task_post_admission_ocr_truth_invalid": error / declaration_error,
