@@ -12,19 +12,38 @@ const SOURCE_SCHEMA: &str = "actingcommand.release-ledger-source.v1";
 const BASELINE_PAGE_EVENTS: usize = 256;
 const OPERATION: Location = LedgerLocation::VerifyReleaseLedgerSource.location();
 
+/// A baseline head hook and the thread that armed it.
 #[cfg(any(test, feature = "test-hooks"))]
-thread_local! {
-    static AFTER_BASELINE_HEAD_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
-}
+type ArmedBaselineHeadHook = (std::thread::ThreadId, Box<dyn FnOnce() + Send>);
+
+/// Workflow #381 L1, test hook: the armed hooks, at most one per arming thread.
+#[cfg(any(test, feature = "test-hooks"))]
+static AFTER_BASELINE_HEAD_HOOKS: std::sync::Mutex<Vec<ArmedBaselineHeadHook>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Workflow #381 L1, test hook: `hook` runs once, on this thread, inside the next
 /// [`read_release_baseline_source`] that finds a head, right after the head is read (so the
 /// caller's read snapshot is fixed) and before the first row page. An append made there lands in
-/// the middle of the scan.
+/// the middle of the scan. Arming again on the same thread replaces the earlier hook.
 #[cfg(any(test, feature = "test-hooks"))]
-pub fn after_release_baseline_head_for_test(hook: Box<dyn FnOnce()>) {
-    AFTER_BASELINE_HEAD_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+pub fn after_release_baseline_head_for_test(hook: Box<dyn FnOnce() + Send>) {
+    let thread = std::thread::current().id();
+    let mut hooks = AFTER_BASELINE_HEAD_HOOKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    hooks.retain(|(armed, _)| *armed != thread);
+    hooks.push((thread, hook));
+}
+
+/// The hook armed on this thread, removed so it runs once.
+#[cfg(any(test, feature = "test-hooks"))]
+fn armed_baseline_head_hook() -> Option<Box<dyn FnOnce() + Send>> {
+    let thread = std::thread::current().id();
+    let mut hooks = AFTER_BASELINE_HEAD_HOOKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let index = hooks.iter().position(|(armed, _)| *armed == thread)?;
+    Some(hooks.swap_remove(index).1)
 }
 
 /// A persistable locator, not a fact or material capability. Every use requires verification.
@@ -185,7 +204,7 @@ pub fn read_release_baseline_source(
     };
     #[cfg(any(test, feature = "test-hooks"))]
     {
-        if let Some(hook) = AFTER_BASELINE_HEAD_HOOK.with(|slot| slot.borrow_mut().take()) {
+        if let Some(hook) = armed_baseline_head_hook() {
             hook();
         }
     }
