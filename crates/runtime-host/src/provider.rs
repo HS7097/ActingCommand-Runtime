@@ -21,8 +21,10 @@ use actingcommand_device::{
     NemuSessionBackends, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
     create_touch_backend_for_fenced_input, discover_mumu_instances, mumu_state_wait,
 };
+use actingcommand_device::{AdbTrackDevices, DeviceSerial, TrackDevicesEvent, TrackDevicesStopper};
 pub use actingcommand_execution_kernel::{
-    DeviceProcessPresence, DiscoveredInstanceBinding, EmulatorControlFailure,
+    DeviceLinkWatch, DeviceLinkWatchEvent, DeviceLinkWatchStop, DeviceProcessPresence,
+    DiscoveredInstanceBinding, EmulatorControlFailure,
     EmulatorControlOutcome, EmulatorControlResult, ExecutionBackendProvider,
     ForegroundApplicationObservation, HandsetBinding, HandsetEndpoint, InstanceDiscoveryFailure,
     InstanceState, PendingAdbEndpoint, ProviderDiscoveredInstance, ProviderInstanceDiscovery,
@@ -693,6 +695,67 @@ impl ExecutionBackendEntry {
             assigned: self.application_id.clone(),
         })
     }
+
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.1): the serial of a bound handset and the adb it
+    /// is reached through; `None` for an emulator and for a handset the private binding file
+    /// binds no device to.
+    fn bound_handset(&self) -> Option<(DeviceSerial, String)> {
+        let endpoint = self.endpoint();
+        match endpoint.handset() {
+            Some(HandsetEndpoint::Bound(binding)) => Some((
+                binding.serial().clone(),
+                self.application_adb.adb_path.clone(),
+            )),
+            Some(HandsetEndpoint::Unbound) | None => None,
+        }
+    }
+
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.3): one `adb -s <serial> reconnect` of a bound
+    /// handset's transport. Any other instance is refused before adb runs.
+    fn reconnect_handset(&self) -> DeviceResult<()> {
+        let Some((serial, _)) = self.bound_handset() else {
+            return Err(DeviceError::fatal(
+                "only a bound handset's transport is reconnected",
+            ));
+        };
+        Adb::new(self.application_adb.clone()).reconnect_transport(serial.adb_arg())
+    }
+}
+
+/// Workflow #398 RD-2 (model-398 v1.1 §4.1): the registry's device-link watch, one
+/// `adb track-devices` process read as the link state of each bound handset by its alias. The
+/// serials stay here; the watch's events name aliases only.
+struct RegistryLinkWatch {
+    process: AdbTrackDevices,
+    handsets: Vec<(String, DeviceSerial)>,
+}
+
+impl DeviceLinkWatch for RegistryLinkWatch {
+    fn next_event(&mut self) -> DeviceLinkWatchEvent {
+        match self.process.next_event() {
+            TrackDevicesEvent::List(list) => DeviceLinkWatchEvent::Links(
+                self.handsets
+                    .iter()
+                    .map(|(alias, serial)| (alias.clone(), list.state_of(serial)))
+                    .collect(),
+            ),
+            TrackDevicesEvent::Ended => DeviceLinkWatchEvent::Ended,
+            TrackDevicesEvent::ProtocolInvalid => DeviceLinkWatchEvent::ProtocolInvalid,
+        }
+    }
+
+    fn stopper(&self) -> Arc<dyn DeviceLinkWatchStop> {
+        Arc::new(RegistryLinkWatchStop(self.process.stopper()))
+    }
+}
+
+/// Ends the registry's `adb track-devices` process.
+struct RegistryLinkWatchStop(Arc<TrackDevicesStopper>);
+
+impl DeviceLinkWatchStop for RegistryLinkWatchStop {
+    fn stop(&self) -> DeviceResult<()> {
+        self.0.stop()
+    }
 }
 
 /// The only [`ExecutionBackendProvider`]: every instance the daemon configured, real or
@@ -991,6 +1054,40 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             RegistryEntry::Real(entry) => entry.control_application(witness, action),
             #[cfg(feature = "fixture-backends")]
             RegistryEntry::Fixture(_) => fixtures::FixtureEntry::control_application(),
+        }
+    }
+
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.1): one `adb track-devices` process for every
+    /// bound handset, through the first one's adb (the installation's); none when the registry
+    /// has no bound handset, so an emulator-only configuration runs no watch process.
+    fn open_device_link_watch(&self) -> DeviceResult<Option<Box<dyn DeviceLinkWatch>>> {
+        let mut adb_path = None;
+        let mut handsets = Vec::new();
+        for (alias, entry) in &self.entries {
+            let entry = match entry {
+                RegistryEntry::Real(entry) => entry,
+                #[cfg(feature = "fixture-backends")]
+                RegistryEntry::Fixture(_) => continue,
+            };
+            if let Some((serial, path)) = entry.bound_handset() {
+                adb_path.get_or_insert(path);
+                handsets.push((alias.clone(), serial));
+            }
+        }
+        let Some(adb_path) = adb_path else {
+            return Ok(None);
+        };
+        let process = AdbTrackDevices::spawn(&adb_path)?;
+        Ok(Some(Box::new(RegistryLinkWatch { process, handsets })))
+    }
+
+    fn reconnect_handset(&self, instance_alias: &str) -> DeviceResult<()> {
+        match self.entry(instance_alias)? {
+            RegistryEntry::Real(entry) => entry.reconnect_handset(),
+            #[cfg(feature = "fixture-backends")]
+            RegistryEntry::Fixture(_) => Err(DeviceError::fatal(
+                "a fixture instance has no handset transport to reconnect",
+            )),
         }
     }
 

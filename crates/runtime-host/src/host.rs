@@ -160,6 +160,8 @@ mod backend_open;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;
+// Workflow #398 RD-2: the wired device link of the handsets, its wait and restore.
+mod device_link;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
@@ -1618,6 +1620,7 @@ impl RuntimeHost {
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
+            device_links: Mutex::new(device_link::DeviceLinks::default()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
             config_override_gate: Mutex::new(()),
             recovery_ladder_config: Mutex::new(None),
@@ -1916,6 +1919,9 @@ impl RuntimeHost {
             host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
             shared.check_install_preparation()?;
+            // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
+            // after their daemon-start preparation; none without a bound handset.
+            device_link::start(&shared)?;
             lock(
                 &shared.performance,
                 HostLocation::SampleCapacityBeforeBusiness,
@@ -2877,6 +2883,32 @@ impl RuntimeHost {
             .expire_due_leases()
     }
 
+    /// Workflow #398 RD-2: one event of the running device-link watch, handed in as its reader
+    /// hands it (the fake provider's watch reports nothing by itself).
+    #[cfg(test)]
+    pub(crate) fn device_link_event_for_test(
+        &self,
+        event: actingcommand_execution_kernel::DeviceLinkWatchEvent,
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::DeviceLinkEventForTest)?;
+        shared.device_link_event(shared.device_link_generation()?, event)
+    }
+
+    /// Workflow #398 RD-2: one tick of the device links' timers at the host clock, as the lease
+    /// sweep runs it.
+    #[cfg(test)]
+    pub(crate) fn device_link_tick_for_test(&self) -> RuntimeHostResult<()> {
+        let shared = self.shared.as_ref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeHostClosed,
+                crate::codes::test_spellings::TestLocation::DeviceLinkTickForTest,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?;
+        device_link::tick(shared)
+    }
+
     /// Workflow #369 S1: the instance's admission guard, for a test thread to hold.
     #[cfg(test)]
     pub(crate) fn instance_admission_for_test(
@@ -3702,6 +3734,13 @@ impl RuntimeHost {
             &mut failure,
             join_runtime_thread(self.monitor_thread.take(), HostLocation::JoinRuntimeMonitor),
         );
+        // Workflow #398 RD-2: the device-link watch stops (its process ends) and its reader is
+        // joined, after the sweep that restarts it.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            device_link::stop_watch(&shared),
+        );
         // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
         // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
         // joined, before the host's own close.
@@ -4156,6 +4195,9 @@ struct HostShared {
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
+    // Workflow #398 RD-2: the handsets' device links and their watch (model-398 §4). A leaf
+    // lock: nothing else is taken while it is held.
+    device_links: Mutex<device_link::DeviceLinks>,
     // Workflow #387 D1b: the configuration in effect (the file layer of the manifest and the
     // instruction values), and the gate that orders each change and the start's restore with
     // the records it leads to.
@@ -4702,6 +4744,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             return Err(error);
         }
         if let Err(error) = shared.expire_agent_sessions() {
+            shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
+        // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
+        // the watch's restarts), on the host clock.
+        if let Err(error) = device_link::tick(&shared) {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }

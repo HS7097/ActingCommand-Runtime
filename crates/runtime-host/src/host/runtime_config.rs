@@ -379,6 +379,23 @@ impl HostShared {
             })
     }
 
+    /// Workflow #398 RD-2: the `device_link` section in effect (model-398 §4.6), read at every
+    /// link change, restore and watch restart.
+    pub(super) fn device_link_config(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::DeviceLinkConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .device_link()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
     /// each step of a contained run (the kernel's `step_pacing()`).
     pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {

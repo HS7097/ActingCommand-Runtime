@@ -1252,6 +1252,31 @@ actingcommand_contract::outcome_codes! {
         PriorityOffsetUnknownTask => "priority_offset_unknown_task": warning / none,
         /// Error. Workflow #378 A2-P.
         PolicyDetectionReasonUnknown => "policy_detection_reason_unknown": error / none,
+        // ---- Workflow #398 RD-2 (model-398 v1.1 §4, §10.1): a handset's wired device link
+        // and its watch: begin
+        /// Error. A run (or the opening of a handset's backends) ended because the handset's
+        /// device link left `device`; the device failure it met is its `caused_by` link, and
+        /// no input follows (keys `device_label`, `device_link_state`).
+        DeviceLinkLost => "device_link_lost": error / environment_fault,
+        /// Warning. A handset left `device`: its availability is withdrawn
+        /// (`device_link:<state>`) and the Runtime waits for the link (keys `device_label`,
+        /// `device_link_state`).
+        DeviceLinkWaiting => "device_link_waiting": warning / none,
+        /// Info. A handset is back at `device` and its preparation passed: available again
+        /// (keys `device_label`).
+        DeviceLinkRestored => "device_link_restored": info / none,
+        /// Warning. The device-link watch ended and was started again within its restart budget
+        /// (keys `device_watch_problem`).
+        DeviceWatchRestarted => "device_watch_restarted": warning / none,
+        /// Error. The device-link watch could not start, read an output of unknown shape, or
+        /// ended more often than its restart budget allows: every handset is `unwatched` and
+        /// unavailable until a person's self-check (keys `device_watch_problem`).
+        DeviceWatchFailed => "device_watch_failed": error / none,
+        /// Warning. The one reconnect of an `offline` handset's transport
+        /// (`device_link.offline_action = kick_once`) failed; the Runtime waits for the link as
+        /// under `wait` (keys `device_label`; adb's text is the cause).
+        DeviceLinkReconnectFailed => "device_link_reconnect_failed": warning / none,
+        // ---- Workflow #398 RD-2: end
     }
 }
 
@@ -2093,6 +2118,15 @@ actingcommand_contract::outcome_locations! {
         RecoveryStabilityCount => "recovery_stability_count",
         RecoveryStabilityAdmission => "recovery_stability_admission",
         RecoveryUnclassifiedNote => "recovery_unclassified_note",
+        // Workflow #398 RD-2: the device-link watch of the handsets, the link states it applies,
+        // the restore preparation it queues and the retained session it closes.
+        DeviceLinkWatch => "device_link_watch",
+        DeviceLinkApply => "device_link_apply",
+        DeviceLinkRestore => "device_link_restore",
+        DeviceLinkSessionClose => "device_link_session_close",
+        DeviceLinkReconnect => "device_link_reconnect",
+        DeviceLinkRead => "device_link_read",
+        DeviceLinkRun => "device_link_run",
     }
 }
 
@@ -2207,6 +2241,9 @@ pub(crate) mod test_spellings {
             StoreTestReport => "store_test_report",
             TakePolicyConditionForTest => "take_policy_condition_for_test",
             ValidatePolicyAdmissionRequestForTest => "validate_policy_admission_request_for_test",
+            // Workflow #398 RD-2: a test hands the device-link watch's events and timers in.
+            DeviceLinkEventForTest => "device_link_event_for_test",
+            DeviceLinkTickForTest => "device_link_tick_for_test",
         }
     }
 }

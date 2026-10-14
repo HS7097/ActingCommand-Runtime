@@ -5000,6 +5000,8 @@ const HOST_SPLIT: &[HostModule] = &[
         ],
     },
     host_module("device_diagnostic", &["HostShared"]),
+    // Workflow #398 RD-2: the handsets' device links, their watch, wait and restore.
+    host_module("device_link", &["HostShared"]),
     host_module("emulator_instance", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),

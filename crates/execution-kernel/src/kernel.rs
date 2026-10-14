@@ -418,6 +418,22 @@ impl ExecutionKernel {
         self.provider.probe_adb_baseline(instance_alias)
     }
 
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.1): opens the provider's device-link watch,
+    /// outside any session; `None` when the provider has no bound handset. The device error
+    /// comes back untyped.
+    pub fn open_device_link_watch(
+        &self,
+    ) -> actingcommand_device::DeviceResult<Option<Box<dyn crate::DeviceLinkWatch>>> {
+        self.provider.open_device_link_watch()
+    }
+
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.3): one reconnect of a bound handset's transport,
+    /// driven on the provider directly, outside any session; the device error comes back
+    /// untyped.
+    pub fn reconnect_handset(&self, instance_alias: &str) -> actingcommand_device::DeviceResult<()> {
+        self.provider.reconnect_handset(instance_alias)
+    }
+
     pub fn probe_adb_baseline_until(
         &self,
         instance_alias: &str,

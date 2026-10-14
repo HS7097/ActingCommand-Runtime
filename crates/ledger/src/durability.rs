@@ -202,7 +202,10 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
     match phase {
         RuntimeLifecyclePhase::BackendOpenObserved
         | RuntimeLifecyclePhase::AdbTargetRecovery
-        | RuntimeLifecyclePhase::DeviceDiagnosticDetail => CommitSync::Normal,
+        | RuntimeLifecyclePhase::DeviceDiagnosticDetail
+        // Workflow #398 RD-2: a handset's link, observed; the availability it withdraws or
+        // restores is its own durable fact record.
+        | RuntimeLifecyclePhase::DeviceLinkObserved { .. } => CommitSync::Normal,
         RuntimeLifecyclePhase::PriorEpochOwnerImported
         | RuntimeLifecyclePhase::PriorEpochScopeClosed
         | RuntimeLifecyclePhase::PriorEpochOwnerReleasedByExit { .. }

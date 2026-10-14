@@ -6312,6 +6312,19 @@ impl HostShared {
                 }
             }
         }
+        // Workflow #398 RD-2 (model-398 v1.1 §4.4): a device failure met while the instance's
+        // handset is no longer `device` ends the run with `device_link_lost`, the device failure
+        // its `caused_by` link; the run sends nothing more to the device.
+        if let Err(
+            ContainedTaskRunError::Boundary(failure)
+            | ContainedTaskRunError::NonfatalOperation(failure),
+        ) = &mut execution
+            && let Some(lost) = self
+                .device_link_lost(control.instance_id, &failure.error)
+                .map_err(RequestFailure::poison_without_terminal)?
+        {
+            *failure.error = lost;
+        }
         if let Err(ContainedTaskRunError::Task(error)) = &execution {
             runtime
                 .task_timing

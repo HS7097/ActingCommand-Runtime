@@ -637,6 +637,17 @@ impl HostShared {
         )
     }
 
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.2): whether `record` is a withdrawal the device
+    /// link published, whatever its state.
+    pub(super) fn withdrawn_by_device_link(record: Option<&FactRecord>) -> bool {
+        record.is_some_and(|record| {
+            record.source_detector == DEVICE_LINK_AVAILABILITY_DETECTOR
+                && record
+                    .source_snapshot_id
+                    .starts_with(DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX)
+        })
+    }
+
     /// Workflow #398 RD-1b: whether `record` is a withdrawal for the device link's `state`.
     pub(super) fn withdrawn_for_device_link(record: Option<&FactRecord>, state: &str) -> bool {
         record.is_some_and(|record| {

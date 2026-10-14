@@ -1577,6 +1577,14 @@
       "type": "vocab:device_binding_problem",
       "description": "What is wrong with the private device-binding file (Workflow #398 RD-1b)."
     },
+    "device_link_state": {
+      "type": "vocab:device_link_state",
+      "description": "The state of a handset's wired device link (Workflow #398 RD-2)."
+    },
+    "device_watch_problem": {
+      "type": "vocab:device_watch_problem",
+      "description": "What went wrong with the device-link watch, the Runtime's one adb track-devices process (Workflow #398 RD-2)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -4769,6 +4777,52 @@
         },
         "serial_invalid": {
           "description": "A serial is not 1 to 64 bytes of printable ASCII without white space."
+        }
+      }
+    },
+    "device_link_state": {
+      "description": "The state of a handset's wired device link (model-398 section 4.2). The first six are what the adb server reports for the bound serial; the last two are the Runtime's own.",
+      "tokens": {
+        "device": {
+          "description": "adb reports device: the handset answers."
+        },
+        "absent": {
+          "description": "The bound serial is not in adb's device list (the cable is out)."
+        },
+        "offline": {
+          "description": "adb reports offline."
+        },
+        "unauthorized": {
+          "description": "adb reports unauthorized: a person allows USB debugging on the handset."
+        },
+        "no_permissions": {
+          "description": "adb reports no permissions (a driver problem on the host)."
+        },
+        "other": {
+          "description": "adb reports another state (authorizing, connecting, recovery, sideload, bootloader and the like)."
+        },
+        "unwatched": {
+          "description": "The link watch is not running, so the Runtime cannot see the link."
+        },
+        "unbound": {
+          "description": "The private binding file binds no device to the handset instance."
+        }
+      }
+    },
+    "device_watch_problem": {
+      "description": "What went wrong with the device-link watch (model-398 section 4.3).",
+      "tokens": {
+        "spawn_failed": {
+          "description": "The watch process could not be started."
+        },
+        "exited": {
+          "description": "The watch process ended, or its output closed."
+        },
+        "protocol_invalid": {
+          "description": "The watch's output has a shape the parser does not know."
+        },
+        "restart_budget_spent": {
+          "description": "The watch ended more often within the restart window than the restart limit allows."
         }
       }
     },
