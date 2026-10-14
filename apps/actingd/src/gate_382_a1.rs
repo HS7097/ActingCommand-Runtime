@@ -16,7 +16,6 @@
 use super::*;
 use actingcommand_contract::codes::RuntimeContractCode;
 use actingcommand_contract::{IdentifierIssuer, InstallHeldStartup, MAX_INSTALL_TIMEOUT_MS};
-use actingcommand_vision_ffi::VisionListingCode;
 use std::ffi::OsString;
 
 #[path = "../../../tests/support/vision_folders.rs"]

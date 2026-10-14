@@ -244,6 +244,14 @@ fn assert_wait_interrupted(events: &[PersistedEvent], run_lease: LeaseId, reason
 /// granted on the instance; after it the next dispatch is admitted and granted. The Runtime clock
 /// steps 1 ms a reading from the fixture's instant (and jumps to the next dispatch once the
 /// ladder has released), so the evaluations never precede the records they read.
+///
+/// The instance stays available through the re-evaluation, as in the model's incident (the run
+/// was dispatched to a device whose self-check passed): the fake's opens report a passed
+/// self-check from the scheduled run on. Model-369 v3.1 §3.3 W-1 defers a held instance's
+/// candidates `dispatch_instance_held`; an instance projected unavailable has no candidate and is
+/// blocked at placement `instance_unavailable` (contracts/scheduling/README.md, #317 sc3), which
+/// unobserved opens or rung 3's emulator Stop would cause. Each capture takes 400 ms until the
+/// re-evaluation, so rungs 1 and 2 (one capture or more each) keep rung 3's Stop after it.
 #[test]
 fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_its_release() {
     let root = TempDir::new().expect("tempdir");
@@ -268,6 +276,8 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     let calls = state.emulator.listen();
     let context = admit_ladder_run(&host, &request);
     state.unknown_capture.store(true, Ordering::Release);
+    state.observed_open.store(true, Ordering::Release);
+    state.capture_delay_ms.store(400, Ordering::Release);
     let failure = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("the scheduled run fails");
@@ -333,6 +343,7 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
         queued <= 1,
         "at most the ladder's continuation waits: {queued}"
     );
+    state.capture_delay_ms.store(0, Ordering::Release);
     await_readiness_wait(&calls);
     assert_eq!(
         lease_status(&host, 222),
@@ -340,10 +351,9 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
         "rung 3's readiness wait holds the lease and queues nothing"
     );
 
-    // Android boots and the fake's opens pass a preparation's self-check: the readiness wait's
+    // Android boots, and the fake's opens pass a preparation's self-check: the readiness wait's
     // next attempt passes, rung 3 runs the startup package on the ladder's key, and the climb
     // ends with the ladder's release.
-    state.observed_open.store(true, Ordering::Release);
     state.android_down.store(false, Ordering::Release);
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
 
