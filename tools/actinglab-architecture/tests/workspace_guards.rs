@@ -5006,6 +5006,37 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("host_claims", &["HostShared"]),
     host_module("input", &["HostShared"]),
     host_module("instance_discovery", &["HostShared"]),
+    // Workflow #389 MCP-4 (register W2): one instance's facts, read from the fact store under the
+    // fact write gate with the read's state source. It appends nothing and never builds the
+    // ledger-pinned fact projection.
+    HostModule {
+        module: "instance_fact_read",
+        owners: &["HostShared"],
+        definitions: &[
+            HostDefinition {
+                name: "HostShared::instance_fact_snapshot_read",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/requests.rs"],
+                delegates: &[
+                    "self.resolve_instance",
+                    "self.observe_runtime_state",
+                    "self.instance_fact_view",
+                    "RuntimeResult::InstanceFactSnapshot",
+                ],
+            },
+            HostDefinition {
+                name: "HostShared::instance_fact_view",
+                visibility: DeclaredVisibility::Private,
+                callers: &["host/instance_fact_read.rs"],
+                delegates: &[
+                    "self.fact_write_gate",
+                    "self.synchronize_fact_store_under_gate",
+                    ".instance_records",
+                ],
+            },
+        ],
+        delegates: &[],
+    },
     host_module("installation", &["HostShared"]),
     host_module("lab_operation", &["HostShared"]),
     host_module("lease", &["HostShared"]),
