@@ -1557,6 +1557,8 @@ impl RuntimeHost {
             policy_outcome_projection_failures: AtomicU64::new(0),
             #[cfg(test)]
             policy_outcome_projection_position_override: AtomicU64::new(0),
+            #[cfg(test)]
+            policy_condition_for_test: Mutex::new(None),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
@@ -3256,6 +3258,34 @@ impl RuntimeHost {
             .reconcile_performance_control(observation)
     }
 
+    /// Workflow #386 SR-2a, test only: the next live policy settlement records `condition`, as
+    /// SR-2b's writer will.
+    #[cfg(test)]
+    pub(crate) fn settle_next_policy_run_by_condition_for_test(
+        &self,
+        condition: actingcommand_contract::PolicyConditionSettlement,
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::SetPolicyConditionForTest)?;
+        *lock(
+            &shared.policy_condition_for_test,
+            crate::codes::test_spellings::TestLocation::SetPolicyConditionForTest,
+        )? = Some(condition);
+        Ok(())
+    }
+
+    /// Workflow #386 SR-2a, test only: records a `runtime.lifecycle_observed` phase, as a later
+    /// writer (SR-4a's ladder suppression) will.
+    #[cfg(test)]
+    pub(crate) fn append_lifecycle_observed_for_test(
+        &self,
+        phase: RuntimeLifecyclePhase,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::AppendTestLifecycleObserved)?
+            .append_lifecycle_observed(phase, EventLinksDraft::default())
+            .map(|_| ())
+    }
+
     #[cfg(test)]
     pub(crate) fn append_approval_event_for_test(
         &self,
@@ -4056,6 +4086,10 @@ struct HostShared {
     policy_outcome_projection_failures: AtomicU64,
     #[cfg(test)]
     policy_outcome_projection_position_override: AtomicU64,
+    // Workflow #386 SR-2a, test only: the condition the next live policy settlement records,
+    // the stand-in for SR-2b's writer.
+    #[cfg(test)]
+    policy_condition_for_test: Mutex<Option<actingcommand_contract::PolicyConditionSettlement>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
@@ -4119,6 +4153,19 @@ struct OperationSuccess {
 }
 
 impl HostShared {
+    /// Workflow #386 SR-2a, test only: takes the condition a test set for the next live policy
+    /// settlement.
+    #[cfg(test)]
+    fn take_policy_condition_for_test(
+        &self,
+    ) -> RuntimeHostResult<Option<actingcommand_contract::PolicyConditionSettlement>> {
+        Ok(lock(
+            &self.policy_condition_for_test,
+            crate::codes::test_spellings::TestLocation::TakePolicyConditionForTest,
+        )?
+        .take())
+    }
+
     #[cfg(test)]
     fn consume_scheduled_policy_checkpoint_for_test(
         &self,

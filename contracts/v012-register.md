@@ -59,9 +59,9 @@ before SH-1 merges.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| S1 | policy execution record, failure part: `condition` | new optional member | SH-1 | SR-2b (SR-2a reads) | `{refunded, count, expires_at_unix_ms}`; replay only — the rerun state loads from L7 |
+| S1 | policy execution record, failure part: `condition` | new optional member | SH-1 | SR-2b (SR-2a reads) | `{refunded, count, expires_at_unix_ms}`; replay only — the rerun state loads from L7; **done (SR-2a):** the settlement takes it from the record, as it takes `perf_context` (`policy_control.rs`, `commit_execution` and `preview_settlement`), never from the configuration. A run with it adds to no failure streak and no escalation (the record keeps the pair's previous counters, 0 when there are none, and `failure_streaks` keeps the latest real failure), continues (retry attempt 0, no retry time), is never re-judged `policy_runtime_budget_exceeded`, adds no runtime to the task or activity window, and with `refunded` gives back the task daily, task window, activity daily and activity window counts its admission took. Only a recoverable failure of a task that is not sensitive takes it; any other pairing is `policy_execution_record_mismatch`. `count` and `expires_at_unix_ms` are SR-2b's (the rerun state); the live settlement writes no `condition` before SR-2b |
 | S2 | `ContainedTaskCancellationReason::BlackoutStop` | new enum value (wire and ledger) | SH-1 (runtime-client 2) | SR-4b | `from_failure_code`: `blackout_run_stopped` → `BlackoutStop` |
-| S3 | `RecoveryLadderSuppression::Blackout` | new enum value | SH-1 | SR-4a (SR-2a decodes) | — |
+| S3 | `RecoveryLadderSuppression::Blackout` | new enum value | SH-1 | SR-4a (SR-2a decodes) | **done (SR-2a):** a v0.12.0 start reads a `recovery_ladder_suppressed` record with `reason: "blackout"` (SH-1's decoder; no Runtime reader branches on the reason); [emulator-control.md](emulator-control.md) lists the value. The host sets no blackout before SR-4a |
 
 No other new event type (`disposition` gains no value). The pack schedule `session.pack.schedule`
 and the feature locks `session.feature.<key>` are ordinary `fact.published` records (§4).
