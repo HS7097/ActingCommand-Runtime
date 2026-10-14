@@ -373,7 +373,10 @@ fn gate_e1_bundle_maintenance_matches_every_indexed_identity() {
         },
     ];
     for material in cases {
-        let (code, detail) = bundle_refusal(&index(&packages, Vec::new()), &[material.clone()]);
+        let (code, detail) = bundle_refusal(
+            &index(&packages, Vec::new()),
+            std::slice::from_ref(&material),
+        );
         assert_eq!(code, BUNDLE_INVALID, "{material:?}: {detail}");
     }
     let (code, detail) = bundle_refusal(
