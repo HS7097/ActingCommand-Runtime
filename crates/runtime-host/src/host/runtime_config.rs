@@ -150,6 +150,8 @@ impl HostShared {
                 &original.request_id(),
                 ConfigHostLocation::ConfigureSettings,
             )?,
+            // Workflow #389 U-2: `host.config_overrides` names the channel from U-2 on.
+            channel: validated.channel().map(|binding| binding.channel),
         };
         let applied = match current.apply(changes, &stamp, &context) {
             Ok(applied) => applied,
@@ -369,6 +371,21 @@ impl HostShared {
         lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
             .recognition_join_timeout_ms()
             .map(Duration::from_millis)
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
+    /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
+    /// at each suspension lift check.
+    pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .lift_check_min_interval_ms()
             .map_err(|failure| {
                 RuntimeHostError::fatal(
                     failure.failure_code(),

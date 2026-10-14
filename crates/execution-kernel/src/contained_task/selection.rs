@@ -139,6 +139,19 @@ pub(super) struct PreparedSelect {
     policy: SelectionPolicy,
 }
 
+impl PreparedSelect {
+    /// The step's candidate layout (Workflow #308 SEL-L3: a scan session's layout).
+    pub(super) fn layout_id(&self) -> &str {
+        &self.layout_id
+    }
+
+    /// The step's sealed policy document (Workflow #308 SEL-L3: a scan session evaluates every
+    /// viewport with it).
+    pub(super) fn policy(&self) -> &SelectionPolicy {
+        &self.policy
+    }
+}
+
 #[cfg(test)]
 impl PreparedSelect {
     /// A prepared select step for the gate tests outside this module (Workflow #386 SR-1): the
@@ -624,7 +637,10 @@ type Confirmation<E> = (
 );
 
 impl PreparedContainedTask {
-    fn project_transaction<R: ContainedTaskRuntime>(
+    /// The layout's projection on `first` as a select step takes it: candidate sampling and
+    /// its budget against `deadline`, every candidate evaluation recorded. A scan session
+    /// (Workflow #308 SEL-L3) projects each viewport frame with it.
+    pub(super) fn project_transaction<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         operation: &TaskOperation,

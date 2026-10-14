@@ -3031,7 +3031,8 @@ fn a4_every_receipt_state_carries_its_outcome_code() {
 
 /// One success code per request kind that completes (review L1): each is a success and no two
 /// kinds share one. A kind that never answers completed carries its state's info code instead,
-/// and the five kinds of #389 section 2.3 get theirs with their behaviour (U-2, U-3, U-4).
+/// and the kinds of #389 section 2.3 get theirs with their behaviour: BindChannel with U-2, the
+/// other four with U-3 and U-4.
 #[test]
 fn a4_each_request_kind_that_completes_has_its_own_success_code() {
     use crate::outcome::Category;
@@ -3043,7 +3044,6 @@ fn a4_each_request_kind_that_completes_has_its_own_success_code() {
         Kind::PollQueuedLease,
         Kind::CancelQueuedLease,
         Kind::ObserveContainedPage,
-        Kind::BindChannel,
         Kind::UpgradeState,
         Kind::UpgradeStateStatus,
         Kind::LoadPack,

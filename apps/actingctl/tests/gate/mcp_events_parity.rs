@@ -37,6 +37,7 @@ fn gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters() {
     // range both reads ask for.
     let ledger = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

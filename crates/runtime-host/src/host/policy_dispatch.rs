@@ -785,8 +785,9 @@ impl HostShared {
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
-        // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration.
-        let suspension_lift = self.suspension_lift_view(&procedure_manifest);
+        // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration;
+        // PKG-S3: a due paused pair's packages are measured (at most once per interval).
+        let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
         let (mut cycle, eligibility_unknown_pairs) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -1617,8 +1618,9 @@ impl HostShared {
                 )
             })?;
             procedure_manifest.validate_intent(intent, HostLocation::AdmitPolicyDispatch)?;
-            // Workflow #336 L6 (§12.7): the evaluation's lift rule, under the admission lock.
-            let suspension_lift = self.suspension_lift_view(&procedure_manifest);
+            // Workflow #336 L6 (§12.7): the evaluation's lift rule, under the admission lock; its
+            // measurements are the evaluation's while the interval runs (PKG-S3).
+            let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
             let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
             let success_links = links.clone();
             let failure_links = links;
@@ -1728,18 +1730,6 @@ impl HostShared {
                                     None,
                                 )
                             })?;
-                            if intent.package_digest.as_ref()
-                                != Some(task_request.expected_sha256())
-                            {
-                                return Err(RequestFailure::request(
-                                    policy_admission_request(
-                                        HostCode::ProcedurePackageDigestMismatch,
-                                        HostLocation::AdmitPolicyDispatch,
-                                    ),
-                                    RuntimeReceiptState::Denied,
-                                    None,
-                                ));
-                            }
                             self.contained_task_lease_ttl(task_request)
                         })
                         .transpose();
@@ -2820,12 +2810,6 @@ fn policy_event_data(
     intent: &DispatchIntent,
     reason_chain: &DecisionReasonChain,
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
-    let package_digest = intent.package_digest.clone().ok_or_else(|| {
-        policy_admission_fatal(
-            HostCode::ProcedurePackageDigestMissing,
-            HostLocation::BuildPolicyDispatchEvent,
-        )
-    })?;
     let procedure_binding_digest = intent.procedure_binding_digest.clone().ok_or_else(|| {
         policy_admission_fatal(
             HostCode::ProcedureBindingDigestMissing,
@@ -2837,7 +2821,6 @@ fn policy_event_data(
         task_id: intent.task_id.clone(),
         instance_id: intent.instance_id.clone(),
         operation_id: intent.operation_id.clone(),
-        package_digest,
         procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
         reasons: reason_chain

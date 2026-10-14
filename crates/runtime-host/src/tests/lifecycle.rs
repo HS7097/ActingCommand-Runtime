@@ -342,6 +342,7 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
         let host = RuntimeHost::start(config(&root), Arc::new(registry)).unwrap();
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ))

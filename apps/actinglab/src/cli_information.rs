@@ -26,6 +26,7 @@ pub(super) fn help_data() -> Value {
             "--capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc>",
             "--backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
             "--touch-backend <auto|auto-fastest|maatouch|minitouch|adb_shell_input>",
+            "--via <mcp|ui> (set by the counter that forwards the work; every Runtime connection binds the Lab channel)",
             "--require-session",
             "--dry-run (global; read at any argv position; commands[].dry_run_mode states each command's behaviour)",
             "--verbose",

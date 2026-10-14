@@ -626,6 +626,38 @@
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
     },
+    "viewport_index": {
+      "type": "integer",
+      "description": "The index of a scan session's viewport: a coverage viewport in scan order, 0 being the start (Workflow #308 SEL-L3)."
+    },
+    "position_index": {
+      "type": "integer",
+      "description": "The index of a scan session's tracked position, in first-seen order among all tracked positions of the attempt (Workflow #308 SEL-L3)."
+    },
+    "gap_px": {
+      "type": "integer",
+      "description": "A distance in frame pixels by which a scan's coverage or spacing exceeds its declared limit (Workflow #308 SEL-L3)."
+    },
+    "expected_identity": {
+      "type": "id",
+      "description": "The business identity a selection expected: a dictionary ID, never screen text (Workflow #308)."
+    },
+    "observed_identity": {
+      "type": "id",
+      "description": "The business identity a selection read instead: a dictionary ID, never screen text (Workflow #308)."
+    },
+    "scan_alignment_failure": {
+      "type": "vocab:scan_alignment_failure",
+      "description": "Why a scan session found no single shift for a frame (Workflow #308 SEL-L3)."
+    },
+    "scan_spacing_failure": {
+      "type": "vocab:scan_spacing_failure",
+      "description": "Which spacing check of a scan session found a missed anchor (Workflow #308 SEL-L3)."
+    },
+    "scan_bound": {
+      "type": "vocab:scan_bound",
+      "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3)."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -2684,6 +2716,57 @@
         },
         "join_timeout": {
           "description": "The recognition had not returned when the run's join timeout ended."
+        }
+      }
+    },
+    "scan_alignment_failure": {
+      "description": "Why a scan session found no single shift for a frame (Workflow #308 SEL-L3).",
+      "tokens": {
+        "too_few_matches": {
+          "description": "No cluster of pairs reaches min_overlap_instances."
+        },
+        "no_consistent_shift": {
+          "description": "No cluster of pairs is consistent, for any other reason."
+        },
+        "ambiguous_shift": {
+          "description": "Two or more consistent clusters lie inside the motion's window."
+        },
+        "unexpected_displacement": {
+          "description": "No consistent cluster lies inside the motion's window, but one lies outside it."
+        }
+      }
+    },
+    "scan_spacing_failure": {
+      "description": "Which spacing check of a scan session found a missed anchor (Workflow #308 SEL-L3).",
+      "tokens": {
+        "axis_gap": {
+          "description": "Two consecutive rows lie further apart than max_axis_gap_px."
+        },
+        "row_short": {
+          "description": "A row holds another number of positions than spacing.columns."
+        },
+        "leading_gap": {
+          "description": "The first row starts further from the band's leading edge than max_axis_gap_px."
+        },
+        "trailing_gap": {
+          "description": "The last row starts further from the band's trailing edge than max_trailing_gap_px."
+        },
+        "cross_gap": {
+          "description": "A row's first position, or the next one, lies further across the axis than max_cross_lead_px or max_cross_gap_px."
+        }
+      }
+    },
+    "scan_bound": {
+      "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3).",
+      "tokens": {
+        "coverage_viewports": {
+          "description": "max_viewports: the coverage viewports."
+        },
+        "reposition_viewports": {
+          "description": "max_reposition_viewports: the rewind and return viewports."
+        },
+        "duration": {
+          "description": "max_ms, or the task's own deadline when it comes first."
         }
       }
     },
@@ -31362,6 +31445,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_bind_channel": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a BindChannel whose via names a forwarding counter on a channel other than lab (Workflow #389 U-2; via exists only on the Lab channel).",
+      "common_causes": "A client defect: a counter program named via for its own connection.",
+      "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work."
+    },
     "invalid_bundle_index": {
       "category": "error",
       "ladder_class": "none",
@@ -41426,6 +41529,28 @@
       "description": "Ledger forensics reports legacy diagnostic read limit.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "lift_check_hash_unmeasured": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A suspension lift check could not measure the content hash of a package the paused task's run went through (Workflow #336 PKG-S3, M-PKG D18): the package was removed, is being replaced or could not be read, or the task's procedure names no package location (path absent). The pause stays; the package is measured again at a later check. Linked as a note under the pause the check kept.",
+      "common_causes": "The package was deleted or moved, or a replacement was in progress when the check read it.",
+      "handling": "Put the package back at its configured path, or finish its replacement. The next check measures it again and lifts the pause when its content changed."
     },
     "limit_exceeded": {
       "category": "error",
@@ -51668,46 +51793,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "policy_run_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports policy run package digest invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "policy_run_package_digest_missing": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports policy run package digest missing. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "policy_run_receipt_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -53794,46 +53879,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): procedure package digest invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "procedure_package_digest_mismatch": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports procedure package digest mismatch. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "procedure_package_digest_missing": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports procedure package digest missing. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -59883,6 +59928,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A completed receipt of a AssessPredictiveMaintenance request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "request_bind_channel_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a BindChannel request: the connection is bound to the channel (and via) the request named. Workflow #378 A4: one success code per request kind (Workflow #389 U-2 adds the behaviour of the kind U-1 shaped).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -70562,6 +70621,240 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_scan_alignment_rejected": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "scan_alignment_failure": "required",
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session found no single shift for a frame: not exactly one consistent cluster of anchor pairs lay inside the window its motion admits (scan_alignment_failure says why; count is the pairs of the best cluster, limit_count the declared min_overlap_instances). The Runtime never guesses a second time.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_bounds_exceeded": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "scan_bound": "required",
+        "limit_count": "optional",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session ran out of a declared bound (scan_bound): its coverage viewports or its rewind and return viewports (limit_count), or its time (timeout_ms: max_ms, or the task's remaining time when shorter).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_end_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session advanced twice without the list moving (two consecutive forward viewports repeated the one before them) and without the declared end check passing; the scan is stuck, and repeats never end a scan by themselves.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_gap_detected": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "gap_px": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session left a gap in its coverage: after the one corrective reverse advance of that gap, a coverage band still started gap_px later than the union before it minus the instance extent allows; viewport_index names the corrective viewport.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_identity_mismatch": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "position_index": "required",
+        "expected_identity": "required",
+        "observed_identity": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session read a position with another Known identity (observed_identity) than the one it had read there before (expected_identity); position_index names the position and viewport_index the viewport of the later reading.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_instance_missing": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "scan_spacing_failure": "required",
+        "gap_px": "optional",
+        "count": "optional",
+        "limit_count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session found a missed anchor through a declared spacing check (scan_spacing_failure: a row gap, a short row, a leading, trailing or cross gap); gap_px is the distance found, or count and limit_count the positions of a row and the declared columns.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_position_unread": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "position_index": "required",
+        "viewport_index": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session tracked a position that never entered the readable band of any coverage viewport, so the coverage cannot be complete; position_index names the first such position and viewport_index the viewport that first saw it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_replay_frame_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scan dry run over a saved frame sequence needed a frame the sequence does not hold: a corrective or rewind move (stage), or a capture after its last frame. The dry run fails; it never passes without the frames.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_settle_incomplete": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session captured frames at the declared settle interval, and no two consecutive captures gave the same core anchor set before the settle timeout (timeout_ms) ended; viewport_index names the viewport being settled.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_scan_start_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "viewport_index": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's scan session could not prove the start of its list: the declared start check failed on the settled first frame and the scan declares no rewind, or two consecutive rewind viewports repeated the one before them without the start check passing (stage select_scan_start). No selecting input was made.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "selection_selected": {
       "category": "info",
       "ladder_class": "none",
@@ -79160,6 +79453,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: check scheduler cleanup."
     },
+    "check_suspension_lift": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: check whether a paused task's suspension is lifted (Workflow #336 PKG-S3)."
+    },
     "classify_monitor_observation": {
       "owner": "runtime-host",
       "layer": "host",
@@ -79183,6 +79484,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The artifact store's operation or stage: cleanup artifact temp."
+    },
+    "cleanup_connection_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: cleanup connection channel."
     },
     "cleanup_connection_queues": {
       "owner": "runtime-host",
@@ -84736,6 +85045,14 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: read clock."
     },
+    "read_connection_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read connection channel."
+    },
     "read_contained_task_deadline_config": {
       "owner": "runtime-host",
       "layer": "host",
@@ -86368,6 +86685,14 @@
       "since": "0.12.0",
       "description": "The ledger's operation or stage: record commit statistics."
     },
+    "record_configured_approval": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: record configured approval."
+    },
     "record_contained_task_capture": {
       "owner": "runtime-host",
       "layer": "host",
@@ -87922,6 +88247,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: run startup package."
     },
+    "runtime_bind_channel": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: runtime bind channel."
+    },
     "runtime_configure_settings": {
       "owner": "runtime-client",
       "layer": "client",
@@ -88474,6 +88807,54 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: select runtime storage."
+    },
+    "select_scan_align": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L3: a select step's scan session aligning a viewport and checking its coverage for gaps."
+    },
+    "select_scan_decide": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L3: a select step's scan session checking its coverage before the decision."
+    },
+    "select_scan_end": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L3: a select step's scan session testing the end of its list and advancing."
+    },
+    "select_scan_observe": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L3: a select step's scan session reading a viewport's positions and checking its spacing."
+    },
+    "select_scan_settle": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L3: a select step's scan session waiting for a frame to settle."
+    },
+    "select_scan_start": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L3: a select step's scan session confirming the start of its list (the start check and the rewind)."
     },
     "self_check_instance": {
       "owner": "runtime-client",

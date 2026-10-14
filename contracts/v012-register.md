@@ -738,6 +738,44 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.46 Slice U-2 (#389, UIM §3.2, §4.1, §4.2, §5.2; register §1.6 U1, U4)
+
+U-2 binds each connection to its channel and marks, never refuses: no request is refused by
+channel or by Lab option before U-6. The connection-to-channel table is memory only, is not part
+of any status read and counts no connection ([runtime-interface.md](runtime-interface.md),
+"Channels"). Its codes (`request_bind_channel_completed`, `invalid_bind_channel`, and the first
+emissions of `channel_binding_exists` and `client_channel_unsupported`) are catalog entries, not
+rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| U2-1 | `command.received` (G14, §1.6 U1): `channel`, `via` | existing optional members, now written | SH-1 | U-2 | written on the `command.received` the C4 path writes and on `DebugPackage`'s; `channel` ∈ `cli`, `mcp`, `ui`, `lab`, `via` ∈ `mcp`, `ui` and only with `lab`; absent on the Runtime's own command records (scheduled runs, the ladder, the emulator control phases); before AO-4 the other writes show their channel in their receipt only (UIM §5.2) |
+| U2-2 | receipt `actingcommand.runtime.receipt.v2`: `channel`, `via` | new optional members (runtime-client 2, W9) | U-2 | U-2 | the door's tag of the connection the request came on; absent on the handshake of a connection not bound yet; a `BindChannel` receipt carries the binding it made (or, refused, the one the connection keeps) |
+| U2-3 | `BindChannel {channel, via?}` → `RuntimeResult::ChannelBound {channel, via?}` | behaviour of a W11 kind | U-1 | U-2 | sent once per new connection after `Health` (connect, the `send_or_dropped` reconnect, the contained-task timeout recovery); `via` on another channel than `lab` is refused `invalid_bind_channel` before any binding; a second one is refused `channel_binding_exists` (`channel` = the kept one); records nothing; accepted while an install transition drains |
+| U2-4 | transition binding (UIM §3.2 "Transition") | memory only | U-2 | U-2 | until U-6 a connection that never binds is bound at its first request other than the handshake from that request's envelope source: `Ui` → `ui`, `Lab` → `lab`, `Cli` and `Adapter` → `cli`; U-6 deletes it |
+| U2-5 | `host.config_overrides` rows: `channel` | existing optional member, now written | D1b | U-2 | the channel of the `ConfigureSettings` that set the value; a restored row whose `channel` is not one of the four values stops the start (`host_config_overrides_fact_invalid`) |
+| U2-6 | `lab_module_authoring`, `lab_module_debugging` (§1.6 U4, §5) | configuration keys reported as `config.parameters.top_level` rows | U-2 | U-2 | booleans, `false` in the defaults file (not installed); `source` `explicit` when the file names one; never settable (`read_at_assembly`, not in D1's set); read once at start; nothing is refused by them before U-6 |
+| U2-7 | `approval.decision` written by actingd's start-up transcription | existing record, new writer path | — | U-2 | in process instead of a `(User, Ui)` connection with an identity card: provenance stays `(Governance, User, Ui)` (the approval projection requires it); the record links a request id and a correlation id the host mints; actingd declares no governance identity card any more |
+
+### 1.47 Wave 12 slice PKG-S3 (#336 option 丙, M-PKG v1.1 §3.3, §3.4, §4.4)
+
+PKG-S3 removes the package digest from the scheduling binding and the dispatch, writes the
+failure identity in format v2 (§2) and lifts a pause by the content hashes that identity
+records. It adds no record type and no persisted member; one warning code and one
+configuration key. A stored dispatch intent that still carries `package_digest` does not
+decode (`corrupt_ledger_record`, location `decode_sqlite_record`) and the ledger does not open;
+a v1 failure identity string is not read. [policy-suspension.md](policy-suspension.md) is the
+contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P3-1 | `policy.dispatch_intent` (`PolicyDispatchEventData`) | removed persisted member `package_digest` | PKG-S3 | PKG-S3 | the ledger's replay equality of two intents (`same_dispatch_definition`) no longer compares it; `procedure_binding_digest` stays |
+| P3-2 | `DispatchIntent.package_digest` (policy evaluation) and `ProcedureBinding.package_digest` | removed members | PKG-S3 | PKG-S3 | `procedure_binding_digest` is SHA-256 over the tuple v3 (`actingcommand.procedure-binding.v3`, `procedure_ref`, `operation_id`, `yield_points`): a package changed in place or found at another path keeps its binding and decisions. The binding carries its package's location (`scheduled_execution.package_path`) outside the tuple; a scheduled run naming another path is `policy_run_identity_mismatch`. The codes `procedure_package_digest_mismatch`, `procedure_package_digest_missing`, `policy_run_package_digest_invalid` and `policy_run_package_digest_missing` are deleted (pending) |
+| P3-3 | `policy.execution_recorded` `failure.failure_identity` | changed value (format v2, §2), shape unchanged | PKG-S3 | PKG-S3 | at most 214 bytes; the main package and each layer as `<I><H>`; the pause's recorded hashes are rebuilt from it alone, never from the dispatch |
+| P3-4 | `actingd suspended` (`actingcommand.actingd.suspended.v2`) `package` `{paused_hash_prefix, current_hash_prefix, layers[{kind, package_id, paused_hash_prefix, current_hash_prefix, changed}]}`; `lifts_when` `content_hash_changes`; `lifted[].lifted_by` `main_hash \| layer:<n> \| restart`; `lifted[].effective` `next_evaluation \| active` | changed report members (not persisted) | PKG-S3 | PKG-S3 | replaces `paused`/`current` package references, `paused_digest_prefix`/`current_digest_prefix`, `main_digest_changes_or_any_layer_changes`, `main_digest` and `pending_restart`; the report measures each package it names once, read-only; warning `lift_check_hash_unmeasured:<task>/<instance>`. The `takeover` hint keeps `--package-ref` until PKG-S4 removes the flag |
+| P3-5 | `lift_check_hash_unmeasured` (warning; `path?`, `package_id?`, `caused_by` the read's refusal), location `check_suspension_lift` | new code | PKG-S3 | PKG-S3 | a note link of the `policy_task_paused` reason a lift check could not judge (M-PKG D18): the pause stays and the package is measured again at a later check |
+| P3-6 | `scheduling.suspension.lift_check_min_interval_ms` | new configuration key (§5) | PKG-S3 | PKG-S3 | duration, default 60 000 (`actingd.defaults.json`); read at each lift check |
+
 ### 1.48 Wave 12 slice OUT-2 (#390, forced compromises O-01, O-02, R-03, S-01)
 
 OUT-2 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
@@ -753,6 +791,30 @@ is a catalog entry, not a row (§7).
 |---|---|---|---|---|---|
 | O2-1 | package format: task `scheduling_outcome.designated_effects[] {operation_id, max_repeats?}`, `max_repeats` an integer or `{fact_key}` (task schema `0.9`) | new member (resource file format, not a ledger shape) | OUT-2 | resource side | 1 to 8 members, each operation once; a constant cap from 1 to 1,000, absent = 1; a fact cap is an unexpired integer instance fact from 0 to 1,000, read once before the run's first step; not with `designated_operation`; an older task schema refuses it (`UnconsumedField`); the `package` interface revision is declared once by A8 |
 | O2-2 | `task.completed` `TerminalCommitted.scheduling_disposition.effect` (and the same disposition in a scheduling outcome projection's `scheduling_result`): `SchedulingEffectEvidence::DesignatedEffects` (`{"kind": "designated_effects", "effects": [DesignatedEffectTally {operation_label, count, max_repeats}]}`) | new enum value of an existing member | OUT-2 | OUT-2 | written for a run of a package that declares a set: one tally per member in declaration order, `count` the times its effect completed (0 when none), `max_repeats` the cap the run held it to; 1 to 8 tallies, each operation once, `max_repeats` at most 1,000 and `count` at most `max_repeats` (`invalid_scheduling_outcome_declaration`, field `designated_effects`); its mapping condition is `designated_effect_completed` when any count is above 0. A run of a `designated_operation` package keeps `designated_effect_completed` or `no_designated_effect` |
+
+### 1.49 Wave 12 slice SEL-L3 (#308, frozen selector model S0 v2.1 §2.1–§2.6, §3.3, §6 row L3)
+
+SEL-L3 brings the scan session engine of a select step in the execution kernel and its offline
+`dry_run_scan`; it writes no new record type, member, wire shape or configuration key. The
+candidate projection v2 and the record's scan members are SEL-L4a's (merged); the record of a
+scan select, its admission, `Decide`, `Return`, `Confirm` and the tap are SEL-L4b's, which also
+reads `select.scan` from a package (L3 reads it only as given). A scan's drags are recorded as
+the existing `task.effect_intent` of the select step, as the row below states. The codes
+`selection_scan_start_unconfirmed`, `selection_scan_settle_incomplete`,
+`selection_scan_alignment_rejected`, `selection_scan_gap_detected`,
+`selection_scan_instance_missing`, `selection_scan_identity_mismatch`,
+`selection_scan_end_unconfirmed`, `selection_scan_position_unread` (execution-kernel, error,
+`pack_logic_mismatch`), `selection_scan_bounds_exceeded` (`budget_or_permission`) and
+`selection_scan_replay_frame_missing` (dry run only, `none`), the locations `select_scan_start`,
+`select_scan_settle`, `select_scan_align`, `select_scan_observe`, `select_scan_end` and
+`select_scan_decide` (the domain `select_` that execution-kernel already holds), and the keys
+`viewport_index`, `position_index`, `gap_px`, `expected_identity`, `observed_identity`,
+`scan_alignment_failure`, `scan_spacing_failure` and `scan_bound` with their vocabularies are
+catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L3-1 | `task.effect_intent` of a select step: several per step action, one per scan drag (advance, corrective, rewind; SEL-L4b adds the return drags), each linked to the frame it was sampled on, each followed by its input; none followed by `task.effect_completed` | existing record, written more than once per select step | SEL-L3 (kernel); online from SEL-L4b, which first lets a package declare `scan` | SEL-L4b | the step's one `task.effect_completed` follows its selecting tap, so the host's count of designated effects per step (one) is unchanged; the host already keys every intent by `(step_index, operation_label)` and links it to the last captured frame, so it needs no change |
 
 ### 1.50 Wave 12 slice REC-5 (#396, REC-M v1.2.1 §7)
 
@@ -787,7 +849,7 @@ readers in one PR.
 | Slice | Removed or changed |
 |---|---|
 | PKG-S2 | `PackageAdmitted.package_sha256` (keep `package_label`, `task_label`); `EntryRecoveryPackageAdmitted/Completed/Failed.package_sha256` → `package_label`; effective configuration `EntryRecovery.package_sha256` → `package_label`; `TaskSelectionPolicy.package_sha256`; Lab declared refusal `declared_package`, `verified_package` → optional `package_label`; Lab evidence `expected_package_sha256` / `actual_package_sha256` → `package_label`; `EvidencePackage.sha256`; OCR comparison report `truth_set_sha256` and its runtime-client reader; run status `package_ref` / `recovery_packages` → `package_label` / `recovery_package_labels`; run summary digest checks; reading facts' `resource_bundle_hash` = SHA-256(`"package:" + package_id`) (shape unchanged). **Done (PKG-S2):** all of them, §1.31 P2-1 to P2-11; also the run summary's `package_digest` (now `package_label`), the in-package `sha256` keys made optional and ignored (D5), and request replay by `package_label` (a recorded label must be the request's package's, or a configured prerequisite package's or the recovery binding's `package_id`, each admitted again) |
-| PKG-S3 | `DispatchIntent.package_digest` (payload and storage equality); `ProcedureBinding.package_digest`; `binding_digest` tuple v3 = (`procedure_ref`, `operation_id`, `yield_points`); `PausedOn.package_digest` → content hashes parsed from the failure identity; suspension report members `paused_hash_prefix`, `current_hash_prefix`, `lifts_when: content_hash_changes`, `lifted_by: main_hash \| layer:<n> \| restart` |
+| PKG-S3 | `DispatchIntent.package_digest` (payload and storage equality); `ProcedureBinding.package_digest`; `binding_digest` tuple v3 = (`procedure_ref`, `operation_id`, `yield_points`); `PausedOn.package_digest` → content hashes parsed from the failure identity; suspension report members `paused_hash_prefix`, `current_hash_prefix`, `lifts_when: content_hash_changes`, `lifted_by: main_hash \| layer:<n> \| restart`. **Done (PKG-S3):** all of them, §1.47 P3-1 to P3-6; also the run identity check by path (the request's path against the binding's location) and `lifted[].effective` `next_evaluation` in place of `pending_restart` |
 | PKG-S4 | IPC `expected_sha256` of `PackageDebugRequest`, `ContainedTaskRecoveryBinding`, `ContainedTaskRequest`, the Lab operation, online observation and saved-artifact OCR requests; `PackageDebugSummary.verified_sha256`; configuration `startup_package.expected_sha256`, `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`, the resource declaration's `package_digest` |
 | PKG-S5 | bundle v4 `packs[] {package_id, server, entry_task_id, path = "packs/<package_id>", file_count, byte_count}` (the bundle-level maintenance declaration stays, coordinator 10-12); `RecordingArtifact.digest` / `.sha256` → `package_id`; `PackageRef`, `ContentDirectory` and the `sha256:` serializers |
 
@@ -815,7 +877,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W8 | request `actingcommand.runtime.request.v4`: optional `detail` (`codes` \| `full`) | runtime-client 2 | A4 | #378 §7.1; absent, the source's class default applies (codes only for `source: ui`, the full outcome for every other source); requests v1–v3 are refused; [client-interactions.md](client-interactions.md) |
 | W9 | receipt `actingcommand.runtime.receipt.v2`: `outcome` (an `actingcommand.outcome.v1` envelope) on every receipt; the v1 member `error` (`RuntimeErrorProjection`) is removed | runtime-client 2 | A4 | #378 §7.2; admitted, observed, queued and cancelled carry `request_admitted`, `request_observed`, `request_queued`, `request_cancelled`; completed carries its kind's `request_<kind>_completed`; denied and failed carry the refusal or failure on top, with the values `runtime_code`, `operation`, `host_halted`, `holder_id`, `lease_id`, `retry_after_ms` where they apply; `host_halted` travels in codes mode too; a consumer judges refusal by `state` (denied/failed), the category only says how bad it is; codes mode is applied where the receipt leaves the host |
 | W10 | `RuntimeResult::ContainedTaskCompleted.outcome` → `task_result`; `ContainedTaskCancellationStatus::Terminal.outcome` → `task_result` | runtime-client 2 | A4 | #378 §8.1: renames in receipt v2 (same value), because `outcome` is reserved for the envelope |
-| W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4) |
+| W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4); **done (U-2):** `BindChannel` answers `ChannelBound` with `request_bind_channel_completed` (§1.46 U2-3) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
 | W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
 
@@ -871,7 +933,7 @@ when it takes effect.
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
-| `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 | PKG-S3; SR-3 |
+| `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

@@ -6,7 +6,8 @@
 // actinglab.exe --json`). For the same action and instance, the tool runs exactly the command
 // an operator types, after `--json`, against the Runtime of this server's state root, without
 // `--record`; its answer is that command's envelope data unchanged, as for every Lab tool
-// (gate 43, `interpret`).
+// (gate 43, `interpret`). Workflow #389 U-2: MCP forwards the work, so `--via mcp` comes
+// after `--json`, before the operator's command.
 
 use super::super::{APP, APP_ACTIONS, Program, command_line};
 use serde_json::{Map, json};
@@ -47,7 +48,16 @@ fn gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance() {
             .collect::<Vec<_>>();
         assert_eq!(
             words,
-            ["--json", "session", "app", action, "--instance", ALIAS],
+            [
+                "--json",
+                "--via",
+                "mcp",
+                "session",
+                "app",
+                action,
+                "--instance",
+                ALIAS
+            ],
             "ac_app with action {action}"
         );
         assert!(

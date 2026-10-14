@@ -209,6 +209,9 @@ pub struct InstructionStamp {
     pub set_unix_ms: u64,
     pub set_in_owner_epoch: String,
     pub request_id: String,
+    /// Workflow #389 U-2: the channel the instruction came through, when the request passed the
+    /// door bound to one.
+    pub channel: Option<actingcommand_contract::RuntimeChannel>,
 }
 
 /// One instruction value with what it overrode (§5.7 `host.config_overrides` row).
@@ -404,6 +407,13 @@ impl EffectiveConfig {
         scheduling::recognition_join_timeout_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, in
+    /// milliseconds: the least time between two measurements of one package by the suspension
+    /// lift checks.
+    pub fn lift_check_min_interval_ms(&self) -> Result<u64, ConfigFailure> {
+        scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// The instruction value of `key`, when one is in effect.
     pub fn instruction(&self, key: &str) -> Option<&InstructionValue> {
         self.setting(key)
@@ -547,7 +557,7 @@ impl EffectiveConfig {
             .iter()
             .filter_map(|setting| {
                 let instruction = setting.instruction.as_ref()?;
-                Some(BTreeMap::from([
+                let mut row = BTreeMap::from([
                     (
                         OVERRIDE_CONFIG_KEY.to_owned(),
                         FactScalar::String(setting.key.clone()),
@@ -576,7 +586,14 @@ impl EffectiveConfig {
                         OVERRIDE_REQUEST_ID.to_owned(),
                         FactScalar::String(instruction.stamp.request_id.clone()),
                     ),
-                ]))
+                ]);
+                if let Some(channel) = instruction.stamp.channel {
+                    row.insert(
+                        OVERRIDE_CHANNEL.to_owned(),
+                        FactScalar::String(channel.as_str().to_owned()),
+                    );
+                }
+                Some(row)
             })
             .collect()
     }
@@ -741,11 +758,16 @@ impl RecordedOverride {
             Some(FactScalar::TimestampMs(at)) => *at,
             _ => return Err(OverridesInvalid),
         };
-        if let Some(channel) = row.get(OVERRIDE_CHANNEL)
-            && !matches!(channel, FactScalar::String(_))
-        {
-            return Err(OverridesInvalid);
-        }
+        let channel = match row.get(OVERRIDE_CHANNEL) {
+            None => None,
+            Some(FactScalar::String(channel)) => Some(
+                serde_json::from_value::<actingcommand_contract::RuntimeChannel>(Value::String(
+                    channel.clone(),
+                ))
+                .map_err(|_| OverridesInvalid)?,
+            ),
+            Some(_) => return Err(OverridesInvalid),
+        };
         // A key is a configuration key's spelling, the type of the outcome key `config_key`.
         let config_key = text(OVERRIDE_CONFIG_KEY)?;
         if config_key.is_empty()
@@ -766,6 +788,7 @@ impl RecordedOverride {
                 set_unix_ms,
                 set_in_owner_epoch: text(OVERRIDE_SET_IN_OWNER_EPOCH)?,
                 request_id: text(OVERRIDE_REQUEST_ID)?,
+                channel,
             },
         })
     }

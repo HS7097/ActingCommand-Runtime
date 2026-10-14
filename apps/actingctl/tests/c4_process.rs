@@ -123,6 +123,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
     assert_eq!(status["instances"][0]["instance_alias"], "node.a");
     let holder = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -303,6 +304,7 @@ fn actingctl_task_run_that_waited_prints_exactly_one_stdout_json_line() {
     runtime.wait_ready(root.path());
     let holder = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -481,6 +483,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
 
     let ledger_client = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -583,6 +586,7 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
 
     let ledger_client = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

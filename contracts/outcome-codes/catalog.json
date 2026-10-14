@@ -626,6 +626,38 @@
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
     },
+    "viewport_index": {
+      "type": "integer",
+      "description": "The index of a scan session's viewport: a coverage viewport in scan order, 0 being the start (Workflow #308 SEL-L3)."
+    },
+    "position_index": {
+      "type": "integer",
+      "description": "The index of a scan session's tracked position, in first-seen order among all tracked positions of the attempt (Workflow #308 SEL-L3)."
+    },
+    "gap_px": {
+      "type": "integer",
+      "description": "A distance in frame pixels by which a scan's coverage or spacing exceeds its declared limit (Workflow #308 SEL-L3)."
+    },
+    "expected_identity": {
+      "type": "id",
+      "description": "The business identity a selection expected: a dictionary ID, never screen text (Workflow #308)."
+    },
+    "observed_identity": {
+      "type": "id",
+      "description": "The business identity a selection read instead: a dictionary ID, never screen text (Workflow #308)."
+    },
+    "scan_alignment_failure": {
+      "type": "vocab:scan_alignment_failure",
+      "description": "Why a scan session found no single shift for a frame (Workflow #308 SEL-L3)."
+    },
+    "scan_spacing_failure": {
+      "type": "vocab:scan_spacing_failure",
+      "description": "Which spacing check of a scan session found a missed anchor (Workflow #308 SEL-L3)."
+    },
+    "scan_bound": {
+      "type": "vocab:scan_bound",
+      "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3)."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -2684,6 +2716,57 @@
         },
         "join_timeout": {
           "description": "The recognition had not returned when the run's join timeout ended."
+        }
+      }
+    },
+    "scan_alignment_failure": {
+      "description": "Why a scan session found no single shift for a frame (Workflow #308 SEL-L3).",
+      "tokens": {
+        "too_few_matches": {
+          "description": "No cluster of pairs reaches min_overlap_instances."
+        },
+        "no_consistent_shift": {
+          "description": "No cluster of pairs is consistent, for any other reason."
+        },
+        "ambiguous_shift": {
+          "description": "Two or more consistent clusters lie inside the motion's window."
+        },
+        "unexpected_displacement": {
+          "description": "No consistent cluster lies inside the motion's window, but one lies outside it."
+        }
+      }
+    },
+    "scan_spacing_failure": {
+      "description": "Which spacing check of a scan session found a missed anchor (Workflow #308 SEL-L3).",
+      "tokens": {
+        "axis_gap": {
+          "description": "Two consecutive rows lie further apart than max_axis_gap_px."
+        },
+        "row_short": {
+          "description": "A row holds another number of positions than spacing.columns."
+        },
+        "leading_gap": {
+          "description": "The first row starts further from the band's leading edge than max_axis_gap_px."
+        },
+        "trailing_gap": {
+          "description": "The last row starts further from the band's trailing edge than max_trailing_gap_px."
+        },
+        "cross_gap": {
+          "description": "A row's first position, or the next one, lies further across the axis than max_cross_lead_px or max_cross_gap_px."
+        }
+      }
+    },
+    "scan_bound": {
+      "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3).",
+      "tokens": {
+        "coverage_viewports": {
+          "description": "max_viewports: the coverage viewports."
+        },
+        "reposition_viewports": {
+          "description": "max_reposition_viewports: the rewind and return viewports."
+        },
+        "duration": {
+          "description": "max_ms, or the task's own deadline when it comes first."
         }
       }
     },

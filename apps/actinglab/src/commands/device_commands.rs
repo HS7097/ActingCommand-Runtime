@@ -4,13 +4,13 @@ use crate::{
     resolve_instance_id, runtime_capture_backend, runtime_input_backend, runtime_state_root,
     stream_input_relay_action,
 };
-use actingcommand_contract::{EventActor, EventSource, InputAction, RuntimeReceipt};
+use actingcommand_contract::{InputAction, RuntimeReceipt};
 use actingcommand_device::{CaptureBackendChoice, Frame, combine_operation_and_close};
 use actingcommand_lab::{
     AttachFrameRequest, LabInputPort, OpaqueJson, UserConfig, record_attach_frame,
     record_frame_preflight,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -577,12 +577,8 @@ pub(crate) fn open_cli_runtime_input_proxy(
     config: &UserConfig,
 ) -> CliOutcome<(runtime_input_backend::RuntimeInputBackend, String)> {
     let instance_alias = resolve_instance_id(global, config)?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(|error| CliError::device(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(|error| CliError::device(error.to_string()))?;
     let proxy = runtime_input_backend::RuntimeInputBackend::connect(client, &instance_alias)
         .map_err(|error| CliError::device(error.to_string()))?;
     Ok((proxy, instance_alias))

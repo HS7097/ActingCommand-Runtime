@@ -258,6 +258,7 @@ impl RuntimeAccess {
         let state_root = self.locate().state_root.map_err(state_root_unresolved)?;
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             &state_root,
+            actingcommand_runtime_client::RuntimeChannel::Mcp,
             EventActor::Cli,
             EventSource::Cli,
         ))
@@ -334,8 +335,13 @@ pub(super) fn connect_at(
     let state_root = state_root
         .as_ref()
         .map_err(|outcome| state_root_unresolved(outcome.clone()))?;
-    RuntimeClient::connect(RuntimeClientConfig::new(state_root, actor, source))
-        .map_err(|error| unavailable(&error, state_root))
+    RuntimeClient::connect(RuntimeClientConfig::new(
+        state_root,
+        actingcommand_runtime_client::RuntimeChannel::Mcp,
+        actor,
+        source,
+    ))
+    .map_err(|error| unavailable(&error, state_root))
 }
 
 /// A state root that cannot be told (`install_state_root_unresolved`): class usage; the person

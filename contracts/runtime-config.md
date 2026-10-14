@@ -77,10 +77,15 @@ resolved against the configuration file's directory; a location only, never a di
 S6a's row: the per-instance `start_emulator` (boolean, from the entry's `start_emulator`, default
 `none`, so a file that does not name it leaves it off and reports no row; not settable, read once
 at assembly; allowed only on a discovery-bound instance, `start_emulator_requires_discovery_binding`,
-[actingd-check-config.md](actingd-check-config.md)); the daemon acts on it from S6c on. A manifest
-key the table does not have fails the start (`config_key_unknown`). The
-manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
-`performance`, `scheduling`, `ledger_observer`), then each instance's per-instance keys together.
+[actingd-check-config.md](actingd-check-config.md)); the daemon acts on it from S6c on. Workflow
+#389 U-2's rows: the top-level `lab_module_authoring` and `lab_module_debugging` (boolean, default
+`file`, `false` in `actingd.defaults.json`, not settable, read once at assembly), the Lab's two
+options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
+only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
+read and reported only: nothing is refused by them. A manifest key the table does not have fails
+the start (`config_key_unknown`). The manifest lists the exact keys in row order
+(`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
+`ledger_observer`, the two Lab options), then each instance's per-instance keys together.
 
 ## The recovery ladder section (D1c)
 
@@ -210,7 +215,10 @@ that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows
 `ac_diagnose` lists under `not_run`) by SR-6b. Workflow #384 D2-S2 reads
 `fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
 to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); D2-S4 adds the
-section's other fact refresh keys.
+section's other fact refresh keys. Workflow #336 PKG-S3 reads
+`suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
+hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
+"Lifting (R19)").
 
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
@@ -233,6 +241,7 @@ section's other fact refresh keys.
 | `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
 | `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
+| `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired

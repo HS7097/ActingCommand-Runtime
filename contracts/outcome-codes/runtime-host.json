@@ -8844,6 +8844,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "lift_check_hash_unmeasured": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A suspension lift check could not measure the content hash of a package the paused task's run went through (Workflow #336 PKG-S3, M-PKG D18): the package was removed, is being replaced or could not be read, or the task's procedure names no package location (path absent). The pause stays; the package is measured again at a later check. Linked as a note under the pause the check kept.",
+      "common_causes": "The package was deleted or moved, or a replacement was in progress when the check read it.",
+      "handling": "Put the package back at its configured path, or finish its replacement. The next check measures it again and lifts the pause when its content changed."
+    },
     "maintenance_arguments_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -13507,46 +13529,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "policy_run_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports policy run package digest invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "policy_run_package_digest_missing": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports policy run package digest missing. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "policy_run_receipt_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -14544,46 +14526,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports procedure operation mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "procedure_package_digest_mismatch": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports procedure package digest mismatch. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "procedure_package_digest_missing": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The Runtime host reports procedure package digest missing. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21613,6 +21555,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: check scheduler cleanup."
     },
+    "check_suspension_lift": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: check whether a paused task's suspension is lifted (Workflow #336 PKG-S3)."
+    },
     "classify_monitor_observation": {
       "owner": "runtime-host",
       "layer": "host",
@@ -27325,6 +27275,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: record once a code the recovery ladder met that the embedded catalog does not list (Workflow #387 D1c)."
+    },
+    "read_connection_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read connection channel."
+    },
+    "cleanup_connection_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: cleanup connection channel."
+    },
+    "record_configured_approval": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: record configured approval."
     }
   }
 }

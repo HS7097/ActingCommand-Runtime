@@ -1882,7 +1882,6 @@ fn dispatch_event_data(payload: &PolicyDispatchPayload) -> PolicyDispatchEventDa
         task_id: payload.task_id().to_owned(),
         instance_id: payload.instance_id().to_owned(),
         operation_id: payload.operation_id().to_owned(),
-        package_digest: payload.package_digest().to_owned(),
         procedure_binding_digest: payload.procedure_binding_digest().to_owned(),
         reason_chain_id: payload.reason_chain_id().to_owned(),
         reasons: payload.reasons().to_vec(),
@@ -2099,7 +2098,6 @@ fn same_dispatch_definition(
         && expected.task_id() == actual.task_id()
         && expected.instance_id() == actual.instance_id()
         && expected.operation_id() == actual.operation_id()
-        && expected.package_digest() == actual.package_digest()
         && expected.procedure_binding_digest() == actual.procedure_binding_digest()
         && expected.reason_chain_id() == actual.reason_chain_id()
         && expected.reasons() == actual.reasons()

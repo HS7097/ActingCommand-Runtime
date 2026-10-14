@@ -1,8 +1,10 @@
 # Policy suspension of linear tasks
 
 A scheduled `linear_steps` task that fails mid-run is recorded, rerun at once, and paused when
-the same problem happens again; the pause is lifted automatically once its package (or a
-package its run went through) is updated (Workflow #336, R17-R19, R21, R22, R25). Everything
+the same problem happens again; the pause is lifted automatically once the content of its
+package (or of a package its run went through) changes (Workflow #336, R17-R19, R21, R22, R25;
+PKG-S3, option 丙: judged by the content hashes the failure identity recorded, without a
+restart). Everything
 here uses the existing policy `on_failure`, the existing `policy.execution_recorded` and
 `runtime.failed` records and the existing `paused_task` disposition: no ledger event type or
 enum value is added. Since Workflow #378 A2-P the failure part of `policy.execution_recorded`
@@ -78,20 +80,29 @@ writes the failure identity as `failure.failure_identity` of its `policy.executi
 beside the run's failure as `failure.outcome` (Workflow #378 A2-P):
 
 ```text
-<base>~v1~k<K>~m<M>[~p<I><D>]{0,3}[~r<G><I><D>]{0,1}~f<F>
+<base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}~f<F>
 ```
 
 | Segment | Content |
 |---|---|
 | `base` | The terminal `failure_code`, or the request error code when the run has no terminal. A code longer than 64 bytes or containing `~` is `h` and the first 16 hex digits of its SHA-256. |
 | `K` | The first 12 hex digits of SHA-256 over `actingcommand.failure-key.v1`, the original code, the scope, the step and detail′, joined by newlines. |
-| `M` | The first 12 hex digits of the main package's digest (a ZIP or content-directory SHA-256; for a Git source tree reference, the SHA-256 of its wire value). |
-| `p<I><D>` | One per declared prerequisite layer, outermost first: `I` the first 8 hex digits of SHA-256 over the package id, `D` the first 12 hex digits of the digest `prerequisite_packages` maps it to, or `x` when it maps none. |
-| `r<G><I><D>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `D` as above. |
+| `m<I><H>` | The main package: `I` the first 8 hex digits of SHA-256 over its `package_id` (the admitted package's `package_label`), `H` the first 12 hex digits of its content hash measured when the failure is settled, or `x` when it could not be measured (removed, being replaced, unreadable). |
+| `p<I><H>` | One per declared prerequisite layer, outermost first: `I` as above for the layer's package id, `H` the content hash of the package `prerequisite_packages` maps it to, measured at the settlement, or `x` when it maps none or the package could not be measured. |
+| `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
 | `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate. |
 
-The identity prefix is everything before `~f`. At most 206 bytes, without whitespace or
-control characters.
+The identity prefix is everything before `~f`. At most 214 bytes, without whitespace or
+control characters. A format v1 string (Workflow #336 L6, before PKG-S3) is not read.
+
+**Content hash** (Workflow #336 PKG-S3, option 丙; M-PKG §3.3). A package's content hash is the
+`content-directory.v1` hash of the content table its path holds (a directory, a `.json` or a
+`.zip` content container), or the SHA-256 of the whole file for an assembled package ZIP (one
+holding `resources/manifest.json`). It has one use: a pause. It is measured in two places only,
+read-only: when a scheduled failure is settled (the main package at the path the run used and
+each layer at the path its mapping names; SR-3 adds its suspension point) and at a lift check
+("Lifting"). Admission never computes or compares it, and it is stored only inside the failure
+identity.
 
 Every other run writes no failure identity: a main package that was not admitted (its mode is
 unknown), a page-graph package, and the startup reconciliation of an interrupted settlement.
@@ -134,8 +145,8 @@ Only these failures can pause a task by repeating:
   `contained_task_linear_intermediate_unobserved` or `contained_task_guard_refused`: the main
   package's own steps no longer match the screen;
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
-  configuration problem (a missing mapping, a digest that does not match, an incompatible
-  package).
+  configuration problem (a missing mapping, a package id that does not match, an
+  incompatible package).
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
@@ -207,26 +218,40 @@ the terminal's and its identity's base is the base of the terminal's code
 
 ## Lifting (R19)
 
-A paused pair is admitted again, by the evaluation and by admission, once any of these differs
-from the paused dispatch:
+A paused pair is admitted again, by the evaluation and by admission, once a lift check finds
+that any of these differs from what its failure identity recorded (Workflow #336 PKG-S3; the
+recorded hashes come from the identity alone, never from the dispatch, so a restart rebuilds
+them):
 
-- the main package digest now bound to its procedure;
-- for a `p` layer, the digest the prerequisite mapping now has for its id hash (`x` when none,
-  changed when several ids share the hash);
+- the content hash of the main package, measured at the location its procedure's binding names
+  (`scheduled_execution.package_path`);
+- for a `p` layer, the content hash of the package the prerequisite mapping now has for its id
+  hash (`x` when none; changed when several ids share the hash);
 - for the `r` layer, the return-home entry of its game and server (missing or another id is a
-  change), then its digest as for a `p` layer.
+  change), then its content hash as for a `p` layer.
 
-A procedure that is no longer bound never lifts. The configuration is the one the daemon read
-at startup, so an update takes effect after a restart. An interrupted settlement
+A lift check runs when the paused pair is due at an evaluation and again at its admission. It
+measures one package at most once per `scheduling.suspension.lift_check_min_interval_ms`
+(default 60 000 ms, [runtime-config.md](runtime-config.md)) and judges by that measurement until
+the interval has passed, so a package changed in place lifts the pause at the pair's first due
+evaluation after it, without a restart and without a configuration change. A package that
+cannot be measured (removed, being replaced, unreadable, or a procedure whose binding names no
+location) lifts nothing: the check keeps the pause, links a Warning
+`lift_check_hash_unmeasured` (`path`, `package_id` for a layer, `caused_by` the read's refusal)
+as a note of the `policy_task_paused` reason, and measures again at a later check. A recorded
+`x` differs from every measured hash, so a package the settlement could not measure lifts the
+pause once a check measures it. A pause recorded without a failure identity (an exceeded
+runtime budget, a page-graph task) names no package: its main package is compared with the hash
+the pair's first lift check measured. A procedure that is no longer bound never lifts. The
+prerequisite and return-home mappings are the ones the daemon read at startup. An interrupted settlement
 (`policy_settlement_interrupted`) is lifted without a package update (Workflow #361 M6) when
 it is the first of its pair in a row: the next dispatch of the pair is admitted as usual,
 within its loop and activity budgets (the interrupted admission already counted against them).
 A second one in a row is lifted by a package update only. The count is rebuilt from the
 execution records, so nothing persisted changes. The next dispatch is admitted as usual;
-a linear task that fails again starts a new streak, since `M` or a layer changed. A page-graph
-task records no failure identity, so the same failure pauses it again at once. A suspension in
-an older ledger, including an exceeded budget, is lifted by a changed main package digest too; the first
-interrupted settlement in a row in an older ledger is lifted at the next start of this Runtime. There is
+a linear task that fails again starts a new streak, since a recorded hash changed. A page-graph
+task records no failure identity, so the same failure pauses it again at once. The first
+interrupted settlement in a row is lifted at the next start of this Runtime. There is
 no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
 suspension.
 
@@ -237,8 +262,9 @@ actingd suspended --config <path>
 ```
 
 Loads and assembles the configuration exactly as startup does, then opens the state root's
-ledger read-only, without referenced material and without the owner lock, so it runs beside a
-running daemon. Nothing is written.
+ledger read-only and without the owner lock, so it runs beside a running daemon. Since
+Workflow #336 PKG-S3 it reads the packages a paused pair names, read-only, to measure their
+content hashes now, each package once per report. Nothing is written.
 
 stdout is one JSON object:
 
@@ -252,15 +278,16 @@ stdout is one JSON object:
    "previous":{"execution_sequence":0,"disposition":"retry_scheduled","run_id":"..."},
    "step":{"scope":"main","operation_label":"..."},
    "detail":"...",
-   "package":{"paused":{},"current":{},"layers":[{"kind":"return_home","package_id":"...",
-     "paused_digest_prefix":"...","current_digest_prefix":"...","changed":false}]},
+   "package":{"paused_hash_prefix":"...","current_hash_prefix":"...",
+     "layers":[{"kind":"return_home","package_id":"...",
+     "paused_hash_prefix":"...","current_hash_prefix":"...","changed":false}]},
    "frames":{"previous":{"frame_id":"...","artifact_sha256":"..."},"current":{},
      "comparison":{"source":"recomputed","status":"similar","reason":null,
        "changed_cells_milli":0,"digest_mean_milli":0,"ccoeff":1.0,"ccoeff_error":null}},
-   "lifts_when":"main_digest_changes_or_any_layer_changes",
+   "lifts_when":"content_hash_changes",
    "takeover":"actingctl task-run --state-root <root> --instance <instance> --package <package> --package-ref <package-ref>"}],
- "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_digest|layer:<n>|restart",
-   "effective":"active|pending_restart","paused":{},"package":{}}],
+ "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_hash|layer:<n>|restart",
+   "effective":"next_evaluation|active","paused":{},"package":{}}],
  "repeating":[{"task_id":"...","instance_id":"...","error_code":"...","failure_code":"...",
    "step":{},"latest":{"execution_sequence":0,"run_id":"..."},
    "previous":{"execution_sequence":0,"run_id":"..."},"detail":null}],
@@ -280,9 +307,13 @@ stdout is one JSON object:
   compared again (`source` `recomputed`); a recomputed `different` for an accumulating identity
   adds the warning `comparison_disagrees_with_record:<task>/<instance>`. A missing frame or an
   unreadable artifact gives `status` `unavailable` with its reason.
-- `lifted`: each pair paused by its latest execution whose suspension the configuration lifts
-  and that was not dispatched again. `effective` is `pending_restart` when the configuration
-  file changed after the daemon's start, else `active`. The first interrupted settlement of a
+- `package`: the content hash prefixes the pause recorded (`paused_hash_prefix`, `x` when the
+  settlement could not measure the package, `null` for a pause without a failure identity) and
+  the ones measured now (`current_hash_prefix`, `null` when the package cannot be measured or
+  the procedure is not bound); a layer is `changed` only when it was measured now and differs.
+- `lifted`: each pair paused by its latest execution whose suspension a content hash change
+  lifts and that was not dispatched again. `effective` is `next_evaluation`: the running daemon
+  lifts it at its next check of the pair, without a restart. The first interrupted settlement of a
   pair in a row is listed here with `lifted_by` `restart` and `effective` `active` (Workflow #361
   M6); a second one in a row is listed under `suspended` like any other pause.
 - `repeating`: each pair whose latest execution is a failure that does not accumulate and whose
@@ -293,7 +324,9 @@ stdout is one JSON object:
   when an instruction changes a setting, Workflow #387 D1b). Warnings: `config_newer_than_daemon_start` when the
   configuration file changed after it, `daemon_start_unknown` without it,
   `error_code_unparsed:<task>/<instance>` for a failure identity that does not
-  parse (judged on its main digest only), `task_not_in_catalog:<task>/<instance>`.
+  parse (its pause is then judged by its main package alone),
+  `lift_check_hash_unmeasured:<task>/<instance>` when a package the pause names cannot be
+  measured now, `task_not_in_catalog:<task>/<instance>`.
 - `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
   records") whose event time is within 48 h of the ledger's latest event, newest first, at most
   200; `clock_slots_total` is added with their number when the list is cut. A record is a

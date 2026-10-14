@@ -80,6 +80,7 @@ fn stamp() -> InstructionStamp {
         set_unix_ms: 1,
         set_in_owner_epoch: "epoch".to_owned(),
         request_id: "request".to_owned(),
+        channel: None,
     }
 }
 

@@ -114,6 +114,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         .unwrap();
         let source_client = RuntimeClient::connect(RuntimeClientConfig::new(
             original.path(),
+            actingcommand_runtime_client::RuntimeChannel::Lab,
             EventActor::Lab,
             EventSource::Lab,
         ))
@@ -199,6 +200,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             .unwrap();
             let client = RuntimeClient::connect(RuntimeClientConfig::new(
                 target.path(),
+                actingcommand_runtime_client::RuntimeChannel::Lab,
                 EventActor::Lab,
                 EventSource::Lab,
             ))
@@ -575,6 +577,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         let execution = thread::spawn(move || {
             let client = RuntimeClient::connect(RuntimeClientConfig::new(
                 client_root,
+                actingcommand_runtime_client::RuntimeChannel::Cli,
                 EventActor::Cli,
                 EventSource::Cli,
             ))
@@ -941,6 +944,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         .unwrap();
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ))
@@ -1125,6 +1129,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         .expect("formal zero-input host");
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ))
