@@ -166,11 +166,17 @@ fn gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection() {
 
 /// The empty-alias rows of the same grammar, apart so that what they show stands on its own.
 /// Only a pause or resume without `--instance` is global (contracts/scheduling-pause.md "CLI"):
-/// an `--instance` given with an empty alias names no instance, so it is a usage error before any
-/// connection (test plan v2.2 §3.7 G10; Fail Loud), never a request for the global scope.
+/// an `--instance` given with an empty or blank alias names no instance, so it is a usage error
+/// before any connection (test plan v2.2 §3.7 G10; Fail Loud), never a request for the global
+/// scope.
 #[test]
 fn gate_an_empty_instance_alias_is_a_usage_error_not_a_global_scope() {
-    let usage: &[&[&str]] = &[&["pause", "--instance", ""], &["resume", "--instance", ""]];
+    let usage: &[&[&str]] = &[
+        &["pause", "--instance", ""],
+        &["resume", "--instance", ""],
+        &["pause", "--instance", " "],
+        &["resume", "--instance", " "],
+    ];
     let wrong = grammar_mismatches(usage, &[]);
     assert!(
         wrong.is_empty(),
