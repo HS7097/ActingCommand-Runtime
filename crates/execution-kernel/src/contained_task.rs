@@ -64,6 +64,9 @@ mod unique_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
+// Workflow #308 SEL-L6a.
+#[cfg(test)]
+mod gate_308_l6a;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
@@ -2521,6 +2524,27 @@ impl PreparedContainedTask {
             .operations
             .iter()
             .any(|operation| operation.select.is_some())
+    }
+
+    /// Workflow #308 SEL-L6a (FCM T-03): the pages operation `operation_label` declares it
+    /// reaches, as the run waits for them: its `to` page set (more than one page for a
+    /// multi-destination operation), else its `expect_after` page; empty when it declares
+    /// neither. A label the task does not declare is `contained_task_operation_missing`.
+    pub fn operation_destinations(
+        &self,
+        operation_label: &str,
+    ) -> Result<Vec<String>, ContainedTaskError> {
+        self.program
+            .operations
+            .iter()
+            .find(|operation| operation.id == operation_label)
+            .ok_or_else(|| {
+                ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                    operation_label,
+                )
+            })?
+            .destination_pages()
     }
 
     /// The entry the run must see first, as detector page ids: one page, or the pages of an entry

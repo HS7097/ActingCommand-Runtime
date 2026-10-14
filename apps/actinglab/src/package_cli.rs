@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 #[path = "package_offline.rs"]
-mod offline;
+pub(super) mod offline;
 
 pub(super) fn is_offline_command(args: &[String]) -> bool {
     matches!(args, [group, command, ..] if group == "package" && matches!(command.as_str(), "dry-run" | "preflight"))
