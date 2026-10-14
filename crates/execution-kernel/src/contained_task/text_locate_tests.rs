@@ -269,7 +269,6 @@ fn home_frame() -> Frame {
 fn home_observation() -> PageObservation {
     PageObservation {
         sample_scenes: Vec::new(),
-        remembered_ocr: Default::default(),
         sampling: None,
         input_context: None,
         page_label: "neutral/home".to_owned(),

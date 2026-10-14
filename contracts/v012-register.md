@@ -34,9 +34,9 @@ before SH-1 merges.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| L1 | `ledger.gap_recorded` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`; severity = outcome category | SH-1 | AO-1 (dump gaps), AO-2 (tail, single record) | payload `{gap_kind (dump_incomplete, dump_invalid, tail_unconfirmed, record_rejected), gap_start_unix_ms, gap_end_unix_ms, record_count? (absent = unknown), event_id?, source? {source, lineage, revision}, outcome}`; [ledger-observer.md §10](ledger-observer.md#10-gap-records-ao-1-ao-2) |
+| L1 | `ledger.gap_recorded` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`; severity = outcome category | SH-1 | AO-1 (dump gaps; built, §1.26), AO-2 (tail, single record) | payload `{gap_kind (dump_incomplete, dump_invalid, tail_unconfirmed, record_rejected), gap_start_unix_ms, gap_end_unix_ms, record_count? (absent = unknown), event_id?, source? {source, lineage, revision}, outcome}`; [ledger-observer.md §10](ledger-observer.md#10-gap-records-ao-1-ao-2) |
 | L2 | `ledger.health_observed` | new event type, family `ledger`, action `ledger.probe` (new action value), origin module `global-ledger` | SH-1 | AO-2 (watermark and spill segments, revision skips), AO-8 (mismatch, flush lag) | payload `{outcome, segment_edge? (started, ended)}`; the finding's values travel in `outcome` |
-| L3 | `ledger.dump_imported` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`, info | SH-1 | AO-1 | payload `{outcome}` with `ledger_dump_imported` and its values |
+| L3 | `ledger.dump_imported` | new event type, family `ledger`, action `ledger.recovery`, origin module `global-ledger`, info | SH-1 | AO-1 (built, §1.26) | payload `{outcome}` with `ledger_dump_imported` and its values |
 | L4 | record envelope `capture` | new optional envelope member of every stored event | SH-1 | AO-2 (`capture_seq`, `captured_at_unix_ms`), AO-3 (`source`) | `{capture_seq, captured_at_unix_ms, source? {source: instance_facts \| runtime_facts \| decision_memory \| fact_refresh_transitions, lineage, revision}}`; `timestamp` = capture time |
 | L5 | `runtime.lifecycle_observed` phase `tagged_state_loaded` | new phase | SH-1 | AO-6 | `{stores: [{source, previous_lineage?, previous_revision?, lineage, loaded_count}]}`; the base record of a new lineage |
 | L6 | `runtime.lifecycle_observed` phase `tagged_state_enabled` | new phase | SH-1 | AO-5 / AO-6 | no members |
@@ -45,7 +45,7 @@ before SH-1 merges.
 | L9 | `policy.dispatch_intent`, `task.selection_evaluated`: `input_fact_revisions` | new optional member | SH-1 | AO-3 | `{instance_facts {lineage, revision}, runtime_facts {lineage, revision}}`; readers accept either it or `input_ledger_position` (still non-zero when present); AO-4 stops writing the old member (ORD §3.5 item 11) |
 | L10 | `runtime.fact_snapshot` sealed by the ledger | existing type, origin module `global-ledger` | — | AO-8 (T2) | the core stops writing it (AO-4) |
 | L11 | `ledger_index` table | new table in `runtime-state.sqlite` | AO-2 | AO-2 | [ledger-observer.md §11.1](ledger-observer.md#111-the-index-table-ledger_index) |
-| L12 | ledger dump file | file format, `dump_version` 1 | AO-1 | AO-1 | [ledger-observer.md §9.3](ledger-observer.md#93-dump-file) |
+| L12 | ledger dump file | file format, `dump_version` 1 | AO-1 (built, §1.26 AO1) | AO-1 | [ledger-observer.md §9.3](ledger-observer.md#93-dump-file) |
 | L13 | view lists | Health gains `ledger.gap_recorded`, `ledger.health_observed`, `ledger.dump_imported`; Changes gains `policy.control_state_recorded`, `policy.activity_state_recorded`, `policy.fact_refresh_transition`, `agent.wake_obligation_recorded` | SH-1 (view schema upgrade, `views.rs:40-43`) | — | the new `perf.*` types join Health through their family |
 | L14 | `policy.activity_state_recorded` | new event type, family `policy`, action `policy.control_state`, info; tagged | SH-1 | AO-4 | one (instance, activity profile)'s complete activity state, index key `activity_memory/<instance>/<activity profile>`: `{instance_id, profile_id, local_day, daily_count, window_id, window_count, window_runtime_ms, next_eligible_unix_ms?}` = today's `activity_daily`, `activity_window`, `activity_runtime` and `next_activity_eligible` (`policy_control.rs:88-91`); without it a restart after AO-6 would reset the activity budgets and the activity interval |
 
@@ -490,6 +490,18 @@ RD-5b and RD-4.
 The register-only rows of the re-check are in §3 (W7, W13) and §4 (X10's keys,
 `host.kept_folder_cleared`).
 
+### 1.26 Wave 8 slice AO-1 (#383 ledger-observer.md §9, §15)
+
+AO-1 is the first writer of L1's dump gaps (`dump_incomplete`, `dump_invalid`), of L3 and of the
+dump file (L12), and brings the `ledger_observer` section of `crates/runtime-config`
+(`src/ledger_observer.rs`); [runtime-config.md](runtime-config.md), "The `ledger_observer`
+section", is that section's contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AO1 | ledger dump file (L12) | the members L12 leaves open | AO-1 | AO-1 | header `owner_epoch` is the owner epoch's id (`epoch_…`) and `runtime_commit` is present when the build knows its commit; a record's `draft` holds the sanitized draft's members, `artifacts` as projected references with their object keys; `captured_at_unix_ms` is the draft's time until AO-2 captures; `capture_seq` counts from 1 in each dump; every hash is 64 lowercase hex digits; a place that already holds a dump file is not written to ([ledger-observer.md §9.3](ledger-observer.md#93-dump-file)) |
+| AO2 | `config.parameters.ledger_observer` (21 rows) | new section of an existing fact family | AO-1 | AO-1 | the keys of §5's `ledger_observer.*` row in §15's order; decimals and lists as canonical JSON text; settable: `flush_lag_warn_ms`, `probe_interval_ms`, `probe_sample_keys`, `status_gap_window_ms` |
+
 ### 1.27 Wave 8 slice MCP-4 (#389, MCP-0 command table v1.1 §4.4)
 
 MCP-4 brings the read kind of §3 W2 and the one read output below; neither is a ledger shape, and
@@ -499,6 +511,35 @@ tables; [instance-fact-store.md](instance-fact-store.md), "Reading the seeds").
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | M41 | `actingctl facts --program`, `facts --instance <selector>` and `status --config` ↔ `ac_facts` (`scope` program, instance or config; `instance`; `key_prefix`): `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}` | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | MCP-4 | MCP-4 | `snapshot` is the `RuntimeFactSnapshot` (program) or the instance's `InstanceFactView` (W2); `records` the `config.*` records (config); `read_at_unix_ms` is the Runtime's clock at the read (the snapshot's `taken_at_unix_ms`, the instance read's `sampled_completed_at_unix_ms`); `records_total` counts the records read, `records_kept` those answered after `key_prefix` (program and instance only); the selector is the alias, instance_id or ADB port, resolved with one status read; MCP exports an answer past its output budget (`answer_exported`); CLI success codes `runtime_facts_reported`, `instance_facts_reported` (new) and `runtime_config_reported` |
+
+### 1.28 Wave 8 slice D2-S2 (#384 D2M §3.2, §3.4, §3.5, §6 S2; v1.4.2)
+
+D2-S2 brings its own shapes and writes them; [resource-readings.md](resource-readings.md)
+("Kernel reading", "Host", "Recognition maintenance packages") and
+[runtime-config.md](runtime-config.md) are the contract. No new event type and no new member of a
+persisted record; the reading facts keep their shape.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DS1 | `config.parameters.instance`: `instance.<instance id>.recognition_package` | new per-instance configuration row | D2-S2 | D2-S2 | string, the location of the instance's recognition maintenance package from the entry's `recognition_package.package`, resolved against the configuration file's directory; a location only, never a digest (option 丙); default `none`, so only an instance that names it has the row; not settable (read once at assembly); key-table `file_path` `InstanceMemberAt("recognition_package.package")` |
+| DS2 | `config.parameters.scheduling`: `scheduling.fact_refresh.recognition_join_timeout_ms` | new configuration row | D2-S2 | D2-S2 | milliseconds `0..=1800000`, default `10000` (`actingd.defaults.json`), settable; the one `scheduling.fact_refresh.*` key D2-S2 reads (the join, D2M §3.5), parsed here ahead of D2-S4's other six keys of the §5 row |
+| DS3 | `config.subsystems` row `recognition_packages` | new row of an existing fact | D2-S2 | D2-S2 | only when the configuration binds a recognition package; `enabled` when the start kept one; outcome `config_subsystem_configured` with one `note` link `fact_reader_binding_ignored` (caused by `fact_reader_binding_invalid`) per binding the start runs without |
+| DS4 | task diagnostic stream (`task-diagnostic.v2`): a reading mark that gave no reading is one `error` row (`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the mark's `target_id`) whose `outcome` is `contained_task_resource_reading_unresolved` (warning; `reading_id`, `fact_key`, `reading_problem`) | new value of an existing member | D2-S2 | D2-S2 | written on the frame the mark was read on; a joined reading's OCR rows also carry that frame's `frame_id`, not the last captured frame's; schema not bumped |
+| DS5 | `fact.published` of a reading | changed rule of an existing record (shape unchanged) | D2-S2 | D2-S2 | `observed_at_unix_ms` and the `frame:` part of `source_snapshot_id` are those of the frame the reading was taken on, on any page of the task (they were the terminal frame's); readings are published in the order of their frames' capture times |
+| DS6 | package format: bundle `maintenance[].uses` value `recognition` (at most one per server); task `resource_readings[].page_id` any page the task declares; `linear_steps` tasks may carry `resource_readings` | new value and relaxed rules (resource file format, not a ledger shape) | D2-S2 | resource side (D2-R1, D2-S6) | a reader that does not know `recognition` refuses the declaration; the `package` interface revision is declared once by A8 |
+| DS7 | check-config v1: `error.code` `fact_reader_binding_invalid`, stage `config_recognition_binding`, `error.detail` `{alias, path, reader_problem, package_id, fact_key}`; `instances[].recognition_package` `{package, fact_keys}` for an instance that binds one; warning `fact_reader_missing:<instance>:<fact key>` | interface members | D2-S2 | D2-S2 | schema version stays `v1` (additive) |
+| DS8 | `actinglab package bundle` output: `warnings` (absent when empty), one `recognition_pack_undeclared` outcome per pack that qualifies as a reader but is not declared `recognition` | interface member | D2-S2 | D2-S2 | resource-tooling `PackageBundleResponse.warnings` |
+
+Configuration keys (§5): per instance `recognition_package` `{package}` (built, DS1) and
+`scheduling.fact_refresh.recognition_join_timeout_ms` (built, DS2). The codes
+`fact_reader_binding_invalid`, `fact_reader_binding_ignored`, `fact_reader_missing`,
+`fact_reader_document_mismatch` (runtime-host; registered, emitted once actingd loads a
+scheduling-layer document and D2-S4 reads `min_interval_ms`), `recognition_pack_undeclared`
+(resource-tooling, domain `recognition_pack_` gains its owner), the reclassification of
+`contained_task_resource_reading_unresolved` to warning (ladder class `none`), the keys
+`reading_id`, `reading_problem` and the vocabulary `reading_problem`, the `reader_problem` token
+`package_unreadable` and the actingd location `config_recognition_binding` are catalog entries,
+not rows (§7).
 
 ### 1.29 Wave 8 slice REC-6 (#396, REC-M v1.2.1 §8)
 
@@ -601,7 +642,7 @@ when it takes effect.
 
 | Section | Keys | Defaults and meaning | Parsed by | Read by (takes effect) |
 |---|---|---|---|---|
-| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) | there | AO-1 | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x) |
+| `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) | there | AO-1 (built, §1.26) | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x) |
 | `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms` | M387 §7.1 | D1c | D1c (v0.12.0) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
@@ -614,8 +655,8 @@ when it takes effect.
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
-| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 | D2-S4 (v0.12.0) |
-| per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 | D2-S2 |
+| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
+| per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17 | S6a | S6a |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |

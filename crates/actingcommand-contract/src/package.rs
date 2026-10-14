@@ -412,6 +412,32 @@ pub enum MaintenanceUse {
     Startup,
     Prerequisite,
     ReturnHome,
+    /// Workflow #384 D2-S2: the standard package's recognition maintenance package, the one
+    /// package the scheduler runs to read an instance's facts (at most one per server).
+    // Interface anchor `package` (contracts/component-interfaces.md): a reader without this use
+    // refuses the declaration; A8 declares the revision once.
+    Recognition,
+}
+
+crate::outcome_vocabulary! {
+    /// Workflow #384 D2: why no reader can refresh an instance fact, or what is wrong with a
+    /// reader binding (vocabulary `reader_problem`, `rd-1009/d2/model-d2-fact-refresh.md` §7.3).
+    pub enum ReaderProblem: "reader_problem" {
+        KeyNotMarked => "key_not_marked",
+        DesignatedOperation => "designated_operation",
+        NoMarks => "no_marks",
+        RecognizeOnly => "recognize_only",
+        StabilityTermination => "stability_termination",
+        PolicyFactAuthority => "policy_fact_authority",
+        LivePoolKey => "live_pool_key",
+        PackageUnbound => "package_unbound",
+        NotDeclared => "not_declared",
+        Disabled => "disabled",
+        ConfidenceBelowDocument => "confidence_below_document",
+        IntervalExceedsFreshness => "interval_exceeds_freshness",
+        /// Workflow #384 D2-S2: the bound package cannot be read or admitted.
+        PackageUnreadable => "package_unreadable",
+    }
 }
 
 /// Source declarations and bundle v3 use this same shape. Machine and instance bindings
@@ -436,7 +462,7 @@ pub fn validate_bundle_maintenance_declarations(
             || !bundle_identifier(&entry.server)
             || !entries.insert((&entry.package_id, &entry.server))
             || entry.uses.is_empty()
-            || entry.uses.len() > 3
+            || entry.uses.len() > 4
             || entry
                 .uses
                 .iter()

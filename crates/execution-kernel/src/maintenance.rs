@@ -6,7 +6,7 @@
 use crate::codes::ExecutionKernelCode;
 use crate::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::{BundleIndexV3, MaintenanceUse, PackageRef};
+use actingcommand_contract::{BundleIndexV3, MaintenanceUse, PackageRef, ReaderProblem};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_PREREQUISITE_DEPTH: usize = 3;
@@ -26,6 +26,13 @@ pub struct TaskPackageDescriptor {
     maximum_executed_steps: u32,
     startup_incompatibility: Option<&'static str>,
     prerequisite_incompatibility: Option<&'static str>,
+    /// Workflow #384 D2-S2: why the package cannot be a recognition maintenance package (its
+    /// token is [`TaskPackageDescriptor::use_incompatibility`]'s answer).
+    #[serde(skip)]
+    recognition_incompatibility: Option<ReaderProblem>,
+    /// Workflow #384 D2-S2: the instance fact keys its reading marks write, in declaration
+    /// order.
+    reading_keys: Vec<String>,
 }
 
 impl PreparedContainedTask {
@@ -46,6 +53,8 @@ impl PreparedContainedTask {
             maximum_executed_steps: self.maximum_executed_steps(),
             startup_incompatibility: self.startup_incompatibility(),
             prerequisite_incompatibility: self.prerequisite_incompatibility(),
+            recognition_incompatibility: self.recognition_incompatibility(),
+            reading_keys: self.reading_keys(),
         }
     }
 }
@@ -81,6 +90,15 @@ impl TaskPackageDescriptor {
     pub fn maximum_executed_steps(&self) -> u32 {
         self.maximum_executed_steps
     }
+    /// Workflow #384 D2-S2: the instance fact keys the package's reading marks write.
+    pub fn reading_keys(&self) -> &[String] {
+        &self.reading_keys
+    }
+    /// Workflow #384 D2-S2 (model §3.2): why the package cannot be a recognition maintenance
+    /// package, as the binding check reports it; `None` for a package that qualifies.
+    pub fn recognition_problem(&self) -> Option<ReaderProblem> {
+        self.recognition_incompatibility
+    }
 
     pub fn use_incompatibility(&self, purpose: MaintenanceUse) -> Option<&'static str> {
         match purpose {
@@ -91,6 +109,9 @@ impl TaskPackageDescriptor {
                     .is_some()
                     .then_some("return_home_declares_prerequisite")
             }),
+            MaintenanceUse::Recognition => {
+                self.recognition_incompatibility.map(ReaderProblem::as_str)
+            }
         }
     }
 
@@ -346,6 +367,8 @@ mod tests {
             maximum_executed_steps: 1,
             startup_incompatibility: None,
             prerequisite_incompatibility: None,
+            recognition_incompatibility: None,
+            reading_keys: Vec::new(),
         }
     }
 

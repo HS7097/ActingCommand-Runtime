@@ -33,7 +33,7 @@ use actingcommand_contract::{
 };
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::Scene;
-use actingcommand_recognition_pack::RecognitionEvaluator;
+use actingcommand_recognition_pack::{RecognitionEvaluator, RememberedOcrObservations};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::thread;
@@ -248,6 +248,51 @@ impl LinearPlan {
             }
         }
         Ok(())
+    }
+
+    /// Workflow #384 D2-S2 (model §3.2 qualification 4, §3.4): the segments of the path, as the
+    /// operation index ranges a requested key set may leave out. A path without optional
+    /// operations whose first step leaves a page, which ends on that page and returns to it on
+    /// the way has one segment per return: each leaves the entry page, reaches its pages and
+    /// comes back. Every operation of such a path is in one segment. Any other path is not
+    /// segmented and always runs whole.
+    fn reading_segments(&self) -> Vec<std::ops::Range<usize>> {
+        let Some(LinearFrom::Page(entry)) = self.steps.first().map(|step| &step.from) else {
+            return Vec::new();
+        };
+        if !self.runs.is_empty() || self.target != *entry {
+            return Vec::new();
+        }
+        let mut segments = Vec::new();
+        let mut start = 0;
+        for (index, step) in self.steps.iter().enumerate() {
+            if step.to == *entry {
+                segments.push(start..index + 1);
+                start = index + 1;
+            }
+        }
+        segments
+    }
+
+    /// Workflow #384 D2-S2: the segments that reach no page `reads_on` accepts, as the first
+    /// operation of each mapped to the operation after it. The entry page, where every segment
+    /// starts and ends, is no segment's own page.
+    pub(super) fn segments_without_reads(
+        &self,
+        reads_on: impl Fn(&str) -> bool,
+    ) -> std::collections::BTreeMap<usize, usize> {
+        let Some(LinearFrom::Page(entry)) = self.steps.first().map(|step| &step.from) else {
+            return std::collections::BTreeMap::new();
+        };
+        self.reading_segments()
+            .into_iter()
+            .filter(|segment| {
+                !self.steps[segment.clone()]
+                    .iter()
+                    .any(|step| step.to != *entry && reads_on(step.to.as_str()))
+            })
+            .map(|segment| (segment.start, segment.end))
+            .collect()
     }
 
     /// The candidates of operation `index` once the members `handled` of its run have run.
@@ -521,7 +566,6 @@ impl TaskProgram {
                 self.stability_termination.is_some() || control.stability_termination.is_some(),
             ),
             ("post_admission_ocr", self.post_admission_ocr.is_some()),
-            ("resource_readings", self.resource_readings.is_some()),
             (
                 "stop_on_confirmation",
                 control.stop_on_confirmation == Some(false),
@@ -848,6 +892,32 @@ impl PreparedContainedTask {
                 Some(observed)
             }
         };
+        // Workflow #384 D2-S2 (model §3.5): the entry frame goes to recognition when the entry
+        // page carries marks the run reads. A linear frame is captured without the run's
+        // collector, so its page gate keeps no observation for the marks (Workflow #396 REC-6).
+        if let Some(observed) = &observation {
+            self.hand_off_reading_frame(
+                runtime,
+                ocr_collector,
+                &observed.page_label,
+                &observed.scene,
+                observed.captured_at,
+                RememberedOcrObservations::default(),
+            )?;
+        }
+        // Workflow #384 D2-S2 (model §3.4): with a requested key set, a segment that reaches no
+        // page marking one of its keys is not run; the run stays on the entry page it starts
+        // and ends on.
+        let unread_segments = match ocr_collector
+            .reading_relay
+            .as_ref()
+            .filter(|relay| relay.requested().is_some())
+        {
+            Some(relay) => {
+                plan.segments_without_reads(|page| relay.marks_wanted_on(&self.control.game, page))
+            }
+            None => std::collections::BTreeMap::new(),
+        };
         // Workflow #339 §3.3: a cursor over the operations. `dispatched` counts the operations
         // run, as the page-graph path counts its steps, and is the next `step_index`; a skipped
         // optional operation writes nothing. The next operation follows from the page that
@@ -859,6 +929,13 @@ impl PreparedContainedTask {
         let mut dispatched = 0_u32;
         let mut handled = BTreeSet::new();
         loop {
+            if let Some(after) = unread_segments.get(&current) {
+                if *after >= plan.steps.len() {
+                    break;
+                }
+                current = *after;
+                continue;
+            }
             let (operation, step) = self
                 .program
                 .operations
@@ -874,6 +951,16 @@ impl PreparedContainedTask {
                 step,
                 &candidates,
                 observation,
+            )?;
+            // Workflow #384 D2-S2 (model §3.5): the frame the step arrived on goes to
+            // recognition when its page carries marks the run reads.
+            self.hand_off_reading_frame(
+                runtime,
+                ocr_collector,
+                &reached.page_label,
+                &reached.scene,
+                reached.captured_at,
+                RememberedOcrObservations::default(),
             )?;
             dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
             let next = match step.run.map(|run| &plan.runs[run]) {
@@ -906,7 +993,6 @@ impl PreparedContainedTask {
         self.finish_success(
             runtime,
             ocr_collector,
-            observation.as_ref(),
             Some(plan.target.clone()),
             dispatched,
         )

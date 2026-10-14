@@ -34,6 +34,7 @@ fn reopen(database: &Arc<RuntimeDatabase>) -> GlobalLedgerResult<GlobalLedger> {
     .open_writer_timed(
         Arc::clone(database),
         "l5b-reopen".into(),
+        None,
         &mut LedgerOpenTiming::default(),
     )
 }

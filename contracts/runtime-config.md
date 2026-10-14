@@ -26,7 +26,8 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
   that the shipped file's SHA-256 is the `defaults_sha256` `check-config` reports. It holds
   exactly the keys whose `default` is `file`, parsed by `DefaultsFile` (no required top-level
   member; a member without parsing code is refused). D1c fills it with the `recovery_ladder` and
-  `host_claims` sections (M387 §7.1), P-c with the `performance` section (PERF §10).
+  `host_claims` sections (M387 §7.1), P-c with the `performance` section (PERF §10), SR-1 with
+  the `scheduling` section, AO-1 with the `ledger_observer` section.
 - **Merge.** A key the file names is `explicit`, otherwise `default` (from the defaults file, the
   section-level key or code). A list or object the file names replaces the default whole. The
   example configuration stays a skeleton: a configuration names only the keys it changes. A key
@@ -64,12 +65,18 @@ question 2: change it in the file, commit, restart) and the per-instance `stuck_
 the `recovery_ladder` and `host_claims` sections below (all settable, default `file`) and
 `standard_packs.root` (Workflow #373 NAV-6, moved here: string, default `none`, not settable,
 read once at assembly). P-c's rows: the `performance` section below. Workflow #386 SR-1's rows:
-the `scheduling` section below. Workflow #398 RD-1b's row: the per-instance `device_kind` (string
+the `scheduling` section below. Workflow #383 AO-1's rows: the `ledger_observer` section below.
+Workflow #398 RD-1b's row: the per-instance `device_kind` (string
 `emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
 at assembly; [device-binding.md](device-binding.md)), present only for an instance that names
-`device`. A manifest key the table does not have fails the start (`config_key_unknown`). The
+`device`. Workflow #384 D2-S2's row: the per-instance `recognition_package` (string, the location
+of the instance's recognition maintenance package, from the entry's `recognition_package.package`
+resolved against the configuration file's directory; a location only, never a digest; default
+`none`, not settable, read once at assembly; [resource-readings.md](resource-readings.md),
+"Recognition maintenance packages"), present only for an instance that names it. A manifest key
+the table does not have fails the start (`config_key_unknown`). The
 manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
-`performance`, `scheduling`), then each instance's per-instance keys together.
+`performance`, `scheduling`, `ledger_observer`), then each instance's per-instance keys together.
 
 ## The recovery ladder section (D1c)
 
@@ -196,7 +203,10 @@ in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 [cost-commit.md](cost-commit.md) (`cost_commit`) and [scheduling-blackout.md](scheduling-blackout.md)
 (`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes
 that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows` (the most rows
-`ac_diagnose` lists under `not_run`) by SR-6b.
+`ac_diagnose` lists under `not_run`) by SR-6b. Workflow #384 D2-S2 reads
+`fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
+to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); D2-S4 adds the
+section's other fact refresh keys.
 
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
@@ -218,6 +228,7 @@ that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
 | `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
 | `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |
+| `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -235,11 +246,53 @@ instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_
 (`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
 against the other. No slice reads them before #405.
 
+## The `ledger_observer` section (Workflow #383 AO-1)
+
+[ledger-observer.md](ledger-observer.md) §15 and [v012-register.md](v012-register.md) §5: every
+key is parsed, checked and defaulted from v0.12.0 on, default `file`. The Runtime reads
+`write_attempts`, `write_retry_backoff_ms`, `flush_attempt_stall_ms`, `health_probe_interval_ms`
+and `dump_max_bytes` when the ledger opens: they make the writer's failure plan
+([ledger-observer.md §9](ledger-observer.md#9-write-failure-retry-dump-fatal-ao-1)); a host
+started without actingd's manifest reads the defaults file's values. The other keys take effect
+with AO-2 (the capture queue, its batches and the request ring), AO-5 (the tag rules) and AO-8
+(the probes and status).
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `ledger_observer.buffer_bytes` | integer, at least 1 | `67108864` (64 MiB) | no |
+| `ledger_observer.buffer_records` | integer, at least 1 | `20480` | no |
+| `ledger_observer.buffer.tier1_ratio`, `.tier2_ratio`, `.tier3_ratio` | decimal | `0.6`, `0.75`, `0.9` | no |
+| `ledger_observer.buffer.hysteresis_ratio` | decimal | `0.1` | no |
+| `ledger_observer.spill_batch_bytes` | integer, at least 1 | `4194304` (4 MiB) | no |
+| `ledger_observer.dump_max_bytes` | integer, at least 1 | `1073741824` (1 GiB) | no |
+| `ledger_observer.flush_batch_records`, `.flush_batch_records_busy` | integer, at least 1 | `256`, `2048` | no |
+| `ledger_observer.write_attempts` | integer `1..=4294967295` | `5` | no |
+| `ledger_observer.write_retry_backoff_ms` | list of milliseconds, one per attempt | `[0, 100, 250, 500, 1000]` | no |
+| `ledger_observer.flush_attempt_stall_ms` | milliseconds, at least 1 | `120000` | no |
+| `ledger_observer.flush_lag_warn_ms` | milliseconds, at least 1 | `5000` | yes |
+| `ledger_observer.health_probe_interval_ms` | milliseconds, at least 1 | `1000` | no |
+| `ledger_observer.probe_interval_ms` | milliseconds, at least 1 | `60000` | yes |
+| `ledger_observer.probe_sample_keys` | integer, at least 1 | `1024` | yes |
+| `ledger_observer.request_index_records` | integer, at least 1 | `4096` | no |
+| `ledger_observer.status_gap_window_ms` | milliseconds, at least 1 | `86400000` | yes |
+| `ledger_observer.tag.workbench_patterns` | list of key patterns | ledger-observer.md §15 | no |
+| `ledger_observer.tag.reobserve_prefixes` | list of key prefixes | ledger-observer.md §15 | no |
+
+A key that is not settable is read when the ledger opens, before any instruction value is
+restored ("used before the ledger opens"): the capture queue and the writer with its probe
+exist from then on. The section is checked whole at start, in `check-config` and after every
+instruction; a broken rule is `config_value_invalid` (`section_check`) for the key it concerns:
+the tiers rise strictly within (0, 1] (`tier1_ratio` above 0 and below `tier2_ratio`,
+`tier2_ratio` below `tier3_ratio`, `tier3_ratio` at most 1); `hysteresis_ratio` lies within
+(0, 1); (`tier3_ratio` − `tier2_ratio`) × `buffer_bytes` is at least `spill_batch_bytes`;
+`write_retry_backoff_ms` lists exactly `write_attempts` waits; the tag lists hold non-empty texts
+without spaces or control characters. A ratio or a wait of the wrong type is `wrong_type`.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
-| `config.subsystems` | unchanged | at start |
+| `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |
 | `host.config_overrides` | one per instruction value: `config_key`, `value_json`, `base_json`, `base_source` (`explicit` or `default`), `set_unix_ms`, `set_in_owner_epoch`, `request_id`; `channel` from U-2 on | at every `ConfigureSettings`, and at start when it held rows (tagged, `tag.workbench_patterns`) |

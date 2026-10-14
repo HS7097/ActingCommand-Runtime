@@ -9,11 +9,13 @@ use crate::codes::ResourceToolingCode;
 use crate::{
     PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
 };
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleIndex, BundleIndexV2, BundleIndexV3, BundleIndexV3Version, BundleIndexVersion,
     BundleMaintenance, BundlePackV2, ContentDirectory, ContentDirectoryVersion, LabError,
-    LabErrorClass, LabResult, PackageRef, content_directory_digest,
+    LabErrorClass, LabResult, MaintenanceUse, PackageRef, content_directory_digest,
 };
+use actingcommand_execution_kernel::TaskPackageDescriptor;
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
 use serde_json::Value;
@@ -102,12 +104,13 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
         request.source,
         request.maintenance,
     )
-    .and_then(|index| {
+    .and_then(|(index, warnings)| {
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
         Ok(PackageBundleResponse {
             status: "written".to_string(),
             out: out.display().to_string(),
             index,
+            warnings,
         })
     })
     .map_err(|mut error| {
@@ -127,7 +130,7 @@ fn write_bundle(
     directories: &[PathBuf],
     source: Option<actingcommand_contract::BundleSource>,
     maintenance: Option<Vec<BundleMaintenance>>,
-) -> LabResult<BundleIndex> {
+) -> LabResult<(BundleIndex, Vec<Outcome>)> {
     let packs_dir = staging.join("packs");
     fs::create_dir(&packs_dir).map_err(|error| write_error(&packs_dir, error))?;
     let mut containment = Containment::for_metadata_validation();
@@ -227,8 +230,10 @@ fn write_bundle(
             ));
         }
     }
+    let mut warnings = Vec::new();
     let index = match maintenance {
         Some(maintenance) => {
+            warnings = undeclared_recognition_packs(&maintenance, &descriptors);
             let index = BundleIndexV3 {
                 schema_version: BundleIndexV3Version::V3,
                 game: applications.game.clone(),
@@ -266,7 +271,34 @@ fn write_bundle(
     encoded.push(b'\n');
     write_new(&staging.join("applications.json"), applications_bytes)?;
     write_new(&staging.join("bundle.json"), &encoded)?;
-    Ok(index)
+    Ok((index, warnings))
+}
+
+/// Workflow #384 D2-S2 (D2 model §3.2): a pack that only navigates and reads (it qualifies as a
+/// recognition maintenance package: marks, no designated operation, no stability termination,
+/// not recognize-only) belongs to the standard package's one recognition maintenance package;
+/// each such pack the declarations do not name for `recognition` is one
+/// `recognition_pack_undeclared`, a warning while the resource repositories declare theirs.
+fn undeclared_recognition_packs(
+    maintenance: &[BundleMaintenance],
+    descriptors: &[TaskPackageDescriptor],
+) -> Vec<Outcome> {
+    let declared = maintenance
+        .iter()
+        .filter(|entry| entry.uses.contains(&MaintenanceUse::Recognition))
+        .map(|entry| entry.package_id.as_str())
+        .collect::<BTreeSet<_>>();
+    descriptors
+        .iter()
+        .filter(|descriptor| {
+            descriptor.recognition_problem().is_none()
+                && !declared.contains(descriptor.package_id())
+        })
+        .map(|descriptor| {
+            Outcome::new(ResourceToolingCode::RecognitionPackUndeclared)
+                .package_id(descriptor.package_id())
+        })
+        .collect()
 }
 
 /// The parts of the applications table the bundle relies on; the table's full check is

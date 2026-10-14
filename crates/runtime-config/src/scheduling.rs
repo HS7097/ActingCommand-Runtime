@@ -7,6 +7,9 @@
 //! defaulted now, so that the one v0.12.0 configuration revision carries them (order §3.5 item
 //! 18). Workflow #405: the random task delay (`random_delay`), whose section-level keys are every
 //! instance's defaults (the per-instance keys are in the per-instance section), parsed only.
+//! Workflow #384 D2-S2: `fact_refresh.recognition_join_timeout_ms`, how long a successful run
+//! waits for the readings it handed to recognition, read by the host when a run joins; D2-S4
+//! adds the section's other fact refresh keys.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! host blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, and
@@ -69,6 +72,11 @@ pub const RANDOM_DELAY_MIN_MS: &str = "scheduling.random_delay.min_ms";
 /// Workflow #405: the longest random delay, in milliseconds (also a per-instance member).
 pub const RANDOM_DELAY_MAX_MS: &str = "scheduling.random_delay.max_ms";
 
+/// Workflow #384 D2-S2 (D2 model §3.4, §3.5): how long a successful run waits before
+/// `Finalizing` for the readings of the frames it handed to recognition.
+pub const FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS: &str =
+    "scheduling.fact_refresh.recognition_join_timeout_ms";
+
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
 const MAX_RANDOM_DELAY_MS: i64 = 86_400_000;
@@ -123,6 +131,8 @@ pub struct SchedulingFile {
     not_run: Option<NotRunFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     random_delay: Option<RandomDelayFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fact_refresh: Option<FactRefreshFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -163,6 +173,10 @@ file_struct!(FeatureLockFile {
 });
 file_struct!(NotRunFile { diagnose_rows });
 file_struct!(
+    /// Workflow #384 D2-S2: the fact refresh keys parsed so far.
+    FactRefreshFile { recognition_join_timeout_ms }
+);
+file_struct!(
     /// Workflow #405: a random delay, section-level or one instance's.
     RandomDelayFile {
         enabled,
@@ -200,6 +214,11 @@ const STAGE: KeyRange = KeyRange::Tokens(PACING_STAGE_TOKENS);
 pub(crate) const DELAY: KeyRange = KeyRange::Integer {
     min: 0,
     max: MAX_RANDOM_DELAY_MS,
+};
+/// Workflow #384 D2-S2: a join timeout, `0..=1800000` ms: no wait beyond the longest task budget.
+const JOIN_TIMEOUT: KeyRange = KeyRange::Integer {
+    min: 0,
+    max: actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS as i64,
 };
 
 /// One row per key of the section (`contracts/v012-register.md` §5), in the model's order.
@@ -280,6 +299,12 @@ pub(crate) static ROWS: &[KeyRow] = &[
     ),
     row(RANDOM_DELAY_MIN_MS, ValueType::DurationMs, DELAY, "#405"),
     row(RANDOM_DELAY_MAX_MS, ValueType::DurationMs, DELAY, "#405"),
+    row(
+        FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS,
+        ValueType::DurationMs,
+        JOIN_TIMEOUT,
+        "D2-S2",
+    ),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -617,4 +642,12 @@ pub(crate) fn sample_timeout_retries(
     value: &dyn Fn(&str) -> Option<FactScalar>,
 ) -> Result<u32, ConfigFailure> {
     Reader { value }.count(SAMPLE_TIMEOUT_RETRIES)
+}
+
+/// Workflow #384 D2-S2: `scheduling.fact_refresh.recognition_join_timeout_ms` in effect, read
+/// alone (the host reads it when a run joins its readings).
+pub(crate) fn recognition_join_timeout_ms(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<u64, ConfigFailure> {
+    Reader { value }.duration(FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS)
 }

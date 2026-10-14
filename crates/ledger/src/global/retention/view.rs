@@ -1121,7 +1121,11 @@ impl super::super::GlobalLedger {
             },
             LedgerLocation::FrameRetentionView.location(),
         )?;
-        super::super::receive_response(receiver, LedgerLocation::FrameRetentionView.location())?
+        super::super::receive_response(
+            receiver,
+            LedgerLocation::FrameRetentionView.location(),
+            self.reply_timeout,
+        )?
     }
 }
 

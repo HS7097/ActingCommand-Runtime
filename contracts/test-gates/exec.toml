@@ -644,6 +644,20 @@ tests = [
 ]
 incident = []
 
+# Workflow #384 D2-S2: reading marks stand on any page of a task (a region or the whole page) and are read on the frames the run reaches their pages on, joined before Finalizing within the join timeout; a mark that gives no reading is a warning of its own and the run succeeds; a recognition maintenance package (one per server) only navigates and reads; a requested key set runs only the segments that reach its keys
+[[gate]]
+key = "49"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s2::d2s2_t8_one_recognition_package_per_server_and_an_unknown_use_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s2::d2s2_t9_a_reader_navigates_and_reads_and_declares_no_operation",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s2::d2s2_t10_marks_on_any_page_and_the_whole_page_are_read_on_their_frames",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s2::d2s2_t11_the_join_waits_before_finalizing_and_a_late_reading_is_a_join_timeout",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s2::d2s2_t12_a_mark_that_gives_no_reading_is_a_warning_and_the_run_succeeds",
+    "actingcommand-execution-kernel::lib::contained_task::gate_384_d2s2::d2s2_t13_a_requested_key_set_runs_only_its_segments",
+]
+incident = ["#384"]
+
 # Workflow #396 REC-6: located text decides a page rule; a page its immediate targets rule out skips its lazy targets (located text, value tests) without a provider call, and pages told apart by lazy targets match as a full evaluation does; value tests compare (seven ops, mul and add, parses, clock_hms, whitespace_all_v1 with both parts of current_capacity) and name an unreadable side or an unmet comparison; a value test is refused in forbidden; a page that collects OCR gates on any backend, the gate's observation of a field or reading target is the one its frame collects, and the page-gate refusal is retired; a guard check on an unmet value test refuses the input; without an OCR model the offline tools refuse a value test under lab_ocr_unavailable
 [[gate]]
 key = "50"

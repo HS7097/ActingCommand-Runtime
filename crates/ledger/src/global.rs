@@ -21,6 +21,8 @@ pub use retention::{
 mod sqlite;
 mod storage;
 mod store;
+// Workflow #383 AO-1: retry, dump, fatal stop and import (`contracts/ledger-observer.md` §9).
+mod write_failure;
 pub use migration::*;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use sqlite::after_release_baseline_head_for_test;
@@ -28,6 +30,10 @@ pub use sqlite::{
     RELEASE_BASELINE_STATE_KEY, ReleaseLedgerSourceReference, SqliteLedgerReadOnly,
     VerifiedReleaseLedgerSource, capture_release_source_reference, read_release_baseline_source,
     refuse_unsupported_ledger_format, verify_release_source_reference, verify_transaction_event,
+};
+pub use write_failure::{
+    LEDGER_DUMP_FILE_NAME, LEDGER_DUMP_VERSION, LedgerFailurePlan, LedgerFailureSink,
+    LedgerMonotonicClock, LedgerWritePolicy, fallback_dump_path,
 };
 
 pub(crate) use projection::query_matches;
@@ -46,7 +52,7 @@ pub use read_only::{
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, IoKind, Location};
 use actingcommand_contract::{
     CorrelationId, EventId, EventQuery, EventType, IdentifierIssuer, PerformanceLedgerUnavailable,
     PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
@@ -60,7 +66,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak,
+    Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError, Weak,
     mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 use std::thread::{self, JoinHandle};
@@ -416,6 +422,9 @@ pub struct GlobalLedgerError {
     terminal: bool,
     rolled_back_work: Option<Box<TransactionWorkError>>,
     io_kind: Option<LedgerIoKind>,
+    /// Workflow #383 AO-1: a write failure (I/O, busy, a full disk) that is read back and tried
+    /// again, with the I/O kind it reports; `None` for every other failure (§9.1).
+    write_failure: Option<IoKind>,
 }
 
 /// Closed kind of the `std::io::Error` behind a ledger error; unlisted kinds are `Other`.
@@ -577,6 +586,7 @@ impl GlobalLedgerError {
             terminal: false,
             rolled_back_work: Some(Box::new(error)),
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -597,6 +607,17 @@ impl GlobalLedgerError {
         self.io_kind
     }
 
+    /// Workflow #383 AO-1: whether this is a write failure (I/O, busy, a full disk) that the
+    /// write path reads back and tries again (`contracts/ledger-observer.md` §9.1).
+    pub(crate) fn is_write_failure(&self) -> bool {
+        self.write_failure.is_some()
+    }
+
+    /// The I/O kind a write failure reports.
+    pub(crate) fn write_failure_kind(&self) -> Option<IoKind> {
+        self.write_failure
+    }
+
     pub fn is_fatal(&self) -> bool {
         self.terminal
     }
@@ -615,6 +636,7 @@ impl GlobalLedgerError {
             terminal: false,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -632,6 +654,7 @@ impl GlobalLedgerError {
             terminal: true,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -650,6 +673,7 @@ impl GlobalLedgerError {
             terminal: true,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -674,6 +698,7 @@ impl GlobalLedgerError {
             terminal: true,
             rolled_back_work: None,
             io_kind: Some(error.kind().into()),
+            write_failure: None,
         }
     }
 
@@ -691,6 +716,7 @@ impl GlobalLedgerError {
             terminal: true,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -708,6 +734,7 @@ impl GlobalLedgerError {
             terminal: false,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -719,6 +746,7 @@ impl GlobalLedgerError {
             terminal: true,
             rolled_back_work: None,
             io_kind: Some(error.kind().into()),
+            write_failure: None,
         }
     }
 
@@ -730,6 +758,7 @@ impl GlobalLedgerError {
             terminal: true,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -772,6 +801,10 @@ pub struct GlobalLedgerConfig {
     segment_max_bytes: u64,
     ingress_capacity: usize,
     subscription_capacity: usize,
+    /// Workflow #383 AO-1: how long a caller waits for one writer reply.
+    reply_timeout: Duration,
+    /// Workflow #383 AO-1: the running Runtime's write-failure state (`with_failure_plan`).
+    write_failure: Option<Arc<write_failure::WriteFailureState>>,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -785,6 +818,11 @@ impl fmt::Debug for GlobalLedgerConfig {
         debug
             .field("ingress_capacity", &self.ingress_capacity)
             .field("subscription_capacity", &self.subscription_capacity)
+            .field("reply_timeout", &self.reply_timeout)
+            .field(
+                "failure_plan",
+                &self.write_failure.as_ref().map(|state| state.plan()),
+            )
             .finish()
     }
 }
@@ -798,7 +836,27 @@ impl GlobalLedgerConfig {
             segment_max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
             ingress_capacity: DEFAULT_INGRESS_CAPACITY,
             subscription_capacity: DEFAULT_SUBSCRIPTION_CAPACITY,
+            reply_timeout: COMMAND_TIMEOUT,
+            write_failure: None,
         }
+    }
+
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9): the running Runtime's writer. A
+    /// failed write is read back and tried again by `plan`'s policy; when the attempts are used
+    /// up, or the store reports an integrity or format failure, the writer writes its dump and
+    /// `plan`'s sink stops the Runtime; the open imports a dump an earlier run left. Without a
+    /// plan (an offline writer, §6) a failed write is not tried again and ends the writer.
+    pub fn with_failure_plan(mut self, plan: LedgerFailurePlan) -> Self {
+        self.write_failure = Some(write_failure::WriteFailureState::new(plan));
+        self
+    }
+
+    /// Workflow #383 AO-1: how long a caller waits for one writer reply
+    /// ([`GlobalLedger::REPLY_TIMEOUT`] unless set); a wait that runs out is the error
+    /// `writer_response_timeout`.
+    pub fn with_reply_timeout(mut self, timeout: Duration) -> Self {
+        self.reply_timeout = timeout;
+        self
     }
 
     #[cfg(test)]
@@ -841,6 +899,12 @@ impl GlobalLedgerConfig {
             return Err(GlobalLedgerError::fatal(
                 LedgerCode::InvalidLedgerConfig.code(),
                 LedgerLocation::ValidateIngressCapacity.location(),
+            ));
+        }
+        if self.reply_timeout.is_zero() {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::InvalidLedgerConfig.code(),
+                LedgerLocation::ConfigureLedgerWritePolicy.location(),
             ));
         }
         if self.subscription_capacity == 0 {
@@ -1124,6 +1188,176 @@ pub struct GlobalLedger {
     commit_statistics: Arc<CommitStatistics>,
     // Replies of accepted-but-unconfirmed appends, oldest first.
     deferred: Mutex<Vec<PendingReply>>,
+    /// Workflow #383 AO-1: how long a caller waits for one writer reply.
+    reply_timeout: Duration,
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §14 T8): the probe that stops a
+    /// stalled write attempt; only a writer with a failure plan has one.
+    probe: Option<WriteProbe>,
+}
+
+/// Workflow #383 AO-1 (§14 T8): the probe thread and the flag that ends it.
+struct WriteProbe {
+    stop: Arc<(Mutex<bool>, Condvar)>,
+    thread: JoinHandle<()>,
+}
+
+impl WriteProbe {
+    /// The probe holds the queue weakly: once the writer has ended, the queue is closed and
+    /// every later command fails at once as `writer_unavailable`.
+    fn start(
+        state: Arc<write_failure::WriteFailureState>,
+        receiver: Weak<Mutex<Receiver<WriterCommand>>>,
+    ) -> GlobalLedgerResult<Self> {
+        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let probe_stop = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name("actingcommand-ledger-probe".to_string())
+            .spawn(move || probe_loop(&state, &receiver, &probe_stop))
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::WriterSpawnFailed.code(),
+                    LedgerLocation::LedgerAttemptWatch.location(),
+                    &error,
+                )
+            })?;
+        Ok(Self { stop, thread })
+    }
+
+    fn finish(self) -> GlobalLedgerResult<()> {
+        let (stopped, changed) = &*self.stop;
+        *stopped.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        changed.notify_all();
+        self.thread.join().map_err(|_| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterPanicked.code(),
+                LedgerLocation::LedgerAttemptWatch.location(),
+            )
+        })
+    }
+}
+
+/// Workflow #383 AO-1 (§9.1, §14 T8): every `health_probe_interval_ms` the probe looks at the
+/// write attempt in progress; one that started more than `flush_attempt_stall_ms` ago is treated
+/// as exhausted: the probe seals the writer and runs §9.2 itself, the record in flight included.
+fn probe_loop(
+    state: &write_failure::WriteFailureState,
+    receiver: &Weak<Mutex<Receiver<WriterCommand>>>,
+    stop: &(Mutex<bool>, Condvar),
+) {
+    let interval = Duration::from_millis(state.plan().policy().health_probe_interval_ms());
+    let (stopped, changed) = stop;
+    let mut guard = stopped.lock().unwrap_or_else(PoisonError::into_inner);
+    loop {
+        guard = changed
+            .wait_timeout_while(guard, interval, |stopped| !*stopped)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0;
+        if *guard {
+            return;
+        }
+        if let Some((in_flight, stalled)) = state.seal_if_stalled() {
+            drop(guard);
+            // The stalled writer still holds the queue, so it is there to answer.
+            let queued = receiver.upgrade().map_or_else(Vec::new, |receiver| {
+                refuse_queued(&receiver, &write_failure::sealed_error())
+            });
+            state.write_dump_and_stop(in_flight, &queued, &stalled);
+            return;
+        }
+    }
+}
+
+/// §9.2: the commands still queued when the writer is sealed. Each is answered with `error`; the
+/// drafts of the plain appends among them are returned for the dump, in queue order.
+fn refuse_queued(
+    receiver: &Mutex<Receiver<WriterCommand>>,
+    error: &GlobalLedgerError,
+) -> Vec<SanitizedEventDraft> {
+    let receiver = receiver.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut drafts = Vec::new();
+    while let Ok(command) = receiver.try_recv() {
+        if let Some(draft) = refuse_command(command, error) {
+            drafts.push(draft);
+        }
+    }
+    drafts
+}
+
+/// Answers one queued command with `error`; a plain append's draft is returned for the dump. A
+/// joint append is not dumped: its state work rolls back with it, so neither took effect.
+fn refuse_command(
+    command: WriterCommand,
+    error: &GlobalLedgerError,
+) -> Option<SanitizedEventDraft> {
+    let refused = error.clone();
+    match command {
+        WriterCommand::Append {
+            draft, response, ..
+        } => {
+            let _ = response.send((Err(refused), None));
+            return Some(*draft);
+        }
+        WriterCommand::ReconcilePriorEpochCloses { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ReleaseLabPin { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ResolveArtifact { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::RetentionCandidates { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::FrameRetentionView { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::AdmitArtifactEviction { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::FinishArtifactEviction { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::AppendTransaction { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ReconcileScheduledPolicySettlement { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::Query { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::QueryPage { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ProjectViewPage { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ProjectSchedulingOutcomes { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::LatestSequence { response } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::Subscribe { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ReplayPage { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::Project { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::ProjectPage { response, .. } => {
+            let _ = response.send(Err(refused));
+        }
+        WriterCommand::Shutdown { response } => {
+            let _ = response.send(Err(refused));
+        }
+        #[cfg(test)]
+        WriterCommand::TestTerminalFailure { .. } | WriterCommand::TestSubscriberCount { .. } => {}
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1349,7 +1583,11 @@ impl LedgerSubscription {
         ) {
             return Err(self.latch_after_terminal_check(error));
         }
-        let page = match receive_response(receiver, LedgerLocation::ReplaySubscription.location()) {
+        let page = match receive_response(
+            receiver,
+            LedgerLocation::ReplaySubscription.location(),
+            COMMAND_TIMEOUT,
+        ) {
             Ok(Ok(page)) => page,
             Ok(Err(error)) | Err(error) => {
                 return Err(self.latch_after_terminal_check(error));
@@ -1559,7 +1797,14 @@ impl GlobalLedger {
         config.validate()?;
         let capacity = config.ingress_capacity;
         let subscription_capacity = config.subscription_capacity;
+        let reply_timeout = config.reply_timeout;
+        let failure = config.write_failure.clone();
         let (sender, receiver) = mpsc::sync_channel(capacity);
+        // Workflow #383 AO-1: the probe answers the queued commands when it seals a stalled
+        // writer (§9.2), so the queue is shared; only the writer receives while it runs.
+        let receiver = Arc::new(Mutex::new(receiver));
+        let writer_receiver = Arc::clone(&receiver);
+        let writer_failure = failure.clone();
         let (store_sender, store_receiver) = mpsc::sync_channel(0);
         let writer = thread::Builder::new()
             .name("actingcommand-global-ledger".to_string())
@@ -1570,7 +1815,12 @@ impl GlobalLedger {
                         LedgerLocation::StartWriter.location(),
                     )
                 })?;
-                writer_loop(store, receiver, subscription_capacity)
+                writer_loop(
+                    store,
+                    &writer_receiver,
+                    subscription_capacity,
+                    writer_failure.as_deref(),
+                )
             })
             .map_err(|error| {
                 GlobalLedgerError::io(
@@ -1591,12 +1841,33 @@ impl GlobalLedger {
         };
         let commit_statistics = store.commit_statistics();
         match store_sender.send(store) {
-            Ok(()) => Ok(Self {
-                sender: Some(sender),
-                writer: Some(writer),
-                commit_statistics,
-                deferred: Mutex::new(Vec::new()),
-            }),
+            Ok(()) => {
+                let queue = Arc::downgrade(&receiver);
+                drop(receiver);
+                let probe = match failure
+                    .map(|state| WriteProbe::start(state, queue))
+                    .transpose()
+                {
+                    Ok(probe) => probe,
+                    Err(error) => {
+                        // The writer has the store: dropping the queue ends it, and it closes the
+                        // store as at any end of its queue.
+                        drop(sender);
+                        return Err(match writer.join() {
+                            Ok(closed) => error.with_close_result(closed),
+                            Err(_) => error,
+                        });
+                    }
+                };
+                Ok(Self {
+                    sender: Some(sender),
+                    writer: Some(writer),
+                    commit_statistics,
+                    deferred: Mutex::new(Vec::new()),
+                    reply_timeout,
+                    probe,
+                })
+            }
             Err(mpsc::SendError(store)) => {
                 drop(sender);
                 let close_result = store.close();
@@ -1633,7 +1904,11 @@ impl GlobalLedger {
             },
             LedgerLocation::AppendTransaction.location(),
         )?;
-        receive_response(receiver, LedgerLocation::AppendTransaction.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::AppendTransaction.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
@@ -1674,7 +1949,11 @@ impl GlobalLedger {
                 value.send.finish(Instant::now(), sent.is_ok());
             }
             sent?;
-            receive_response(receiver, LedgerLocation::AppendEvent.location())
+            receive_response(
+                receiver,
+                LedgerLocation::AppendEvent.location(),
+                self.reply_timeout,
+            )
         })();
         match result {
             Ok((result, Some(value))) => (
@@ -1792,6 +2071,7 @@ impl GlobalLedger {
             terminal: true,
             rolled_back_work: None,
             io_kind: None,
+            write_failure: None,
         }
     }
 
@@ -1821,6 +2101,7 @@ impl GlobalLedger {
         receive_response(
             receiver,
             LedgerLocation::ReconcileScheduledPolicySettlement.location(),
+            self.reply_timeout,
         )?
     }
 
@@ -1840,7 +2121,11 @@ impl GlobalLedger {
             WriterCommand::Query { query, response },
             LedgerLocation::QueryEvents.location(),
         )?;
-        receive_response(receiver, LedgerLocation::QueryEvents.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::QueryEvents.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn query_page(
@@ -1871,7 +2156,11 @@ impl GlobalLedger {
             },
             LedgerLocation::QueryEventPage.location(),
         )?;
-        receive_response(receiver, LedgerLocation::QueryEventPage.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::QueryEventPage.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn project_view_page(
@@ -1909,7 +2198,11 @@ impl GlobalLedger {
             },
             LedgerLocation::ProjectLedgerViewPage.location(),
         )?;
-        receive_response(receiver, LedgerLocation::ProjectLedgerViewPage.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::ProjectLedgerViewPage.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn project_scheduling_outcomes(
@@ -1936,6 +2229,7 @@ impl GlobalLedger {
         receive_response(
             receiver,
             LedgerLocation::ProjectSchedulingOutcomes.location(),
+            self.reply_timeout,
         )?
     }
 
@@ -1952,7 +2246,11 @@ impl GlobalLedger {
             WriterCommand::LatestSequence { response },
             LedgerLocation::LatestSequence.location(),
         )?;
-        receive_response(receiver, LedgerLocation::LatestSequence.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::LatestSequence.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn subscribe(&self, cursor: SubscriptionCursor) -> GlobalLedgerResult<LedgerSubscription> {
@@ -1976,7 +2274,11 @@ impl GlobalLedger {
             WriterCommand::Subscribe { cursor, response },
             LedgerLocation::SubscribeEvents.location(),
         )?;
-        let registration = receive_response(receiver, LedgerLocation::SubscribeEvents.location())??;
+        let registration = receive_response(
+            receiver,
+            LedgerLocation::SubscribeEvents.location(),
+            self.reply_timeout,
+        )??;
         Ok(LedgerSubscription {
             sender: sender.clone(),
             replay: VecDeque::new(),
@@ -2015,7 +2317,11 @@ impl GlobalLedger {
             },
             LedgerLocation::ProjectEvents.location(),
         )?;
-        receive_response(receiver, LedgerLocation::ProjectEvents.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::ProjectEvents.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn project_page(
@@ -2048,7 +2354,11 @@ impl GlobalLedger {
             },
             LedgerLocation::ProjectEventPage.location(),
         )?;
-        receive_response(receiver, LedgerLocation::ProjectEventPage.location())?
+        receive_response(
+            receiver,
+            LedgerLocation::ProjectEventPage.location(),
+            self.reply_timeout,
+        )?
     }
 
     pub fn close(mut self) -> GlobalLedgerResult<()> {
@@ -2056,6 +2366,11 @@ impl GlobalLedger {
     }
 
     fn shutdown(&mut self) -> GlobalLedgerResult<()> {
+        let probe = self.probe.take().map_or(Ok(()), WriteProbe::finish);
+        self.shutdown_writer().and(probe)
+    }
+
+    fn shutdown_writer(&mut self) -> GlobalLedgerResult<()> {
         let Some(writer) = self.writer.take() else {
             return Ok(());
         };
@@ -2088,8 +2403,13 @@ impl GlobalLedger {
                 )
             });
         drop(sender);
-        let response_result = send_result
-            .and_then(|()| receive_response(receiver, LedgerLocation::ShutdownWriter.location())?);
+        let response_result = send_result.and_then(|()| {
+            receive_response(
+                receiver,
+                LedgerLocation::ShutdownWriter.location(),
+                self.reply_timeout,
+            )?
+        });
         let join_result = writer.join().map_err(|_| {
             GlobalLedgerError::fatal(
                 LedgerCode::WriterPanicked.code(),
@@ -2136,15 +2456,51 @@ impl Drop for GlobalLedger {
     }
 }
 
+/// The writer thread. Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2): when a write
+/// gave up (its attempts used up, or an integrity or format failure), the writer seals itself,
+/// answers every queued command, writes the dump and the failure plan's sink stops the Runtime.
 fn writer_loop<S: LedgerStore>(
-    mut store: S,
-    receiver: Receiver<WriterCommand>,
+    store: S,
+    receiver: &Mutex<Receiver<WriterCommand>>,
     subscription_capacity: usize,
+    failure: Option<&write_failure::WriteFailureState>,
+) -> GlobalLedgerResult<()> {
+    let result = writer_commands(store, receiver, subscription_capacity, failure);
+    if result.is_err()
+        && let Some(failure) = failure
+        && let Some(stop) = failure.take_give_up()
+        && let Some(in_flight) = failure.seal()
+    {
+        let queued = refuse_queued(receiver, &write_failure::sealed_error());
+        failure.write_dump_and_stop(in_flight, &queued, &stop);
+    }
+    result
+}
+
+fn writer_commands<S: LedgerStore>(
+    mut store: S,
+    receiver: &Mutex<Receiver<WriterCommand>>,
+    subscription_capacity: usize,
+    failure: Option<&write_failure::WriteFailureState>,
 ) -> GlobalLedgerResult<()> {
     let mut subscribers = Vec::new();
     let mut previous_writer_work = LedgerWriterWorkObservation::default();
     let statistics = store.commit_statistics();
-    while let Ok(command) = receiver.recv() {
+    loop {
+        // Workflow #383 AO-1: a writer the probe sealed takes no further command; the probe
+        // answers the queue (§9.2).
+        if failure.is_some_and(write_failure::WriteFailureState::is_sealed) {
+            let error = write_failure::sealed_error().with_close_result(store.close());
+            notify_terminal_failure(&mut subscribers, error.clone());
+            return Err(error);
+        }
+        let next = {
+            let receiver = receiver.lock().unwrap_or_else(PoisonError::into_inner);
+            receiver.recv()
+        };
+        let Ok(command) = next else {
+            break;
+        };
         let started = Instant::now();
         let mut read_events = 0;
         let mut whole_ledger_query = false;
@@ -2756,10 +3112,17 @@ fn send_command(
     }
 }
 
-fn receive_response<T>(receiver: Receiver<T>, operation: Location) -> GlobalLedgerResult<T> {
-    match receiver.recv_timeout(COMMAND_TIMEOUT) {
+/// Waits at most `timeout` for one writer reply. Workflow #383 AO-1 (§9.1, §9.5): a wait that
+/// runs out is the error `writer_response_timeout`, not a fatal failure; a stalled write attempt
+/// is the probe's to stop.
+fn receive_response<T>(
+    receiver: Receiver<T>,
+    operation: Location,
+    timeout: Duration,
+) -> GlobalLedgerResult<T> {
+    match receiver.recv_timeout(timeout) {
         Ok(result) => Ok(result),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::fatal(
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
             LedgerCode::WriterResponseTimeout.code(),
             operation,
         )),

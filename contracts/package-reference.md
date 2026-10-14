@@ -346,9 +346,11 @@ pack material. The bundle index validator reuses those same rules and adds index
 generation then checks actual material and full chains through the kernel.
 
 Each entry has exactly `package_id`, `server` and `uses`. Uses are a nonempty set of at
-most the three values `startup`, `prerequisite`, `return_home`. A reference must name a
-pack in this index with the same server; the package/server pair is unique. Each server
-has at most one startup and one return-home entry. Unknown versions, fields or uses,
+most the four values `startup`, `prerequisite`, `return_home`, `recognition` (Workflow #384
+D2-S2: the standard package's recognition maintenance package,
+[resource-readings.md](resource-readings.md), "Recognition maintenance packages"). A reference
+must name a pack in this index with the same server; the package/server pair is unique. Each
+server has at most one startup, one return-home and one recognition entry. Unknown versions, fields or uses,
 duplicate uses or roles and missing references fail explicitly. There are at most as
 many entries as packs. `BundleIndex::validate()` dispatches the version-specific
 structural validation; the v2 type continues to reject v3.
@@ -360,7 +362,8 @@ with nothing), performs the same task preparation as Runtime and returns a
 read-only `TaskPackageDescriptor`. It returns no runnable task and performs no provider
 inference. The descriptor exposes the actual package/task identity, package reference,
 mode, game, server, resolution, declared prerequisite, resolved linear entry page,
-maximum step count and use qualification. Insufficient material fails preparation;
+maximum step count, use qualification and (Workflow #384 D2-S2) the keys of its reading marks.
+Insufficient material fails preparation;
 callers must treat its identity/qualification as unknown, never infer it from paths,
 application names or index labels. This does not prove execution or recognition results.
 
@@ -374,7 +377,9 @@ uses ordinary task admission and rejects resource readings through
 its startup lease. Prerequisites retain the existing exclusions for
 recognize-only, stability termination, post-admission OCR/fields, resource readings and
 designated operations. Return-home packages additionally declare no prerequisite of
-their own. The shared `PrerequisiteChain` predicate owns game/server/resolution
+their own. A recognition package is no `recognize_only` package, declares no stability
+termination and no designated operation and carries at least one reading mark (Workflow #384
+D2-S2); it takes no part in the chains. The shared `PrerequisiteChain` predicate owns game/server/resolution
 compatibility, cycle detection, three declared layers and the 1,000-step aggregate bound.
 A return-home fallback is outside the three declared layers. Only a linear package with
 a resolved first-step page and no declared prerequisite selects that fallback; an
@@ -384,8 +389,9 @@ failure facts and execution, consuming this same predicate incrementally.
 Consumers validate structure and actual material before deriving bindings: `startup`
 supplies the instance's existing `startup_package`; `prerequisite` supplies a
 `prerequisite_packages` entry without editing business control; `return_home` supplies
-both the package binding and the shared game/server return-home mapping. Configuration
-conflict handling and application belong to the installer. No declaration triggers a
+both the package binding and the shared game/server return-home mapping; `recognition`
+supplies the instance's `recognition_package` (a location only, Workflow #384 D2-S2).
+Configuration conflict handling and application belong to the installer. No declaration triggers a
 task directly or adds a Runtime execution mode, ledger field or persistent authority.
 
 Publication callers requesting maintenance must require the machine-readable result's

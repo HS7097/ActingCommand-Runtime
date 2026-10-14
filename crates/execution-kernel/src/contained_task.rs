@@ -22,8 +22,7 @@ use actingcommand_contract::{
     SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
     SchedulingEffectCondition, SchedulingOutcomeDeclaration, TASK_RECOGNITION_TARGET_LIMIT,
     TaskOutcome, TaskPhase, TaskPhaseEvidence, TaskTimingCheckPosition, TaskTimingFailure,
-    TaskTimingScope, TaskTimingStage, ocr_confidence_milli, validate_resource_readings,
-    validate_task_phases,
+    TaskTimingScope, TaskTimingStage, validate_resource_readings, validate_task_phases,
 };
 use sample_retry::SampleRetries;
 // Workflow #373 NAV-3b: entry page sets.
@@ -50,6 +49,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 mod linear;
+// Workflow #384 D2-S2.
+mod readings;
 // Workflow #386 SR-1.
 mod sample_retry;
 mod selection;
@@ -66,10 +67,16 @@ mod gate_386_sr1;
 // Workflow #396 REC-6.
 #[cfg(test)]
 mod value_test_tests;
+// Workflow #384 D2-S2.
+#[cfg(test)]
+mod gate_384_d2s2;
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
 pub use linear::linear_main_interface;
+pub use readings::{
+    ReadingMarks, ResourceReadingMiss, ResourceReadingProblem, judge_resource_reading,
+};
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
     ContainedTaskBoundaryIdentity, ContainedTaskBoundaryTiming, ContainedTaskEvaluationTiming,
@@ -812,9 +819,9 @@ struct PostAdmissionOcrCollector<'a> {
     /// Workflow #360: each target keeps one provider stream (one model) for the whole read;
     /// different targets may use different models.
     stream_bindings: BTreeMap<String, OcrProviderExecutionEvidence>,
-    /// Readings taken on the successful terminal frame; `None` when the run does not read them
-    /// (offline simulation, bound recovery entry).
-    resource_readings: Option<&'a [ResourceReadingDeclaration]>,
+    /// Workflow #384 D2-S2: the reading marks and the frames handed to recognition; `None` when
+    /// the run does not read them (offline simulation, bound recovery entry, prerequisite).
+    reading_relay: Option<readings::ReadingRelay<'a>>,
     /// The fields report was recorded by a successful completion; a reading that then fails
     /// must not record it a second time.
     fields_report_recorded: bool,
@@ -830,6 +837,8 @@ impl<'a> PostAdmissionOcrCollector<'a> {
 
     /// Workflow #396 REC-6: the OCR targets this run collects or reads (fields, the collection
     /// mode's targets, readings), whose observation by a page gate is kept for the same frame.
+    /// Workflow #384 D2-S2: the readings are the reading marks of the run's relay; a frame handed
+    /// to recognition takes the gate's observations of their targets.
     fn remembered_ocr_targets(&self) -> HashSet<String> {
         let fields = self
             .fields
@@ -841,9 +850,9 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             .into_iter()
             .flat_map(|prepared| prepared.target_ids.iter().cloned());
         let readings = self
-            .resource_readings
-            .into_iter()
-            .flatten()
+            .reading_relay
+            .iter()
+            .flat_map(|relay| relay.declarations().iter())
             .map(|reading| reading.target_id.clone());
         fields.chain(collected).chain(readings).collect()
     }
@@ -1809,11 +1818,19 @@ pub enum ContainedTaskTrace {
     PostAdmissionOcrFields {
         report: OcrFieldsReport,
     },
-    /// Every declared reading bound to the terminal page, read from the terminal frame before
-    /// `Finalizing`. In memory only; `captured_at` is that frame's device capture time.
+    /// Workflow #384 D2-S2: the run reached a page it reads marks on, on the frame it captured
+    /// last, and handed that frame to recognition; `captured_at` is the frame's device capture
+    /// time. In memory only.
+    ResourceReadingFrame {
+        captured_at: SystemTime,
+    },
+    /// The readings of one handed-off frame, joined before `Finalizing` in hand-off order: the
+    /// marks that held and those that gave no reading (model §3.5). In memory only;
+    /// `captured_at` is that frame's device capture time.
     ResourceReadings {
         captured_at: SystemTime,
         readings: Vec<ResourceReadingValue>,
+        unresolved: Vec<ResourceReadingMiss>,
     },
     Finalizing {
         outcome: TaskOutcome,
@@ -1826,78 +1843,6 @@ pub struct ResourceReadingValue {
     pub declaration: ResourceReadingDeclaration,
     pub value: u64,
     pub confidence_milli: u16,
-}
-
-/// Reads the declarations bound to `page_label` from one already captured scene: one OCR
-/// evaluation of each declared target, the shared trim and parse, and the confidence floor.
-/// Workflow #396 REC-6: a target the page gate observed on this scene (`remembered`) takes that
-/// observation instead of calling the provider again.
-/// Each evaluation goes to `observer` before it is judged. Declarations of other pages are
-/// not read; an empty result means none is bound to this page. The first reading that does
-/// not hold fails with `contained_task_resource_reading_unresolved` and detail
-/// `<id>:<reason>`, the reason being an `OcrFieldReason` name, `confidence_missing` or
-/// `low_confidence`.
-pub fn evaluate_resource_readings(
-    game: &str,
-    evaluator: &RecognitionEvaluator,
-    scene: &Scene,
-    remembered: actingcommand_recognition_pack::RememberedOcrObservations,
-    page_label: &str,
-    declarations: &[ResourceReadingDeclaration],
-    observer: &mut OcrEvaluationObserver<'_>,
-) -> Result<Vec<ResourceReadingValue>, ContainedTaskError> {
-    let context = evaluator
-        .scene_context(scene)
-        .with_remembered_observations(remembered);
-    let mut readings = Vec::new();
-    for declaration in declarations
-        .iter()
-        .filter(|declaration| crate::page_anchor_matches(game, page_label, &declaration.page_id))
-    {
-        let unresolved = |reason: &str| {
-            ContainedTaskError::with_detail(
-                ExecutionKernelCode::ContainedTaskResourceReadingUnresolved.code(),
-                format!("{}:{reason}", declaration.id),
-            )
-        };
-        let result = context.evaluate_ocr_observation(&declaration.target_id);
-        observer(&declaration.target_id, &result)?;
-        let evaluated = match result {
-            Ok(evaluated) => evaluated,
-            Err(error) => {
-                let reason = if error.code() == RecognitionPackErrorCode::RegionUnresolved {
-                    OcrFieldReason::RegionUnresolved
-                } else {
-                    OcrFieldReason::ProviderFailed
-                };
-                return Err(unresolved(&ocr_field_reason_name(reason)?));
-            }
-        };
-        let value = match declaration.parse(&evaluated.text) {
-            Ok(value) => value,
-            Err(reason) => return Err(unresolved(&ocr_field_reason_name(reason)?)),
-        };
-        let confidence_milli = ocr_confidence_milli(evaluated.confidence)
-            .ok_or_else(|| unresolved("confidence_missing"))?;
-        if confidence_milli < declaration.minimum_confidence_milli {
-            return Err(unresolved("low_confidence"));
-        }
-        readings.push(ResourceReadingValue {
-            declaration: declaration.clone(),
-            value,
-            confidence_milli,
-        });
-    }
-    Ok(readings)
-}
-
-fn ocr_field_reason_name(reason: OcrFieldReason) -> Result<String, ContainedTaskError> {
-    match serde_json::to_value(reason) {
-        Ok(serde_json::Value::String(name)) => Ok(name),
-        _ => Err(ContainedTaskError::new(
-            ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
-        )),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2147,6 +2092,28 @@ pub trait ContainedTaskRuntime {
         >,
     ) -> Result<(), Self::Error> {
         Ok(())
+    }
+
+    /// Workflow #384 D2-S2 (model §3.5): how long a successful run waits before `Finalizing`
+    /// for the readings of the frames it handed to recognition
+    /// (`scheduling.fact_refresh.recognition_join_timeout_ms`). A runtime without the
+    /// configuration answers `None` and waits until each recognition returns.
+    fn reading_join_timeout(&mut self) -> Result<Option<Duration>, Self::Error> {
+        Ok(None)
+    }
+
+    /// Workflow #384 D2-S2: one reading mark's OCR evaluation, recorded at the join, on the frame
+    /// handed to recognition at `captured_at`. A runtime that keeps the run's frames records it
+    /// against that frame.
+    fn record_reading_evaluation(
+        &mut self,
+        _captured_at: SystemTime,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::OcrObservationEvaluation,
+        >,
+    ) -> Result<(), Self::Error> {
+        self.record_ocr_evaluation(target_id, result)
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error>;
@@ -2444,7 +2411,7 @@ impl PreparedContainedTask {
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
-        program.validate_resource_reading_targets(&bundle, &evaluator)?;
+        program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -2500,6 +2467,42 @@ impl PreparedContainedTask {
     /// Whether the task declares `resource_readings`; offline simulation does not read them.
     pub const fn has_resource_readings(&self) -> bool {
         self.program.resource_readings.is_some()
+    }
+
+    /// Workflow #384 D2-S2: the instance fact keys the task's reading marks write, in
+    /// declaration order.
+    pub fn reading_keys(&self) -> Vec<String> {
+        self.program
+            .resource_readings
+            .iter()
+            .flatten()
+            .map(|reading| reading.fact_key.clone())
+            .collect()
+    }
+
+    /// Workflow #384 D2-S2 (model §3.2, qualifications 1-3): the first declaration that keeps
+    /// the package from being a recognition maintenance package, or `None`. A reader only
+    /// navigates and reads: it is no `recognize_only` package, declares no stability
+    /// termination and no designated operation, and carries at least one reading mark.
+    pub fn recognition_incompatibility(&self) -> Option<actingcommand_contract::ReaderProblem> {
+        use actingcommand_contract::ReaderProblem;
+        if self.control.execution_mode == "recognize_only" {
+            Some(ReaderProblem::RecognizeOnly)
+        } else if self.control.stability_termination.is_some()
+            || self.program.stability_termination.is_some()
+        {
+            Some(ReaderProblem::StabilityTermination)
+        } else if self
+            .scheduling_outcome
+            .as_ref()
+            .is_some_and(|declaration| declaration.designated_operation().is_some())
+        {
+            Some(ReaderProblem::DesignatedOperation)
+        } else if self.program.resource_readings.is_none() {
+            Some(ReaderProblem::NoMarks)
+        } else {
+            None
+        }
     }
 
     /// A host-scheduled startup package publishes no instance resource facts.
@@ -3216,10 +3219,31 @@ impl PreparedContainedTask {
         self.run_with_options(runtime, ContainedTaskRunOptions::default())
     }
 
+    /// Workflow #384 D2-S2 (model §3.4): runs the package for the requested key set `keys`. The
+    /// run reads only the marks of those keys, and a linear package whose path returns to its
+    /// entry page runs only the segments that reach a page marking one of them. A run without a
+    /// key set ([`Self::run`]) reads every mark and runs every segment.
+    pub fn run_for_reading_keys<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        keys: &BTreeSet<String>,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        self.run_with_reading_keys(runtime, ContainedTaskRunOptions::default(), Some(keys))
+    }
+
     pub(crate) fn run_with_options<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         options: ContainedTaskRunOptions,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        self.run_with_reading_keys(runtime, options, None)
+    }
+
+    fn run_with_reading_keys<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        options: ContainedTaskRunOptions,
+        reading_keys: Option<&BTreeSet<String>>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         runtime.update_run_progress(0);
         runtime
@@ -3246,8 +3270,11 @@ impl PreparedContainedTask {
             PostAdmissionOcrExecution::Enabled
         ) {
             ocr_collector.fields = self.post_admission_fields.as_ref();
-            if options.entry == ContainedTaskEntry::Ordinary {
-                ocr_collector.resource_readings = self.program.resource_readings.as_deref();
+            if options.entry == ContainedTaskEntry::Ordinary
+                && let Some(declarations) = self.program.resource_readings.as_deref()
+            {
+                ocr_collector.reading_relay =
+                    Some(readings::ReadingRelay::new(declarations, reading_keys));
             }
         }
         let result = self.run_with_collector(
@@ -4152,7 +4179,6 @@ impl PreparedContainedTask {
                     return self.finish_success(
                         runtime,
                         ocr_collector,
-                        observation.as_ref(),
                         current_page,
                         machine.completed_steps(),
                     );
@@ -4258,7 +4284,6 @@ impl PreparedContainedTask {
             StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => self.finish_success(
                 runtime,
                 ocr_collector,
-                Some(observation),
                 Some(observation.page_label.clone()),
                 machine.completed_steps(),
             ),
@@ -4273,11 +4298,10 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
-        terminal: Option<&PageObservation>,
         final_page: Option<String>,
         executed_steps: u32,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
-        let resource_readings = ocr_collector.resource_readings;
+        let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
             if report.frames_collected == 0 {
                 return Err(ContainedTaskError::new(
@@ -4302,8 +4326,10 @@ impl PreparedContainedTask {
                 None => None,
             }
         };
-        if let Some(declarations) = resource_readings {
-            self.record_resource_readings(runtime, declarations, terminal, final_page.as_deref())?;
+        // Workflow #384 D2-S2 (model §3.5): the readings of every handed-off frame are joined
+        // before `Finalizing`.
+        if let Some(relay) = reading_relay {
+            self.join_resource_readings(runtime, relay)?;
         }
         runtime
             .record(ContainedTaskTrace::Finalizing {
@@ -4316,54 +4342,6 @@ impl PreparedContainedTask {
             executed_steps,
             selected_scheduling_outcome,
         })
-    }
-
-    /// Reads the declarations bound to the completed page from the terminal observation's own
-    /// frame: no further capture and no input. A run completed on another allowed terminal page
-    /// reads nothing.
-    fn record_resource_readings<R: ContainedTaskRuntime>(
-        &self,
-        runtime: &mut R,
-        declarations: &[ResourceReadingDeclaration],
-        terminal: Option<&PageObservation>,
-        final_page: Option<&str>,
-    ) -> Result<(), ContainedTaskRunError<R::Error>> {
-        let observation = terminal
-            .filter(|observation| final_page == Some(observation.page_label.as_str()))
-            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
-        // Preserve a recorder failure's original boundary type, as page capture does.
-        let mut recording_failure = None;
-        let readings = evaluate_resource_readings(
-            &self.control.game,
-            &self.evaluator,
-            &observation.scene,
-            observation.remembered_ocr.clone(),
-            &observation.page_label,
-            declarations,
-            &mut |target, result| {
-                runtime
-                    .record_ocr_evaluation(target, result)
-                    .map_err(|error| {
-                        recording_failure = Some(error);
-                        ContainedTaskError::new(
-                            ExecutionKernelCode::ContainedTaskRecordBoundary.code(),
-                        )
-                    })
-            },
-        );
-        if let Some(error) = recording_failure {
-            return Err(ContainedTaskRunError::Boundary(error));
-        }
-        let readings = readings?;
-        if readings.is_empty() {
-            return Ok(());
-        }
-        runtime
-            .record(ContainedTaskTrace::ResourceReadings {
-                captured_at: observation.captured_at,
-                readings,
-            })
-            .map_err(ContainedTaskRunError::Boundary)
     }
 
     fn finish_effect_attempt<R: ContainedTaskRuntime>(
@@ -5110,6 +5088,17 @@ impl PreparedContainedTask {
             if let Some(error) = ocr_collector.field_failure_error() {
                 return Err(error.into());
             }
+            // Workflow #384 D2-S2 (model §3.5): a frame on which the run reaches a page it reads
+            // marks on goes to recognition; the run does not wait for it. Workflow #396 REC-6:
+            // the page gate's observations of its marks' targets on this frame go with it.
+            self.hand_off_reading_frame(
+                runtime,
+                ocr_collector,
+                &page_label,
+                &scene,
+                frame.captured_at,
+                remembered_ocr,
+            )?;
             Ok(Ok(PageObservation {
                 page_label,
                 scene,
@@ -5119,7 +5108,6 @@ impl PreparedContainedTask {
                 frame_started,
                 sample_scenes,
                 sampling: sampled.then_some((timing, sample_deadline)),
-                remembered_ocr,
             }))
         })();
         let capture_ended = Instant::now();
@@ -5309,9 +5297,6 @@ struct PageObservation {
     frame_started: Instant,
     sample_scenes: Vec<Scene>,
     sampling: Option<(ContainedTaskTimingContext, Instant)>,
-    /// Workflow #396 REC-6: the page gate's observations of reading targets on this frame, which
-    /// the terminal frame's readings take instead of calling the provider again.
-    remembered_ocr: actingcommand_recognition_pack::RememberedOcrObservations,
 }
 
 fn sample_geometry_matches(
@@ -6526,11 +6511,13 @@ impl TaskProgram {
     }
 
     /// Before any input: each reading's target is one OCR target that does not locate text and is
-    /// not marked personal by the projection metadata. Workflow #396 REC-6: a page gate may name
-    /// it, and the gate's observation of the terminal frame is the reading's.
+    /// not marked personal by the projection metadata, and its page is one the task declares.
+    /// Workflow #396 REC-6: a page gate may name it, and the gate's observation of the frame
+    /// handed to recognition (Workflow #384 D2-S2) is the reading's.
     fn validate_resource_reading_targets(
         &self,
         bundle: &LoadedBundle,
+        detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<(), ContainedTaskError> {
         for (index, reading) in self.resource_readings.iter().flatten().enumerate() {
@@ -6556,6 +6543,18 @@ impl TaskProgram {
                     == Some(actingcommand_contract::page_projection::Privacy::Personal)
             }) {
                 return Err(invalid("target_personal"));
+            }
+            // Workflow #384 D2-S2 (model §3.2): a mark may stand on any page of the task, and
+            // only there; a page the task does not declare is never reached.
+            if !detector
+                .page_ids()
+                .any(|page| crate::page_anchor_matches(&self.game, page, &reading.page_id))
+            {
+                let mut error = invalid("page_undeclared");
+                if let Some(issue) = error.declaration_issue.as_mut() {
+                    issue.field_path = format!("/resource_readings/{index}/page_id");
+                }
+                return Err(error);
             }
         }
         Ok(())
@@ -11625,7 +11624,6 @@ mod retry_wiring_tests {
         let mut task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/home".to_owned(),
@@ -11720,7 +11718,6 @@ mod retry_wiring_tests {
         let task = omitted_policy_task(false, false);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/terminal".to_owned(),
@@ -11763,7 +11760,6 @@ mod retry_wiring_tests {
             .page_id = "any".to_owned();
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/terminal".to_owned(),
@@ -11802,7 +11798,6 @@ mod retry_wiring_tests {
         frame.pixels[3..6].fill(0);
         let observation = PageObservation {
             sample_scenes: Vec::new(),
-            remembered_ocr: Default::default(),
             sampling: None,
             input_context: None,
             page_label: "neutral/home".to_owned(),

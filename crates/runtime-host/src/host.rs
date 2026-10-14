@@ -507,6 +507,10 @@ pub struct RuntimeHostConfig {
     /// Per instance alias: the stuck-recovery ladder settings (slice #316-B4); an instance
     /// without an entry uses the defaults (enabled, 600 s cool-down).
     stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
+    /// Workflow #384 D2-S2 (D2 model §3.2): per instance alias, the location of the recognition
+    /// maintenance package bound by `instances[].recognition_package` that the start kept. The
+    /// scheduler runs it to read the instance's facts (D2-S4); the start never prepares it.
+    recognition_packages: BTreeMap<String, PathBuf>,
     /// Workflow #336 L2b: per package id, the locator and content reference of a package a
     /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
     /// run resolves it; not a configuration fact.
@@ -518,6 +522,12 @@ pub struct RuntimeHostConfig {
     /// Workflow #373 NAV-6: `standard_packs.root`, the directory of the installed standard
     /// packages' game roots; `None` reads no root. A startup key, never changed while running.
     standard_packs_root: Option<PathBuf>,
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2 step 4): where the ledger reports
+    /// a retried write and its fatal stop; actingd's sink writes its lines and ends the process.
+    /// Without one the ledger's writer ends at the stop and every later write fails.
+    ledger_failure_sink: Option<Arc<dyn actingcommand_ledger::LedgerFailureSink>>,
+    /// Workflow #383 AO-1: the commit the Runtime was built from, for the dump's header.
+    runtime_commit: Option<String>,
     #[cfg(any(test, feature = "test-hooks"))]
     preparation_test_hook: Option<PreparationTestHook>,
     /// Workflow #369 E3 (#670 safety net), test only: the run whose settlement the start
@@ -555,9 +565,12 @@ impl RuntimeHostConfig {
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
+            recognition_packages: BTreeMap::new(),
             prerequisite_packages: BTreeMap::new(),
             return_home_packages: BTreeMap::new(),
             standard_packs_root: None,
+            ledger_failure_sink: None,
+            runtime_commit: None,
             #[cfg(any(test, feature = "test-hooks"))]
             preparation_test_hook: None,
             #[cfg(test)]
@@ -715,6 +728,23 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Workflow #384 D2-S2: adds one subsystem row to the installed configuration manifest; a
+    /// host without a manifest records none.
+    pub fn with_config_subsystem(
+        mut self,
+        subsystem: actingcommand_contract::ConfigSubsystem,
+    ) -> Self {
+        if let Some(manifest) = self.config_manifest.as_mut() {
+            manifest.subsystems.push(subsystem);
+        }
+        self
+    }
+
+    /// The policy inputs the host evaluates from, when a policy is configured.
+    pub const fn policy_inputs(&self) -> Option<&PolicyInputSnapshot> {
+        self.policy_inputs.as_ref()
+    }
+
     /// Installs the configuration layers this start read (Workflow #387 D1b): the host records
     /// them as `config.selection` together with the manifest.
     pub fn with_config_selection(
@@ -750,6 +780,21 @@ impl RuntimeHostConfig {
     ) -> Self {
         self.resource_packages = resource_packages;
         self
+    }
+
+    /// Workflow #384 D2-S2: installs the recognition maintenance package locations the start
+    /// kept, keyed by instance alias. Nothing is opened here.
+    pub fn with_recognition_packages(
+        mut self,
+        recognition_packages: BTreeMap<String, PathBuf>,
+    ) -> Self {
+        self.recognition_packages = recognition_packages;
+        self
+    }
+
+    /// The kept recognition maintenance package locations, keyed by instance alias.
+    pub const fn recognition_packages(&self) -> &BTreeMap<String, PathBuf> {
+        &self.recognition_packages
     }
 
     /// Installs the stuck-recovery ladder settings, keyed by instance alias (slice #316-B4).
@@ -805,6 +850,23 @@ impl RuntimeHostConfig {
     /// game (`<root>/<game>/`). Read at startup and in each run's preparation.
     pub fn with_standard_packs_root(mut self, root: Option<PathBuf>) -> Self {
         self.standard_packs_root = root;
+        self
+    }
+
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1, §9.2 step 4): where the ledger
+    /// reports a retried write (`ledger_write_retried`) and the fatal stop after its dump
+    /// (`ledger_write_failed`, `ledger_dump_failed`).
+    pub fn with_ledger_failure_sink(
+        mut self,
+        sink: Arc<dyn actingcommand_ledger::LedgerFailureSink>,
+    ) -> Self {
+        self.ledger_failure_sink = Some(sink);
+        self
+    }
+
+    /// Workflow #383 AO-1: the commit the Runtime was built from, named by the dump's header.
+    pub fn with_runtime_commit(mut self, commit: impl Into<String>) -> Self {
+        self.runtime_commit = Some(commit.into());
         self
     }
 
@@ -1003,6 +1065,8 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &(!self.return_home_packages.is_empty()).then_some("<runtime-owned>"),
             )
             .field("standard_packs_root", &self.standard_packs_root)
+            .field("ledger_failure_sink", &self.ledger_failure_sink.is_some())
+            .field("runtime_commit", &self.runtime_commit)
             .finish()
     }
 }
@@ -1202,8 +1266,16 @@ impl RuntimeHost {
         // material, so a missing or damaged frame never stops the start and the line's
         // material fields print 0.
         let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
-        let opened =
-            maintenance.open_writer_timed(Arc::clone(&database), ledger_owner, &mut timing);
+        // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9, §12 step 2): the writer reads
+        // back and retries a failed write by `ledger_observer.*`, dumps and stops when it gives
+        // up, and the open imports a dump an earlier run left before any new record.
+        let plan = ledger_failure_plan(&config, owner_epoch, started_at_unix_ms)?;
+        let opened = maintenance.open_writer_timed(
+            Arc::clone(&database),
+            ledger_owner,
+            Some(plan),
+            &mut timing,
+        );
         println!(
             "actingd ledger_open {timing} deadline_ms={}",
             limits.timeout_seconds.saturating_mul(1000)
@@ -1473,7 +1545,6 @@ impl RuntimeHost {
                 owner_epoch,
                 config.device_diagnostic_mode,
             )),
-            lifecycle_append_failed: AtomicBool::new(false),
             detection_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
             agent_write_gate: Mutex::new(()),
@@ -3550,14 +3621,12 @@ impl RuntimeHost {
             Ok(failure) => failure,
             Err(error) => Some(error),
         };
-        if failure
+        // Workflow #383 AO-1: after a ledger failure the shutdown records nothing more; there is
+        // no latch (`contracts/ledger-observer.md` §9.5).
+        if !failure
             .as_ref()
             .is_some_and(|error| error.projection().code == RuntimeErrorCode::LedgerFailure)
         {
-            shared
-                .lifecycle_append_failed
-                .store(true, Ordering::Release);
-        } else if !shared.lifecycle_append_failed.load(Ordering::Acquire) {
             record_failure(
                 &mut failure,
                 shared
@@ -3935,7 +4004,6 @@ struct HostShared {
     // Serialize explicit catalog transitions; the catalog itself is rebuilt by Ledger.
     signature_write_gate: Mutex<()>,
     device_diagnostics: Mutex<device_diagnostic::DeviceDiagnosticBudget>,
-    lifecycle_append_failed: AtomicBool,
     // Detection quota preview, ledger append, and replay-state commit are one ordered transition.
     detection_write_gate: Mutex<()>,
     // State and release pointer changes are serialized with their ledger facts.
@@ -4679,6 +4747,72 @@ fn ledger_error(operation: impl Into<Location>) -> RuntimeHostError {
         operation,
         RuntimeErrorCode::LedgerFailure,
     )
+}
+
+/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure
+/// plan from the configuration in effect (`ledger_observer.*`; the defaults file's values for a
+/// host started without actingd's manifest): its write policy, its dump file in the state root
+/// and in `%LOCALAPPDATA%\ActingCommand\ledger-dumps` when the variable is set, and the sink
+/// that stops the Runtime.
+fn ledger_failure_plan(
+    config: &RuntimeHostConfig,
+    owner_epoch: actingcommand_contract::OwnerEpoch,
+    started_at_unix_ms: u64,
+) -> RuntimeHostResult<actingcommand_ledger::LedgerFailurePlan> {
+    let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+        RuntimeHostError::fatal(
+            failure.failure_code(),
+            crate::codes::ConfigHostLocation::RecordRuntimeConfig,
+            RuntimeErrorCode::RuntimeFatal,
+        )
+        .with_outcome_values(|outcome| failure.with_values(outcome))
+    };
+    let effective = match &config.config_manifest {
+        Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
+            .map_err(refused)?,
+        None => actingcommand_runtime_config::EffectiveConfig::default(),
+    };
+    let section = effective.ledger_observer().map_err(refused)?;
+    let policy = actingcommand_ledger::LedgerWritePolicy::new(
+        section.write_attempts,
+        section.write_retry_backoff_ms,
+        section.flush_attempt_stall_ms,
+        section.health_probe_interval_ms,
+        section.dump_max_bytes,
+    )
+    .map_err(|error| {
+        RuntimeHostError::relayed_fatal(
+            error.code(),
+            error.operation(),
+            RuntimeErrorCode::LedgerFailure,
+        )
+    })?;
+    let state_root = config.state_root.canonicalize().map_err(|_| {
+        RuntimeHostError::fatal(
+            SharedCode::StateRootInspectFailed,
+            HostLocation::SelectRuntimeStorage,
+            RuntimeErrorCode::LedgerFailure,
+        )
+    })?;
+    let fallback_dir = std::env::var_os("LOCALAPPDATA").map(|local| {
+        PathBuf::from(local)
+            .join("ActingCommand")
+            .join("ledger-dumps")
+    });
+    let mut plan = actingcommand_ledger::LedgerFailurePlan::new(
+        policy,
+        &state_root,
+        fallback_dir.as_deref(),
+        owner_epoch,
+        started_at_unix_ms,
+    );
+    if let Some(commit) = &config.runtime_commit {
+        plan = plan.with_runtime_commit(commit.clone());
+    }
+    if let Some(sink) = &config.ledger_failure_sink {
+        plan = plan.with_sink(Arc::clone(sink));
+    }
+    Ok(plan)
 }
 
 fn lock_poison_error(operation: impl Into<Location>) -> RuntimeHostError {

@@ -90,7 +90,7 @@ fn reopen(database: &Arc<RuntimeDatabase>, timing: &mut LedgerOpenTiming) -> Glo
         limits.deadline().expect("deadline"),
     )
     .expect("maintenance owner")
-    .open_writer_timed(Arc::clone(database), "material-reopen".into(), timing)
+    .open_writer_timed(Arc::clone(database), "material-reopen".into(), None, timing)
     .expect("the writer opens without reading material")
 }
 
@@ -357,8 +357,12 @@ fn finish_failed(ledger: &GlobalLedger, permit: Box<ArtifactEvictionPermit>) {
         LedgerLocation::FinishArtifactEviction.location(),
     )
     .expect("finish command");
-    let finished = receive_response(receiver, LedgerLocation::FinishArtifactEviction.location())
-        .expect("finish reply");
+    let finished = receive_response(
+        receiver,
+        LedgerLocation::FinishArtifactEviction.location(),
+        GlobalLedger::REPLY_TIMEOUT,
+    )
+    .expect("finish reply");
     assert_eq!(
         finished
             .expect_err("a failed outcome stops the writer")
