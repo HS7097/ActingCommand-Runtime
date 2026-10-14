@@ -460,9 +460,11 @@ fn write_text(output: &mut impl Write, text: &str) -> io::Result<()> {
 // Test-only: Workflow #382 MCP-T1 (test plan A-5a), the result envelope, budget and jobs gate;
 // Workflow #372 K3, ac_diagnose's clock-slot rows.
 // Workflow #387 D1b, D1-M8: actingctl config set|clear and ac_config_set send the same changes.
+// Workflow #389 MCP-8: ac_overview's truncation order.
 #[cfg(test)]
 mod tests {
     mod clock_slots;
     mod gate_387_d1b;
+    mod gate_mcp8;
     mod gate_mcpt1;
 }
