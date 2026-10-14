@@ -10,17 +10,22 @@
 //! layer (§5.2.1 last item). The settlement reads it with the run's own task rows and error
 //! frames, compares the error frame with the previous failure's only when the identity prefix
 //! repeats, and writes the identity. Replay never compares: it reads the recorded identity.
+//!
+//! Workflow #336 PKG-S3 (M-PKG §3.3): the settlement is one of the two places a package's
+//! content hash is measured. It measures the main package and each layer the run resolved, at
+//! the paths the run used, and records their hash prefixes in the identity (`x` for a package
+//! it could not measure, D18).
 
 use super::contained_task::prepare_contained_task;
 use super::policy_outcome::policy_dispatch_intent;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
-    FailureIdentity, IdentityFrame, IdentityLayer, RERUN_ONLY_BACKEND_FAILURES, SuspensionLiftView,
+    FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, RERUN_ONLY_BACKEND_FAILURES,
     encode_failure_base, failure_accumulates, failure_detail_fingerprint, failure_key,
     failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
-    package_digest_prefix,
 };
+use crate::suspension_lift::{LiftCheckTime, SuspensionLiftView, measure_package_hash};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::scheduled_failure_code_str;
 use actingcommand_execution_kernel::{FailureFrameVerdict, compare_failure_frames};
@@ -45,6 +50,9 @@ pub(super) struct ScheduledResolution {
 #[derive(Debug, Clone)]
 struct ScheduledMain {
     linear: bool,
+    /// The admitted package's `package_id` and the path the run read it from.
+    package_id: String,
+    package_path: String,
     game: String,
     layers: Vec<ResolvedLayer>,
     /// Whether the whole prerequisite chain was resolved and admitted.
@@ -59,16 +67,24 @@ enum FrameComparison {
 }
 
 impl HostShared {
-    /// The configuration a paused pair's suspension is lifted against (§12.7).
+    /// The configuration a paused pair's suspension is lifted against (§12.7), checked now:
+    /// a package measured within `scheduling.suspension.lift_check_min_interval_ms` is not
+    /// measured again (Workflow #336 PKG-S3).
     pub(super) fn suspension_lift_view<'a>(
         &'a self,
         manifest: &'a ProcedureManifest,
-    ) -> SuspensionLiftView<'a> {
-        SuspensionLiftView {
+    ) -> RuntimeHostResult<SuspensionLiftView<'a>> {
+        let time = LiftCheckTime {
+            monotonic_ms: self.monotonic_ms()?,
+            min_interval_ms: self.lift_check_min_interval_ms()?,
+        };
+        Ok(SuspensionLiftView {
             manifest,
             prerequisite_packages: &self.prerequisite_packages,
             return_home_packages: &self.return_home_packages,
-        }
+            checks: &self.lift_checks,
+            time,
+        })
     }
 
     /// Registers a scheduled run's decision as it enters the scheduled path.
@@ -109,6 +125,8 @@ impl HostShared {
         );
         let main = ScheduledMain {
             linear: prepared.execution_mode() == "linear_steps",
+            package_id: prepared.package_label().to_owned(),
+            package_path: task_request.package_path().to_owned(),
             game: prepared.game().to_owned(),
             layers,
             resolved: chain.is_ok(),
@@ -234,24 +252,12 @@ impl HostShared {
                 .native_detail()
                 .map(|detail| detail.text()),
         );
+        let (main_package, layers) = settled_packages(&main, &self.prerequisite_packages);
         let mut identity = FailureIdentity {
             base: encode_failure_base(&code),
             key: failure_key(&code, &scope, &operation, &detail),
-            main_digest: package_digest_prefix(context.package_digest()),
-            layers: main
-                .layers
-                .iter()
-                .map(|layer| {
-                    IdentityLayer::resolved(
-                        &layer.package_id,
-                        layer
-                            .return_home
-                            .as_ref()
-                            .map(|(game, server)| (game.as_str(), server.as_str())),
-                        &self.prerequisite_packages,
-                    )
-                })
-                .collect(),
+            main: main_package,
+            layers,
             frame: IdentityFrame::unique(decision_id),
         };
         if rerun_only_backend || !failure_accumulates(&code, &scope, restart_segment) {
@@ -378,6 +384,42 @@ impl HostShared {
     }
 }
 
+/// Workflow #336 PKG-S3 (M-PKG §3.3, D18): the packages of a settled failure's identity: the
+/// main package and each layer the run resolved, with the content hash measured now at the path
+/// the run used (the mapping's, for a layer). A package that cannot be measured (removed, being
+/// replaced, unreadable), or a layer the mapping does not name, is `x`, and the failure is
+/// recorded as usual.
+fn settled_packages(
+    main: &ScheduledMain,
+    prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
+) -> (IdentityPackage, Vec<IdentityLayer>) {
+    let measured = |path: Option<&str>| path.and_then(|path| measure_package_hash(path).ok());
+    let main_package = IdentityPackage::measured(
+        &main.package_id,
+        measured(Some(main.package_path.as_str())).as_deref(),
+    );
+    let layers = main
+        .layers
+        .iter()
+        .map(|layer| {
+            IdentityLayer::measured(
+                &layer.package_id,
+                layer
+                    .return_home
+                    .as_ref()
+                    .map(|(game, server)| (game.as_str(), server.as_str())),
+                measured(
+                    prerequisite_packages
+                        .get(&layer.package_id)
+                        .map(ContainedTaskRecoveryBinding::package_path),
+                )
+                .as_deref(),
+            )
+        })
+        .collect();
+    (main_package, layers)
+}
+
 /// Reads both error frames, a frame the cleaner moved into `kept\` included (Workflow #375 R5d),
 /// and compares them.
 fn compare_frame_files(
@@ -482,6 +524,149 @@ mod tests {
         };
         reference.validate().expect("valid reference");
         reference
+    }
+
+    // A package file the content hash reads as an assembled package (it holds
+    // `resources/manifest.json`), so its hash is the SHA-256 of the whole file (M-PKG D3).
+    fn assembled_package(path: &Path, marker: &str) -> String {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("resources/manifest.json", options)
+            .expect("manifest entry");
+        zip.write_all(br#"{"schema_version":"0.3","entry_task_id":"task"}"#)
+            .expect("manifest content");
+        zip.start_file("control.json", options)
+            .expect("control entry");
+        zip.write_all(marker.as_bytes()).expect("control content");
+        let bytes = zip.finish().expect("finish package").into_inner();
+        std::fs::write(path, &bytes).expect("write package");
+        format!("{:x}", Sha256::digest(&bytes))
+    }
+
+    fn hash12(value: &str) -> String {
+        value.chars().take(12).collect()
+    }
+
+    fn id8(value: &str) -> String {
+        format!("{:x}", Sha256::digest(value.as_bytes()))
+            .chars()
+            .take(8)
+            .collect()
+    }
+
+    // Workflow #336 PKG-S3, M-PKG §4.4 S3-T2 and S3-T8 (settlement half): a settled failure's
+    // identity names the main package and every layer its run went through by the id hash of
+    // its `package_id` and the first twelve hex digits of the content hash measured at the
+    // settlement; it reads back from its v2 string. A package that cannot be read then, and a
+    // layer the mapping does not name, is `x`.
+    #[test]
+    fn s3_t2_a_settled_identity_names_each_package_by_its_content_hash() {
+        let temp = tempfile::tempdir().expect("root");
+        let main_path = temp.path().join("main.zip");
+        let layer_path = temp.path().join("layer.zip");
+        let home_path = temp.path().join("home.zip");
+        let main_hash = assembled_package(&main_path, "main");
+        let layer_hash = assembled_package(&layer_path, "layer");
+        let home_hash = assembled_package(&home_path, "home");
+        let mapping = BTreeMap::from([
+            (
+                "neutral.layer".to_owned(),
+                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy(), "0".repeat(64))
+                    .expect("layer binding"),
+            ),
+            (
+                "neutral.home".to_owned(),
+                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy(), "0".repeat(64))
+                    .expect("home binding"),
+            ),
+        ]);
+        let main = ScheduledMain {
+            linear: true,
+            package_id: "neutral.main".to_owned(),
+            package_path: main_path.to_string_lossy().into_owned(),
+            game: "neutral".to_owned(),
+            layers: vec![
+                ResolvedLayer {
+                    package_id: "neutral.layer".to_owned(),
+                    return_home: None,
+                },
+                ResolvedLayer {
+                    package_id: "neutral.home".to_owned(),
+                    return_home: Some(("neutral".to_owned(), "test".to_owned())),
+                },
+            ],
+            resolved: true,
+        };
+        let (main_package, layers) = settled_packages(&main, &mapping);
+        assert_eq!(
+            main_package,
+            IdentityPackage {
+                id_hash: id8("neutral.main"),
+                hash: hash12(&main_hash),
+            }
+        );
+        assert_eq!(
+            layers,
+            vec![
+                IdentityLayer::Declared(IdentityPackage {
+                    id_hash: id8("neutral.layer"),
+                    hash: hash12(&layer_hash),
+                }),
+                IdentityLayer::ReturnHome {
+                    key_hash: id8("neutral\0test"),
+                    package: IdentityPackage {
+                        id_hash: id8("neutral.home"),
+                        hash: hash12(&home_hash),
+                    },
+                },
+            ]
+        );
+        let identity = FailureIdentity {
+            base: "page_confirmation_failed".to_owned(),
+            key: "0".repeat(12),
+            main: main_package,
+            layers,
+            frame: IdentityFrame::None,
+        };
+        let encoded = identity.encode();
+        assert_eq!(
+            encoded,
+            format!(
+                "page_confirmation_failed~v2~k{}~m{}{}~p{}{}~r{}{}{}~fna",
+                "0".repeat(12),
+                id8("neutral.main"),
+                hash12(&main_hash),
+                id8("neutral.layer"),
+                hash12(&layer_hash),
+                id8("neutral\0test"),
+                id8("neutral.home"),
+                hash12(&home_hash),
+            )
+        );
+        assert_eq!(FailureIdentity::parse(&encoded), Some(identity));
+
+        // S3-T8: the main package is gone and the home layer is no longer mapped at the
+        // settlement; both are `x`, and the identity still reads back.
+        std::fs::remove_file(&main_path).expect("remove the main package");
+        let mapping =
+            BTreeMap::from([("neutral.layer".to_owned(), mapping["neutral.layer"].clone())]);
+        let (main_package, layers) = settled_packages(&main, &mapping);
+        assert_eq!(main_package.hash, "x");
+        assert_eq!(layers[0].hash(), hash12(&layer_hash));
+        assert_eq!(layers[1].hash(), "x");
+        let unmeasured = FailureIdentity {
+            base: "page_confirmation_failed".to_owned(),
+            key: "0".repeat(12),
+            main: main_package,
+            layers,
+            frame: IdentityFrame::None,
+        };
+        assert_eq!(
+            FailureIdentity::parse(&unmeasured.encode()),
+            Some(unmeasured)
+        );
     }
 
     /// Workflow #375 R5d: the previous failure's error frame, moved by the cleaner into its

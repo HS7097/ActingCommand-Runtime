@@ -6,39 +6,38 @@
 //! suspension lift rule read back from it. Pure: it reads only the rows and values its callers
 //! pass, never a ledger handle, an artifact, a clock or a lock.
 //!
-//! `<base>~v1~k<K>~m<M>[~p<I><D>]{0,3}[~r<G><I><D>]{0,1}~f<F>`: the terminal failure code (or
-//! `h` and its hash), the failure key over code, scope, step and detail, the main package
-//! digest, each declared prerequisite layer and the return-home layer with their mapped
-//! digests, and the error frame (`na` without one, `u…` for a failure that never
-//! accumulates). The identity prefix is everything before `~f`.
+//! Format v2 (Workflow #336 PKG-S3, M-PKG §3.4):
+//! `<base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}~f<F>`: the terminal failure code
+//! (or `h` and its hash), the failure key over code, scope, step and detail, the main package,
+//! each declared prerequisite layer and the return-home layer, each as the id hash of its
+//! `package_id` and the content hash measured when the failure was settled (`x` when it could
+//! not be measured), and the error frame (`na` without one, `u…` for a failure that never
+//! accumulates). The identity prefix is everything before `~f`. A v1 string is not read.
 
-use crate::ProcedureManifest;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
-    ApplicationPayload, ArtifactKind, ContainedTaskRecoveryBinding, EventAction, EventPayload,
-    EventQuery, EventType, PackageRef, RunId, TaskEntryTargetDisposition, TaskPayload,
-    TaskSemanticFact,
+    ApplicationPayload, ArtifactKind, EventAction, EventPayload, EventQuery, EventType, RunId,
+    TaskEntryTargetDisposition, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_execution_kernel::linear_main_interface;
 use actingcommand_ledger::{LedgerArtifactReference, PersistedEvent};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-const VERSION: &str = "v1";
+const VERSION: &str = "v2";
 const KEY_DOMAIN: &str = "actingcommand.failure-key.v1";
 const MAX_BASE_BYTES: usize = 64;
 const BASE_HASH_HEX: usize = 16;
 const KEY_HEX: usize = 12;
-const DIGEST_HEX: usize = 12;
+/// The content hash digits a package segment keeps.
+const HASH_HEX: usize = 12;
 const ID_HEX: usize = 8;
 const FRAME_HEX: usize = 12;
 const MAX_DECLARED_LAYERS: usize = 3;
-/// A mapped digest that is not one value (several mapping keys share the id hash): never equal
-/// to a recorded digest, so the layer counts as changed.
-const AMBIGUOUS_DIGEST: &str = "?";
-/// The mapped digest of a package id the mapping does not name.
-pub(crate) const MISSING_DIGEST: &str = "x";
+/// The content hash of a package that was not measured: the mapping names no package for its
+/// id, or reading the package failed (M-PKG D18).
+pub(crate) const MISSING_HASH: &str = "x";
 
 /// The `key=value` fragments of a native detail that enter the failure key (§12.4; R24 adds
 /// `application`).
@@ -90,21 +89,14 @@ fn is_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The hexadecimal content digest of a package reference: the ZIP or content-directory
-/// SHA-256, or the SHA-256 of a Git source tree reference's wire value.
-pub(crate) fn package_ref_hex(reference: &PackageRef) -> String {
-    match reference {
-        PackageRef::LegacyZipSha256(value) => value.clone(),
-        PackageRef::ContentDirectory(directory) => directory.sha256.clone(),
-        PackageRef::GitSourceTree(_) => {
-            sha256_hex(reference.prefixed_wire_value().to_string().as_bytes())
-        }
-    }
+/// The first twelve hex digits of a measured content hash.
+pub(crate) fn content_hash_prefix(content_hash: &str) -> String {
+    hex_prefix(content_hash, HASH_HEX)
 }
 
-/// The first twelve hex digits of a package reference's digest.
-pub(crate) fn package_digest_prefix(reference: &PackageRef) -> String {
-    hex_prefix(&package_ref_hex(reference), DIGEST_HEX)
+/// Whether `hash` is a package segment's hash: twelve hex digits, or `x`.
+fn is_segment_hash(hash: &str) -> bool {
+    hash == MISSING_HASH || is_hex(hash, HASH_HEX)
 }
 
 /// The first eight hex digits of SHA-256 over a package id.
@@ -179,92 +171,104 @@ pub(crate) fn failure_accumulates(code: &CodeStr, scope: &str, restart_segment: 
     }
 }
 
+/// A package of the identity: the id hash of its `package_id` and its content hash prefix (or
+/// `x`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IdentityPackage {
+    pub(crate) id_hash: String,
+    pub(crate) hash: String,
+}
+
+impl IdentityPackage {
+    /// The package `package_id` with the content hash measured for it (`None`: not measured).
+    pub(crate) fn measured(package_id: &str, content_hash: Option<&str>) -> Self {
+        Self {
+            id_hash: package_id_hash(package_id),
+            hash: content_hash.map_or_else(|| MISSING_HASH.to_owned(), content_hash_prefix),
+        }
+    }
+
+    fn parse(segment: &str) -> Option<Self> {
+        let (id_hash, hash) = (segment.get(..ID_HEX)?, segment.get(ID_HEX..)?);
+        (is_hex(id_hash, ID_HEX) && is_segment_hash(hash)).then(|| Self {
+            id_hash: id_hash.to_owned(),
+            hash: hash.to_owned(),
+        })
+    }
+
+    fn encode(&self) -> String {
+        format!("{}{}", self.id_hash, self.hash)
+    }
+}
+
 /// One prerequisite layer of the identity, as resolved for the failed run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IdentityLayer {
-    /// `p<I><D>`: a declared prerequisite package.
-    Declared { id_hash: String, digest: String },
-    /// `r<G><I><D>`: the return-home package of a game and server.
+    /// `p<I><H>`: a declared prerequisite package.
+    Declared(IdentityPackage),
+    /// `r<G><I><H>`: the return-home package of a game and server.
     ReturnHome {
         key_hash: String,
-        id_hash: String,
-        digest: String,
+        package: IdentityPackage,
     },
 }
 
 impl IdentityLayer {
-    /// The layer of `package_id`, with its digest as `prerequisite_packages` maps it now.
-    pub(crate) fn resolved(
+    /// The layer of `package_id`, with the content hash measured for it at settlement.
+    pub(crate) fn measured(
         package_id: &str,
         return_home: Option<(&str, &str)>,
-        prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
+        content_hash: Option<&str>,
     ) -> Self {
-        let id_hash = package_id_hash(package_id);
-        let digest = prerequisite_packages.get(package_id).map_or_else(
-            || MISSING_DIGEST.to_owned(),
-            |binding| package_digest_prefix(binding.expected_sha256()),
-        );
+        let package = IdentityPackage::measured(package_id, content_hash);
         match return_home {
             Some((game, server)) => Self::ReturnHome {
                 key_hash: return_home_key_hash(game, server),
-                id_hash,
-                digest,
+                package,
             },
-            None => Self::Declared { id_hash, digest },
+            None => Self::Declared(package),
         }
     }
 
     pub(crate) const fn kind(&self) -> &'static str {
         match self {
-            Self::Declared { .. } => "declared",
+            Self::Declared(_) => "declared",
             Self::ReturnHome { .. } => "return_home",
         }
     }
 
-    pub(crate) fn id_hash(&self) -> &str {
+    pub(crate) const fn package(&self) -> &IdentityPackage {
         match self {
-            Self::Declared { id_hash, .. } | Self::ReturnHome { id_hash, .. } => id_hash,
+            Self::Declared(package) | Self::ReturnHome { package, .. } => package,
         }
     }
 
-    pub(crate) fn digest(&self) -> &str {
-        match self {
-            Self::Declared { digest, .. } | Self::ReturnHome { digest, .. } => digest,
-        }
+    pub(crate) fn id_hash(&self) -> &str {
+        &self.package().id_hash
+    }
+
+    /// The content hash prefix recorded for the layer, or `x`.
+    pub(crate) fn hash(&self) -> &str {
+        &self.package().hash
     }
 
     fn encode(&self) -> String {
         match self {
-            Self::Declared { id_hash, digest } => format!("p{id_hash}{digest}"),
-            Self::ReturnHome {
-                key_hash,
-                id_hash,
-                digest,
-            } => format!("r{key_hash}{id_hash}{digest}"),
+            Self::Declared(package) => format!("p{}", package.encode()),
+            Self::ReturnHome { key_hash, package } => format!("r{key_hash}{}", package.encode()),
         }
     }
 
     fn parse(segment: &str) -> Option<Self> {
-        let digest_ok = |digest: &str| digest == MISSING_DIGEST || is_hex(digest, DIGEST_HEX);
         if let Some(rest) = segment.strip_prefix('p') {
-            let (id_hash, digest) = (rest.get(..ID_HEX)?, rest.get(ID_HEX..)?);
-            return (is_hex(id_hash, ID_HEX) && digest_ok(digest)).then(|| Self::Declared {
-                id_hash: id_hash.to_owned(),
-                digest: digest.to_owned(),
-            });
+            return IdentityPackage::parse(rest).map(Self::Declared);
         }
         let rest = segment.strip_prefix('r')?;
-        let (key_hash, id_hash, digest) = (
-            rest.get(..ID_HEX)?,
-            rest.get(ID_HEX..2 * ID_HEX)?,
-            rest.get(2 * ID_HEX..)?,
-        );
-        (is_hex(key_hash, ID_HEX) && is_hex(id_hash, ID_HEX) && digest_ok(digest)).then(|| {
-            Self::ReturnHome {
-                key_hash: key_hash.to_owned(),
-                id_hash: id_hash.to_owned(),
-                digest: digest.to_owned(),
-            }
+        let key_hash = rest.get(..ID_HEX)?;
+        let package = IdentityPackage::parse(rest.get(ID_HEX..)?)?;
+        is_hex(key_hash, ID_HEX).then(|| Self::ReturnHome {
+            key_hash: key_hash.to_owned(),
+            package,
         })
     }
 }
@@ -319,7 +323,7 @@ impl IdentityFrame {
 pub(crate) struct FailureIdentity {
     pub(crate) base: String,
     pub(crate) key: String,
-    pub(crate) main_digest: String,
+    pub(crate) main: IdentityPackage,
     pub(crate) layers: Vec<IdentityLayer>,
     pub(crate) frame: IdentityFrame,
 }
@@ -329,7 +333,9 @@ impl FailureIdentity {
     pub(crate) fn prefix(&self) -> String {
         let mut prefix = format!(
             "{}~{VERSION}~k{}~m{}",
-            self.base, self.key, self.main_digest
+            self.base,
+            self.key,
+            self.main.encode()
         );
         for layer in &self.layers {
             prefix.push('~');
@@ -350,13 +356,11 @@ impl FailureIdentity {
     /// The identity a recorded failure identity string encodes, or `None` for any other text.
     pub(crate) fn parse(identity: &str) -> Option<Self> {
         let parts = identity.split('~').collect::<Vec<_>>();
-        let [base, version, key, main_digest, middle @ .., frame] = parts.as_slice() else {
+        let [base, version, key, main, middle @ .., frame] = parts.as_slice() else {
             return None;
         };
         let key = key.strip_prefix('k').filter(|key| is_hex(key, KEY_HEX))?;
-        let main_digest = main_digest
-            .strip_prefix('m')
-            .filter(|digest| is_hex(digest, DIGEST_HEX))?;
+        let main = IdentityPackage::parse(main.strip_prefix('m')?)?;
         if base.is_empty() || *version != VERSION {
             return None;
         }
@@ -367,7 +371,7 @@ impl FailureIdentity {
             .collect::<Option<Vec<_>>>()?;
         let declared = layers
             .iter()
-            .take_while(|layer| matches!(layer, IdentityLayer::Declared { .. }))
+            .take_while(|layer| matches!(layer, IdentityLayer::Declared(_)))
             .count();
         if declared > MAX_DECLARED_LAYERS || layers.len() > declared + 1 {
             return None;
@@ -375,122 +379,9 @@ impl FailureIdentity {
         Some(Self {
             base: (*base).to_owned(),
             key: key.to_owned(),
-            main_digest: main_digest.to_owned(),
+            main,
             layers,
             frame: IdentityFrame::parse(frame)?,
-        })
-    }
-}
-
-/// The configuration a suspension is judged against (§12.7): the procedure bindings and the
-/// prerequisite and return-home mappings, as read at startup (or by `actingd suspended`).
-pub(crate) struct SuspensionLiftView<'a> {
-    pub(crate) manifest: &'a ProcedureManifest,
-    pub(crate) prerequisite_packages: &'a BTreeMap<String, ContainedTaskRecoveryBinding>,
-    pub(crate) return_home_packages: &'a BTreeMap<(String, String), String>,
-}
-
-/// What lifted a suspension: the main package's digest, or the layer at a one-based index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SuspensionLift {
-    MainDigest,
-    Layer(usize),
-}
-
-impl SuspensionLift {
-    pub(crate) fn label(self) -> String {
-        match self {
-            Self::MainDigest => "main_digest".to_owned(),
-            Self::Layer(index) => format!("layer:{index}"),
-        }
-    }
-}
-
-impl SuspensionLiftView<'_> {
-    /// The mapped digest of the declared layer whose id hash is `id_hash`: `x` when no package
-    /// id has it, and a value equal to no digest when several have it.
-    fn declared_digest(&self, id_hash: &str) -> String {
-        let mut matching = self
-            .prerequisite_packages
-            .iter()
-            .filter(|(package_id, _)| package_id_hash(package_id) == id_hash);
-        match (matching.next(), matching.next()) {
-            (None, _) => MISSING_DIGEST.to_owned(),
-            (Some((_, binding)), None) => package_digest_prefix(binding.expected_sha256()),
-            (Some(_), Some(_)) => AMBIGUOUS_DIGEST.to_owned(),
-        }
-    }
-
-    /// The return-home package id the mapping has for the key hash, if exactly one.
-    fn return_home_id(&self, key_hash: &str) -> Option<&str> {
-        let mut matching = self
-            .return_home_packages
-            .iter()
-            .filter(|((game, server), _)| return_home_key_hash(game, server) == key_hash);
-        match (matching.next(), matching.next()) {
-            (Some((_, package_id)), None) => Some(package_id.as_str()),
-            _ => None,
-        }
-    }
-
-    /// A layer's mapped digest prefix now: `None` when its return-home key or id changed.
-    pub(crate) fn current_layer_digest(&self, layer: &IdentityLayer) -> Option<String> {
-        match layer {
-            IdentityLayer::Declared { id_hash, .. } => Some(self.declared_digest(id_hash)),
-            IdentityLayer::ReturnHome {
-                key_hash, id_hash, ..
-            } => {
-                let package_id = self.return_home_id(key_hash)?;
-                (package_id_hash(package_id) == *id_hash).then(|| {
-                    self.prerequisite_packages.get(package_id).map_or_else(
-                        || MISSING_DIGEST.to_owned(),
-                        |binding| package_digest_prefix(binding.expected_sha256()),
-                    )
-                })
-            }
-        }
-    }
-
-    /// The package id a layer names in the current mapping, if exactly one key has its hash.
-    pub(crate) fn layer_package_id(&self, layer: &IdentityLayer) -> Option<String> {
-        if let IdentityLayer::ReturnHome { key_hash, .. } = layer
-            && let Some(package_id) = self.return_home_id(key_hash)
-            && package_id_hash(package_id) == layer.id_hash()
-        {
-            return Some(package_id.to_owned());
-        }
-        let mut matching = self
-            .prerequisite_packages
-            .keys()
-            .filter(|package_id| package_id_hash(package_id) == layer.id_hash());
-        match (matching.next(), matching.next()) {
-            (Some(package_id), None) => Some(package_id.clone()),
-            _ => None,
-        }
-    }
-
-    /// The current main package digest of `procedure_ref`, if bound.
-    pub(crate) fn current_main(&self, procedure_ref: &str) -> Option<&PackageRef> {
-        self.manifest
-            .binding(procedure_ref)
-            .map(|binding| binding.package_digest())
-    }
-
-    /// §12.7: whether a suspension recorded for `paused_digest` and `layers` is lifted. An
-    /// unbound procedure never lifts (its whole cycle fails anyway).
-    pub(crate) fn lifted(
-        &self,
-        procedure_ref: &str,
-        paused_digest: Option<&PackageRef>,
-        layers: &[IdentityLayer],
-    ) -> Option<SuspensionLift> {
-        let current = self.current_main(procedure_ref)?;
-        if paused_digest != Some(current) {
-            return Some(SuspensionLift::MainDigest);
-        }
-        layers.iter().enumerate().find_map(|(index, layer)| {
-            (self.current_layer_digest(layer).as_deref() != Some(layer.digest()))
-                .then_some(SuspensionLift::Layer(index + 1))
         })
     }
 }

@@ -518,7 +518,6 @@ fn dispatch_intent(alias: &str, catalog_task_id: &str) -> PolicyDispatchEventDat
         task_id: catalog_task_id.to_owned(),
         instance_id: alias.to_owned(),
         operation_id: "operation.runs.scheduled".to_owned(),
-        package_digest: placeholder('a').into(),
         procedure_binding_digest: placeholder('b'),
         reason_chain_id: "reasons.runs.scheduled".to_owned(),
         reasons: vec![PolicyReasonRecord(Outcome::relayed("placement_selected"))],

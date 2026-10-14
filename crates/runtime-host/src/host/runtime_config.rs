@@ -379,6 +379,21 @@ impl HostShared {
             })
     }
 
+    /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
+    /// at each suspension lift check.
+    pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .lift_check_min_interval_ms()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
     /// each step of a contained run (the kernel's `step_pacing()`).
     pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {

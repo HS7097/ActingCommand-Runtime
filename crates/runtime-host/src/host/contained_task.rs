@@ -5897,19 +5897,23 @@ impl HostShared {
                 ),
             ));
         };
-        context.package_digest().validate().map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                HostCode::PolicyRunPackageDigestInvalid,
-                HostLocation::RunScheduledContainedTask,
-                RuntimeErrorCode::RuntimeHalted,
-            ))
-        })?;
-        let expected_sha256 = context.package_digest();
+        // Workflow #336 PKG-S3 (M-PKG §4.4): a run executes the request its procedure's binding
+        // locates, when the binding names a location (the configuration builds both from one
+        // `scheduled_execution.package_path`). No package digest is compared.
+        let bound_path = lock(
+            &self.procedure_manifest,
+            HostLocation::RunScheduledContainedTask,
+        )?
+        .as_ref()
+        .and_then(|manifest| manifest.binding(context.procedure_ref()))
+        .and_then(|binding| binding.package_path().map(str::to_owned));
         if context.correlation_id() != context.request().correlation_id()
             || context.instance_alias() != instance_alias
             || context.lease_token().owner_epoch() != self.owner_epoch
             || context.lease_token().holder_id() != *holder_id
-            || task_request.expected_sha256() != expected_sha256
+            || bound_path
+                .as_deref()
+                .is_some_and(|bound_path| bound_path != task_request.package_path())
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(

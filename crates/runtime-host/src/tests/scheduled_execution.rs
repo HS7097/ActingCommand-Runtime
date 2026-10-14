@@ -701,8 +701,10 @@ fn scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain() 
     host.close().expect("close runtime host");
 }
 
+// Workflow #336 PKG-S3 (M-PKG §4.4): the package case is a request naming another path than
+// the one the procedure's binding locates; no package digest is compared.
 #[test]
-fn scheduled_physical_identity_and_package_mismatches_fail_before_io() {
+fn scheduled_physical_identity_and_package_path_mismatches_fail_before_io() {
     for case in ["provenance", "instance", "package"] {
         let root = TempDir::new().expect("tempdir");
         let (host, state, context, request, resolved) = admitted_physical_run_fixture(&root);
@@ -729,8 +731,39 @@ fn scheduled_physical_identity_and_package_mismatches_fail_before_io() {
             _ => unreachable!(),
         };
         let request = if case == "package" {
-            ContainedTaskRequest::new(request.package_path(), "0".repeat(64))
-                .expect("mismatched physical package request")
+            let bound_at = request.package_path().to_owned();
+            host.replace_procedure_manifest_for_test(
+                ProcedureManifest::new(
+                    [
+                        "procedure.observe",
+                        "procedure.observe-b",
+                        "procedure.detect",
+                    ]
+                    .map(|procedure_ref| {
+                        let binding = ProcedureBinding::new(
+                            procedure_ref,
+                            "operation.observe",
+                            vec!["after_observation".to_owned()],
+                        )
+                        .expect("procedure binding");
+                        if procedure_ref == "procedure.observe" {
+                            binding.with_package_path(bound_at.as_str())
+                        } else {
+                            binding
+                        }
+                    }),
+                )
+                .expect("procedure manifest"),
+            )
+            .expect("bind the procedure at the admitted package's path");
+            ContainedTaskRequest::new(
+                root.path()
+                    .join("another-scheduled-task.zip")
+                    .to_string_lossy()
+                    .into_owned(),
+                request.expected_sha256().clone(),
+            )
+            .expect("physical package request at another path")
         } else {
             request
         };

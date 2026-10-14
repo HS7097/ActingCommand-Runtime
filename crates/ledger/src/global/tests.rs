@@ -356,7 +356,6 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         task_id: "task:recovery-fixture".to_owned(),
         instance_id: "instance:recovery-fixture".to_owned(),
         operation_id: "operation:recovery-fixture".to_owned(),
-        package_digest: format!("sha256:{}", "1".repeat(64)).into(),
         procedure_binding_digest: format!("sha256:{}", "2".repeat(64)),
         reason_chain_id: "reason:recovery-fixture".to_owned(),
         reasons: vec![PolicyReasonRecord(Outcome::relayed("placement_selected"))],
@@ -3005,6 +3004,9 @@ mod gate_383_ao1;
 // Workflow #336 PKG-S2: package facts name packages by label and a digest member is not read.
 #[path = "tests/gate_pkg_s2.rs"]
 mod gate_pkg_s2;
+// Workflow #336 PKG-S3: a dispatch intent names no package digest and one that does is not read.
+#[path = "tests/gate_pkg_s3.rs"]
+mod gate_pkg_s3;
 // Workflow #383 AO-2 (ledger observer §7, §8, §10, §11.1).
 #[path = "tests/gate_383_ao2.rs"]
 mod gate_383_ao2;

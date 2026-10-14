@@ -691,12 +691,15 @@ and resolution when it resolves its chain). Like `prerequisite_packages`, it is
 not a configuration fact, it is read once at startup and a build that predates
 the field refuses it with `config_decode_failed`.
 
-A scheduled task paused by a failure is lifted once the daemon has restarted
-with a configuration in which its procedure binding's `package_digest` changed
-or, for a `linear_steps` task, a `prerequisite_packages` entry its paused run
-went through maps another digest, or its game and server's
-`return_home_packages` entry names another package or that package maps another
-digest. `actingd suspended --config <path>` loads and assembles the
+A scheduled task paused by a failure is lifted once the content hash of a
+package its paused run went through changes (Workflow #336 PKG-S3, option 丙):
+the main package at its procedure binding's `scheduled_execution.package_path`
+or, for a `linear_steps` task, a `prerequisite_packages` entry its run went
+through, or its game and server's `return_home_packages` entry names another
+package or that package's content changed. A package changed in place takes
+effect at the pair's next due evaluation, without a restart; a binding's
+`package_digest` takes no part (PKG-S4 removes the key). `actingd suspended
+--config <path>` loads and assembles the
 configuration exactly as this command does and lists the paused, lifted and
 repeating tasks (`contracts/policy-suspension.md`, "Lifting (R19)" and
 "`actingd suspended`").

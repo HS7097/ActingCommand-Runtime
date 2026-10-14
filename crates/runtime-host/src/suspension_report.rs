@@ -8,6 +8,8 @@
 //! a running daemon is not disturbed. Each pair is judged with the same lift rule as live
 //! admission (§12.7), against the configuration the caller loaded. Error frames are read
 //! read-only and compared again for display; the recorded failure identity stays the verdict.
+//! Workflow #336 PKG-S3: the report reads the packages a paused pair names, read-only, to
+//! measure their content hashes now (each package once per report); it still writes nothing.
 //!
 //! Workflow #372 K3 adds `clock_slots`: the clock-slot records of K2 (`goal_missed` planning
 //! signals whose `signal_id` starts with `signal:clock_slot:`) of the 48 h before the ledger's
@@ -16,14 +18,14 @@
 use crate::RuntimeHostConfig;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
-    FailureIdentity, IdentityLayer, SuspensionLiftView, failure_rows, failure_step,
-    identifier_text, locate_error_frame,
+    FailureIdentity, failure_rows, failure_step, identifier_text, locate_error_frame,
 };
+use crate::suspension_lift::{LiftCheckTime, LiftChecks, PausedPackages, SuspensionLiftView};
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
-    CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType, PackageRef,
+    CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType,
     PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
     PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
     scheduled_failure_code_str,
@@ -41,7 +43,8 @@ use std::fmt;
 use std::path::Path;
 
 const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v2";
-const LIFTS_WHEN: &str = "main_digest_changes_or_any_layer_changes";
+/// Workflow #336 PKG-S3: a pause lifts once the content hash of a package it names changes.
+const LIFTS_WHEN: &str = "content_hash_changes";
 /// `clock_slots` reads the records of this span before the ledger's latest event (#372 K3).
 const CLOCK_SLOT_WINDOW_MS: u64 = 48 * 60 * 60 * 1000;
 /// `clock_slots` keeps at most this many entries, newest first; `clock_slots_total` then counts
@@ -368,10 +371,14 @@ pub fn suspension_report(
         ledger,
         artifact_root: state_root,
     };
+    // Workflow #336 PKG-S3: each package is measured once for the whole report.
+    let checks = LiftChecks::default();
     let view = SuspensionLiftView {
         manifest,
         prerequisite_packages: request.host.prerequisite_packages(),
         return_home_packages: request.host.return_home_packages(),
+        checks: &checks,
+        time: LiftCheckTime::ONE_READ,
     };
     let through_sequence = snapshot.ledger.latest_sequence();
     let intents = snapshot
@@ -383,10 +390,7 @@ pub fn suspension_report(
         .filter_map(|event| match event.payload() {
             EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => Some((
                 payload.decision_id().to_owned(),
-                (
-                    payload.package_digest().clone(),
-                    event.links().run_id().copied(),
-                ),
+                event.links().run_id().copied(),
             )),
             _ => None,
         })
@@ -428,21 +432,17 @@ pub fn suspension_report(
             _ => None,
         });
     let mut warnings = Vec::new();
-    let pending_restart = match daemon_started_at_unix_ms {
-        None => {
-            warnings.push("daemon_start_unknown".to_owned());
-            false
-        }
+    match daemon_started_at_unix_ms {
+        None => warnings.push("daemon_start_unknown".to_owned()),
         Some(started) => {
-            let newer = request
+            if request
                 .config_modified_unix_ms
-                .is_some_and(|modified| modified > started);
-            if newer {
+                .is_some_and(|modified| modified > started)
+            {
                 warnings.push("config_newer_than_daemon_start".to_owned());
             }
-            newer
         }
-    };
+    }
     let (mut suspended, mut lifted, mut repeating) = (Vec::new(), Vec::new(), Vec::new());
     for ((task_id, instance_id), executions) in &pairs {
         let Some(latest) = executions.last() else {
@@ -463,16 +463,14 @@ pub fn suspension_report(
             .failure_identity
             .as_deref()
             .and_then(FailureIdentity::parse);
-        if identity.is_none() && recorded.contains("~v1~") {
+        if identity.is_none() && recorded.contains("~v2~") {
             warnings.push(format!("error_code_unparsed:{pair}"));
         }
         let previous = executions
             .len()
             .checked_sub(2)
             .and_then(|index| executions.get(index));
-        let (paused_digest, current_run) = intents
-            .get(&latest.decision_id)
-            .map_or((None, None), |(digest, run_id)| (Some(digest), *run_id));
+        let current_run = intents.get(&latest.decision_id).copied().flatten();
         let base = identity
             .as_ref()
             .map_or_else(|| recorded.clone(), |identity| identity.base.clone());
@@ -485,10 +483,10 @@ pub fn suspension_report(
             if procedure_ref.is_none() {
                 warnings.push(format!("task_not_in_catalog:{pair}"));
             }
-            let layers = identity
-                .as_ref()
-                .map_or(&[][..], |identity| identity.layers.as_slice());
-            let package = package_json(&view, procedure_ref, paused_digest, layers);
+            // Workflow #336 PKG-S3: what the pause recorded, from its failure identity alone.
+            let paused_packages = PausedPackages::of_identity(failure.failure_identity.as_deref());
+            let package =
+                package_json(&view, procedure_ref, &paused_packages).map_err(|_| lift_failed())?;
             let paused = json!({
                 "execution_sequence": latest.sequence,
                 "observed_at_unix_ms": latest.observed_at_unix_ms,
@@ -502,17 +500,18 @@ pub fn suspension_report(
                 failure.consecutive_same_error,
             ) {
                 Some(("restart".to_owned(), "active"))
+            } else if let Some(procedure_ref) = procedure_ref {
+                let verdict = view
+                    .lifted(procedure_ref, &latest.decision_id, &paused_packages)
+                    .map_err(|_| lift_failed())?;
+                if !verdict.unmeasured.is_empty() {
+                    warnings.push(format!("lift_check_hash_unmeasured:{pair}"));
+                }
+                // A package changed in place lifts the pause at the running daemon's next check
+                // of the pair, without a restart.
+                verdict.lifted.map(|lift| (lift.label(), "next_evaluation"))
             } else {
-                procedure_ref
-                    .and_then(|procedure_ref| view.lifted(procedure_ref, paused_digest, layers))
-                    .map(|lift| {
-                        let effective = if pending_restart {
-                            "pending_restart"
-                        } else {
-                            "active"
-                        };
-                        (lift.label(), effective)
-                    })
+                None
             };
             if let Some((lifted_by, effective)) = lift {
                 lifted.push(json!({
@@ -530,11 +529,8 @@ pub fn suspension_report(
                 failure.consecutive_same_error > 1
                     && matches!(previous.outcome, PolicyExecutionOutcome::Failed { .. })
             });
-            let previous_run = previous.and_then(|previous| {
-                intents
-                    .get(&previous.decision_id)
-                    .and_then(|(_, run_id)| *run_id)
-            });
+            let previous_run =
+                previous.and_then(|previous| intents.get(&previous.decision_id).copied().flatten());
             let (frames, verdict) = snapshot.frames(previous_run, current_run)?;
             if verdict == Some("different")
                 && identity.as_ref().is_some_and(FailureIdentity::accumulates)
@@ -601,9 +597,7 @@ pub fn suspension_report(
         {
             continue;
         }
-        let previous_run = intents
-            .get(&previous.decision_id)
-            .and_then(|(_, run_id)| *run_id);
+        let previous_run = intents.get(&previous.decision_id).copied().flatten();
         repeating.push(json!({
             "task_id": task_id,
             "instance_id": instance_id,
@@ -641,32 +635,41 @@ pub fn suspension_report(
     Ok(report)
 }
 
-/// The main package digest a pair was paused on and has now, and each recorded layer.
+/// A lift check that could not read its own memory (a poisoned lock).
+fn lift_failed() -> SuspensionReportError {
+    SuspensionReportError::new(
+        HostCode::RuntimeStatePoisoned,
+        HostLocation::CheckSuspensionLift,
+    )
+}
+
+/// The content hashes a pair was paused on and has now (Workflow #336 PKG-S3): the main
+/// package's and each recorded layer's prefix (`null` when not recorded or not measurable now).
 fn package_json(
     view: &SuspensionLiftView<'_>,
     procedure_ref: Option<&String>,
-    paused_digest: Option<&PackageRef>,
-    layers: &[IdentityLayer],
-) -> Value {
-    json!({
-        "paused": paused_digest.map(PackageRef::prefixed_wire_value),
-        "current": procedure_ref
-            .and_then(|procedure_ref| view.current_main(procedure_ref))
-            .map(PackageRef::prefixed_wire_value),
-        "layers": layers
-            .iter()
-            .map(|layer| {
-                let current = view.current_layer_digest(layer);
-                json!({
-                    "kind": layer.kind(),
-                    "package_id": view.layer_package_id(layer),
-                    "paused_digest_prefix": layer.digest(),
-                    "current_digest_prefix": current,
-                    "changed": current.as_deref() != Some(layer.digest()),
-                })
-            })
-            .collect::<Vec<_>>(),
-    })
+    paused: &PausedPackages,
+) -> crate::RuntimeHostResult<Value> {
+    let current_main = match procedure_ref {
+        Some(procedure_ref) => view.current_main_hash(procedure_ref)?,
+        None => None,
+    };
+    let mut layers = Vec::with_capacity(paused.layers.len());
+    for layer in &paused.layers {
+        let current = view.current_layer_hash(layer)?;
+        layers.push(json!({
+            "kind": layer.kind(),
+            "package_id": view.layer_package_id(layer),
+            "paused_hash_prefix": layer.hash(),
+            "current_hash_prefix": current,
+            "changed": current.as_deref().is_some_and(|current| current != layer.hash()),
+        }));
+    }
+    Ok(json!({
+        "paused_hash_prefix": paused.main.as_ref().map(|main| main.hash.as_str()),
+        "current_hash_prefix": current_main,
+        "layers": layers,
+    }))
 }
 
 fn execution_disposition(outcome: &PolicyExecutionOutcome) -> Value {

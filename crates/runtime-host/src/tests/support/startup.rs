@@ -28,8 +28,11 @@ fn procedure_manifest() -> ProcedureManifest {
     )
 }
 
+/// The fixture manifest. Workflow #336 PKG-S3: a binding names no package content, so the
+/// primary package (`_primary_package`, kept to say which package a test binds) changes no
+/// binding; no binding names a location, so a scheduled run may name any path.
 fn procedure_manifest_with_primary(
-    primary_package: &[u8],
+    _primary_package: &[u8],
     primary_yield_points: Vec<String>,
 ) -> ProcedureManifest {
     ProcedureManifest::new(
@@ -40,24 +43,13 @@ fn procedure_manifest_with_primary(
         ]
         .into_iter()
         .map(|procedure_ref| {
-            let (package_digest, yield_points) = if procedure_ref == "procedure.observe" {
-                (
-                    format!("sha256:{:x}", Sha256::digest(primary_package)),
-                    primary_yield_points.clone(),
-                )
+            let yield_points = if procedure_ref == "procedure.observe" {
+                primary_yield_points.clone()
             } else {
-                (
-                    format!("sha256:{:x}", Sha256::digest(procedure_ref.as_bytes())),
-                    vec!["after_observation".to_owned()],
-                )
+                vec!["after_observation".to_owned()]
             };
-            ProcedureBinding::new(
-                procedure_ref,
-                package_digest,
-                "operation.observe",
-                yield_points,
-            )
-            .expect("procedure binding")
+            ProcedureBinding::new(procedure_ref, "operation.observe", yield_points)
+                .expect("procedure binding")
         }),
     )
     .expect("procedure manifest")

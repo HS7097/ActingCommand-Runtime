@@ -2458,14 +2458,13 @@ mod tests {
         let manifest = ProcedureManifest::new(vec![
             ProcedureBinding::new(
                 "procedure.observe",
-                format!("sha256:{package_sha256}"),
                 "operation.observe",
                 vec!["after_observation".to_string()],
             )
-            .expect("procedure binding"),
+            .expect("procedure binding")
+            .with_package_path(package_path.to_string_lossy()),
             ProcedureBinding::new(
                 "procedure.followup",
-                format!("sha256:{package_sha256}"),
                 "operation.observe",
                 vec!["after_observation".to_string()],
             )

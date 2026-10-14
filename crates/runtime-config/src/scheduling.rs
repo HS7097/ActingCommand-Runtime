@@ -9,7 +9,9 @@
 //! instance's defaults (the per-instance keys are in the per-instance section), parsed only.
 //! Workflow #384 D2-S2: `fact_refresh.recognition_join_timeout_ms`, how long a successful run
 //! waits for the readings it handed to recognition, read by the host when a run joins; D2-S4
-//! adds the section's other fact refresh keys.
+//! adds the section's other fact refresh keys. Workflow #336 PKG-S3:
+//! `suspension.lift_check_min_interval_ms`, the least time between two measurements of one
+//! package's content hash by the suspension lift checks, read by the host at each check.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! host blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, and
@@ -77,6 +79,11 @@ pub const RANDOM_DELAY_MAX_MS: &str = "scheduling.random_delay.max_ms";
 pub const FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS: &str =
     "scheduling.fact_refresh.recognition_join_timeout_ms";
 
+/// Workflow #336 PKG-S3 (M-PKG §3.4, D1): the least time between two measurements of one
+/// package's content hash by the suspension lift checks.
+pub const SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS: &str =
+    "scheduling.suspension.lift_check_min_interval_ms";
+
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
 const MAX_RANDOM_DELAY_MS: i64 = 86_400_000;
@@ -133,6 +140,8 @@ pub struct SchedulingFile {
     random_delay: Option<RandomDelayFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fact_refresh: Option<FactRefreshFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    suspension: Option<SuspensionFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -175,6 +184,12 @@ file_struct!(NotRunFile { diagnose_rows });
 file_struct!(
     /// Workflow #384 D2-S2: the fact refresh keys parsed so far.
     FactRefreshFile { recognition_join_timeout_ms }
+);
+file_struct!(
+    /// Workflow #336 PKG-S3: the suspension lift checks.
+    SuspensionFile {
+        lift_check_min_interval_ms
+    }
 );
 file_struct!(
     /// Workflow #405: a random delay, section-level or one instance's.
@@ -304,6 +319,12 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         JOIN_TIMEOUT,
         "D2-S2",
+    ),
+    row(
+        SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "PKG-S3",
     ),
 ];
 
@@ -650,4 +671,12 @@ pub(crate) fn recognition_join_timeout_ms(
     value: &dyn Fn(&str) -> Option<FactScalar>,
 ) -> Result<u64, ConfigFailure> {
     Reader { value }.duration(FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS)
+}
+
+/// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read alone
+/// (the host reads it at each suspension lift check).
+pub(crate) fn lift_check_min_interval_ms(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<u64, ConfigFailure> {
+    Reader { value }.duration(SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS)
 }

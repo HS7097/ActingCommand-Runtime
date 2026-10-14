@@ -210,7 +210,10 @@ that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows
 `ac_diagnose` lists under `not_run`) by SR-6b. Workflow #384 D2-S2 reads
 `fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
 to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); D2-S4 adds the
-section's other fact refresh keys.
+section's other fact refresh keys. Workflow #336 PKG-S3 reads
+`suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
+hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
+"Lifting (R19)").
 
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
@@ -233,6 +236,7 @@ section's other fact refresh keys.
 | `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
 | `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
+| `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
