@@ -427,10 +427,10 @@ record: the sampling codes carry their registered values (spec §10, values not 
 
 Configuration keys (§5): the `scheduling.recognition.*` row and the five sections of the next
 row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's random delay
-(§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14). Deviation from §5's
-defaults: `scheduling.rerun.condition_codes` lists the six of SCHED §9's eight codes the catalog
-lists; `perf_run_yielded` and `perf_hold_expired` join it with the performance slices that
-register them (a code list entry must be a listed, active code).
+(§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14).
+`scheduling.rerun.condition_codes` lists SCHED §9's eight codes; `perf_run_yielded` and
+`perf_hold_expired` are registered by SH-1 (pending), since a code list entry must be a listed,
+active code (train 6).
 
 ### 1.24 Wave 6 slice P-c (#385 PERF §10, §11)
 

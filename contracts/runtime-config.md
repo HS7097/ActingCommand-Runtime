@@ -201,7 +201,7 @@ that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | integer `0..=4294967295` | `2` |
-| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's codes the catalog lists |
+| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's eight codes |
 | `scheduling.rerun.max_per_occurrence` | integer `0..=4294967295` | `2` |
 | `scheduling.rerun.resume_stage` | `s0`…`s4` (vocabulary `pacing_stage`) | `s2` |
 | `scheduling.rerun.resume_settle_ms` | milliseconds | `60000` |

@@ -491,7 +491,7 @@ None of these codes triggers the recovery ladder.
 | Key | Default | Meaning |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | 2 | Base number of observe-only retries of a timed-out observation |
-| `scheduling.rerun.condition_codes` | the eight codes above, as far as the catalog lists them | Codes that end a run by a condition; read only at live settlement. Every entry is a code the catalog lists and has not retired; `perf_run_yielded` and `perf_hold_expired` join the defaults file with the performance slices that register them |
+| `scheduling.rerun.condition_codes` | the eight codes above | Codes that end a run by a condition; read only at live settlement. Every entry is a code the catalog lists and has not retired |
 | `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read only at live settlement |
 | `scheduling.rerun.resume_stage` | S2 | Highest pacing stage at which an owed rerun runs |
 | `scheduling.rerun.resume_settle_ms` | 60,000 | How long the stage must stay at or below the resume stage |

@@ -252,6 +252,8 @@
         "recognition_sample_deadline_exceeded",
         "candidate_sample_deadline_exceeded",
         "blackout_run_stopped",
+        "perf_run_yielded",
+        "perf_hold_expired",
         "cost_commit_time_insufficient"
       ],
       "max_per_occurrence": 2,

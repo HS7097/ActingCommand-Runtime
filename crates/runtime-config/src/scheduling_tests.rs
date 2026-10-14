@@ -8,7 +8,6 @@
 // checked on the pair in effect).
 
 use super::*;
-use crate::recovery_ladder::{Listed, listed};
 use crate::scheduling::{
     BLACKOUT_HARD_QUIET_MS, BLACKOUT_HOST, BLACKOUT_QUIET_MARGIN_MS,
     BLACKOUT_STOP_IN_FLIGHT_AT_START, COST_COMMIT_MARGIN_MS, COST_COMMIT_MAX_STAGE,
@@ -100,8 +99,8 @@ fn list(value: &FactScalar) -> Value {
 
 // SCHED §9 and the #405 order: every key of the section, defaulted from the defaults file
 // (source `default`), settable while the Runtime runs; an instance's random delay defaults to
-// the section's. The rerun codes are the model's eight as far as the catalog lists them
-// (`perf_run_yielded` and `perf_hold_expired` arrive with performance slices P-s and P-h).
+// the section's. The rerun codes are the model's eight (SH-1 registers `perf_run_yielded` and
+// `perf_hold_expired`).
 #[test]
 fn sr1_c1_every_scheduling_key_has_its_model_default() {
     let parameters = render(json!({}), json!({})).expect("the defaults resolve");
@@ -141,14 +140,9 @@ fn sr1_c1_every_scheduling_key_has_its_model_default() {
         assert_eq!(parameter.source, ConfigParameterSource::Default, "{key}");
         assert!(parameter.settable, "{key}");
     }
-    let listed_codes = CONDITION_CODES
-        .iter()
-        .filter(|code| matches!(listed(code), Listed::Active))
-        .copied()
-        .collect::<Vec<_>>();
     assert_eq!(
         list(&reported(RERUN_CONDITION_CODES).value),
-        json!(listed_codes)
+        json!(CONDITION_CODES)
     );
     assert_eq!(
         list(&reported(FEATURE_LOCK_CODES).value),
