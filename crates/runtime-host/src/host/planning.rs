@@ -70,9 +70,6 @@ impl HostShared {
                 &self.fact_write_gate,
                 HostLocation::AppendPlanningTransaction,
             )?;
-            if self.lifecycle_append_failed.load(Ordering::Acquire) {
-                return Err(ledger_error(HostLocation::AppendPlanningTransaction));
-            }
             let links = self.events.system_links()?;
             let draft = self.events.draft(
                 EventSeverity::Info,
@@ -89,9 +86,6 @@ impl HostShared {
                 .append_transaction(draft, Box::new(work))
                 .map_err(|error| {
                     let error = crate::policy_host::planning_transaction_error(error);
-                    if error.is_fatal() {
-                        self.lifecycle_append_failed.store(true, Ordering::Release);
-                    }
                     let context = error.clone().with_native_detail(format!(
                         "event_id={attempt_event_id:?}; attempted_sequence={:?}",
                         staged_quota.attempted_sequence()
@@ -149,7 +143,6 @@ impl HostShared {
         })()
         .map_err(|error| {
             if let Some((event_id, sequence)) = committed_signal {
-                self.lifecycle_append_failed.store(true, Ordering::Release);
                 let context = error.clone().with_native_detail(format!(
                     "planning_fact_committed=true; event_id={event_id:?}; sequence={sequence}"
                 ));

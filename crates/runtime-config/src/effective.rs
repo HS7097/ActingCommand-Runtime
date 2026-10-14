@@ -7,11 +7,12 @@
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
+use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::SchedulingConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
-use crate::{host_claims, instance, performance, recovery_ladder, scheduling};
+use crate::{host_claims, instance, ledger_observer, performance, recovery_ladder, scheduling};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, ConfigSubsystem,
@@ -384,6 +385,13 @@ impl EffectiveConfig {
         SchedulingConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #383 AO-1: the `ledger_observer` section in effect, read and checked whole
+    /// (`contracts/ledger-observer.md` §15); the host builds the ledger writer's failure plan
+    /// from it before the ledger opens.
+    pub fn ledger_observer(&self) -> Result<LedgerObserverConfig, ConfigFailure> {
+        LedgerObserverConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -489,7 +497,8 @@ impl EffectiveConfig {
     /// The whole-section checks of `sections` against the values in effect (§5.3), with the
     /// facts of other crates in `context`: the `recovery_ladder` section whole (D1c), the
     /// `host_claims` slack (D1c), the `performance` section whole (Workflow #385 P-c), the
-    /// `scheduling` section whole (Workflow #386 SR-1) and each
+    /// `scheduling` section whole (Workflow #386 SR-1), the `ledger_observer` section whole
+    /// (Workflow #383 AO-1) and each
     /// instance of the per-instance section (D1b).
     fn check_sections(
         &self,
@@ -507,6 +516,9 @@ impl EffectiveConfig {
         }
         if sections.contains(scheduling::SECTION) {
             self.scheduling()?;
+        }
+        if sections.contains(ledger_observer::SECTION) {
+            self.ledger_observer()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

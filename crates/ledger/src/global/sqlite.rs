@@ -6,7 +6,7 @@ use super::projection::EventIndexes;
 use super::read_only::check_read_budget;
 use super::retention::{LedgerOpenTiming, elapsed_ms};
 use super::storage::{
-    DurableStorage, EventStore, UniqueJsonValue, WriterOwnership, increment_sequence,
+    DurableStorage, EventStore, ReadBack, UniqueJsonValue, WriterOwnership, increment_sequence,
 };
 use super::{
     GlobalLedgerConfig, GlobalLedgerError, GlobalLedgerReadOnlyConfig, GlobalLedgerResult,
@@ -19,7 +19,7 @@ use crate::{
     fact::{LedgerEventMetadata, LedgerEventRead, StoredEventRecord},
 };
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{Code, IoKind, Location};
 use actingcommand_contract::{
     EventId, EventQuery, EventType, GLOBAL_EVENT_SCHEMA_VERSION, LedgerMaterialReadState,
     LedgerReadScope, LedgerReadSource, ProjectedArtifactReference, ProjectionProfile,
@@ -652,6 +652,11 @@ pub(super) fn open_formal(
         prefix: Cell::new(Some(prefix)),
     };
     let mut store = EventStore::recovered(backend, next, events)?;
+    // Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.4, §12 step 2): a dump an earlier run
+    // left is imported after the ledger is verified and before any new record.
+    if let Err(error) = store.attach_write_failure(config.write_failure.clone()) {
+        return Err(error.with_close_result(store.backend.close()));
+    }
     if let Some(owner) = stale
         && let Err(error) =
             store.append_recovery(RecoveryReason::StaleOwner, Some(owner), None, None)
@@ -897,6 +902,11 @@ impl SqliteLedgerStore {
             prefix: Cell::new(Some(prefix)),
         };
         let mut store = Self::recovered(backend, next, events)?;
+        // Workflow #383 AO-1: a candidate opened with a failure plan writes and imports as the
+        // running Runtime's writer does (`contracts/ledger-observer.md` §9).
+        if let Err(error) = store.attach_write_failure(config.write_failure.clone()) {
+            return Err(error.with_close_result(store.backend.close()));
+        }
         if let Some(previous_owner) = stale_owner
             && let Err(error) =
                 store.append_recovery(RecoveryReason::StaleOwner, Some(previous_owner), None, None)
@@ -1159,12 +1169,65 @@ impl SqliteStorage {
         // transaction, as a slow commit would.
         #[cfg(any(test, feature = "test-hooks"))]
         crate::writer_stall::before_durable_commit(self.database.root());
+        // Workflow #383 AO-1: a test gate may fail this attempt here (a full disk, a lost commit
+        // result, an integrity failure).
+        #[cfg(any(test, feature = "test-hooks"))]
+        if let Some(fault) = crate::write_fault::before_commit(self.database.root()) {
+            return injected_fault(fault, transaction);
+        }
         match transaction.commit() {
             Ok(()) => JointCommit::Committed,
             Err(error) => JointCommit::CommitFailed(sql_error(
                 error,
                 LedgerLocation::CommitSqliteEvent.location(),
             )),
+        }
+    }
+}
+
+/// Workflow #383 AO-1: the outcome a test gate's fault gives the attempt in progress.
+#[cfg(any(test, feature = "test-hooks"))]
+fn injected_fault(
+    fault: crate::write_fault::InjectedFault,
+    transaction: rusqlite::Transaction<'_>,
+) -> JointCommit {
+    use crate::write_fault::InjectedFault;
+    let full_disk = || {
+        sql_error(
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                None,
+            ),
+            LedgerLocation::CommitSqliteEvent.location(),
+        )
+    };
+    match fault {
+        InjectedFault::FailBeforeCommit => match transaction.rollback() {
+            Ok(()) => JointCommit::RolledBack(full_disk()),
+            Err(error) => JointCommit::RolledBack(sql_error(
+                error,
+                LedgerLocation::RollbackJointEvent.location(),
+            )),
+        },
+        InjectedFault::CommitThenFail => match transaction.commit() {
+            Ok(()) => JointCommit::CommitFailed(full_disk()),
+            Err(error) => JointCommit::CommitFailed(sql_error(
+                error,
+                LedgerLocation::CommitSqliteEvent.location(),
+            )),
+        },
+        InjectedFault::Integrity => {
+            let refused = failure(
+                LedgerCode::LedgerMetaMismatch.code(),
+                LedgerLocation::AppendSqliteEvent.location(),
+            );
+            match transaction.rollback() {
+                Ok(()) => JointCommit::RolledBack(refused),
+                Err(error) => JointCommit::RolledBack(sql_error(
+                    error,
+                    LedgerLocation::RollbackJointEvent.location(),
+                )),
+            }
         }
     }
 }
@@ -1254,6 +1317,57 @@ impl DurableStorage for SqliteStorage {
 
     fn persist(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<Option<u64>> {
         self.persist_joint(event, None, crate::durability::commit_sync(event.payload()))
+    }
+
+    /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1; `ledger-store.md`: a failed
+    /// append is not proof of absence): reads the database head and the event's row. A head
+    /// still where the write left it means the event is absent; a head that names exactly this
+    /// event means it is committed, and the store's head moves to it; anything else is an
+    /// integrity failure.
+    fn read_back(&mut self, event: &PersistedEvent) -> GlobalLedgerResult<ReadBack> {
+        let next = increment_sequence(event.sequence())?;
+        let projected = project_record(&self.database, event, self.head_hash.as_deref())?;
+        let previous_meta = meta_row_with_marker(
+            &self.database,
+            event.sequence(),
+            self.head,
+            self.head_hash.as_deref(),
+            &self.marker,
+        );
+        let committed_meta = meta_row_with_marker(
+            &self.database,
+            next,
+            event.sequence(),
+            Some(&projected.hash),
+            &self.marker,
+        );
+        let (meta, rows) = {
+            let connection = self
+                .database
+                .connection(LedgerLocation::ReadBackLedgerWrite.location())?;
+            let meta = read_meta_columns(&connection, self.meta_has_marker, None, &mut 0)?;
+            let sequence = encode(event.sequence());
+            let rows = read_rows(
+                &connection,
+                &format!("SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence={sequence}"),
+                None,
+                &mut 0,
+                true,
+            )?;
+            (meta, rows)
+        };
+        if meta == previous_meta && rows.is_empty() {
+            return Ok(ReadBack::Absent);
+        }
+        if meta == committed_meta && rows == vec![projected.event] {
+            self.head = event.sequence();
+            self.head_hash = Some(projected.hash);
+            return Ok(ReadBack::Committed);
+        }
+        Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::ReadBackLedgerWrite.location(),
+        ))
     }
 
     fn persist_transaction(
@@ -3560,11 +3674,12 @@ fn failure(code: Code, operation: Location) -> GlobalLedgerError {
     GlobalLedgerError::fatal(code, operation)
 }
 fn sql_error(error: rusqlite::Error, operation: Location) -> GlobalLedgerError {
-    let detail = match error {
-        rusqlite::Error::SqliteFailure(code, _) => {
-            Some(format!("SQLite extended code {}", code.extended_code))
-        }
-        _ => None,
+    let (detail, write_failure) = match error {
+        rusqlite::Error::SqliteFailure(code, _) => (
+            Some(format!("SQLite extended code {}", code.extended_code)),
+            write_failure_kind(code.code),
+        ),
+        _ => (None, None),
     };
     GlobalLedgerError {
         code: LedgerCode::LedgerSqliteFailed.as_str(),
@@ -3573,6 +3688,27 @@ fn sql_error(error: rusqlite::Error, operation: Location) -> GlobalLedgerError {
         terminal: true,
         rolled_back_work: None,
         io_kind: None,
+        write_failure,
+    }
+}
+
+/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1): the SQLite results that are write
+/// failures (I/O, busy, a full disk), read back and tried again, with the I/O kind they report.
+/// Every other result (a constraint, a corrupt image, a misuse) is not tried again.
+fn write_failure_kind(code: rusqlite::ErrorCode) -> Option<IoKind> {
+    match code {
+        rusqlite::ErrorCode::DiskFull => Some(IoKind::StorageFull),
+        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => {
+            Some(IoKind::ResourceBusy)
+        }
+        rusqlite::ErrorCode::ReadOnly => Some(IoKind::ReadOnlyFilesystem),
+        rusqlite::ErrorCode::PermissionDenied => Some(IoKind::PermissionDenied),
+        rusqlite::ErrorCode::OutOfMemory => Some(IoKind::OutOfMemory),
+        rusqlite::ErrorCode::OperationInterrupted => Some(IoKind::Interrupted),
+        rusqlite::ErrorCode::SystemIoFailure
+        | rusqlite::ErrorCode::CannotOpen
+        | rusqlite::ErrorCode::FileLockingProtocolFailed => Some(IoKind::Other),
+        _ => None,
     }
 }
 

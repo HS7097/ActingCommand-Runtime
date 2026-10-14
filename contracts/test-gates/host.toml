@@ -550,6 +550,17 @@ tests = [
 ]
 incident = ["#383 SH-1"]
 
+# Every ledger_observer key has its contract default and AO-1's settable decision, values that break the section's rules are refused at start and through an instruction, and a forced write failure's dump stops the Runtime and is imported once by the restart and deleted (Workflow #383 AO-1; the acceptance row of additions §8.3)
+[[gate]]
+key = "59"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ao1_keys_every_ledger_observer_key_has_its_contract_default",
+    "actingcommand-runtime-config::lib::ledger_observer_tests::ao1_keys_ledger_observer_values_that_break_a_rule_are_refused",
+    "actingcommand-runtime-host::lib::tests::gate_383_ao1::ao1_acceptance_a_forced_write_failure_dumps_and_the_restart_imports_it_once",
+]
+incident = ["#383"]
+
 # The instance fact read answers one instance's facts (its own, its configured server's and game's) with the resolved server and game, appends no ledger record, names the committed head in its state source and puts no ledger position on the wire; an unknown alias is instance_unknown and a reply past one frame is refused instance_fact_snapshot_too_large_for_frame while the Runtime goes on (Workflow #389 MCP-4, register W2)
 [[gate]]
 key = "60"

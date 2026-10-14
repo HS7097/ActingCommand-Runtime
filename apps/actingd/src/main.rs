@@ -31,7 +31,7 @@ mod gate_a2a;
 mod gate_383;
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Detail, Location};
+use actingcommand_contract::outcome::{Code, Detail, Location, Outcome};
 use actingcommand_contract::{
     EventActor, EventSource, GovernanceIdentityCard, PolicyExecutionEventData, RunId,
     RuntimeErrorCode, RuntimeErrorProjection, RuntimeReceipt, SchedulingOutcomeProjection,
@@ -41,7 +41,7 @@ use actingcommand_runtime_client::{
     ClientCode, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
 };
 use actingcommand_runtime_host::{
-    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    LedgerFailureSink, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
     PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, PolicyWakes, RuntimeHost,
     RuntimeHostError, RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
 };
@@ -75,6 +75,39 @@ fn main() -> ExitCode {
 /// The developer line actingd prints as its last act when it fails; the watchdog reads it.
 fn fatal_line(error: &ActingdError) -> String {
     format!("FATAL actingd: {error}")
+}
+
+/// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1, §9.2 step 4): the daemon's side of
+/// the ledger's write path. A write that was read back, retried and committed is a warning line;
+/// the stop after the ledger wrote its dump (or could not) is the fatal line, and the process
+/// ends with exit code 2, a fatal outcome's (`outcome-code-writing-spec.md` §9). The watchdog
+/// does not restart a fatal stop; a person repairs the disk or file, and the next start imports
+/// the dump.
+struct DaemonLedgerFailure;
+
+impl LedgerFailureSink for DaemonLedgerFailure {
+    fn write_retried(&self, outcome: &Outcome) {
+        write_daemon_outcome("WARN", outcome);
+    }
+
+    fn stop(&self, outcome: &Outcome) {
+        write_daemon_outcome("FATAL", outcome);
+        std::process::exit(2);
+    }
+}
+
+/// The developer line `<level> actingd: <code>` and the `OUTCOME actingd:` line of `outcome`, on
+/// stderr in one write (`outcome-code-writing-spec.md` §9).
+fn write_daemon_outcome(level: &str, outcome: &Outcome) {
+    let spelling = outcome.code().as_str();
+    let lines = match serde_json::to_string(&outcome.envelope(Detail::Full)) {
+        Ok(envelope) => format!("{level} actingd: {spelling}\nOUTCOME actingd: {envelope}\n"),
+        Err(_) => format!("{level} actingd: {spelling}\n"),
+    };
+    // stderr is the last place to report to; a failed write there has nowhere else to go.
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(lines.as_bytes());
+    let _ = stderr.flush();
 }
 
 fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
@@ -147,6 +180,13 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
             ActingdError::config(rejection.code).with_detail(rejection.to_string())
         })?;
     let host = host.with_resource_packages(resource_packages);
+    // Workflow #383 AO-1: the ledger's retried writes and its fatal stop after a dump; the
+    // commit actingd was built from names the dump's header.
+    let host = host.with_ledger_failure_sink(Arc::new(DaemonLedgerFailure));
+    let host = match option_env!("ACTINGCOMMAND_RUNTIME_HEAD") {
+        Some(commit) => host.with_runtime_commit(commit),
+        None => host,
+    };
     let host = match install_held {
         Some(held) => host.with_install_held(held),
         None => host,

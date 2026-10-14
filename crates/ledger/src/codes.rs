@@ -351,6 +351,8 @@ actingcommand_contract::outcome_locations! {
         CommitSegmentImport => "commit_segment_import",
         CommitSqliteEvent => "commit_sqlite_event",
         ConfigureFingerprinter => "configure_fingerprinter",
+        /// Workflow #383 AO-1: checking the write policy the ledger is opened with.
+        ConfigureLedgerWritePolicy => "configure_ledger_write_policy",
         ConfigureRedactor => "configure_redactor",
         ConfigureSubscription => "configure_subscription",
         ConfirmDeferred => "confirm_deferred",
@@ -384,6 +386,8 @@ actingcommand_contract::outcome_locations! {
         FinishArtifactEviction => "finish_artifact_eviction",
         FrameRetentionView => "frame_retention_view",
         FreezeSegmentImportSource => "freeze_segment_import_source",
+        /// Workflow #383 AO-1: importing a dump at the start, before any new record.
+        ImportLedgerDump => "import_ledger_dump",
         IncrementReadOnlySequence => "increment_read_only_sequence",
         IncrementSequence => "increment_sequence",
         InitializeLedgerSchema => "initialize_ledger_schema",
@@ -404,6 +408,10 @@ actingcommand_contract::outcome_locations! {
         JoinCancelledWriter => "join_cancelled_writer",
         JoinWriter => "join_writer",
         LatestSequence => "latest_sequence",
+        /// Workflow #383 AO-1: the probe that watches the start of the write attempt in progress.
+        LedgerAttemptWatch => "ledger_attempt_watch",
+        /// Workflow #383 AO-1: writing one record with its retries.
+        LedgerWriteRetry => "ledger_write_retry",
         ListSegments => "list_segments",
         LocateReadOnlyCorruptTail => "locate_read_only_corrupt_tail",
         LockWriterWithoutMetadataWrite => "lock_writer_without_metadata_write",
@@ -448,6 +456,8 @@ actingcommand_contract::outcome_locations! {
         ReadJointCommit => "read_joint_commit",
         ReadLedgerView => "read_ledger_view",
         ReadLedgerViewSequence => "read_ledger_view_sequence",
+        /// Workflow #383 AO-1: reading the ledger back before a failed write is tried again.
+        ReadBackLedgerWrite => "read_back_ledger_write",
         ReadLockedWriterMetadata => "read_locked_writer_metadata",
         ReadOnlyEventSchema => "read_only_event_schema",
         ReadOnlySnapshot => "read_only_snapshot",
@@ -550,6 +560,8 @@ actingcommand_contract::outcome_locations! {
         VerifySqliteRecord => "verify_sqlite_record",
         VerifySqliteRelations => "verify_sqlite_relations",
         VerifyTransactionEvent => "verify_transaction_event",
+        /// Workflow #383 AO-1: writing the dump file and stopping fatally.
+        WriteLedgerDump => "write_ledger_dump",
         WriteWriterMetadata => "write_writer_metadata",
     }
 }

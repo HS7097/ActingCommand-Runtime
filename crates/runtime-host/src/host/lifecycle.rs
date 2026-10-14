@@ -59,13 +59,7 @@ impl HostShared {
         if observations.is_empty() {
             return Ok(());
         }
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error(HostLocation::AppendVendorStdioClose));
-        }
         let gate = lock(&self.fact_write_gate, HostLocation::AppendVendorStdioClose)?;
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error(HostLocation::AppendVendorStdioClose));
-        }
         let mut persisted = Vec::new();
         for observation in observations {
             if observation.recorded_event.get().is_some() {
@@ -94,16 +88,11 @@ impl HostShared {
                         (*observation.facts).clone(),
                     ),
                 )
-                .map_err(|_| {
-                    self.lifecycle_append_failed.store(true, Ordering::Release);
-                    ledger_error(HostLocation::AppendVendorStdioClose)
-                })?;
+                .map_err(|_| ledger_error(HostLocation::AppendVendorStdioClose))?;
             persisted.push((observation, event));
         }
         if !persisted.is_empty() {
-            self.synchronize_fact_store_under_gate().inspect_err(|_| {
-                self.lifecycle_append_failed.store(true, Ordering::Release);
-            })?;
+            self.synchronize_fact_store_under_gate()?;
             for (observation, event) in &persisted {
                 let _ = observation.recorded_event.set(*event.event_id());
             }
@@ -205,9 +194,6 @@ impl HostShared {
                 .all(|observation| observation.recorded_event.get().is_some())
         {
             return Ok(());
-        }
-        if self.lifecycle_append_failed.load(Ordering::Acquire) {
-            return Err(ledger_error(HostLocation::AppendRuntimeLifecycleFailure));
         }
         if let Some(error) = host_error
             && error.projection().code == RuntimeErrorCode::LedgerFailure
@@ -332,10 +318,7 @@ impl HostShared {
                         AuditInput::new(),
                     ),
                 )
-                .map_err(|_| {
-                    self.lifecycle_append_failed.store(true, Ordering::Release);
-                    ledger_error(HostLocation::AppendRuntimeLifecycleFailure)
-                })?;
+                .map_err(|_| ledger_error(HostLocation::AppendRuntimeLifecycleFailure))?;
             let id = *event.event_id();
             persisted.push(event);
             Ok::<_, RuntimeHostError>(id)
@@ -400,13 +383,11 @@ impl HostShared {
     ) {
         if let Err(error) = result {
             let error = error.with_failure_stage(stage.location());
+            // Workflow #383 AO-1: a ledger failure is not recorded in the ledger; no latch refuses
+            // the later appends (a write the ledger gave up on stops the Runtime by its dump).
             let writer_failed = slot.as_ref().is_some_and(|failure| {
                 failure.projection().code == RuntimeErrorCode::LedgerFailure
-            }) || error.projection().code == RuntimeErrorCode::LedgerFailure
-                || self.lifecycle_append_failed.load(Ordering::Acquire);
-            if writer_failed {
-                self.lifecycle_append_failed.store(true, Ordering::Release);
-            }
+            }) || error.projection().code == RuntimeErrorCode::LedgerFailure;
             if !writer_failed
                 && let Err(append_error) = self.append_lifecycle_failure(
                     stage,
@@ -415,9 +396,6 @@ impl HostShared {
                     None,
                 )
             {
-                if append_error.projection().code == RuntimeErrorCode::LedgerFailure {
-                    self.lifecycle_append_failed.store(true, Ordering::Release);
-                }
                 let complete = error.with_complete_failure(
                     crate::error::RuntimeFailureRelation::LifecycleRecord,
                     append_error.with_failure_stage(stage.location()),

@@ -171,6 +171,10 @@ pub(super) struct ActingdConfigFile {
     /// defaults file holds every default.
     #[serde(default)]
     scheduling: Option<actingcommand_runtime_config::SchedulingFile>,
+    /// Workflow #383 AO-1: the ledger observer (`ledger_observer.*`, `contracts/ledger-observer.md`
+    /// §15), each member optional; the defaults file holds every default.
+    #[serde(default)]
+    ledger_observer: Option<actingcommand_runtime_config::LedgerObserverFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1403,6 +1407,8 @@ impl ActingdConfigFile {
             "performance": serde_json::to_value(&self.performance)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "scheduling": serde_json::to_value(&self.scheduling)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "ledger_observer": serde_json::to_value(&self.ledger_observer)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
