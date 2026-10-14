@@ -121,6 +121,11 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #389 MCP-11: `packs` / `ac_packs`.
         PackageBindingUnreadable => "package_binding_unreadable": warning / none,
         // ---- end of MCP-11
+        // ---- Workflow #389 MCP-14: `codes` / `ac_outcome_code` (command table §4.15).
+        OutcomeCodesReported => "outcome_codes_reported": success / none,
+        OutcomeCodeUnknown => "outcome_code_unknown": error / none,
+        OutcomeCatalogUnreadable => "outcome_catalog_unreadable": error / none,
+        // ---- end of MCP-14
         // ---- Workflow #378 A5 (begin): the CLI's success codes (model §7.3), the MCP
         // transport and Lab codes, and the watchdog's report v2 and launcher codes (§7.5).
         AgentFactsPublished => "agent_facts_published": success / none,

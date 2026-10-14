@@ -340,6 +340,12 @@ const CLIENT: &[Subcommand] = &[
         &["--state-root", ROOT],
         &["--root", ROOT],
     ),
+    // Workflow #389 MCP-14: the list flags of `codes`.
+    result(
+        &["codes", "--prefix", "outcome_", "--limit", "5"],
+        &["--state-root", ROOT],
+        &["--limit", "5"],
+    ),
 ];
 
 // `start`, `restart` and `watchdog` are built on Windows only.

@@ -568,6 +568,18 @@ v0.12.0, so nothing written by a 0.12 build becomes unreadable.
 | L5-3 | actingd keys `frame_retention_failed_run_successes`, `frame_retention_failed_run_days`; their `config.parameters.top_level` rows and key table rows | removed configuration keys and rows | L-5b | — | a configuration that names either key is refused when loaded (`config_decode_failed`, start and `check-config`); an instruction naming one is `config_key_unknown` |
 | L5-4 | `invalid_failed_run_retention_policy` (contract), `artifact_eviction_failed_run_basis_conflict` (ledger) | codes retired, no replacement | L-5b | — | no longer emitted; the fragment entries stay, marked `retired` |
 
+### 1.42 Wave 10 slice MCP-14 (#389, MCP-0 command table v1.1 §4.15)
+
+MCP-14 brings the one read output below; it reads the outcome catalog the build embeds, sends no
+Runtime request and changes no persisted record or wire shape ([runtime-interface.md](runtime-interface.md),
+the actingctl and MCP tables). Its codes (`outcome_codes_reported`, `outcome_code_unknown`,
+`outcome_catalog_unreadable`), the key `code_name` and actingctl's share of the domain `outcome_`
+are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| M14-1 | `actingctl codes <code>` ↔ `ac_outcome_code` with `code`: the code's catalog entry as the catalog holds it, with `code`; `actingctl codes [--prefix] [--owner] [--limit] [--cursor]` ↔ `ac_outcome_code` with `prefix`, `owner`, `limit`, `cursor`: `{codes: [{code, category, ladder_class, status}], next_cursor?}` (MCP adds `truncated` when it cuts a list to its output budget) | read output of a general read (offline; no persisted record; the CLI line carries it beside its outcome) | MCP-14 | MCP-14 | codes in name order; `prefix` matches the start of a code's name, `owner` an entry's `owner`; `limit` 1–100, default 20; `next_cursor` is present while codes past the page remain and holds across processes and both sides for the same `prefix` and `owner` (`cursor_invalid` otherwise); `code` excludes the list arguments; the entry text is the catalog's English (command table §0.4 item 1: the Chinese names stay in the UI) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

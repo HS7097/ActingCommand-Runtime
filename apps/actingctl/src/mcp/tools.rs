@@ -542,6 +542,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::facts::run,
     },
     // ---- Workflow #389 MCP-4 (end) ----
+    // ---- Workflow #389 MCP-14 (begin): `ac_outcome_code` ↔ `actingctl codes`; observer before
+    // U-3, a general read (offline) after it (command table §4.15). ----
+    ToolDef {
+        name: "ac_outcome_code",
+        title: "Outcome code catalog",
+        tier: Tier::Observer,
+        description: super::code_lookup::DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::code_lookup::input_schema,
+        result_schema: super::code_lookup::result_schema,
+        run: super::code_lookup::run,
+    },
+    // ---- Workflow #389 MCP-14 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",

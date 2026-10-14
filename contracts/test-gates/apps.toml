@@ -261,7 +261,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-14)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -272,6 +272,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_diagnose_parity::gate_actingctl_diagnose_and_ac_diagnose_answer_the_same_diagnosis_with_its_groups",
     "actingcommand-actingctl::gate::mcp_packs::gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuration",
     "actingcommand-actingctl::gate::mcp_facts_parity::gate_actingctl_facts_and_ac_facts_answer_the_same_facts_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_codes_parity::gate_actingctl_codes_and_ac_outcome_code_answer_the_same_entry_and_list_for_the_same_arguments",
 ]
 incident = ["#389"]
 
@@ -321,3 +322,13 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::l5b_a_configuration_naming_a_retired_failed_run_key_is_refused_as_unknown",
 ]
 incident = ["#382 L-5b"]
+
+# actingctl codes and ac_outcome_code refuse a code the embedded catalog does not list (outcome_code_unknown with code_name), a cursor that is malformed or was issued for other filters (cursor_invalid) and a catalog they cannot read (outcome_catalog_unreadable); ac_outcome_code cuts a list over the output budget to the rows that fit, truncated, and its cursor reads on without a gap (Workflow #389 MCP-14)
+[[gate]]
+key = "49"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code",
+    "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
+]
+incident = ["#389 MCP-14"]

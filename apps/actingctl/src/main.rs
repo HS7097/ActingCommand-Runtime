@@ -6,6 +6,8 @@
 
 // Workflow #378 A5: the one result line of every exit.
 mod cli_line;
+// Workflow #389 MCP-14: `codes` (MCP `ac_outcome_code`), entries of the embedded outcome catalog.
+mod code_lookup;
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 mod codes;
 mod events;
@@ -151,6 +153,12 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-11 (end) ----
+    // ---- Workflow #389 MCP-14 (begin): `codes` reads the outcome catalog this build embeds
+    // offline and takes no `--state-root` (command table D5); its flags are `flags_of`'s. ----
+    if let Some(exit) = code_lookup::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #389 MCP-14 (end) ----
     // Workflow #389 MCP-3: `runs` takes the instance selector of MCP and leaves before
     // `Invocation::parse`.
     if let Some(exit) = run_list::dispatch(&arguments) {
@@ -1084,7 +1092,8 @@ impl Invocation {
                     }
                     key_prefix = Some(prefix);
                 }
-                // Every flag of the table has its arm.
+                // Every flag of the table has its arm (`codes`, whose flags `code_lookup`
+                // parses, never comes here).
                 _ => return Err(ActingctlError::Usage),
             }
             index += 1;
@@ -1280,9 +1289,12 @@ impl Command {
 /// Workflow #382 A1-FLAG: the flags a subcommand of [`Invocation::parse`] takes (`emulator` by
 /// its action), as its usage lists them; `None` for a word that is no such subcommand. Any other
 /// flag, a flag given twice and a word that is no flag are refused by name (Fail Loud: nothing
-/// is ignored silently).
+/// is ignored silently). The offline `codes` leaves before `Invocation::parse` and reads its
+/// flags here (Workflow #389 MCP-14).
 fn flags_of(command: &str, emulator_action: Option<&str>) -> Option<&'static [&'static str]> {
     let flags: &'static [&'static str] = match command {
+        // Workflow #389 MCP-14: the list flags of `codes`; its code is a positional word.
+        "codes" => &["--prefix", "--owner", "--limit", "--cursor"],
         "agent-publish-facts" => &["--state-root", "--record-file"],
         "agent-apply-resource-targets" => &["--state-root", "--policy-file"],
         "config" | "monitor-status" | "selfcheck" => &["--state-root"],

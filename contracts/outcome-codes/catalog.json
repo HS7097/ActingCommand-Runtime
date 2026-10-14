@@ -1668,6 +1668,10 @@
     "held_ms": {
       "type": "duration_ms",
       "description": "How long a policy run was held at its pace checkpoint, in milliseconds."
+    },
+    "code_name": {
+      "type": "name",
+      "description": "An outcome code's name as a lookup was given it; it may name no registered code."
     }
   },
   "vocabularies": {
@@ -6661,6 +6665,7 @@
       "contract"
     ],
     "outcome_": [
+      "actingctl",
       "actingd",
       "contract",
       "ledger",
