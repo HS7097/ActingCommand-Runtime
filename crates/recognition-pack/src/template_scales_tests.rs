@@ -446,7 +446,7 @@ fn a_masked_template_matches_once_resampled() {
     // Text blocks of 4 by 4 pixels in 200..=250, one value per block, over noise in 0..=150. At
     // 750 milli every resampled pixel lies inside one source block, so a block keeps its value.
     let mut background = Noise(0x0396_0506);
-    let is_text = |x: u32, y: u32| (x / 4 + y / 4) % 3 == 0;
+    let is_text = |x: u32, y: u32| (x / 4 + y / 4).is_multiple_of(3);
     let text = |x: u32, y: u32| (200 + (x / 4 * 7 + y / 4 * 3) % 51) as u8;
     let strip = Gray::from_fn(32, 16, |x, y| {
         if is_text(x, y) {
