@@ -169,7 +169,13 @@ fn gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1
         ),
         (
             maintenance,
-            &["ledger-maintenance", "verify", "--config", "a.json", "--backup"],
+            &[
+                "ledger-maintenance",
+                "verify",
+                "--config",
+                "a.json",
+                "--backup",
+            ],
             ActingdCode::MaintenanceOptionInvalid,
         ),
         (
@@ -237,7 +243,12 @@ fn gate_install_held_is_taken_only_after_config_and_bounded_at_600_s() {
     // Anywhere else, or without its value, it is no held start and the start's arguments are a
     // usage error.
     for values in [
-        vec!["--install-held", at_limit.as_str(), "--config", "actingd.json"],
+        vec![
+            "--install-held",
+            at_limit.as_str(),
+            "--config",
+            "actingd.json",
+        ],
         vec!["--config", "actingd.json", "--install-held"],
     ] {
         let (remaining, startup) = match parse_install_held_arguments(arguments(&values)) {
