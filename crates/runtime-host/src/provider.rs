@@ -727,7 +727,7 @@ impl ExecutionBackendEntry {
                 "only a bound handset's transport is reconnected",
             ));
         };
-        Adb::new(self.application_adb.clone()).reconnect_transport(serial.adb_arg())
+        Adb::new(self.application_adb.clone()).reconnect(serial.adb_arg())
     }
 }
 

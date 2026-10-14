@@ -18,7 +18,7 @@
 //! - **Process.** [`AdbTrackDevices`] spawns `adb track-devices`, reads its standard output and
 //!   discards its standard error; [`TrackDevicesStopper`] ends it from another thread by killing
 //!   the process, whose output then closes. It sends nothing to any device. The one command that
-//!   acts on a link, `adb -s <serial> reconnect` of one transport, is [`Adb::reconnect_transport`];
+//!   acts on a link, `adb -s <serial> reconnect` of one transport, is [`Adb::reconnect`];
 //!   nothing here runs `kill-server`, `reboot`, `usb` or `tcpip` (§4.3).
 
 use crate::adb::{installation_adb_command, stop_child};
@@ -287,9 +287,10 @@ impl AdbTrackDevices {
 impl Adb {
     /// Workflow #398 RD-2 (model-398 §4.3, `device_link.offline_action = kick_once`): one
     /// `adb -s <serial> reconnect`, which kicks only that device's transport from the host side.
-    /// A connection-time command like `connect`: it touches no other device and changes no
+    /// An open-phase command like `connect` (read-session-resource-close.md): a host-side
+    /// transport kick that sends nothing to the device, touches no other device and changes no
     /// setting.
-    pub fn reconnect_transport(&self, serial: &str) -> DeviceResult<()> {
+    pub fn reconnect(&self, serial: &str) -> DeviceResult<()> {
         self.run(&["-s", serial, "reconnect"]).map(|_| ())
     }
 }

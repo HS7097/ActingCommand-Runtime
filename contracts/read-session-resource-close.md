@@ -203,7 +203,7 @@ Business witness that `begin_destructive_step` issued for the step:
   `shell_input_tap`, `shell_input_swipe`, `force_stop` and `launch_package` and
   the device helpers that drive writes (`replay_input_records`,
   `validate_maatouch`). `Adb::run` serves read-only commands and the
-  connection-time commands of backend opening; a command with a device effect
+  open-phase commands below; a command with a device effect
   goes through `Adb::run_write(&FencedWrite, args)`. A backend treats the witness
   only as the type-level proof that a step was begun; validating its content
   belongs to the Scheduler. Wrappers pass the caller's witness through unchanged.
@@ -219,8 +219,11 @@ Business witness that `begin_destructive_step` issued for the step:
   `begin_destructive_step` reaches no write path.
 
 Boundary of this step: connection-time writes of backend opening (`connect`,
-`push`, `chmod`, `forward`, `shell_spawn`) stay under the existing open-phase
-authority; read-only operations (capture, `dumpsys`, `wm size`, version probes,
+`push`, `chmod`, `forward`, `shell_spawn`) and the link watch's `reconnect` stay
+under the existing open-phase authority. `Adb::reconnect` (`adb -s <serial>
+reconnect`, Workflow #398 RD-2) is a host-side transport kick that sends nothing
+to the device, issued only by the link watch while the handset is `offline`
+(model-398 §4.3). Read-only operations (capture, `dumpsys`, `wm size`, version probes,
 foreground observation) take no witness; the close side is unchanged and keeps
 `DeviceCloseAuthority`. Host position-only checks remain only on non-write paths
 (below). Witness semantics, the Scheduler's issue and consume, wire formats and
