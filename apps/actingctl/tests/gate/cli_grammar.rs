@@ -114,6 +114,11 @@ fn gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection() {
         &["pause", "--drain-timeout-ms", "600001"],
         &["emulator"],
         &["emulator", "reboot", "--instance", ALIAS],
+        // The instance subcommands of `emulator` require `--instance`.
+        &["emulator", "status"],
+        &["emulator", "start"],
+        &["emulator", "stop"],
+        &["emulator", "restart"],
         &["selfcheck"],
         &["install-transition"],
         &["install-transition", "--action-json", "{"],
@@ -159,22 +164,13 @@ fn gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection() {
     );
 }
 
-/// The instance rows of the same grammar, apart so that what they show stands on its own. The
-/// instance subcommands of `emulator` require `--instance` (contracts/emulator-control.md), and
-/// only a pause or resume without `--instance` is global (contracts/scheduling-pause.md "CLI"):
-/// an `--instance` given with no alias names no instance. Each is a usage error before any
-/// connection (test plan v2.2 §3.7 G10), never a request sent to the Runtime and never a global
-/// scope.
+/// The empty-alias rows of the same grammar, apart so that what they show stands on its own.
+/// Only a pause or resume without `--instance` is global (contracts/scheduling-pause.md "CLI"):
+/// an `--instance` given with an empty alias names no instance, so it is a usage error before any
+/// connection (test plan v2.2 §3.7 G10; Fail Loud), never a request for the global scope.
 #[test]
-fn gate_a_missing_or_empty_instance_is_a_usage_error_before_any_connection() {
-    let usage: &[&[&str]] = &[
-        &["emulator", "status"],
-        &["emulator", "start"],
-        &["emulator", "stop"],
-        &["emulator", "restart"],
-        &["pause", "--instance", ""],
-        &["resume", "--instance", ""],
-    ];
+fn gate_an_empty_instance_alias_is_a_usage_error_not_a_global_scope() {
+    let usage: &[&[&str]] = &[&["pause", "--instance", ""], &["resume", "--instance", ""]];
     let wrong = grammar_mismatches(usage, &[]);
     assert!(
         wrong.is_empty(),

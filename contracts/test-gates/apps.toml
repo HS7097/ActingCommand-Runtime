@@ -375,7 +375,7 @@ coverage = "Y"
 tests = [
     "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_documented_forms_parse_to_their_commands",
     "actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection",
-    "actingcommand-actingctl::gate::cli_grammar::gate_a_missing_or_empty_instance_is_a_usage_error_before_any_connection",
+    "actingcommand-actingctl::gate::cli_grammar::gate_an_empty_instance_alias_is_a_usage_error_not_a_global_scope",
 ]
 incident = ["#382 A-1 G10"]
 
