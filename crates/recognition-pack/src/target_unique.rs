@@ -69,9 +69,11 @@ pub(crate) fn apply_uniqueness(
     }
 }
 
-/// A template search's failure; a search past its limit carries `target_match_search_incomplete`.
+/// A template search's failure; a search past its limit carries `target_match_search_incomplete`
+/// at `stage`.
 pub(crate) fn search_error(
     target_id: &str,
+    stage: RecognitionPackLocation,
     error: recognition::RecognitionError,
 ) -> RecognitionPackError {
     let incomplete = error.timing().is_some();
@@ -81,7 +83,7 @@ pub(crate) fn search_error(
             Outcome::new(RecognitionPackCode::TargetMatchSearchIncomplete)
                 .target_id(target_id)
                 .timeout_ms(recognition::TEMPLATE_MATCH_TIMEOUT)
-                .stage(RecognitionPackLocation::TargetMatchUnique),
+                .stage(stage),
         );
     }
     error
@@ -97,18 +99,25 @@ fn template_rect(matched: recognition::TemplateMatch) -> PackRect {
 }
 
 impl RecognitionEvaluator {
-    /// A template target that declares `unique`, scored by the exact score map of its search
-    /// region. Its best match and its pass decision follow the rules without `unique` on these
-    /// exact scores; a target that passes is then checked for a second place.
-    pub(crate) fn evaluate_unique_template(
+    /// A template target scored by the exact score map of its search region: one that declares
+    /// `unique`, or (Workflow #396 REC-7) a `mask`, which scores only the template pixels it
+    /// selects. Its best match and its pass decision follow the ordinary rules on these exact
+    /// scores; a target that declares `unique` and passes is then checked for a second place.
+    pub(crate) fn evaluate_exact_template(
         &self,
         context: &SceneEvaluation<'_>,
         target: &TemplateTarget,
-        unique: TargetUnique,
+        unique: Option<TargetUnique>,
+        mask: Option<recognition::TemplateMask>,
         template_png: &[u8],
         region: Option<recognition::Rect>,
     ) -> RecognitionPackResult<TargetEvaluation> {
         let scene = context.scene;
+        let stage = if unique.is_some() {
+            RecognitionPackLocation::TargetMatchUnique
+        } else {
+            RecognitionPackLocation::TargetMatchExact
+        };
         let relative = target
             .color_check
             .as_ref()
@@ -123,14 +132,15 @@ impl RecognitionEvaluator {
                 } else {
                     TemplateMatchTimingStage::Exact
                 },
+                mask,
                 &mut context.spectra.borrow_mut(),
                 &self.search_clock,
             )
-            .map_err(|error| search_error(&target.id, error))?;
+            .map_err(|error| search_error(&target.id, stage, error))?;
         if relative {
             let (mut evaluation, accepted) =
-                self.joint_color_evaluation(scene, target, JointSearch::Map(&map))?;
-            if let Some(accepted) = accepted {
+                self.joint_color_evaluation(scene, target, JointSearch::Map { map: &map, stage })?;
+            if let (Some(unique), Some(accepted)) = (unique, accepted) {
                 let second = map
                     .second_within(accepted, unique.margin_milli, |candidate| {
                         Ok(self
@@ -138,7 +148,7 @@ impl RecognitionEvaluator {
                             .0
                             .is_some_and(|color| color.distance <= color.max_distance))
                     })
-                    .map_err(|error| search_error(&target.id, error))?;
+                    .map_err(|error| search_error(&target.id, stage, error))?;
                 apply_uniqueness(
                     &mut evaluation,
                     TargetMatchKind::Template,
@@ -157,7 +167,7 @@ impl RecognitionEvaluator {
 
         let best = map
             .best()
-            .map_err(|error| search_error(&target.id, error))?;
+            .map_err(|error| search_error(&target.id, stage, error))?;
         let threshold = target
             .threshold
             .unwrap_or(self.pack.defaults.template_threshold);
@@ -193,11 +203,13 @@ impl RecognitionEvaluator {
             uniqueness: None,
             message: template_message(template_ok, color_ok),
         };
-        if evaluation.passed {
+        if let Some(unique) = unique
+            && evaluation.passed
+        {
             // An absolute color check holds for every position alike.
             let second = map
                 .second_within(best, unique.margin_milli, |_| Ok(true))
-                .map_err(|error| search_error(&target.id, error))?;
+                .map_err(|error| search_error(&target.id, stage, error))?;
             apply_uniqueness(
                 &mut evaluation,
                 TargetMatchKind::Template,

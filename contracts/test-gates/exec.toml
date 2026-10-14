@@ -597,3 +597,23 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_386_sr1::sr1_t33_a_runtime_without_sampling_keeps_the_single_frame_and_refuses_sampling",
 ]
 incident = ["#386"]
+
+# Template masks score only the pixels they select and are admitted with at least 16 of them; verify_templates take absolute and relative color checks; a ccorr_normed threshold lies at least 50 milli above the template's flat-field score, checked where the package is admitted
+[[gate]]
+key = "46"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::exact_score::mask_tests::masked_scores_are_the_masked_formulas_at_every_position_on_both_engines",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_schema_0_6_pack_still_refuses_a_mask_and_schema_0_7_reads_its_gray_range",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_mask_that_selects_fewer_than_16_template_pixels_is_refused",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_ccoeff_mask_whose_pixels_have_no_variance_is_refused",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_masked_see_through_text_strip_matches_on_a_new_background_where_the_plain_template_fails",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_ccorr_threshold_below_the_flat_field_floor_is_refused_and_one_at_it_is_admitted",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_zero_threshold_is_not_checked_against_the_floor",
+    "actingcommand-recognition-pack::lib::template_mask::tests::ccoeff_templates_have_no_threshold_floor",
+    "actingcommand-recognition-pack::lib::template_mask::tests::a_floor_refusal_of_an_inherited_threshold_points_at_the_default",
+    "actingcommand-pack-containment::rec7_template_masks::a_mask_range_pair_and_a_mask_object_derive_the_same_pack_mask",
+    "actingcommand-pack-containment::rec7_template_masks::verify_templates_take_absolute_and_relative_color_checks_and_their_targets_check_the_color",
+    "actingcommand-pack-containment::rec7_template_masks::a_template_below_its_flat_field_floor_is_refused_where_the_package_is_admitted",
+]
+incident = ["#396"]

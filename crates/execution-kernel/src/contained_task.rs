@@ -8282,8 +8282,9 @@ fn contained_task_declaration_error(error: actingcommand_contract::LabError) -> 
 }
 
 fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {
-    if let ExecutionBundleError::Containment(ContainmentError::ResourceDeclaration { issue }) =
-        &error
+    if let ExecutionBundleError::Containment(ContainmentError::ResourceDeclaration {
+        issue, ..
+    }) = &error
     {
         let mut rejected = ContainedTaskError::with_detail(
             SharedCode::ResourceDeclarationInvalid.code(),

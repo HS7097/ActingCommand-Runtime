@@ -840,9 +840,19 @@ impl SceneEvaluation<'_> {
                 "instance anchor '{target_id}' is not a template target"
             )));
         };
-        if let Some(unsupported) = UnsupportedRecognitionTarget::of_template(target) {
+        if let Some(unsupported) =
+            UnsupportedRecognitionTarget::of_template(target, &evaluator.pack.schema_version)
+        {
             return Err(RecognitionPackError::fatal(format!(
                 "template target '{}' uses unsupported recognition semantics: {unsupported}",
+                target.id
+            )));
+        }
+        // Workflow #396 REC-7: this search scores every template pixel, so it never takes a
+        // masked template (admission refuses one as an anchor).
+        if target.mask.is_some() {
+            return Err(RecognitionPackError::fatal(format!(
+                "instance anchor '{}' declares mask, which a repeated_anchor search does not score",
                 target.id
             )));
         }

@@ -487,9 +487,11 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     .encode_png_fast()
     .unwrap();
     fs::write(seed_dir.join("assets/HOME.png"), &template).unwrap();
+    // Workflow #396 REC-7: a one-pixel ccorr_normed template is flat (its flat-field score is
+    // 1000 milli), so only a threshold of 0 is admitted; the page still needs its color check.
     let source_task = json!({"schema_version":"0.6","task_id":"seed","game":"neutral","server_scope":["test"],"locale":"en-US",
         "coordinate_space":{"width":2,"height":2},"defaults":{"template_threshold":0.9,"color_max_distance":0.0},
-        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.9,
+        "anchors":[{"id":"home","template":"assets/HOME.png","region":{"mode":"full_frame"},"threshold":0.0,
             "color_check":{"region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}}],
         "color_probes":[{"id":"private-value","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}},"expected":[255,0,0]}],
         "entry_page":"home","target_page":"home","goal":"Explicit neutral author goal",
