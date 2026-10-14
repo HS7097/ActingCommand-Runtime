@@ -724,6 +724,12 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
             .strip_prefix("--")
             .filter(|name| !name.contains('_'))
             .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::UnknownFlag))?;
+        // Workflow #382 A1-FLAG: a flag `events` does not take is unknown, with or without a
+        // value after it.
+        let key = name.replace('-', "_");
+        if name != "state-root" && !PARAMETERS.contains(&key.as_str()) {
+            return Err(EventsError::argument(flag, ArgumentProblem::UnknownFlag));
+        }
         let value = arguments
             .get(index + 1)
             .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::ValueMissing))?;
@@ -733,10 +739,6 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
                 return Err(EventsError::argument(flag, ArgumentProblem::GivenTwice));
             }
             continue;
-        }
-        let key = name.replace('-', "_");
-        if !PARAMETERS.contains(&key.as_str()) {
-            return Err(EventsError::argument(flag, ArgumentProblem::UnknownFlag));
         }
         let text = value
             .to_str()
