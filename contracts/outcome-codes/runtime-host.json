@@ -27275,6 +27275,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: record once a code the recovery ladder met that the embedded catalog does not list (Workflow #387 D1c)."
+    },
+    "read_connection_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read connection channel."
+    },
+    "cleanup_connection_channel": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: cleanup connection channel."
+    },
+    "record_configured_approval": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: record configured approval."
     }
   }
 }

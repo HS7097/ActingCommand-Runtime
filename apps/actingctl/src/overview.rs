@@ -501,6 +501,7 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
     let detail = cli_line::detail().unwrap_or(Detail::Full);
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ));

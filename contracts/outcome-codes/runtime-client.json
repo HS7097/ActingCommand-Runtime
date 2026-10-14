@@ -3740,6 +3740,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: runtime configure settings."
+    },
+    "runtime_bind_channel": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: runtime bind channel."
     }
   }
 }

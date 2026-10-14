@@ -42,6 +42,48 @@ pub enum ChannelVia {
     Ui,
 }
 
+impl crate::outcome::VocabularyToken for RuntimeChannel {
+    const VOCABULARY: &'static str = "channel";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl RuntimeChannel {
+    /// The channel's spelling on the wire and in the ledger.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cli => "cli",
+            Self::Mcp => "mcp",
+            Self::Ui => "ui",
+            Self::Lab => "lab",
+        }
+    }
+}
+
+/// What one connection is bound to (section 3.2; U-2): its channel and, on the Lab channel only,
+/// the counter that forwarded the work. The Runtime keeps it in memory for the connection's
+/// lifetime and tags every request of the connection with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChannelBinding {
+    pub channel: RuntimeChannel,
+    pub via: Option<ChannelVia>,
+}
+
+impl ChannelBinding {
+    /// A binding without `via`.
+    pub const fn new(channel: RuntimeChannel) -> Self {
+        Self { channel, via: None }
+    }
+
+    /// Whether `BindChannel` may carry this binding: `via` only on the Lab channel (section 3.2
+    /// rule 7).
+    pub const fn is_valid(self) -> bool {
+        self.via.is_none() || matches!(self.channel, RuntimeChannel::Lab)
+    }
+}
+
 /// One of the two Lab options of the installer page (section 4): option one, authoring, and option
 /// two, debugging. They are independent; Lab is installed when either is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -314,8 +356,9 @@ impl RuntimeOperationKind {
     /// this kind carries, one per kind. A kind that never answers completed has none: its
     /// receipt carries the info code of its state instead (a granted lease or an accepted
     /// shutdown is admitted, a waiting lease is queued, a cancelled queue entry is cancelled, a
-    /// contained page observation is observed). The five kinds of section 2.3 get theirs from
-    /// the slices that add their behaviour (U-2, U-3, U-4); until then they are refused.
+    /// contained page observation is observed). The kinds of section 2.3 get theirs from the
+    /// slices that add their behaviour: `BindChannel` from U-2; the other four from U-3 and U-4,
+    /// refused until then.
     pub const fn success_code(self) -> Option<Code> {
         match self {
             Self::Health => Some(ReceiptCode::HealthCompleted.code()),
@@ -392,17 +435,17 @@ impl RuntimeOperationKind {
             Self::ApplyResourceTargets => Some(ReceiptCode::ApplyResourceTargetsCompleted.code()),
             Self::ResourceTargetView => Some(ReceiptCode::ResourceTargetViewCompleted.code()),
             Self::ConfigureSettings => Some(ReceiptCode::ConfigureSettingsCompleted.code()),
+            // Workflow #389 U-2.
+            Self::BindChannel => Some(ReceiptCode::BindChannelCompleted.code()),
             Self::RequestShutdown
             | Self::AcquireLease
             | Self::QueueLease
             | Self::PollQueuedLease
             | Self::CancelQueuedLease
             | Self::ObserveContainedPage => None,
-            Self::BindChannel
-            | Self::UpgradeState
-            | Self::UpgradeStateStatus
-            | Self::LoadPack
-            | Self::UnloadPack => None,
+            Self::UpgradeState | Self::UpgradeStateStatus | Self::LoadPack | Self::UnloadPack => {
+                None
+            }
         }
     }
 }

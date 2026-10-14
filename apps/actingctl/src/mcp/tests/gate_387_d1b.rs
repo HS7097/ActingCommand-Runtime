@@ -53,6 +53,7 @@ fn d1_m8_cli_and_mcp_changes_leave_the_same_values_in_effect_from_an_observer_se
         set_unix_ms: 1,
         set_in_owner_epoch: "owner_epoch_of_the_test".to_owned(),
         request_id: "request_of_the_test".to_owned(),
+        channel: None,
     };
     // The per-instance section's check reads neither the heartbeat bound nor the device
     // layer's bounds (Workflow #387 D1c added the latter to the check context).
@@ -199,6 +200,7 @@ fn rk1_an_unknown_key_refuses_ac_config_set_whole_with_a_declared_receipt_top() 
     // Nothing changed: the configuration in effect still has the file layer's value.
     let reader = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

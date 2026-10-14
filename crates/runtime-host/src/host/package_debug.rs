@@ -18,7 +18,12 @@ impl HostShared {
             OriginModule::Actinglab,
             EventActor::Lab,
             links.clone(),
-            CommandPayloadDraft::received(EventAction::RuntimeDebugPackage, AuditInput::new()),
+            // Workflow #389 U-2: with the channel the door tagged the request with.
+            CommandPayloadDraft::received_on_channel(
+                EventAction::RuntimeDebugPackage,
+                validated.channel(),
+                AuditInput::new(),
+            ),
         )?;
 
         let summary = match inspect_debug_package(request) {

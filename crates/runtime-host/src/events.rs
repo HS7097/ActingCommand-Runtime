@@ -76,6 +76,16 @@ impl RuntimeEvents {
         request.event_links(instance_id, lease_id, action_id)
     }
 
+    /// A request and a correlation the host mints for a record no client request carries
+    /// (Workflow #389 U-2: actingd's in-process transcription of its configured approvals).
+    pub(crate) fn minted_request_links(&self) -> RuntimeHostResult<EventLinksDraft> {
+        let request_id = self.issuer.mint_request_id().map_err(|_| id_error())?;
+        let correlation_id = self.issuer.mint_correlation_id().map_err(|_| id_error())?;
+        Ok(EventLinksDraft::default()
+            .with_request_id(request_id)
+            .with_correlation_id(correlation_id))
+    }
+
     pub(crate) fn system_links(&self) -> RuntimeHostResult<EventLinksDraft> {
         let request_id = self.issuer.mint_request_id().map_err(|_| id_error())?;
         let correlation_id = self.issuer.mint_correlation_id().map_err(|_| id_error())?;

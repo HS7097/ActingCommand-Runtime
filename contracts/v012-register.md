@@ -738,6 +738,25 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.46 Slice U-2 (#389, UIM §3.2, §4.1, §4.2, §5.2; register §1.6 U1, U4)
+
+U-2 binds each connection to its channel and marks, never refuses: no request is refused by
+channel or by Lab option before U-6. The connection-to-channel table is memory only, is not part
+of any status read and counts no connection ([runtime-interface.md](runtime-interface.md),
+"Channels"). Its codes (`request_bind_channel_completed`, `invalid_bind_channel`, and the first
+emissions of `channel_binding_exists` and `client_channel_unsupported`) are catalog entries, not
+rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| U2-1 | `command.received` (G14, §1.6 U1): `channel`, `via` | existing optional members, now written | SH-1 | U-2 | written on the `command.received` the C4 path writes and on `DebugPackage`'s; `channel` ∈ `cli`, `mcp`, `ui`, `lab`, `via` ∈ `mcp`, `ui` and only with `lab`; absent on the Runtime's own command records (scheduled runs, the ladder, the emulator control phases); before AO-4 the other writes show their channel in their receipt only (UIM §5.2) |
+| U2-2 | receipt `actingcommand.runtime.receipt.v2`: `channel`, `via` | new optional members (runtime-client 2, W9) | U-2 | U-2 | the door's tag of the connection the request came on; absent on the handshake of a connection not bound yet; a `BindChannel` receipt carries the binding it made (or, refused, the one the connection keeps) |
+| U2-3 | `BindChannel {channel, via?}` → `RuntimeResult::ChannelBound {channel, via?}` | behaviour of a W11 kind | U-1 | U-2 | sent once per new connection after `Health` (connect, the `send_or_dropped` reconnect, the contained-task timeout recovery); `via` on another channel than `lab` is refused `invalid_bind_channel` before any binding; a second one is refused `channel_binding_exists` (`channel` = the kept one); records nothing; accepted while an install transition drains |
+| U2-4 | transition binding (UIM §3.2 "Transition") | memory only | U-2 | U-2 | until U-6 a connection that never binds is bound at its first request other than the handshake from that request's envelope source: `Ui` → `ui`, `Lab` → `lab`, `Cli` and `Adapter` → `cli`; U-6 deletes it |
+| U2-5 | `host.config_overrides` rows: `channel` | existing optional member, now written | D1b | U-2 | the channel of the `ConfigureSettings` that set the value; a restored row whose `channel` is not one of the four values stops the start (`host_config_overrides_fact_invalid`) |
+| U2-6 | `lab_module_authoring`, `lab_module_debugging` (§1.6 U4, §5) | configuration keys reported as `config.parameters.top_level` rows | U-2 | U-2 | booleans, `false` in the defaults file (not installed); `source` `explicit` when the file names one; never settable (`read_at_assembly`, not in D1's set); read once at start; nothing is refused by them before U-6 |
+| U2-7 | `approval.decision` written by actingd's start-up transcription | existing record, new writer path | — | U-2 | in process instead of a `(User, Ui)` connection with an identity card: provenance stays `(Governance, User, Ui)` (the approval projection requires it); the record links a request id and a correlation id the host mints; actingd declares no governance identity card any more |
+
 ### 1.47 Wave 12 slice PKG-S3 (#336 option 丙, M-PKG v1.1 §3.3, §3.4, §4.4)
 
 PKG-S3 removes the package digest from the scheduling binding and the dispatch, writes the
@@ -834,7 +853,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W8 | request `actingcommand.runtime.request.v4`: optional `detail` (`codes` \| `full`) | runtime-client 2 | A4 | #378 §7.1; absent, the source's class default applies (codes only for `source: ui`, the full outcome for every other source); requests v1–v3 are refused; [client-interactions.md](client-interactions.md) |
 | W9 | receipt `actingcommand.runtime.receipt.v2`: `outcome` (an `actingcommand.outcome.v1` envelope) on every receipt; the v1 member `error` (`RuntimeErrorProjection`) is removed | runtime-client 2 | A4 | #378 §7.2; admitted, observed, queued and cancelled carry `request_admitted`, `request_observed`, `request_queued`, `request_cancelled`; completed carries its kind's `request_<kind>_completed`; denied and failed carry the refusal or failure on top, with the values `runtime_code`, `operation`, `host_halted`, `holder_id`, `lease_id`, `retry_after_ms` where they apply; `host_halted` travels in codes mode too; a consumer judges refusal by `state` (denied/failed), the category only says how bad it is; codes mode is applied where the receipt leaves the host |
 | W10 | `RuntimeResult::ContainedTaskCompleted.outcome` → `task_result`; `ContainedTaskCancellationStatus::Terminal.outcome` → `task_result` | runtime-client 2 | A4 | #378 §8.1: renames in receipt v2 (same value), because `outcome` is reserved for the envelope |
-| W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4) |
+| W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4); **done (U-2):** `BindChannel` answers `ChannelBound` with `request_bind_channel_completed` (§1.46 U2-3) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
 | W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
 

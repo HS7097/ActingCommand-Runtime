@@ -167,6 +167,7 @@ fn rd1a_t4_effective_configuration_names_the_handset_by_its_label() {
         let host = start_host(config(&root), instance_id, target, &state);
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ))

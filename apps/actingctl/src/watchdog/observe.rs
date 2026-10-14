@@ -419,8 +419,13 @@ pub(crate) fn live_owner(
     state_root: &Path,
     timeout: Option<Duration>,
 ) -> Result<LiveOwner, Outcome> {
-    let config = RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
-        .with_io_timeout(timeout.unwrap_or(HEALTH_TIMEOUT));
+    let config = RuntimeClientConfig::new(
+        state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
+        EventActor::Cli,
+        EventSource::Cli,
+    )
+    .with_io_timeout(timeout.unwrap_or(HEALTH_TIMEOUT));
     let client = RuntimeClient::connect(config).map_err(|error| error.outcome())?;
     let info = client.runtime_info();
     Ok(LiveOwner {

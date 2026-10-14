@@ -42,6 +42,11 @@ pub struct DefaultsFile {
     pub scheduling: Option<SchedulingFile>,
     #[serde(default)]
     pub ledger_observer: Option<LedgerObserverFile>,
+    /// Workflow #389 U-2: the two Lab options, `false` (not installed).
+    #[serde(default)]
+    pub lab_module_authoring: Option<bool>,
+    #[serde(default)]
+    pub lab_module_debugging: Option<bool>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

@@ -4,8 +4,8 @@ use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, create_error_report_zip, effective_run_root,
     list_runs, read_user_config, runtime_slice_cli,
 };
-use actingcommand_contract::{EventActor, EventSource, RunId};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_contract::RunId;
+use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -60,12 +60,8 @@ fn summarize(run_id: &str, flags: &FlagArgs) -> CliOutcome<Value> {
     let state_root = flags.required_path("--state-root")?;
     let run_id = serde_json::from_value::<RunId>(Value::String(run_id.to_owned()))
         .map_err(|_| CliError::usage("run summary requires a canonical typed run id"))?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(runtime_slice_cli::map_runtime_error)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(state_root))
+        .map_err(runtime_slice_cli::map_runtime_error)?;
     client
         .summarize_run(run_id)
         .map_err(runtime_slice_cli::map_runtime_error)

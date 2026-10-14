@@ -341,5 +341,7 @@
         "host.pack_registry."
       ]
     }
-  }
+  },
+  "lab_module_authoring": false,
+  "lab_module_debugging": false
 }

@@ -218,6 +218,7 @@ fn cli_observe(root: &Path, selector: &str, directory: &Path) -> Value {
 fn registered_instance_id(root: &Path) -> String {
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

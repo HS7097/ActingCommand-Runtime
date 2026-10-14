@@ -13,7 +13,8 @@
 //! - The sections (D1c): `recovery_ladder` (§3, §4, §7), `host_claims` (§4.3) and
 //!   `standard_packs` (Workflow #373 NAV-6, moved here); `performance` (Workflow #385 P-c, PERF
 //!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay);
-//!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15).
+//!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
+//!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -26,6 +27,7 @@ mod effective;
 mod existing;
 mod host_claims;
 mod instance;
+pub mod lab_module;
 pub mod ledger_observer;
 pub mod performance;
 pub mod recovery_ladder;

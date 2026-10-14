@@ -5,10 +5,10 @@ use super::{
     parse_optional_duration_ms, runtime_slice_cli, runtime_state_root,
 };
 use actingcommand_contract::{
-    EventActor, EventSource, RUNTIME_INFO_FILE, RuntimeControlPlaneStatus, RuntimeInfo,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RUNTIME_INFO_FILE, RuntimeControlPlaneStatus, RuntimeInfo, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -204,12 +204,8 @@ pub(super) fn clear_monitor(state_root: &Path, instance_alias: &str) -> CliOutco
 }
 
 fn connect(state_root: &Path) -> CliOutcome<RuntimeClient> {
-    RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(runtime_slice_cli::map_runtime_error)
+    RuntimeClient::connect(crate::lab_client_config(state_root))
+        .map_err(runtime_slice_cli::map_runtime_error)
 }
 
 fn project_status(

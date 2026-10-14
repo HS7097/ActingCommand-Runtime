@@ -329,6 +329,7 @@ fn out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_wit
     .expect("zero-input host");
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

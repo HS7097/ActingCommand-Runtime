@@ -57,6 +57,7 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         }
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Lab,
             EventActor::Lab,
             EventSource::Lab,
         ))

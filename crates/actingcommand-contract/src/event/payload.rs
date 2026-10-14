@@ -6605,6 +6605,8 @@ impl PayloadDetail for RecoveryPayload {
 struct ObservationDraft {
     action: EventAction,
     device_diagnostics: Option<DeviceDiagnosticConfig>,
+    /// Workflow #389 U-2 (register U1): the channel of a `command.received` record.
+    channel: Option<crate::ChannelBinding>,
     audit: AuditInput,
 }
 
@@ -8254,6 +8256,7 @@ impl ObservationDraft {
         Self {
             action,
             device_diagnostics: None,
+            channel: None,
             audit,
         }
     }
@@ -8265,8 +8268,8 @@ impl ObservationDraft {
         Ok(ObservationPayload {
             action: self.action,
             device_diagnostics: self.device_diagnostics,
-            channel: None,
-            via: None,
+            channel: self.channel.map(|binding| binding.channel),
+            via: self.channel.and_then(|binding| binding.via),
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -9271,6 +9274,18 @@ impl CommandPayloadDraft {
         Self(CommandDraftKind::Received(ObservationDraft::new(
             action, audit,
         )))
+    }
+
+    /// `command.received` of a request the door tagged with its connection's channel (Workflow
+    /// #389 U-2, register U1); `None` writes no channel, as for the Runtime's own requests.
+    pub fn received_on_channel(
+        action: EventAction,
+        channel: Option<crate::ChannelBinding>,
+        audit: AuditInput,
+    ) -> Self {
+        let mut draft = ObservationDraft::new(action, audit);
+        draft.channel = channel;
+        Self(CommandDraftKind::Received(draft))
     }
 
     pub fn validated(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {

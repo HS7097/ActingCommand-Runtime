@@ -101,6 +101,16 @@ pub(super) struct ActingdConfigFile {
     /// `false`); Lab operation evidence is never deduplicated.
     #[serde(default)]
     frame_retention_dedup_lab: Option<bool>,
+    /// Workflow #389 U-2 (model §4.1): the Lab's two options, option one (authoring) and option
+    /// two (debugging); absent means not installed. Read and reported only until U-6
+    /// (`crates/runtime-config`, `lab_module`); only the installer's Lab transaction writes them.
+    // Interface anchor `actingd-config` revision 5 (contracts/component-interfaces.md): a Runtime
+    // before v0.12.0 refuses a file that names either key; one that names neither keeps its
+    // revision.
+    #[serde(default)]
+    lab_module_authoring: Option<bool>,
+    #[serde(default)]
+    lab_module_debugging: Option<bool>,
     /// Workflow #318 cfg4: the retired shared governance secret. Kept only so a file that
     /// still names the key, whatever its value, is refused with the precise
     /// `governance_capability_retired` instead of the generic decode failure.
@@ -1054,7 +1064,6 @@ pub(super) fn validate_resource_packages(
 }
 
 pub(super) struct PolicyBootstrap {
-    pub(super) state_root: PathBuf,
     pub(super) catalog_approval_ids: Vec<String>,
     pub(super) catalog: CatalogSources,
     /// Workflow #361 A: the configured `replace` transition, if any.
@@ -1454,7 +1463,6 @@ impl ActingdConfigFile {
             policy.validate_registry_modes(&provider)?;
             policy.validate_instance_identities(&configured_aliases)?;
         }
-        let policy_state_root = self.state_root.clone();
         let policy_cadence = PolicyCadence::default();
         let agent_dispatcher_budget = self.agent_dispatcher.as_ref().map(|dispatcher| {
             (
@@ -1495,6 +1503,8 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "ledger_observer": serde_json::to_value(&self.ledger_observer)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "lab_module_authoring": self.lab_module_authoring,
+            "lab_module_debugging": self.lab_module_debugging,
         });
         let standard_packs_root = self
             .standard_packs
@@ -1510,8 +1520,8 @@ impl ActingdConfigFile {
             .transpose()?;
         // Workflow #387 D1b: the defaults file and the rows the configuration mechanism resolves
         // itself (D1c: the `recovery_ladder`, `host_claims` and `standard_packs` sections; P-c:
-        // the `performance` section; #386 SR-1: `scheduling`; then the per-instance section), from
-        // the members the file named.
+        // the `performance` section; #386 SR-1: `scheduling`; #389 U-2: the two Lab options;
+        // then the per-instance section), from the members the file named.
         let (_, defaults) = actingcommand_runtime_config::DefaultsFile::shipped()
             .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?;
         let mechanism_parameters = actingcommand_runtime_config::render_parameters(
@@ -1609,7 +1619,6 @@ impl ActingdConfigFile {
                 .with_procedure_manifest(policy.procedure_manifest)
                 .with_scheduled_procedures(policy.scheduled_tasks.keys().cloned());
             Some(PolicyBootstrap {
-                state_root: policy_state_root,
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
                 catalog_transition: policy.catalog_transition,
@@ -2666,8 +2675,13 @@ mod tests {
                 .expect("configured registry");
             let host = RuntimeHost::start(assembly.host, Arc::new(registry)).expect("runtime host");
             let client = RuntimeClient::connect(
-                RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-                    .with_io_timeout(Duration::from_secs(2)),
+                RuntimeClientConfig::new(
+                    root.path(),
+                    actingcommand_runtime_client::RuntimeChannel::Cli,
+                    EventActor::Cli,
+                    EventSource::Cli,
+                )
+                .with_io_timeout(Duration::from_secs(2)),
             )
             .expect("official client");
             let error = if capture {
@@ -2784,6 +2798,62 @@ mod tests {
             assert!(!public.contains(endpoint));
             assert!(!public.contains("failed to spawn adb"));
             assert!(!public.contains("missing-adb.exe"));
+        }
+    }
+
+    // Workflow #389 U-2 (unified interface model v2.2.3 §4.1, §4.2, §8.2 TU-7; register U4): the
+    // two Lab options are read once at start and reported as `config.parameters.top_level`
+    // rows: absent means `false` (the Lab is not installed by default); a file that names one
+    // reports it explicit. No instruction may change them, and nothing is refused by them in
+    // v0.12.0.
+    #[test]
+    fn u2_the_two_lab_options_are_read_and_reported_and_never_settable() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let base = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.fixture", "instance_id": id.transport(),
+                "fixture_backend": {
+                    "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}], "max_inputs": 1
+                }
+            }]
+        });
+        let default = ConfigParameterSource::Default;
+        let explicit = ConfigParameterSource::Explicit;
+        for (named, authoring, debugging) in [
+            (None, (false, default), (false, default)),
+            (Some(true), (true, explicit), (false, default)),
+        ] {
+            let mut value = base.clone();
+            if let Some(authoring) = named {
+                value["lab_module_authoring"] = json!(authoring);
+            }
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            let assembly = config.assemble().expect("runtime assembly");
+            for (key, (expected, source)) in [
+                ("lab_module_authoring", authoring),
+                ("lab_module_debugging", debugging),
+            ] {
+                let parameter = assembly
+                    .manifest
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == key)
+                    .unwrap_or_else(|| panic!("{key} is reported"));
+                assert_eq!(parameter.value, FactScalar::Boolean(expected), "{key}");
+                assert_eq!(parameter.source, source, "{key}");
+                assert!(!parameter.settable, "{key}");
+                assert_eq!(
+                    actingcommand_contract::config_parameter_section(key),
+                    actingcommand_contract::CONFIG_TOP_LEVEL_SECTION
+                );
+            }
         }
     }
 

@@ -7,17 +7,14 @@ use crate::{
     runtime_session_adapter,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, EventActor, EventSource, EventType, LabErrorClass,
-    RuntimeReceiptState, RuntimeResult,
+    ApplicationLifecycleAction, EventType, LabErrorClass, RuntimeReceiptState, RuntimeResult,
 };
 use actingcommand_lab::{
     ApplicationAttempt, ApplicationExecution, ApplicationPlan, CommitApplicationRequest,
     PlanApplicationRequest, RecordingLock, record_application_append_failed,
     record_commit_application, record_plan_application,
 };
-use actingcommand_runtime_client::{
-    RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeFlowOutput,
-};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeFlowOutput};
 use serde_json::{Value, json};
 
 pub(super) fn run_session_monitor_policy(
@@ -265,12 +262,8 @@ pub(super) fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOut
         Some("session status --diagnostics"),
         json!({"action": args[0], "instance": instance_id}),
     )?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(runtime_slice_cli::map_runtime_error)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = client
         .control_application(&instance_id, action)
         .map_err(runtime_slice_cli::map_runtime_error)?;
@@ -331,12 +324,8 @@ fn run_session_app_recorded(global: &GlobalOptions, args: &[String]) -> CliOutco
             verb: verb.to_string(),
         },
     )?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(runtime_slice_cli::map_runtime_error)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = match client.control_application(&instance_id, action) {
         Ok(output) => output,
         Err(error) => return Err(application_not_completed(&lock, &plan, &error)),

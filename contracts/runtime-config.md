@@ -77,10 +77,15 @@ resolved against the configuration file's directory; a location only, never a di
 S6a's row: the per-instance `start_emulator` (boolean, from the entry's `start_emulator`, default
 `none`, so a file that does not name it leaves it off and reports no row; not settable, read once
 at assembly; allowed only on a discovery-bound instance, `start_emulator_requires_discovery_binding`,
-[actingd-check-config.md](actingd-check-config.md)); the daemon acts on it from S6c on. A manifest
-key the table does not have fails the start (`config_key_unknown`). The
-manifest lists the exact keys in row order (`recovery_ladder`, `host_claims`, `standard_packs`,
-`performance`, `scheduling`, `ledger_observer`), then each instance's per-instance keys together.
+[actingd-check-config.md](actingd-check-config.md)); the daemon acts on it from S6c on. Workflow
+#389 U-2's rows: the top-level `lab_module_authoring` and `lab_module_debugging` (boolean, default
+`file`, `false` in `actingd.defaults.json`, not settable, read once at assembly), the Lab's two
+options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
+only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
+read and reported only: nothing is refused by them. A manifest key the table does not have fails
+the start (`config_key_unknown`). The manifest lists the exact keys in row order
+(`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
+`ledger_observer`, the two Lab options), then each instance's per-instance keys together.
 
 ## The recovery ladder section (D1c)
 

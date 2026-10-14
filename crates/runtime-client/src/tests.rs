@@ -8,6 +8,8 @@ mod gate_381a;
 mod gate_381b;
 // Workflow #391 item 3 (MCP-391c): an instance's recent runs are read by run.
 mod gate_391c;
+// Workflow #389 U-2: each connection binds its channel; an actingd before U-2 leaves it unbound.
+mod gate_389_u2;
 // Workflow #378 A2a: the client error text names registered spellings (brief-a2a.md T5).
 mod gate_a2a;
 // Workflow #378 A4: the client error's outcome and its links (model section 7.2).
@@ -120,7 +122,7 @@ fn fields_v1_task_run_projects_verified_fields_and_redacts_personal_values() {
         let path = root.path().to_path_buf();
         let server = scripted_runtime(&root, move |listener, owner_epoch| {
             let (mut stream, _) = listener.accept().unwrap();
-            respond_to_health(&mut stream, owner_epoch);
+            respond_to_handshake(&mut stream, owner_epoch);
             let request = read_scripted_request(&mut stream);
             assert!(matches!(
                 request.operation(),
@@ -1437,24 +1439,39 @@ fn host(root: &TempDir, state: Arc<FakeState>, lease_ttl_ms: u64) -> RuntimeHost
 
 fn client(root: &TempDir) -> RuntimeClient {
     RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(500)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(500)),
     )
     .expect("runtime client")
 }
 
 fn lab_client(root: &TempDir) -> RuntimeClient {
     RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
-            .with_io_timeout(Duration::from_millis(500)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Lab,
+            EventActor::Lab,
+            EventSource::Lab,
+        )
+        .with_io_timeout(Duration::from_millis(500)),
     )
     .expect("Lab runtime client")
 }
 
 fn client_with_timeout(root: &TempDir, io_timeout: Duration) -> RuntimeClient {
     RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(io_timeout),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(io_timeout),
     )
     .expect("runtime client")
 }
@@ -1820,10 +1837,28 @@ fn release_capture_after_io_budget(
     })
 }
 
-fn respond_to_health(stream: &mut TcpStream, owner_epoch: OwnerEpoch) {
+// The handshake of one connection (Workflow #389 U-2): Health, then BindChannel.
+fn respond_to_handshake(stream: &mut TcpStream, owner_epoch: OwnerEpoch) {
     let request = read_scripted_request(stream);
     assert!(matches!(request.operation(), RuntimeOperation::Health));
     write_scripted_result(stream, &request, RuntimeResult::Health { owner_epoch });
+    respond_to_bind_channel(stream);
+}
+
+// A BindChannel answered with the binding it asked for (Workflow #389 U-2).
+fn respond_to_bind_channel(stream: &mut TcpStream) {
+    let request = read_scripted_request(stream);
+    let RuntimeOperation::BindChannel { channel, via } = request.operation() else {
+        panic!(
+            "expected BindChannel after Health, got {:?}",
+            request.operation()
+        )
+    };
+    let result = RuntimeResult::ChannelBound {
+        channel: *channel,
+        via: *via,
+    };
+    write_scripted_result(stream, &request, result);
 }
 
 fn respond_with_empty_event_page(stream: &mut TcpStream) {
@@ -1945,7 +1980,7 @@ fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
     let root = TempDir::new().expect("tempdir");
     let server = scripted_runtime(&root, |listener, owner_epoch| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        respond_to_health(&mut stream, owner_epoch);
+        respond_to_handshake(&mut stream, owner_epoch);
 
         let request = read_scripted_request(&mut stream);
         assert!(matches!(
@@ -1973,6 +2008,7 @@ fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
     });
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        crate::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -1997,7 +2033,7 @@ fn successful_contained_task_returns_complete_ordered_projection_across_event_pa
     let event_count = usize::from(MAX_RUNTIME_EVENT_QUERY_EVENTS) + 17;
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        respond_to_health(&mut stream, owner_epoch);
+        respond_to_handshake(&mut stream, owner_epoch);
 
         let task_request = read_scripted_request(&mut stream);
         assert!(matches!(
@@ -2104,7 +2140,7 @@ fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts(
     let event_count = usize::from(MAX_RUNTIME_EVENT_QUERY_EVENTS) + 4;
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        respond_to_health(&mut stream, owner_epoch);
+        respond_to_handshake(&mut stream, owner_epoch);
 
         let task_request = read_scripted_request(&mut stream);
         let correlation_id = task_request.correlation_id();
@@ -2413,7 +2449,7 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
     let server_recovered = Arc::clone(&recovered);
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
         let (mut timed_out_stream, _) = listener.accept().expect("accept timed task client");
-        respond_to_health(&mut timed_out_stream, owner_epoch);
+        respond_to_handshake(&mut timed_out_stream, owner_epoch);
         let request = read_scripted_request(&mut timed_out_stream);
         assert!(matches!(
             request.operation(),
@@ -2425,7 +2461,7 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
         recovery_stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("bounded recovery script");
-        respond_to_health(&mut recovery_stream, owner_epoch);
+        respond_to_handshake(&mut recovery_stream, owner_epoch);
         let cancel = read_scripted_request_at(&mut recovery_stream, "cancellation");
         assert!(matches!(
             cancel.operation(),
@@ -2472,9 +2508,14 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
         server_recovered.store(true, Ordering::Release);
     });
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(50))
-            .with_backend_open_timeout(Duration::from_millis(100)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(50))
+        .with_backend_open_timeout(Duration::from_millis(100)),
     )
     .expect("runtime client");
 
@@ -2503,7 +2544,7 @@ fn contained_task_pre_deadline_eof_remains_receipt_failure() {
     let root = TempDir::new().expect("tempdir");
     let server = scripted_runtime(&root, |listener, owner_epoch| {
         let (mut stream, _) = listener.accept().expect("accept task client");
-        respond_to_health(&mut stream, owner_epoch);
+        respond_to_handshake(&mut stream, owner_epoch);
         let request = read_scripted_request(&mut stream);
         assert!(matches!(
             request.operation(),
@@ -2512,8 +2553,13 @@ fn contained_task_pre_deadline_eof_remains_receipt_failure() {
         ));
     });
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(50)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(50)),
     )
     .expect("runtime client");
 
@@ -2553,7 +2599,7 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
     ]
     .map(|(actor, source)| {
         RuntimeProjectClient::connect(
-            RuntimeClientConfig::new(root.path(), actor, source)
+            RuntimeClientConfig::new(root.path(), crate::RuntimeChannel::Cli, actor, source)
                 .with_io_timeout(Duration::from_millis(500)),
         )
         .expect("project client")
@@ -2753,9 +2799,14 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     });
     let host = self::host(&root, Arc::clone(&state), 5_000);
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_millis(240)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(100))
+        .with_backend_open_timeout(Duration::from_millis(240)),
     )
     .expect("runtime client");
     let token = client.acquire_lease("node.a").expect("lease");
@@ -2779,8 +2830,13 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
     let state = Arc::new(FakeState::default());
     let host = host(&root, state, 1_000);
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::User, EventSource::Ui)
-            .with_io_timeout(Duration::from_millis(500)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Ui,
+            EventActor::User,
+            EventSource::Ui,
+        )
+        .with_io_timeout(Duration::from_millis(500)),
     )
     .expect("governance runtime client");
 
@@ -2942,6 +2998,7 @@ fn authoring_session_reuses_one_runtime_correlation_and_requires_durable_termina
     let host = host(&root, state, 1_000);
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        crate::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -3019,8 +3076,13 @@ fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
-            .with_backend_open_timeout(Duration::from_secs(2)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Lab,
+            EventActor::Lab,
+            EventSource::Lab,
+        )
+        .with_backend_open_timeout(Duration::from_secs(2)),
     )
     .expect("Lab runtime client");
     let session = client.begin_debug_session().expect("debug session");
@@ -3235,9 +3297,14 @@ fn observe_readonly_preserves_delayed_host_capture_failure_beyond_io_timeout() {
     });
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(io_timeout)
-            .with_backend_open_timeout(Duration::from_secs(2)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(io_timeout)
+        .with_backend_open_timeout(Duration::from_secs(2)),
     )
     .expect("runtime client");
     let releaser = release_capture_after_io_budget(gate, io_timeout);
@@ -3274,9 +3341,14 @@ fn debug_observe_readonly_preserves_one_delayed_success_chain_beyond_io_timeout(
     });
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
-            .with_io_timeout(io_timeout)
-            .with_backend_open_timeout(Duration::from_secs(2)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Lab,
+            EventActor::Lab,
+            EventSource::Lab,
+        )
+        .with_io_timeout(io_timeout)
+        .with_backend_open_timeout(Duration::from_secs(2)),
     )
     .expect("Lab runtime client");
     let session = client.begin_debug_session().expect("debug session");
@@ -3320,7 +3392,7 @@ fn observe_readonly_connection_close_before_receipt_remains_transport_failure() 
     let root = TempDir::new().expect("tempdir");
     let server = scripted_runtime(&root, |listener, owner_epoch| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        respond_to_health(&mut stream, owner_epoch);
+        respond_to_handshake(&mut stream, owner_epoch);
         let request = read_scripted_request(&mut stream);
         assert!(matches!(
             request.operation(),
@@ -3328,9 +3400,14 @@ fn observe_readonly_connection_close_before_receipt_remains_transport_failure() 
         ));
     });
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_secs(2)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(100))
+        .with_backend_open_timeout(Duration::from_secs(2)),
     )
     .expect("runtime client");
 
@@ -3644,9 +3721,14 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
     state.fail_input.store(true, Ordering::Release);
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_millis(1_000)),
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_millis(100))
+        .with_backend_open_timeout(Duration::from_millis(1_000)),
     )
     .expect("runtime client");
 
@@ -3703,9 +3785,14 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
         });
         let host = self::host(&root, Arc::clone(&state), 1_000);
         let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
-                .with_io_timeout(Duration::from_millis(100))
-                .with_backend_open_timeout(Duration::from_millis(240)),
+            RuntimeClientConfig::new(
+                root.path(),
+                crate::RuntimeChannel::Lab,
+                EventActor::Lab,
+                EventSource::Lab,
+            )
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_millis(240)),
         )
         .expect("runtime client");
         let session = debug.then(|| client.begin_debug_session().expect("debug session"));
@@ -3845,6 +3932,7 @@ fn missing_runtime_info_is_a_visible_fatal_error() {
     let root = TempDir::new().expect("tempdir");
     let error = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        crate::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -3877,9 +3965,14 @@ fn broken_ipc_connection_latches_without_reconnect() {
         });
         let host = self::host(&root, Arc::clone(&state), 5_000);
         let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
-                .with_io_timeout(Duration::from_millis(100))
-                .with_backend_open_timeout(Duration::from_millis(240)),
+            RuntimeClientConfig::new(
+                root.path(),
+                crate::RuntimeChannel::Lab,
+                EventActor::Lab,
+                EventSource::Lab,
+            )
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_millis(240)),
         )
         .expect("runtime client");
         let session = debug.then(|| client.begin_debug_session().expect("debug session"));

@@ -4,7 +4,7 @@ use crate::codes::{ClientCode, ClientLocation};
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Code, Detail, Location};
+use actingcommand_contract::outcome::{Code, Detail, Location, Outcome};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
     ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind, ArtifactProducer,
@@ -45,8 +45,12 @@ use std::fmt;
 use std::fs;
 use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+// Workflow #389 U-2: every frontend names its channel when it builds its configuration.
+pub use actingcommand_contract::{ChannelBinding, ChannelVia, RuntimeChannel};
 
 mod online_observation;
 pub use online_observation::VerifiedPageObservation;
@@ -126,6 +130,11 @@ pub(crate) const OCR_COMPARISON_SCHEMA_V2: &str =
 #[derive(Clone)]
 pub struct RuntimeClientConfig {
     state_root: PathBuf,
+    /// Workflow #389 U-2 (model section 3.2): the channel every connection of the session binds,
+    /// and on the Lab channel the counter that forwarded the work. No configuration exists
+    /// without a channel.
+    channel: RuntimeChannel,
+    via: Option<ChannelVia>,
     actor: EventActor,
     source: EventSource,
     io_timeout: Duration,
@@ -136,9 +145,19 @@ pub struct RuntimeClientConfig {
 }
 
 impl RuntimeClientConfig {
-    pub fn new(state_root: impl Into<PathBuf>, actor: EventActor, source: EventSource) -> Self {
+    /// A session of the frontend whose channel is `channel` (Workflow #389 U-2): `actingctl` is
+    /// `cli`, `actingctl mcp-serve` `mcp`, the console `ui`, actinglab `lab`. The envelope
+    /// (`actor`, `source`) is still each frontend's own until U-6.
+    pub fn new(
+        state_root: impl Into<PathBuf>,
+        channel: RuntimeChannel,
+        actor: EventActor,
+        source: EventSource,
+    ) -> Self {
         Self {
             state_root: state_root.into(),
+            channel,
+            via: None,
             actor,
             source,
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
@@ -146,6 +165,22 @@ impl RuntimeClientConfig {
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
             deadline: None,
             detail: None,
+        }
+    }
+
+    /// Workflow #389 U-2 (model section 3.2 rule 7): the counter that forwarded this Lab session's
+    /// work, set only by that counter's program; a session of another channel with `via` is
+    /// refused at connect (`runtime_client_config_invalid`).
+    pub fn with_via(mut self, via: ChannelVia) -> Self {
+        self.via = Some(via);
+        self
+    }
+
+    /// The binding this session declares (Workflow #389 U-2).
+    pub const fn channel(&self) -> ChannelBinding {
+        ChannelBinding {
+            channel: self.channel,
+            via: self.via,
         }
     }
 
@@ -200,6 +235,7 @@ impl RuntimeClientConfig {
             || self.backend_open_timeout > MAX_BACKEND_OPEN_TIMEOUT
             || self.maximum_frame_bytes == 0
             || self.maximum_frame_bytes > DEFAULT_RUNTIME_MAX_FRAME_BYTES
+            || !self.channel().is_valid()
         {
             return Err(RuntimeClientError::fatal(
                 ClientCode::RuntimeClientConfigInvalid,
@@ -215,6 +251,8 @@ impl fmt::Debug for RuntimeClientConfig {
         formatter
             .debug_struct("RuntimeClientConfig")
             .field("state_root", &"<redacted>")
+            .field("channel", &self.channel)
+            .field("via", &self.via)
             .field("actor", &self.actor)
             .field("source", &self.source)
             .field("io_timeout", &self.io_timeout)
@@ -229,6 +267,11 @@ impl fmt::Debug for RuntimeClientConfig {
 struct RuntimeConnection {
     stream: TcpStream,
     ids: IdentifierIssuer,
+    /// Workflow #389 U-2: the binding every connection of this session declares.
+    channel: ChannelBinding,
+    /// Workflow #389 U-2: the Runtime dropped the connection on `BindChannel` (an actingd
+    /// before U-2); later reconnects of this client send no `BindChannel`.
+    channel_unsupported: bool,
     actor: EventActor,
     source: EventSource,
     io_timeout: Duration,
@@ -863,6 +906,7 @@ impl RuntimeClient {
             within_deadline(config.io_timeout, config.deadline),
             ClientLocation::ConnectRuntime.location(),
         )?;
+        let channel = config.channel();
         let client = Self {
             shared: Arc::new(RuntimeClientShared {
                 info,
@@ -875,6 +919,8 @@ impl RuntimeClient {
                             ClientLocation::ConnectRuntime.location(),
                         )
                     })?,
+                    channel,
+                    channel_unsupported: false,
                     actor: config.actor,
                     source: config.source,
                     io_timeout: config.io_timeout,
@@ -887,14 +933,69 @@ impl RuntimeClient {
             }),
             correlation: None,
         };
-        let observed_epoch = client.health()?;
-        if observed_epoch != client.shared.info.owner_epoch() {
-            return Err(RuntimeClientError::fatal(
-                ClientCode::RuntimeOwnerEpochChanged,
-                ClientLocation::ConnectRuntime.location(),
-            ));
-        }
+        client.handshake(ClientLocation::ConnectRuntime.location())?;
         Ok(client)
+    }
+
+    /// The handshake of every new connection (Workflow #389 U-2, model section 3.2 rule 2):
+    /// `Health` checks the owner epoch, then `BindChannel` binds the session's channel. `connect`,
+    /// `reconnect_in_owner_epoch` and `recover_contained_task_timeout` all call it, so a
+    /// reconnect keeps the channel. Another owner epoch latches `runtime_owner_epoch_changed`.
+    fn handshake(&self, operation: Location) -> RuntimeClientResult<()> {
+        if self.health()? != self.shared.info.owner_epoch() {
+            let error = RuntimeClientError::fatal(ClientCode::RuntimeOwnerEpochChanged, operation);
+            return Err(self.connection(operation)?.latch(error));
+        }
+        self.bind_channel()
+    }
+
+    /// `BindChannel` on this connection (Workflow #389 U-2). An actingd before U-2 cannot decode
+    /// it and drops the connection without a receipt (`send_or_dropped`): the client then
+    /// reconnects once in the same owner epoch, goes on unbound, reports
+    /// `client_channel_unsupported` once per process through the frontend's reporter and sends no
+    /// `BindChannel` on its later reconnects (model section 3.2 rule 8). Every other failure, a
+    /// refusal included, is returned.
+    fn bind_channel(&self) -> RuntimeClientResult<()> {
+        const OPERATION: Location = ClientLocation::RuntimeBindChannel.location();
+        let channel = {
+            let connection = self.connection(OPERATION)?;
+            if connection.channel_unsupported {
+                return Ok(());
+            }
+            connection.channel
+        };
+        match self.send_or_dropped(
+            OPERATION,
+            RuntimeOperation::BindChannel {
+                channel: channel.channel,
+                via: channel.via,
+            },
+        )? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::ChannelBound {
+                    channel: bound,
+                    via,
+                } if bound == channel.channel && via == channel.via => Ok(()),
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => {
+                self.connection(OPERATION)?.channel_unsupported = true;
+                self.reconnect_in_owner_epoch(OPERATION)
+                    .map_err(|reconnect| error.with_related(reconnect))?;
+                report_channel_unsupported(
+                    &Outcome::new(ClientCode::ClientChannelUnsupported).operation(OPERATION),
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Whether this client goes on unbound because its Runtime does not know `BindChannel`
+    /// (Workflow #389 U-2, `client_channel_unsupported`).
+    pub fn channel_unsupported(&self) -> RuntimeClientResult<bool> {
+        Ok(self
+            .connection(ClientLocation::RuntimeBindChannel.location())?
+            .channel_unsupported)
     }
 
     pub fn runtime_info(&self) -> &RuntimeInfo {
@@ -1445,11 +1546,8 @@ impl RuntimeClient {
             connection.stream = connect_runtime_stream(address, connection.io_timeout, operation)?;
             connection.terminal_error = None;
         }
-        if self.health()? != self.shared.info.owner_epoch() {
-            let error = RuntimeClientError::fatal(ClientCode::RuntimeOwnerEpochChanged, operation);
-            return Err(self.connection(operation)?.latch(error));
-        }
-        Ok(())
+        // Workflow #389 U-2: the new connection binds the same channel.
+        self.handshake(operation)
     }
 
     /// Reconnects one physical instance and self-checks it now (`SelfCheckInstance`,
@@ -1955,22 +2053,20 @@ impl RuntimeClient {
             connection.terminal_error = None;
         }
 
-        let observed_epoch = self.health().map_err(|error| {
-            RuntimeClientError::fatal(
-                ClientCode::RuntimeContainedTaskRecoveryFailed,
-                ClientLocation::RecoverContainedTaskTimeout.location(),
-            )
-            .with_related(error)
-        })?;
-        if observed_epoch != self.shared.info.owner_epoch() {
-            let error = RuntimeClientError::fatal(
-                ClientCode::RuntimeOwnerEpochChanged,
-                ClientLocation::RecoverContainedTaskTimeout.location(),
-            );
-            return Err(self
-                .connection(ClientLocation::RecoverContainedTaskTimeout.location())?
-                .latch(error));
-        }
+        // Workflow #389 U-2: the recovery connection binds the same channel, so the run's query,
+        // cancel and reset go out on it as before.
+        self.handshake(ClientLocation::RecoverContainedTaskTimeout.location())
+            .map_err(|error| {
+                if error.code() == ClientCode::RuntimeOwnerEpochChanged.code() {
+                    error
+                } else {
+                    RuntimeClientError::fatal(
+                        ClientCode::RuntimeContainedTaskRecoveryFailed,
+                        ClientLocation::RecoverContainedTaskTimeout.location(),
+                    )
+                    .with_related(error)
+                }
+            })?;
         let recovery_timeout = {
             let connection =
                 self.connection(ClientLocation::RecoverContainedTaskTimeout.location())?;
@@ -6107,6 +6203,33 @@ pub(super) fn receipt_response_timeout(
 enum SentOutcome {
     Answered(Box<RuntimeResult>),
     Dropped(RuntimeClientError),
+}
+
+/// Where this process reports `client_channel_unsupported` (Workflow #389 U-2, model section
+/// 3.5): the frontend's own line, on stderr or in the MCP warnings. The runtime client never
+/// writes to stderr itself (a Runtime-domain crate does not), so each frontend installs its
+/// reporter once at start.
+static CHANNEL_UNSUPPORTED_REPORTER: OnceLock<fn(&Outcome)> = OnceLock::new();
+
+/// Whether this process reported `client_channel_unsupported` already (catalog: once per client
+/// process).
+static CHANNEL_UNSUPPORTED_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// Installs this process's reporter of `client_channel_unsupported` (Workflow #389 U-2); `false`
+/// when one is installed already. Without a reporter the fallback stays visible through
+/// [`RuntimeClient::channel_unsupported`].
+pub fn set_channel_unsupported_reporter(reporter: fn(&Outcome)) -> bool {
+    CHANNEL_UNSUPPORTED_REPORTER.set(reporter).is_ok()
+}
+
+/// The one report of `client_channel_unsupported`, once per process (Workflow #389 U-2, model
+/// section 3.5), through the frontend's reporter.
+fn report_channel_unsupported(outcome: &Outcome) {
+    if let Some(reporter) = CHANNEL_UNSUPPORTED_REPORTER.get()
+        && !CHANNEL_UNSUPPORTED_REPORTED.swap(true, Ordering::SeqCst)
+    {
+        reporter(outcome);
+    }
 }
 
 /// The connection that carried `request_id` ended before its receipt header: what an older
