@@ -161,6 +161,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
         provider,
         policy,
         resource_packages,
+        recognition_packages,
         adb_requirement,
         ..
     } = file.assemble().map_err(|code| {
@@ -185,6 +186,17 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let host = host.with_ledger_failure_sink(Arc::new(DaemonLedgerFailure));
     let host = match option_env!("ACTINGCOMMAND_RUNTIME_HEAD") {
         Some(commit) => host.with_runtime_commit(commit),
+        None => host,
+    };
+    // Workflow #384 D2-S2 (D2 model §3.2): a recognition package binding whose package the start
+    // cannot read, or whose marks the configuration claims, is left out and noted in the
+    // `recognition_packages` subsystem row; the start goes on. No bound package is prepared.
+    let (recognition_packages, recognition_subsystem) =
+        config::recognition_package::start_bindings(&recognition_packages, &host, policy.as_ref())
+            .map_err(ActingdError::config)?;
+    let host = host.with_recognition_packages(recognition_packages);
+    let host = match recognition_subsystem {
+        Some(subsystem) => host.with_config_subsystem(subsystem),
         None => host,
     };
     let host = match install_held {

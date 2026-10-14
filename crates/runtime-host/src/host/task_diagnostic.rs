@@ -256,7 +256,11 @@ impl RuntimeContainedTask<'_> {
             index: 0,
             parent_index,
             payload,
-            frame_id: self.last_frame_id.map(|id| *id.transport()),
+            // Workflow #384 D2-S2: a joined reading's rows belong to the frame it was read on.
+            frame_id: self
+                .diagnostic_frame
+                .or(self.last_frame_id)
+                .map(|id| *id.transport()),
             step_action_id: self.diagnostic_step.as_ref().map(|step| step.action_id),
             physical_action_id: self.diagnostic_physical,
         }
@@ -827,6 +831,32 @@ impl RuntimeContainedTask<'_> {
                 .map(|_| ()),
         })();
         ppocr_diagnostic::finish_task_ppocr_record(recorded, reports, primary)
+    }
+
+    /// Workflow #384 D2-S2 (model §3.5): a reading mark that gave no reading on the frame
+    /// `frame_id` handed to recognition, written as a recognition error row of the
+    /// post-admission phase whose outcome is the warning
+    /// `contained_task_resource_reading_unresolved`, on that frame.
+    pub(super) fn diagnostic_reading_miss(
+        &mut self,
+        frame_id: IssuedFrameId,
+        miss: &actingcommand_execution_kernel::ResourceReadingMiss,
+    ) -> Result<(), RequestFailure> {
+        self.diagnostic_frame = Some(frame_id);
+        self.diagnostic(
+            None,
+            Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
+                phase: "post_admission".to_owned(),
+                target_id: Some(miss.declaration.target_id.clone()),
+                error: TaskDiagnosticRecognitionError {
+                    region: None,
+                    timing: None,
+                    sample: None,
+                    outcome: miss.outcome(),
+                },
+            })),
+        )
+        .map(|_| ())
     }
 
     pub(super) fn finish_diagnostic(

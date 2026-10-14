@@ -46,7 +46,10 @@ pub use effective::{
     OVERRIDE_VALUE_JSON, OverridesInvalid, RestoreNote,
 };
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
-pub use instance::{DEVICE_KIND, DEVICE_KIND_TOKENS, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS};
+pub use instance::{
+    DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, STUCK_RECOVERY,
+    STUCK_RECOVERY_COOLDOWN_SECS,
+};
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;
 pub use recovery_ladder::{

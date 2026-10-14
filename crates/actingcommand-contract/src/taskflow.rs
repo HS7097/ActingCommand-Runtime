@@ -704,9 +704,10 @@ pub const MAX_RESOURCE_READINGS: usize = 16;
 /// The largest value a reading may declare: 2^53 - 1, exact in every JSON consumer.
 pub const MAX_RESOURCE_READING_VALUE: u64 = (1 << 53) - 1;
 
-/// One operation `resource_readings` entry (schema 0.8 and 0.9, Workflow #335 S5): the integer
-/// the Runtime reads from `target_id` on the successful terminal frame of `page_id` and writes
-/// as the instance fact `fact_key`. The declaration never enters an event, artifact or report.
+/// One operation `resource_readings` entry (schema 0.8 and 0.9, Workflow #335 S5), a reading
+/// mark: the integer the Runtime reads from `target_id` on each frame a successful run reaches
+/// the task's page `page_id` on (Workflow #384 D2-S2: any page of the task) and writes as the
+/// instance fact `fact_key`. The declaration never enters an event, artifact or report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceReadingDeclaration {

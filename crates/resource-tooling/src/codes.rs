@@ -85,6 +85,11 @@ actingcommand_contract::outcome_codes! {
         PackageBundleIndexInvalid => "package_bundle_index_invalid": error / none,
         PackageBundlePacksRootInvalid => "package_bundle_packs_root_invalid": error / none,
         PackageBundleWriteFailed => "package_bundle_write_failed": error / none,
+        /// Warning (Workflow #384 D2-S2, transitional): a pack of a bundle with maintenance
+        /// declarations only navigates and reads, but the declarations do not name it for
+        /// `recognition` (key `package_id`). The resource repositories make it an error once
+        /// their recognition packages are declared (D2-S6).
+        RecognitionPackUndeclared => "recognition_pack_undeclared": warning / none,
         // Resource conversion source reads (`resource_convert`).
         SelectionPolicyLimitExceeded => "selection_policy_limit_exceeded": error / none,
     }

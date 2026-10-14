@@ -1,0 +1,384 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! Workflow #384 D2-S2 (`rd-1009/d2/model-d2-fact-refresh.md` §3.2, §3.4, §3.5): reading marks
+//! on any page of the task. When a run reaches a marked page, the frame it reached the page on is
+//! handed to recognition and the run goes on without waiting for the result. A successful run
+//! joins its readings before `Finalizing`, in hand-off order and within the runtime's join
+//! timeout. A mark that gives no reading is a warning of its own and never fails the run. A
+//! requested key set reads only the marks of its keys, and a linear package runs only the
+//! segments that reach one of them.
+
+use super::*;
+use actingcommand_contract::ocr_confidence_milli;
+use actingcommand_recognition_pack::{OcrObservationEvaluation, RecognitionPackResult};
+use std::sync::mpsc;
+
+/// The recognition results of one handed-off frame, one per mark in mark order.
+type MarkResults = Vec<RecognitionPackResult<OcrObservationEvaluation>>;
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why one reading mark gave no reading on a frame handed to recognition (the vocabulary
+    /// `reading_problem`).
+    pub enum ResourceReadingProblem: "reading_problem" {
+        /// The trimmed text is empty.
+        Empty => "empty",
+        /// The text is not an integer of the declared format.
+        InvalidInteger => "invalid_integer",
+        /// The integer does not fit 64 bits.
+        Overflow => "overflow",
+        /// The integer is outside the declared range.
+        OutOfRange => "out_of_range",
+        /// The OCR target's region could not be placed on the frame.
+        RegionUnresolved => "region_unresolved",
+        /// The OCR provider failed, or the recognition ended without an answer.
+        ProviderFailed => "provider_failed",
+        /// The provider gave no confidence.
+        ConfidenceMissing => "confidence_missing",
+        /// The confidence is below the mark's floor.
+        LowConfidence => "low_confidence",
+        /// The recognition had not returned when the join timeout ended.
+        JoinTimeout => "join_timeout",
+    }
+}
+
+impl ResourceReadingProblem {
+    /// The problem of a text the declaration's parser refused. The parser gives only the four
+    /// reasons of a text it could not read as the declared integer; every other reason of the
+    /// shared set names a field result the parser never gives and reads as no integer.
+    const fn of_parse(reason: OcrFieldReason) -> Self {
+        match reason {
+            OcrFieldReason::Empty => Self::Empty,
+            OcrFieldReason::Overflow => Self::Overflow,
+            OcrFieldReason::OutOfRange => Self::OutOfRange,
+            OcrFieldReason::InvalidInteger
+            | OcrFieldReason::Resolved
+            | OcrFieldReason::UnknownEntry
+            | OcrFieldReason::AmbiguousEntry
+            | OcrFieldReason::LimitExceeded
+            | OcrFieldReason::ProviderFailed
+            | OcrFieldReason::RegionUnresolved
+            | OcrFieldReason::NotCollected
+            | OcrFieldReason::LowConfidence => Self::InvalidInteger,
+        }
+    }
+}
+
+/// One reading mark that gave no reading on a frame handed to recognition (model §3.5). In
+/// memory only; the runtime reports it as the warning `contained_task_resource_reading_unresolved`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceReadingMiss {
+    pub declaration: ResourceReadingDeclaration,
+    pub problem: ResourceReadingProblem,
+}
+
+impl ResourceReadingMiss {
+    /// The warning of this miss: `contained_task_resource_reading_unresolved` with the mark's
+    /// `reading_id`, `fact_key` and `reading_problem`.
+    pub fn outcome(&self) -> Outcome {
+        Outcome::new(ExecutionKernelCode::ContainedTaskResourceReadingUnresolved)
+            .reading_id(self.declaration.id.as_str())
+            .fact_key(self.declaration.fact_key.as_str())
+            .reading_problem(self.problem)
+    }
+}
+
+/// Judges one mark's OCR evaluation: the shared trim and parse, then the confidence floor.
+pub fn judge_resource_reading(
+    declaration: &ResourceReadingDeclaration,
+    result: &RecognitionPackResult<OcrObservationEvaluation>,
+) -> Result<ResourceReadingValue, ResourceReadingProblem> {
+    let evaluated = match result {
+        Ok(evaluated) => evaluated,
+        Err(error) if error.code() == RecognitionPackErrorCode::RegionUnresolved => {
+            return Err(ResourceReadingProblem::RegionUnresolved);
+        }
+        Err(_) => return Err(ResourceReadingProblem::ProviderFailed),
+    };
+    let value = declaration
+        .parse(&evaluated.text)
+        .map_err(ResourceReadingProblem::of_parse)?;
+    let confidence_milli = ocr_confidence_milli(evaluated.confidence)
+        .ok_or(ResourceReadingProblem::ConfidenceMissing)?;
+    if confidence_milli < declaration.minimum_confidence_milli {
+        return Err(ResourceReadingProblem::LowConfidence);
+    }
+    Ok(ResourceReadingValue {
+        declaration: declaration.clone(),
+        value,
+        confidence_milli,
+    })
+}
+
+/// Workflow #384 D2-S2: the package id and the reading-mark keys of a package, read from its
+/// declarations without preparing it as a task (D2 model §3.2, the binding checks a Runtime
+/// start makes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadingMarks {
+    pub package_id: String,
+    /// The keys of its reading marks, in declaration order.
+    pub fact_keys: Vec<String>,
+}
+
+impl PreparedContainedTask {
+    /// Workflow #384 D2-S2: the [`ReadingMarks`] of the package `locator` names, admitted by its
+    /// path through the metadata-only containment as [`Self::describe_path`] admits it, but
+    /// without preparing the task: its qualification as a reader is not decided here.
+    pub fn read_reading_marks(
+        instance_label: &str,
+        locator: &std::path::Path,
+        deadline: Instant,
+    ) -> Result<ReadingMarks, ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_metadata_path(
+            instance_label,
+            locator,
+            &actingcommand_contract::PackageRef::default(),
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        let bundle = bundle.loaded_bundle();
+        let control = bundle.control().cloned().ok_or_else(|| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlMissing.code())
+        })?;
+        let control = parse_task_control_declaration(control)?;
+        let readings = match bundle.operation().get("resource_readings") {
+            None => Vec::new(),
+            Some(value) => serde_json::from_value::<Vec<ResourceReadingDeclaration>>(value.clone())
+                .map_err(|_| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskResourceReadingInvalid.code(),
+                    )
+                })?,
+        };
+        Ok(ReadingMarks {
+            package_id: control.package_id,
+            fact_keys: readings
+                .into_iter()
+                .map(|reading| reading.fact_key)
+                .collect(),
+        })
+    }
+}
+
+/// One frame handed to recognition: its device capture time, the marks of its page and the
+/// channel its recognition answers on.
+#[derive(Debug)]
+struct HandedOffFrame {
+    captured_at: SystemTime,
+    declarations: Vec<ResourceReadingDeclaration>,
+    results: mpsc::Receiver<MarkResults>,
+}
+
+/// The reading marks of one ordinary run and the frames it handed to recognition (model §3.5).
+#[derive(Debug, Default)]
+pub(super) struct ReadingRelay<'a> {
+    declarations: &'a [ResourceReadingDeclaration],
+    /// The requested key set (model §3.4); `None` reads every mark.
+    requested: Option<&'a BTreeSet<String>>,
+    /// The run's recognition evaluator, shared with its recognition threads once a frame is
+    /// handed off.
+    evaluator: Option<Arc<RecognitionEvaluator>>,
+    /// The page of the last frame offered: a stay on one page is one pass.
+    last_page: Option<String>,
+    frames: Vec<HandedOffFrame>,
+}
+
+impl<'a> ReadingRelay<'a> {
+    pub(super) fn new(
+        declarations: &'a [ResourceReadingDeclaration],
+        requested: Option<&'a BTreeSet<String>>,
+    ) -> Self {
+        Self {
+            declarations,
+            requested,
+            ..Self::default()
+        }
+    }
+
+    /// The requested key set, when the run was given one.
+    pub(super) fn requested(&self) -> Option<&'a BTreeSet<String>> {
+        self.requested
+    }
+
+    fn wanted(&self, declaration: &ResourceReadingDeclaration) -> bool {
+        self.requested
+            .is_none_or(|keys| keys.contains(&declaration.fact_key))
+    }
+
+    /// Whether the run reads a mark on `page`.
+    pub(super) fn marks_wanted_on(&self, game: &str, page: &str) -> bool {
+        self.declarations.iter().any(|declaration| {
+            crate::page_anchor_matches(game, page, &declaration.page_id) && self.wanted(declaration)
+        })
+    }
+
+    /// The marks the run reads on a frame of `page_label`, when that frame starts a new pass
+    /// of the page; empty when it does not or the page has none.
+    fn pass(&mut self, game: &str, page_label: &str) -> Vec<ResourceReadingDeclaration> {
+        if self.last_page.as_deref() == Some(page_label) {
+            return Vec::new();
+        }
+        self.last_page = Some(page_label.to_owned());
+        self.declarations
+            .iter()
+            .filter(|declaration| {
+                crate::page_anchor_matches(game, page_label, &declaration.page_id)
+                    && self.wanted(declaration)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Hands `scene` to recognition for `declarations` and returns at once. The recognition
+    /// runs on its own thread; when no thread can be started, it runs here, so the marks are
+    /// still read.
+    fn hand_off(
+        &mut self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+        captured_at: SystemTime,
+        declarations: Vec<ResourceReadingDeclaration>,
+    ) -> Result<(), ContainedTaskError> {
+        let evaluator = Arc::clone(
+            self.evaluator
+                .get_or_insert_with(|| Arc::new(evaluator.clone())),
+        );
+        let scene =
+            Scene::from_rgb8(scene.width(), scene.height(), scene.rgb8_pixels()).map_err(|_| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code())
+            })?;
+        let targets = declarations
+            .iter()
+            .map(|declaration| declaration.target_id.clone())
+            .collect::<Vec<_>>();
+        let job = Arc::new((evaluator, scene, targets));
+        let (sender, results) = mpsc::channel();
+        let here = sender.clone();
+        let thread_job = Arc::clone(&job);
+        let spawned = thread::Builder::new()
+            .name("contained-task-reading".to_owned())
+            .spawn(move || {
+                // The join may already have given up on this frame; its answer is then unread.
+                let _unread = sender.send(read_marks(&thread_job));
+            });
+        if spawned.is_err() {
+            let _unread = here.send(read_marks(&job));
+        }
+        self.frames.push(HandedOffFrame {
+            captured_at,
+            declarations,
+            results,
+        });
+        Ok(())
+    }
+}
+
+/// The OCR evaluation of every mark's target on one handed-off frame, in mark order.
+fn read_marks(job: &(Arc<RecognitionEvaluator>, Scene, Vec<String>)) -> MarkResults {
+    let (evaluator, scene, targets) = job;
+    let context = evaluator.scene_context(scene);
+    targets
+        .iter()
+        .map(|target| context.evaluate_ocr_observation(target))
+        .collect()
+}
+
+impl PreparedContainedTask {
+    /// The run reached `page_label` on the frame it captured last, at `captured_at`. When the
+    /// frame starts a pass of a page the run reads marks on, the runtime is told the frame was
+    /// handed off and the frame goes to recognition; the run does not wait (model §3.5).
+    pub(super) fn hand_off_reading_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        page_label: &str,
+        scene: &Scene,
+        captured_at: SystemTime,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        let Some(relay) = ocr_collector.reading_relay.as_mut() else {
+            return Ok(());
+        };
+        let declarations = relay.pass(&self.control.game, page_label);
+        if declarations.is_empty() {
+            return Ok(());
+        }
+        runtime
+            .record(ContainedTaskTrace::ResourceReadingFrame { captured_at })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        relay.hand_off(&self.evaluator, scene, captured_at, declarations)?;
+        Ok(())
+    }
+
+    /// Before `Finalizing` of a successful run: waits for the readings of every handed-off
+    /// frame, in hand-off order, until the runtime's join timeout ends, records each mark's
+    /// evaluation against its frame, and records each frame's readings and misses. A mark whose
+    /// recognition had not returned is the miss `join_timeout`; a recognition thread that ended
+    /// without an answer is `provider_failed` for each of its marks.
+    pub(super) fn join_resource_readings<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        relay: ReadingRelay<'_>,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        if relay.frames.is_empty() {
+            return Ok(());
+        }
+        let deadline = runtime
+            .reading_join_timeout()
+            .map_err(ContainedTaskRunError::operation::<R>)?
+            .map(|timeout| Instant::now() + timeout);
+        for frame in relay.frames {
+            let answer = match deadline {
+                None => frame
+                    .results
+                    .recv()
+                    .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                Some(deadline) => frame
+                    .results
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now())),
+            };
+            let mut readings = Vec::new();
+            let mut unresolved = Vec::new();
+            match answer {
+                Ok(results) => {
+                    for (declaration, result) in frame.declarations.into_iter().zip(results) {
+                        runtime
+                            .record_reading_evaluation(
+                                frame.captured_at,
+                                &declaration.target_id,
+                                &result,
+                            )
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                        match judge_resource_reading(&declaration, &result) {
+                            Ok(reading) => readings.push(reading),
+                            Err(problem) => unresolved.push(ResourceReadingMiss {
+                                declaration,
+                                problem,
+                            }),
+                        }
+                    }
+                }
+                Err(timeout) => {
+                    let problem = match timeout {
+                        mpsc::RecvTimeoutError::Timeout => ResourceReadingProblem::JoinTimeout,
+                        mpsc::RecvTimeoutError::Disconnected => {
+                            ResourceReadingProblem::ProviderFailed
+                        }
+                    };
+                    unresolved.extend(frame.declarations.into_iter().map(|declaration| {
+                        ResourceReadingMiss {
+                            declaration,
+                            problem,
+                        }
+                    }));
+                }
+            }
+            runtime
+                .record(ContainedTaskTrace::ResourceReadings {
+                    captured_at: frame.captured_at,
+                    readings,
+                    unresolved,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
+        Ok(())
+    }
+}

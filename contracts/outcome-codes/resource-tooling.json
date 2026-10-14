@@ -1051,6 +1051,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "recognition_pack_undeclared": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package) but the declarations do not name it for recognition. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
+      "common_causes": "A reading pack of the standard package is not declared in maintenance.json.",
+      "handling": "Declare the standard package's one recognition maintenance package with the use recognition, and merge other reading packs into it."
+    },
     "selection_policy_limit_exceeded": {
       "category": "error",
       "ladder_class": "none",

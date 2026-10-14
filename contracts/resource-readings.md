@@ -1,13 +1,17 @@
 # Resource readings
 
 Workflow #335 S5. A package declares, per resource, where the Runtime reads its current amount
-after a task: which terminal page, which OCR target, how the text is parsed, the lowest
-confidence it accepts, how long the reading stays valid and the instance fact key it becomes.
-The Runtime reads only what the package declares and writes each reading back as an instance
-fact. It never writes a `produces` amount, a weight or any other amount computed by the policy.
+during a task: which page, which OCR target, how the text is parsed, the lowest confidence it
+accepts, how long the reading stays valid and the instance fact key it becomes. Such a
+declaration is a reading mark (Workflow #384 D2-S2): it may stand on any page of the task, the
+whole page or a region of it. The Runtime reads only what the package declares and writes each
+reading back as an instance fact. It never writes a `produces` amount, a weight or any other
+amount computed by the policy.
 
-This document covers the declaration, its admission and the kernel reading (slice S5a), and the
-host bridge that publishes the readings as instance facts (slice S5b, "Host" below).
+This document covers the declaration, its admission and the kernel reading (slice S5a, with
+Workflow #384 D2-S2's marks on any page, hand-off and join), the host bridge that publishes the
+readings as instance facts (slice S5b, "Host" below) and the recognition maintenance package
+(D2-S2, "Recognition maintenance packages" below).
 
 ## Declaration
 
@@ -36,7 +40,7 @@ file. The following is the member only, not a complete task:
 | the array | `1..=16` entries; the task declares `scheduling_outcome` | empty or longer: `InvalidValue` @ `/resource_readings`; no outcome: `MissingField` @ `/scheduling_outcome` |
 | `id` | `[A-Za-z0-9_\-/.:]`, `1..=128` bytes, unique in the task | `InvalidValue` @ `/resource_readings/<i>/id` |
 | `fact_key` | starts with `resource.` or `inventory.`, satisfies the instance fact key rule, unique in the task | `InvalidValue` @ `…/fact_key` |
-| `page_id` | an identifier like `id` (not `any`) that is one of the task's `scheduling_outcome` terminal pages; the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id` |
+| `page_id` | an identifier like `id` (not `any`) naming a page the task declares: its entry, target, error or `scheduling_outcome` pages, or a page one of its operations leaves, reaches or passes through (Workflow #384 D2-S2; it was a terminal page only); the page gate may use any recognition backend | `InvalidValue` @ `…/page_id`; cross-reference: `package_invalid` naming `…/page_id`; before any input the Runtime refuses a page its detector does not hold (`page_undeclared`) |
 | `target_id` | an identifier like `id`, exactly one entry of the task's own `ocr_targets`; a page gate may also name it (Workflow #396 REC-6), and the gate's observation of the terminal frame is then the reading's | `InvalidValue` @ `…/target_id`; cross-reference: `package_invalid` naming `…/target_id`; a target the projection metadata marks personal is refused by the Runtime before any input |
 | `trim` | `whitespace_v1` only | `InvalidValue` @ `…/trim` |
 | `value` | `type` `unsigned_integer` only; `format` one of `ascii_decimal` (the default), `comma_grouped`, `current_capacity`, `times_prefixed`, `clock_hms`; `min <= max <= 2^53-1` | `InvalidValue` @ `…/value/type`, `…/value/format`, `…/value/min`, `…/value/max` (a copied `u64::MAX` is refused at `…/value/max`) |
@@ -70,48 +74,66 @@ sealed ZIP and a content directory both pass the same declaration gate, which re
 
 ### Two uses, one declaration
 
-- An observation package: a zero-input task (`operations: []`, schema `0.8`) whose only purpose
-  is to read, which is the Workflow #308 zero-input observation package.
-- A reading after a task: a task that changes the resource declares the reading on its own
-  terminal page.
+- A recognition maintenance package: a package that only navigates and reads, the standard
+  package's one reader of instance facts ("Recognition maintenance packages" below). A zero-input
+  observation package (`operations: []`, schema `0.8`, the Workflow #308 zero-input observation
+  package) is the simplest one.
+- A mark in a business package: a task that changes the resource, or passes a page that shows
+  it, marks that page; the reading is taken there.
+
+The whole page is a mark whose OCR target covers the whole frame; no field is added for it. A
+`linear_steps` package may carry marks (Workflow #384 D2-S2; it was refused before).
 
 Not provided: an amount derived from a settlement (a constant or predicted amount), an
 increment reading (`+N`) and a value read from a pixel target. The value type is a closed set.
 
 ## Kernel reading
 
-Readings are taken only when a run completes successfully on a page:
+Workflow #384 D2-S2 (`rd-1009/d2/model-d2-fact-refresh.md` §3.4, §3.5). A run reads its marks on
+the frames it reaches their pages on:
 
-- In `finish_success`, which every successful completion reaches: after the operation `0.8`
-  fields report (when the task has one) and always before `Finalizing`.
-- Only from the terminal observation's own frame. There is no further capture and no input.
-- Only the declarations whose `page_id` matches the completed page. A run that completes on
-  another allowed terminal page reads nothing and still succeeds; the ledger shows it as a
-  `task.terminal_committed` `final_page` that differs from the declared `page_id`, and nothing
-  else is recorded.
+- **Hand-off.** When the run recognizes a page it reads marks on, on a frame that starts a pass
+  of that page (the page differs from the page of the frame before: a stay on one page is one
+  pass, and a page passed again is read again), the kernel records the in-memory trace
+  `ContainedTaskTrace::ResourceReadingFrame { captured_at }` with that frame's device capture
+  time and hands the frame to recognition. The run does not wait: the marks' OCR targets are
+  evaluated on their own thread while the run goes on. A page-graph run hands off from its
+  observations (its entry and every page it then recognizes); a `linear_steps` run from its
+  entry frame and the frame each step arrives on.
+- **Join.** A successful run joins its readings in `finish_success`, after the operation `0.8`
+  fields report (when the task has one) and always before `Finalizing`: frame by frame in
+  hand-off order it waits for the frame's recognition, all frames together for at most the
+  runtime's join timeout (`scheduling.fact_refresh.recognition_join_timeout_ms`, default
+  10000; a runtime without the configuration waits until each recognition returns). Each mark's
+  evaluation is recorded in the task diagnostic stream with the phase label `post_admission`, on
+  its frame, then the text is trimmed and parsed and the confidence converted. A reading holds
+  when the parse succeeds and the confidence is present and at least `minimum_confidence_milli`.
+  For each frame the kernel then records the in-memory trace `ContainedTaskTrace::ResourceReadings
+  { captured_at, readings, unresolved }`: per reading that holds the declaration, the integer
+  value and the confidence milli; per mark that gave no reading the declaration and its
+  `reading_problem` (`empty`, `invalid_integer`, `overflow`, `out_of_range`,
+  `region_unresolved`, `provider_failed`, `confidence_missing`, `low_confidence`, and
+  `join_timeout` for a recognition that had not returned when the join timeout ended). The
+  traces are never serialized.
+- **A miss never fails the run.** Each mark that gave no reading is the warning
+  `contained_task_resource_reading_unresolved` (`reading_id`, `fact_key`, `reading_problem`;
+  [Host](#host) writes it), the run settles as it would without the mark, and an earlier fact of
+  the key stays until its own expiry. A run that fails or is cancelled joins nothing and
+  publishes nothing.
+- **A requested key set** (`PreparedContainedTask::run_for_reading_keys`; the scheduler's
+  reading dispatch, D2-S4) reads only the marks of its keys. A `linear_steps` package whose path
+  starts on a page, ends on it and returns to it on the way, without optional operations, has
+  one segment per return; with a key set, a segment that reaches no page marking one of its keys
+  is not run, and the run stays on the entry page it starts and ends on. Any other package runs
+  whole. A run without a key set (a manual `task-run`, MCP `ac_run_pack`, the Lab) reads every
+  mark and runs every segment.
 - Not in offline simulation: `actinglab package dry-run` reads nothing and reports
   `post_admission_ocr.pending_real_execution: true` for a task that declares OCR fields or
   readings.
-- Not in a bound recovery entry and not in `recognize_only` (which cannot declare a scheduling
-  outcome).
+- Not in a bound recovery entry, a prerequisite package or `recognize_only` (which cannot
+  declare a scheduling outcome).
 
-Each reading evaluates its OCR target once on the terminal scene. The evaluation is recorded in
-the existing task diagnostic stream with the phase label `post_admission`, then the text is
-trimmed and parsed and the confidence converted. A reading holds when the parse succeeds and the
-confidence is present and at least `minimum_confidence_milli`. The first reading that does not
-hold fails the run with `contained_task_resource_reading_unresolved` and the detail
-`<id>:<reason>`, where the reason is the snake-case `OcrFieldReason` (`empty`,
-`invalid_integer`, `overflow`, `out_of_range`, `region_unresolved`, `provider_failed`),
-`confidence_missing` or `low_confidence`. This happens before `Finalizing`, so no fact is
-written and an earlier fact of the key stays until its own expiry. The raw text and confidence
-remain in the task diagnostic. A schema `0.8` fields report already recorded by that
-completion stays the only one; the failure does not record it again.
-
-When every bound reading holds, the kernel emits the in-memory trace
-`ContainedTaskTrace::ResourceReadings { captured_at, readings }` with the terminal frame's
-device capture time and, per reading, the declaration, the integer value and the confidence
-milli. The trace is never serialized. `evaluate_resource_readings` is the exported function the
-kernel uses for this evaluation.
+`judge_resource_reading` is the exported function the kernel judges one mark's evaluation with.
 
 Before any input, the Runtime refuses a package whose reading target is not one OCR target,
 locates text, or is marked personal by the projection metadata, with
@@ -136,13 +158,21 @@ the existing fatal ledger path instead of returning an unrecorded ordinary refus
 Only the host writes readings, through `publish_facts`, the instance fact store's one
 publication path; no write site is added.
 
-**The trace.** The host accepts `ResourceReadings` once per run and only before `Finalizing`,
-and only for the frame it captured last: the trace's `captured_at` must equal the capture time
-the host kept with that frame's id. A second trace or one after `Finalizing`
-(`contained_task_resource_reading_duplicate`), a trace before any frame
-(`contained_task_resource_reading_frame_missing`) or of another frame
-(`contained_task_resource_reading_frame_mismatch`) poisons the Runtime. The readings then travel
-in memory on the run's terminal draft.
+**The traces.** The host accepts `ResourceReadingFrame` only before `Finalizing` and before the
+run joins any frame, and only for the frame it captured last: the trace's `captured_at` must
+equal the capture time the host kept with that frame's id, which the host keeps with the
+hand-off. It accepts one `ResourceReadings` per handed-off frame, before `Finalizing` and in
+hand-off order: its `captured_at` must be the next handed-off frame's. A hand-off after the join
+began or after `Finalizing`, or readings after `Finalizing`
+(`contained_task_resource_reading_duplicate`), a trace without a frame to name
+(`contained_task_resource_reading_frame_missing`), one of another frame
+(`contained_task_resource_reading_frame_mismatch`), and a successful `Finalizing` before every
+handed-off frame is joined (`contained_task_finalizing_state_invalid`) poison the Runtime. The
+readings that held travel in memory on the run's terminal draft, frame by frame. Each mark that
+gave no reading is written at once as one task diagnostic row of kind `error`
+(`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the mark's `target_id`) whose
+`outcome` is the warning `contained_task_resource_reading_unresolved`, on its frame; a mark's
+evaluation is recorded on its frame too.
 
 **Run kinds.** A manual `task-run` and a policy dispatch both write. A startup package or a
 stuck-recovery return-home package that declares readings is refused after admission, before
@@ -158,7 +188,7 @@ readings.
 | `scope` | `{"kind": "instance", "instance_id": <the run's registered instance alias>}` |
 | `key` | `fact_key` |
 | `content` | inline `integer`, the reading |
-| `observed_at_unix_ms` | the terminal frame's device capture time in Unix ms. It is wall clock time, the clock domain of the Runtime clock that refuses an observation in the future |
+| `observed_at_unix_ms` | the device capture time of the frame the reading was taken on, in Unix ms. It is wall clock time, the clock domain of the Runtime clock that refuses an observation in the future |
 | `expires_at_unix_ms` | `observed_at_unix_ms + valid_for_ms` |
 | `ttl_policy` | `{"minimum_ms": valid_for_ms, "maximum_ms": valid_for_ms, "source": "detector_contract"}` |
 | `confidence_milli` | the reading's `ocr_confidence_milli` |
@@ -185,11 +215,12 @@ terminal flow once, unchanged.
    already committed terminal is rejected as before; a refused projection is rewritten as before
    (`contained_task_outcome_*`). Neither publishes. A successful projection of this terminal is
    the confirmed settlement.
-2. No lock is held. Each reading, in declaration order, is published through `publish_facts`
-   (ordinary purpose) as its own single-record observation. A non-fatal refusal stops
-   publishing: the readings already written stay, and the terminal becomes the failure
-   `contained_task_resource_reading_rejected`. A fatal store failure poisons the Runtime, as for
-   every publication.
+2. No lock is held. Each reading, frame by frame in the order of the frames' capture times and
+   in mark order within a frame, is published through `publish_facts` (ordinary purpose) as its
+   own single-record observation; a key read on two frames is published twice, and the store
+   keeps the newer observation. A non-fatal refusal stops publishing: the readings already
+   written stay, and the terminal becomes the failure `contained_task_resource_reading_rejected`.
+   A fatal store failure poisons the Runtime, as for every publication.
 3. The gate is taken again and the original flow runs in full: the chain, an already committed
    terminal, the summary, the projection, the summary and terminal appends and the failed
    terminal note.
@@ -203,13 +234,13 @@ detail is the failure's native detail.
 `policy` lock is never taken under it. Between stage 2 and stage 3 another path can commit the
 run's terminal. Stage 3 then rejects the attempt as
 `contained_task_terminal_already_committed`, and the facts stay written: they are real
-observations of the terminal frame, and the rejection is reported on its own.
+observations of the frames they were read on, and the rejection is reported on its own.
 
 **Ledger order.** `Finalizing` is the event `task.terminal_intent` and `TerminalCommitted` is
 `task.completed` or `task.failed`.
 
-- Success: the terminal frame's recognition, `Finalizing` (`success`), `fact.published` once
-  per reading, `capture.summary_committed`, `TerminalCommitted` (`success`).
+- Success: the frames' recognitions, `Finalizing` (`success`), `fact.published` once per
+  reading that held, `capture.summary_committed`, `TerminalCommitted` (`success`).
 - Refused in stage 0 or 2: `Finalizing` (`success`), the readings published before the refusal,
   `capture.summary_committed`, `TerminalCommitted` (`failure`). This is the same sequence as for
   a refused settlement projection.
@@ -222,7 +253,6 @@ but has no native detail field.
 
 | Code | When | Native detail | Reading why from the ledger |
 | --- | --- | --- | --- |
-| `contained_task_resource_reading_unresolved` | a reading does not hold, before `Finalizing` | `<id>:<reason>` | the OCR text and confidence in the task diagnostic |
 | `contained_task_resource_reading_invalid` | a declaration refused before any input | `<id>:<reason>` | the package admission refusal |
 | `contained_task_resource_reading_run_kind_unsupported` | a startup or return-home package declares readings | none | the package's `runtime.failed` |
 | `contained_task_resource_reading_live_pool_unsupported` | stage 0 | `<id>:<pool id>` | the active catalog's `ledger_fact` pool of that key |
@@ -240,7 +270,9 @@ For `contained_task_resource_reading_rejected`, the fact store code can be trace
 The detail `<id>:fact_observation_invalid` also names a reading that a fact record cannot hold.
 
 A refused run is a failed run for the policy (`failure_streak`). None of these codes triggers
-stuck recovery.
+stuck recovery. `contained_task_resource_reading_unresolved` is no failure code since Workflow
+#384 D2-S2: a mark that gives no reading is a warning (task diagnostic row above) and the run
+settles as it would without it; it adds nothing to `failure_streak`.
 
 **Live pools.** Readings do not supply `ledger_fact` pools. Such a pool requires its records to
 carry `input.committed` and `input.failed` in `invalidate_on`, and a reading carries neither,
@@ -263,6 +295,45 @@ An agent should not publish a reading's key by hand once a package reads it. A m
 observation that combines that key with other keys makes a later single-key reading an
 incomplete refresh (`fact_observation_incomplete_refresh`), and a newer manual observation makes
 it `fact_observation_not_newer`; publish at most that one key per observation.
+
+## Recognition maintenance packages
+
+Workflow #384 D2-S2 (`rd-1009/d2/model-d2-fact-refresh.md` §3.2, §3.10). The standard package's
+recognition maintenance package is the one package the scheduler runs to read an instance's
+facts (D2-S4). It is an ordinary task package that only navigates and reads.
+
+- **Declaration.** The standard package root's `maintenance.json` names it with the use
+  `recognition` ([package-reference.md](package-reference.md), "Maintenance declarations");
+  each server has at most one (`duplicate_bundle_maintenance_role`), and a reader that does not
+  know the use refuses the declaration.
+- **Qualification** (`TaskPackageDescriptor::use_incompatibility(Recognition)`, the reader
+  problem token): no `recognize_only` package (`recognize_only`), no stability termination
+  (`stability_termination`), no designated operation (`designated_operation`), at least one
+  mark (`no_marks`). Navigating into a page is allowed; it may not declare `cost_commit`
+  (scheduling slice SR-10).
+- **Binding.** The instance's `instances[].recognition_package` names it by location only,
+  `{"package": "<path>"}` (never a digest, option 丙); a relative path resolves against the
+  configuration file's directory ([runtime-config.md](runtime-config.md)). acsetup writes it
+  from the bundle's declaration (D2-S6).
+- **`check-config`** prepares each bound package and refuses a binding that is no reader with
+  `fact_reader_binding_invalid` (stage `config_recognition_binding`; `reader_problem`: the
+  qualification's token, `package_unreadable` with the loader's refusal as its cause, or
+  `policy_fact_authority` / `live_pool_key` for a mark whose key the configuration's
+  `policy.facts` declares or a `ledger_fact` pool observes for the instance, since the fact
+  store would refuse every such reading). It reports `instances[].recognition_package`
+  (`package`, `fact_keys`) and warns `fact_reader_missing:<instance>:<fact key>` for each
+  realistic fact (`resource.*`, `inventory.*`) a catalog task's trigger or stop predicate reads
+  in an instance's scope that the instance's reader does not mark, or that an instance without
+  a reader cannot refresh.
+- **A Runtime start** reads each bound package's marks without preparing it and runs without a
+  binding it cannot read or whose marks the configuration claims; the `recognition_packages`
+  row of `config.subsystems` notes each such binding as `fact_reader_binding_ignored` (caused by
+  its `fact_reader_binding_invalid`) and the start goes on. The scheduler's reading dispatch
+  checks the qualification again when it prepares the package (D2-S4).
+- **Resource validation.** `package bundle --maintenance` adds one warning
+  `recognition_pack_undeclared` (`package_id`) to its output's `warnings` for each pack that
+  qualifies as a reader but is not declared `recognition`; the resource repositories make it an
+  error once their readers are declared (D2-S6).
 
 ## Never written
 

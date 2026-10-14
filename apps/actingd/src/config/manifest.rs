@@ -431,6 +431,18 @@ pub(crate) fn env_overrides_subsystem(declared: Option<bool>, ignored: &[&str]) 
     subsystem("env_overrides", declared == Some(true), outcome)
 }
 
+/// Workflow #384 D2-S2: `recognition_packages`, a start's recognition package bindings, added
+/// only when the configuration names one. It is enabled when the start kept a binding; every
+/// binding the start runs without is a `note` link of `fact_reader_binding_ignored`, so an
+/// ignored binding is never silent.
+pub(super) fn recognition_packages_subsystem(kept: bool, ignored: Vec<Outcome>) -> ConfigSubsystem {
+    let outcome = ignored.into_iter().fold(
+        Outcome::new(ActingdCode::ConfigSubsystemConfigured),
+        |outcome, warning| outcome.link(CauseRelation::Note, warning),
+    );
+    subsystem("recognition_packages", kept, outcome)
+}
+
 /// The registry id's canonical text (`instance_<32 hex>`), its only public spelling.
 pub(super) fn instance_id_text(instance_id: InstanceId) -> Result<String, Code> {
     match serde_json::to_value(instance_id) {

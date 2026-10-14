@@ -46,6 +46,10 @@ pub struct PackageBundleResponse {
     pub status: String,
     pub out: String,
     pub index: BundleIndex,
+    /// Workflow #384 D2-S2: one `recognition_pack_undeclared` per pack that reads like a
+    /// recognition maintenance package but is not declared one; absent when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 
 #[derive(Debug, Clone)]

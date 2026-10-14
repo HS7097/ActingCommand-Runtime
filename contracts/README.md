@@ -9,7 +9,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `global-ledger-query.md` — shared query predicates, indexes, bounded watch and read-only event pages.
 - `task-flow.schema.json` — declarative task-flow schema.
 - `ocr-fields.md` — operation 0.8 typed post-admission fields and task-run projection.
-- `resource-readings.md` — the `task.json` family `resource_readings`: declaration and version gate, the kernel reading on the successful terminal frame, and its failure codes.
+- `resource-readings.md` — the `task.json` family `resource_readings` (reading marks): declaration and version gate, the kernel reading on the frames a run reaches the marked pages on, joined before `Finalizing`, its failure codes and the recognition maintenance package (Workflow #384 D2-S2).
 - `task-diagnostic-stream.md` — task-owned raw evaluation records, verified streaming and bounded read-only export.
 - `device-diagnostic-budget.md` — owner-epoch Shadow diagnostics, source references and bounded close summaries.
 - `nemu-owned-resource-close.md` — fenced connection retirement and bounded completion of Runtime-owned Nemu resources.

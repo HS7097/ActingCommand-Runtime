@@ -3078,9 +3078,9 @@ fn entry_page_ids(bundle: &Bundle) -> Vec<&str> {
 
 /// Cross-references of operation `resource_readings` (`contracts/resource-readings.md`). The
 /// declaration gate has already checked each entry; this adds the pages and targets it names:
-/// a reading's page is a `scheduling_outcome` terminal page and its target is one of the task's
-/// own `ocr_targets`, which a page gate may also name (Workflow #396 REC-6). Each error names
-/// the entry's field pointer.
+/// a reading's page is a page the task declares (Workflow #384 D2-S2: any page, not only a
+/// terminal one) and its target is one of the task's own `ocr_targets`, which a page gate may
+/// also name (Workflow #396 REC-6). Each error names the entry's field pointer.
 fn validate_resource_readings_bundle(bundle: &Bundle, game: &str, errors: &mut Vec<String>) {
     let Some(value) = bundle.data.get("resource_readings") else {
         return;
@@ -3097,14 +3097,11 @@ fn validate_resource_readings_bundle(bundle: &Bundle, game: &str, errors: &mut V
                 return;
             }
         };
-    // An invalid outcome declaration is reported by its own check.
-    let Ok(terminal_pages) = declared_scheduling_outcome_page_ids(bundle) else {
+    // Workflow #384 D2-S2 (D2 model §3.2): a mark may stand on any page the task declares. An
+    // invalid page declaration is reported by its own check.
+    let Ok(task_pages) = declared_task_page_ids(bundle, game) else {
         return;
     };
-    let terminal_pages = terminal_pages
-        .iter()
-        .map(|page| normalize_page_rule_id(game, page))
-        .collect::<BTreeSet<_>>();
     let targets = match ocr_target_declarations(bundle) {
         Ok(targets) => targets,
         Err(error) => {
@@ -3113,9 +3110,9 @@ fn validate_resource_readings_bundle(bundle: &Bundle, game: &str, errors: &mut V
         }
     };
     for (index, reading) in readings.iter().enumerate() {
-        if !terminal_pages.contains(&normalize_page_rule_id(game, &reading.page_id)) {
+        if !task_pages.contains(&normalize_page_rule_id(game, &reading.page_id)) {
             errors.push(format!(
-                "{}: /resource_readings/{index}/page_id '{}' is not a terminal page of scheduling_outcome",
+                "{}: /resource_readings/{index}/page_id '{}' is not a page the task declares",
                 path.display(),
                 reading.page_id
             ));
@@ -3134,6 +3131,36 @@ fn validate_resource_readings_bundle(bundle: &Bundle, game: &str, errors: &mut V
             ));
         }
     }
+}
+
+/// Workflow #384 D2-S2: every page a task declares, normalized: its entry, target, error and
+/// scheduling outcome pages and each page its operations leave, reach or pass through.
+fn declared_task_page_ids(bundle: &Bundle, game: &str) -> CliOutcome<BTreeSet<String>> {
+    let mut pages = BTreeSet::new();
+    for page in entry_page_ids(bundle) {
+        pages.insert(normalize_page_rule_id(game, page));
+    }
+    for page in declared_terminal_page_ids(bundle)?.into_iter().flatten() {
+        pages.insert(normalize_page_rule_id(game, &page));
+    }
+    for page in declared_error_page_ids(bundle)? {
+        pages.insert(normalize_page_rule_id(game, page));
+    }
+    for page in declared_scheduling_outcome_page_ids(bundle)? {
+        pages.insert(normalize_page_rule_id(game, &page));
+    }
+    for operation in array_field(&bundle.data, "operations") {
+        if let Some(page) = operation.get("from").and_then(Value::as_str) {
+            pages.insert(normalize_page_rule_id(game, page));
+        }
+        for page in operation_destination_page_ids(bundle, operation)? {
+            pages.insert(normalize_page_rule_id(game, &page));
+        }
+        if let Some(page) = operation_transition_page_id(operation) {
+            pages.insert(normalize_page_rule_id(game, page));
+        }
+    }
+    Ok(pages)
 }
 
 fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {

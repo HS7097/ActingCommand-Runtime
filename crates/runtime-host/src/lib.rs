@@ -38,6 +38,8 @@ mod project_interface;
 mod proposal;
 mod provider;
 mod provider_startup;
+// Workflow #384 D2-S2.
+mod recognition_binding;
 mod recovery_read;
 mod recovery_timing;
 mod strategy;
@@ -80,6 +82,10 @@ pub use policy_host::{
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
 pub use provider_startup::ProviderStartup;
+pub use recognition_binding::{
+    missing_fact_readers, recognition_binding_ignored, recognition_binding_invalid,
+    recognition_binding_key_conflict, recognition_binding_qualification,
+};
 pub use suspension_report::{SuspensionReportError, SuspensionReportRequest, suspension_report};
 
 #[cfg(test)]

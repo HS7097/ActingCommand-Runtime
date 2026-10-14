@@ -507,6 +507,10 @@ pub struct RuntimeHostConfig {
     /// Per instance alias: the stuck-recovery ladder settings (slice #316-B4); an instance
     /// without an entry uses the defaults (enabled, 600 s cool-down).
     stuck_recovery: BTreeMap<String, actingcommand_contract::InstanceStuckRecovery>,
+    /// Workflow #384 D2-S2 (D2 model §3.2): per instance alias, the location of the recognition
+    /// maintenance package bound by `instances[].recognition_package` that the start kept. The
+    /// scheduler runs it to read the instance's facts (D2-S4); the start never prepares it.
+    recognition_packages: BTreeMap<String, PathBuf>,
     /// Workflow #336 L2b: per package id, the locator and content reference of a package a
     /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
     /// run resolves it; not a configuration fact.
@@ -561,6 +565,7 @@ impl RuntimeHostConfig {
             startup_packages: BTreeMap::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
+            recognition_packages: BTreeMap::new(),
             prerequisite_packages: BTreeMap::new(),
             return_home_packages: BTreeMap::new(),
             standard_packs_root: None,
@@ -723,6 +728,23 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Workflow #384 D2-S2: adds one subsystem row to the installed configuration manifest; a
+    /// host without a manifest records none.
+    pub fn with_config_subsystem(
+        mut self,
+        subsystem: actingcommand_contract::ConfigSubsystem,
+    ) -> Self {
+        if let Some(manifest) = self.config_manifest.as_mut() {
+            manifest.subsystems.push(subsystem);
+        }
+        self
+    }
+
+    /// The policy inputs the host evaluates from, when a policy is configured.
+    pub const fn policy_inputs(&self) -> Option<&PolicyInputSnapshot> {
+        self.policy_inputs.as_ref()
+    }
+
     /// Installs the configuration layers this start read (Workflow #387 D1b): the host records
     /// them as `config.selection` together with the manifest.
     pub fn with_config_selection(
@@ -758,6 +780,21 @@ impl RuntimeHostConfig {
     ) -> Self {
         self.resource_packages = resource_packages;
         self
+    }
+
+    /// Workflow #384 D2-S2: installs the recognition maintenance package locations the start
+    /// kept, keyed by instance alias. Nothing is opened here.
+    pub fn with_recognition_packages(
+        mut self,
+        recognition_packages: BTreeMap<String, PathBuf>,
+    ) -> Self {
+        self.recognition_packages = recognition_packages;
+        self
+    }
+
+    /// The kept recognition maintenance package locations, keyed by instance alias.
+    pub const fn recognition_packages(&self) -> &BTreeMap<String, PathBuf> {
+        &self.recognition_packages
     }
 
     /// Installs the stuck-recovery ladder settings, keyed by instance alias (slice #316-B4).

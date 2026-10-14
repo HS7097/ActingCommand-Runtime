@@ -512,6 +512,35 @@ tables; [instance-fact-store.md](instance-fact-store.md), "Reading the seeds").
 |---|---|---|---|---|---|
 | M41 | `actingctl facts --program`, `facts --instance <selector>` and `status --config` ↔ `ac_facts` (`scope` program, instance or config; `instance`; `key_prefix`): `{scope, read_at_unix_ms, snapshot \| records, records_total, records_kept}` | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | MCP-4 | MCP-4 | `snapshot` is the `RuntimeFactSnapshot` (program) or the instance's `InstanceFactView` (W2); `records` the `config.*` records (config); `read_at_unix_ms` is the Runtime's clock at the read (the snapshot's `taken_at_unix_ms`, the instance read's `sampled_completed_at_unix_ms`); `records_total` counts the records read, `records_kept` those answered after `key_prefix` (program and instance only); the selector is the alias, instance_id or ADB port, resolved with one status read; MCP exports an answer past its output budget (`answer_exported`); CLI success codes `runtime_facts_reported`, `instance_facts_reported` (new) and `runtime_config_reported` |
 
+### 1.28 Wave 8 slice D2-S2 (#384 D2M §3.2, §3.4, §3.5, §6 S2; v1.4.2)
+
+D2-S2 brings its own shapes and writes them; [resource-readings.md](resource-readings.md)
+("Kernel reading", "Host", "Recognition maintenance packages") and
+[runtime-config.md](runtime-config.md) are the contract. No new event type and no new member of a
+persisted record; the reading facts keep their shape.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DS1 | `config.parameters.instance`: `instance.<instance id>.recognition_package` | new per-instance configuration row | D2-S2 | D2-S2 | string, the location of the instance's recognition maintenance package from the entry's `recognition_package.package`, resolved against the configuration file's directory; a location only, never a digest (option 丙); default `none`, so only an instance that names it has the row; not settable (read once at assembly); key-table `file_path` `InstanceMemberAt("recognition_package.package")` |
+| DS2 | `config.parameters.scheduling`: `scheduling.fact_refresh.recognition_join_timeout_ms` | new configuration row | D2-S2 | D2-S2 | milliseconds `0..=1800000`, default `10000` (`actingd.defaults.json`), settable; the one `scheduling.fact_refresh.*` key D2-S2 reads (the join, D2M §3.5), parsed here ahead of D2-S4's other six keys of the §5 row |
+| DS3 | `config.subsystems` row `recognition_packages` | new row of an existing fact | D2-S2 | D2-S2 | only when the configuration binds a recognition package; `enabled` when the start kept one; outcome `config_subsystem_configured` with one `note` link `fact_reader_binding_ignored` (caused by `fact_reader_binding_invalid`) per binding the start runs without |
+| DS4 | task diagnostic stream (`task-diagnostic.v2`): a reading mark that gave no reading is one `error` row (`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the mark's `target_id`) whose `outcome` is `contained_task_resource_reading_unresolved` (warning; `reading_id`, `fact_key`, `reading_problem`) | new value of an existing member | D2-S2 | D2-S2 | written on the frame the mark was read on; a joined reading's OCR rows also carry that frame's `frame_id`, not the last captured frame's; schema not bumped |
+| DS5 | `fact.published` of a reading | changed rule of an existing record (shape unchanged) | D2-S2 | D2-S2 | `observed_at_unix_ms` and the `frame:` part of `source_snapshot_id` are those of the frame the reading was taken on, on any page of the task (they were the terminal frame's); readings are published in the order of their frames' capture times |
+| DS6 | package format: bundle `maintenance[].uses` value `recognition` (at most one per server); task `resource_readings[].page_id` any page the task declares; `linear_steps` tasks may carry `resource_readings` | new value and relaxed rules (resource file format, not a ledger shape) | D2-S2 | resource side (D2-R1, D2-S6) | a reader that does not know `recognition` refuses the declaration; the `package` interface revision is declared once by A8 |
+| DS7 | check-config v1: `error.code` `fact_reader_binding_invalid`, stage `config_recognition_binding`, `error.detail` `{alias, path, reader_problem, package_id, fact_key}`; `instances[].recognition_package` `{package, fact_keys}` for an instance that binds one; warning `fact_reader_missing:<instance>:<fact key>` | interface members | D2-S2 | D2-S2 | schema version stays `v1` (additive) |
+| DS8 | `actinglab package bundle` output: `warnings` (absent when empty), one `recognition_pack_undeclared` outcome per pack that qualifies as a reader but is not declared `recognition` | interface member | D2-S2 | D2-S2 | resource-tooling `PackageBundleResponse.warnings` |
+
+Configuration keys (§5): per instance `recognition_package` `{package}` (built, DS1) and
+`scheduling.fact_refresh.recognition_join_timeout_ms` (built, DS2). The codes
+`fact_reader_binding_invalid`, `fact_reader_binding_ignored`, `fact_reader_missing`,
+`fact_reader_document_mismatch` (runtime-host; registered, emitted once actingd loads a
+scheduling-layer document and D2-S4 reads `min_interval_ms`), `recognition_pack_undeclared`
+(resource-tooling, domain `recognition_pack_` gains its owner), the reclassification of
+`contained_task_resource_reading_unresolved` to warning (ladder class `none`), the keys
+`reading_id`, `reading_problem` and the vocabulary `reading_problem`, the `reader_problem` token
+`package_unreadable` and the actingd location `config_recognition_binding` are catalog entries,
+not rows (§7).
+
 ### 1.29 Wave 8 slice REC-6 (#396, REC-M v1.2.1 §8)
 
 REC-6 brings and writes both members of R6-1, in the task diagnostic stream; R6-2 is resource file
@@ -626,8 +655,8 @@ when it takes effect.
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
-| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 | D2-S4 (v0.12.0) |
-| per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 | D2-S2 |
+| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
+| per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17 | S6a | S6a |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
