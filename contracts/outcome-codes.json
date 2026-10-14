@@ -612,11 +612,15 @@
     },
     "reading_id": {
       "type": "id",
-      "description": "The id of a contained task's reading mark (resource_readings[].id)."
+      "description": "The id of a contained task's reading mark (resource_readings[].id), or of a resource adjustment whose amount gave no reading (resource_adjustments[].id, Workflow #384 D2-S3)."
     },
     "reading_problem": {
       "type": "vocab:reading_problem",
       "description": "Why a reading mark gave no reading on a frame handed to recognition."
+    },
+    "adjustment_reason": {
+      "type": "vocab:adjustment_reason",
+      "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3)."
     },
     "entry_problem": {
       "type": "vocab:entry_problem",
@@ -2676,6 +2680,26 @@
         },
         "join_timeout": {
           "description": "The recognition had not returned when the run's join timeout ended."
+        }
+      }
+    },
+    "adjustment_reason": {
+      "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3).",
+      "tokens": {
+        "base_missing": {
+          "description": "The key had no current record to adjust."
+        },
+        "base_expired": {
+          "description": "The key's current record had expired."
+        },
+        "newer_observation": {
+          "description": "An observation of the key at or after the confirmation already holds the change."
+        },
+        "amount_unresolved": {
+          "description": "The change the screen shows could not be read; the key's record is dropped."
+        },
+        "after_read_missing": {
+          "description": "No reading of the key followed the confirmation; the key's record is dropped."
         }
       }
     },
@@ -5200,7 +5224,7 @@
       "runtime-host"
     ],
     "runtime_restart_": [
-      "runtime-host"
+      "contract"
     ],
     "policy_settlement_release_": [
       "runtime-host"
@@ -8031,6 +8055,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "actingd_fallback_log_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "variable": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A start refusal could not be appended to the fallback log %LOCALAPPDATA%\\ActingCommand\\logs (Workflow #378 A6a, model section 8.2): path names the folder or file, with the OS error as the caused_by link; variable names LOCALAPPDATA when it is not set. A developer line only; actingd still exits by the refusal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "action_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -8112,12 +8153,17 @@
       "handling": "TBD"
     },
     "adb_install_mismatch": {
-      "category": "error",
+      "category": "fatal",
       "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_path": "required",
+        "aliases": "required",
+        "tools_dir": "required",
+        "files": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -8126,16 +8172,37 @@
       "handling": "TBD"
     },
     "adb_install_missing": {
-      "category": "error",
+      "category": "fatal",
       "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_path": "required",
+        "aliases": "required",
+        "tools_dir": "required",
+        "files": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
       "description": "actingd refused the install root's adb: a distributed binary is missing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "adb_install_pin_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The platform-tools pin this build carries (scripts/windows-tools/windows-tool-sources.v1.json, compiled in) cannot be read: it does not decode (its foreign_data_error link), no single component carries distributed_files, an entry is malformed (path), or adb.exe is not listed. A build defect (Workflow #378 A6a).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -14448,7 +14515,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "active_catalog_id": "optional",
+        "active_catalog_version": "optional",
+        "active_catalog_hash": "optional",
+        "configured_catalog_id": "optional",
+        "configured_catalog_version": "optional",
+        "configured_catalog_hash": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -15629,6 +15702,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingd check-config was given an unknown, repeated or empty option.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "check_config_passed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "check-config passed (Workflow #378 A6a, check-config v2): the configuration loads, assembles and validates as a start would. What the check noted (an ignored environment override, an unresolved MuMu installation, an unused device binding, a broken standard-pack root, a missing fact reader) is a note link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -24939,6 +25026,53 @@
       "description": "The Runtime host reports expired queue context missing.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "fact_adjustment_skipped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "adjustment_reason": "required",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a run confirmed an operation that declares a resource adjustment of fact_key, and the adjustment wrote nothing, for adjustment_reason. With after_read_missing (no reading of the key followed the confirmation) and amount_unresolved (the change the screen shows could not be read) the key's record is dropped, so the key is unknown until it is read again. task_id is the package's entry task. A task diagnostic row of the run, on its confirmation frame; the run itself succeeds.",
+      "common_causes": "No reading mark of the key on a page the run passes after the operation, a mark or an amount that could not be read, a key with no current record, or an observation of the key already newer than the confirmation.",
+      "handling": "Nothing to repair for base_missing, base_expired and newer_observation. For after_read_missing and amount_unresolved, check the package's marks and the amount's OCR target on the pages after the operation."
+    },
+    "fact_adjustment_underflow": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "task_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a run's confirmed resource adjustment would take fact_key below zero: the change read on the confirmation frame is larger than the key's current value. Nothing is written and the key's record is dropped, so the key is unknown until it is read again. task_id is the package's entry task. A task diagnostic row of the run, on its confirmation frame; the run itself succeeds.",
+      "common_causes": "The key's current record is stale or was misread, or the amount was misread.",
+      "handling": "Check the key's reading mark and the amount's OCR target; the next reading of the key replaces the dropped record."
     },
     "fact_commit_missing": {
       "category": "error",
@@ -40341,6 +40475,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "ledger_maintenance_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An actingd ledger-maintenance pass completed (Workflow #378 A6a); the report's status says which.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "ledger_maintenance_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -40452,6 +40600,64 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger reports ledger not an empty root.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ledger_open_measured": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "event_count": "required",
+        "artifact_count": "required",
+        "artifact_bytes": "required",
+        "worker_count": "required",
+        "sql_read_ms": "required",
+        "verify_ms": "required",
+        "material_ms": "required",
+        "restore_ms": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure (Workflow #378 A6a, N1).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ledger_opened": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "event_count": "required",
+        "artifact_count": "required",
+        "artifact_bytes": "required",
+        "worker_count": "required",
+        "sql_read_ms": "required",
+        "verify_ms": "required",
+        "material_ms": "required",
+        "restore_ms": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start opened its ledger (Workflow #378 A6a, model section 7.4, N1): the open's phases (events read, artifacts and their bytes checked, workers, and the SQL read, verify, material and restore times) and its deadline as timeout_ms. actingd writes it as a daemon line.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -41202,7 +41408,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "count": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -45653,6 +45860,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "owner_released": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "owner_pid": "required",
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start released the previous owner, whose process had exited although its last journal record declared resources in use or unconfirmed (slice #315-B2c-2): owner_pid is its process and at_unix_ms when it started. actingd writes it as a daemon line (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "owner_resource_unconfirmed": {
       "category": "error",
       "ladder_class": "none",
@@ -45664,7 +45893,9 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "owner_pid": "optional",
+        "owner_probe_state": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -46351,6 +46582,28 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A panic boundary caught a panic; raw_text keeps the panic payload. It is a link under the interrupted operation's own failure code.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "panic_unrecovered": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "at_unix_ms": "optional",
+        "limit_count": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The watchdog's restart budget ran out and every start in its window ended in runtime_restart_required (Workflow #378 A6a, model sections 2.4 and 7.5): neither the Runtime nor the person operating it recovered it. The last start's terminal outcome is the caused_by link, with its panic_caught links. Only the watchdog decides it; at_unix_ms is when the budget ran out and limit_count the budget.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -60280,6 +60533,166 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_adjustment_fact_key_duplicate": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: two adjustments change one key on one operation.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_fact_key_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment's fact_key is no resource.* or inventory.* instance fact key.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_id_duplicate": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: two adjustments have one id.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_id_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment id breaks the identifier rule of reading marks.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_mark_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment without amount reads the changed key after its operation, but the task has no reading mark of that key.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_operation_id_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment's operation_id is no operation of the task.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustment_target_id_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: an adjustment amount's target_id breaks the identifier rule.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "resource_adjustments_count_invalid": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S3: a task's resource_adjustments declaration was refused: it is empty or has more than 16 entries.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "resource_close_instance_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -60429,7 +60842,10 @@
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "required",
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -60443,7 +60859,10 @@
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "required",
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -63486,9 +63905,11 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime's wire error code (receipt projection `code`): runtime fatal.",
+      "retired_in": "0.12.0",
+      "replaced_by": "runtime_halted",
+      "description": "Retired (Workflow #378 A6a): renamed runtime_halted (model section 2.3, M1a).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -63641,6 +64062,29 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports runtime frame write failed.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_halted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "holder_id": "optional",
+        "lease_id": "optional",
+        "retry_after_ms": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime halted (Workflow #378 A6a, model section 2.3, M1a; was runtime_fatal): the Runtime error code a receipt projection carries for a condition that latched the host. A latched host answers every later request with an error condition under runtime_halted as its caused_by link, and with a fatal condition as itself.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -66438,6 +66882,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "runtime_ready": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pid": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime started and is ready (Workflow #378 A6a, model section 7.4): actingd's daemon line, with its process id.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "runtime_receipt_build_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -66705,8 +67165,8 @@
     "runtime_restart_required": {
       "category": "error",
       "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
+      "owner": "contract",
+      "layer": "contract",
       "uncertain": false,
       "values": {
         "operation": "optional",
@@ -66718,7 +67178,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category.",
+      "description": "An instance worker panicked again before it finished one payload after it was rebuilt from an earlier panic (spec section 7). The Runtime is marked fatal and actingd exits with this outcome; each panic was recorded as panic_caught under its payload's own failure category. Workflow #378 A6a: the contract's, as the watchdog reads it from a start's terminal outcome (panic_unrecovered).",
       "common_causes": "A defect that panics on every payload of one instance.",
       "handling": "actingd is restarted by its supervisor; report the panic_caught records with the build."
     },
@@ -66953,6 +67413,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl status: the Runtime reported its status.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_stopped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime stopped (Workflow #378 A6a, model sections 7.4-7.5): the terminal outcome of a requested stop; when a condition stopped it, that condition is the daemon line after it. An accepted shutdown of a held start is a requested stop, with the shutdown as its caused_by link.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -68882,6 +69356,27 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "scheduling_pause_dropped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start dropped an instance's scheduling pause because the instance is not registered (Workflow #361 B1). actingd writes it as a daemon line (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "scheduling_pause_epoch_encode_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -69059,6 +69554,28 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports scheduling pause releasing.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "scheduling_pause_restored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional",
+        "at_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start restored a scheduling pause (Workflow #361 B1): an instance's with its alias, the global one without; at_unix_ms is since when it holds. actingd writes it as a daemon line (Workflow #378 A6a).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -73240,6 +73757,46 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "suspended_frame_missing": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended compares no error frames of a pair: a run of the pair recorded none (the comparison's outcome; Workflow #378 A6a, was the text frame_missing).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "suspended_frame_unreadable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended could not read a recorded error frame of a pair; the artifact store's failure is the caused_by link (Workflow #378 A6a, was the text artifact_unreadable).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "suspended_ledger_incomplete": {
       "category": "error",
       "ladder_class": "none",
@@ -73271,7 +73828,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "state_root": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -73426,6 +73984,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingd suspended printed no JSON report.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "suspended_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended produced its report (Workflow #378 A6a).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -74900,6 +75472,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "unlock_owner_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd unlock-owner recorded the operator's confirmation (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "unlock_owner_config_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -75495,7 +76081,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "invalid_models": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -78887,6 +79474,14 @@
       "since": "0.12.0",
       "description": "check-config stage: checking the recognition maintenance package bindings (Workflow #384 D2-S2)."
     },
+    "config_resource_package": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "check-config stage: admitting the resource packages (Workflow #378 A6a; was resource_package)."
+    },
     "config_validate": {
       "owner": "actingd",
       "layer": "config",
@@ -78942,6 +79537,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger's operation or stage: configure fingerprinter."
+    },
+    "configure_ledger_capture": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking the capture queue policy (budget, tiers, spill batch, flush batches, request ring, tagged workbench keys) the ledger writer is opened with (Workflow #383 AO-2, ledger observer §7, §15)."
     },
     "configure_ledger_write_policy": {
       "owner": "ledger",
@@ -80959,6 +81562,30 @@
       "since": "0.12.0",
       "description": "The probe that watches the start of the write attempt in progress and stops a stalled one (Workflow #383 AO-1, ledger observer §14 T8)."
     },
+    "ledger_capture_record": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Taking one record into the capture queue: its capture number, its place and the watermark check (Workflow #383 AO-2, ledger observer §7)."
+    },
+    "ledger_flush_captured": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The flush thread assembling, checking and committing the records it took from the capture queue (Workflow #383 AO-2, ledger observer §8)."
+    },
+    "ledger_index_rows": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Maintaining the rows of the index table ledger_index in the transaction of a batch (Workflow #383 AO-2, ledger observer §11.1, §11.4)."
+    },
     "ledger_query_selection": {
       "owner": "ledger",
       "layer": "store",
@@ -80966,6 +81593,30 @@
       "status": "active",
       "since": "0.11.5",
       "description": "Answering a query on a selected ledger read (GlobalLedger::open_selected)."
+    },
+    "ledger_read_spilled": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The flush thread reading the spilled records of the capture queue back from the dump file (Workflow #383 AO-2, ledger observer §7, §8.1)."
+    },
+    "ledger_spill_records": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The spill thread appending the oldest memory records of the capture queue to the dump file (Workflow #383 AO-2, ledger observer §7)."
+    },
+    "ledger_tail_gap": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Recording at the start the unconfirmed tail of a previous run that ended without its close and without a complete dump (Workflow #383 AO-2, ledger observer §10)."
     },
     "ledger_write_retry": {
       "owner": "ledger",
@@ -86691,9 +87342,11 @@
       "owner": "actingd",
       "layer": "config",
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "check-config stage: admitting the resource packages."
+      "retired_in": "0.12.0",
+      "replaced_by": "config_resource_package",
+      "description": "Retired (Workflow #378 A6a): renamed config_resource_package, as resource_package is the check-config report's member name."
     },
     "resource_target_view": {
       "owner": "contract",
