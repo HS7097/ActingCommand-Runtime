@@ -13,6 +13,9 @@ mod codes;
 pub mod color_digest;
 // Workflow #396 REC-2; REC-7 masks.
 mod exact_score;
+// Test plan v2.2 E-1 G8 (exec key 17): color_digest.v1.
+#[cfg(test)]
+mod gate_e1;
 
 pub use codes::ColorDigestErrorCode;
 pub use exact_score::{ExactScoreMap, RegionSpectra, score_milli};

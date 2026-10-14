@@ -224,15 +224,6 @@ jobs:
           name: test-results-${{ github.job }}
           path: ${{ runner.temp }}/test-results/
           if-no-files-found: error
-      # pack-containment's trybuild stays here until E-1 replaces it with compile_fail doctests
-      # (test plan §4 #4); this step leaves with it.
-      - name: Remove trybuild cache artifacts
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path -LiteralPath target/tests) {
-            Remove-Item -LiteralPath target/tests -Recurse -Force -ErrorAction Stop
-          }
 
   exec-tooling:
     runs-on: windows-latest

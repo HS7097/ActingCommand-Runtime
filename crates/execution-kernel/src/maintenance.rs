@@ -342,6 +342,10 @@ pub fn validate_bundle_maintenance(
     Ok(())
 }
 
+// Test plan v2.2 E-1 G4a (exec key 12): the prerequisite chain and bundle maintenance tables.
+#[cfg(test)]
+mod gate_e1;
+
 #[cfg(test)]
 mod tests {
     use super::*;

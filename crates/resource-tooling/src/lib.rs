@@ -12,6 +12,9 @@ mod authoring;
 mod business_catalog;
 mod codes;
 mod declaration_exclusions;
+// Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
+#[cfg(test)]
+mod gate_e1;
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;

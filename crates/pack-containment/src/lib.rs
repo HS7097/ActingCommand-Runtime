@@ -501,6 +501,31 @@ pub enum PackageLayout {
     Module,
 }
 
+/// An admitted package. The capability originates only from `Containment::load` and the
+/// crate's other admission entries; no code outside this crate can construct one
+/// (`docs/architecture/actinglab-a7-issue26-splice.md`, "Externally Supplied `LoadedBundle`").
+///
+/// Test plan v2.2 §4 #4: the two examples below differ only in the last line of `reissue`. The
+/// first compiles, so the second fails for that line alone: building a `LoadedBundle` from its
+/// fields is refused outside the crate.
+///
+/// ```
+/// use actingcommand_pack_containment::{LoadedBundle, PackageLayout, TaskId};
+///
+/// fn reissue(bundle: LoadedBundle, task_id: TaskId, layout: PackageLayout) -> LoadedBundle {
+///     let _ = (&task_id, &layout);
+///     bundle
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use actingcommand_pack_containment::{LoadedBundle, PackageLayout, TaskId};
+///
+/// fn reissue(bundle: LoadedBundle, task_id: TaskId, layout: PackageLayout) -> LoadedBundle {
+///     let _ = (&task_id, &layout);
+///     LoadedBundle { task_id, layout, ..bundle }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct LoadedBundle {
     projection_metadata: Option<VerifiedProjectionMetadata>,

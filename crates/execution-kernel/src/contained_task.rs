@@ -91,6 +91,9 @@ mod gate_384_d2s3;
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
+// Test plan v2.2 E-5 G5 (exec key 3): linear_steps.
+#[cfg(test)]
+mod gate_e5_linear;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,

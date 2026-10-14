@@ -772,3 +772,98 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_387_d1cg::d1cg_a_recognition_that_cannot_conclude_stays_the_class_4_recognition_failure",
 ]
 incident = ["#387"]
+
+# Test plan v2.2 E-5 G5: linear_steps admission refuses a malformed path and misplaced optional or application steps by reason; each step starts on the frame its page passed on and awaits only the next step's page; a declared intermediate page must be seen first; the post-input wait is the larger of post_delay_ms and the window minimum; an absent optional page is skipped after its settle; only a swallowed input is retried; an application entry starts from any screen and is never retried; only a page entry without a prerequisite falls back to return home, whose first step is awaited alone
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_admission_refuses_a_malformed_path",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_admission_refuses_misplaced_optional_and_application_steps",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_each_step_leaves_its_page_and_reaches_the_next",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_an_intermediate_page_must_be_seen_before_the_next_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_the_post_input_wait_is_the_larger_of_post_delay_and_the_window_minimum",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_an_optional_step_is_skipped_when_its_page_is_absent_and_run_when_present",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_only_a_swallowed_input_is_retried",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_an_application_entry_starts_from_any_screen_and_is_never_retried",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_only_a_page_entry_without_a_prerequisite_falls_back_to_return_home",
+    "actingcommand-execution-kernel::lib::contained_task::gate_e5_linear::gate_linear_the_first_step_after_return_home_and_without_a_fallback",
+]
+incident = ["#382 E-5"]
+
+# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the declared bindings
+[[gate]]
+key = "12"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_takes_three_declared_layers_and_refuses_a_fourth",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_return_home_fallback_is_outside_the_three_declared_layers",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_only_a_linear_page_entry_without_a_prerequisite_selects_the_fallback",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_a_cycle",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_an_incompatible_prerequisite",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_more_than_1000_steps_in_total",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_chain_refuses_an_unbound_or_misidentified_prerequisite",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_matches_every_indexed_identity",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_refuses_a_duplicate_role_or_a_missing_reference",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_declared_bindings",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G8: two error frames are similar at 250 changed cells per thousand and different at the next count, a cell changes above a difference of 6, frames of different sizes are different (size_changed) and an undecodable frame is png_invalid
+[[gate]]
+key = "13"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_exactly_250_per_mille_is_similar_and_one_cell_more_is_different",
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_a_cell_difference_of_6_is_unchanged_and_7_is_changed",
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_of_different_sizes_are_different",
+    "actingcommand-execution-kernel::lib::tests::gate_e1_failure_frames::gate_e1_failure_frames_an_undecodable_png_is_png_invalid",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G8: color_digest.v1 gives the contract's golden values, quantizes and encodes the ROI cells row-major, and refuses by the contract's six error codes
+[[gate]]
+key = "17"
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_golden_values",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_grid_is_one_to_min_32_and_the_roi_per_axis",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_quantizes_the_roi_cells_and_encodes_them_row_major",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_algorithm_name_is_exact",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_region_outside_the_rule_is_refused",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_cells_outside_the_encoding_are_refused",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_exclude_cells_outside_the_rule_are_refused",
+    "actingcommand-recognition::lib::gate_e1::gate_e1_color_digest_different_grids_are_refused",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G9: the model folder listing lists the flat and nested layouts with the family defaults; a folder missing rec or keys, mixing layouts, holding cls, with a malformed or mismatched model.json or an illegal name is listed invalid with its reason and does not stop the listing
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_flat_layout_is_listed",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_nested_layout_is_listed",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_missing_rec_or_keys_is_invalid_and_does_not_block_the_listing",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_mixed_layout_is_invalid_and_does_not_block_the_listing",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_with_cls_is_invalid_and_does_not_block_the_listing",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_malformed_or_mismatched_model_json_is_invalid",
+    "actingcommand-vision-ffi::lib::gate_e1::gate_e1_vision_models_illegal_name_is_invalid_and_does_not_block_the_listing",
+]
+incident = ["#382 E-1"]
+
+# Test plan v2.2 E-1 G10: package bundle refuses an existing --out or <out>.part (package_bundle_out_exists) and leaves <out>.part named on failure; the business catalog compiles deterministically and refuses an unknown field, a duplicate row ID and an undeclared pool (package digest is not tested: M-PKG option 丙 retires it)
+[[gate]]
+key = "33"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_package_bundle_refuses_an_existing_out",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_package_bundle_refuses_an_existing_part_directory",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_package_bundle_failure_leaves_the_part_directory_and_names_it",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_output_is_deterministic",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_an_unknown_field",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_a_duplicate_row_id",
+    "actingcommand-resource-tooling::lib::gate_e1::gate_e1_business_catalog_refuses_an_undeclared_pool",
+]
+incident = ["#382 E-1"]
