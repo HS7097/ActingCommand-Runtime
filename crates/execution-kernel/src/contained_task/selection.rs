@@ -592,7 +592,7 @@ fn selection_record(
     Ok(TaskSelectionRecord {
         layout_id: projection.layout_id().to_owned(),
         page_id: projection.page_id().to_owned(),
-        projection: projection.clone(),
+        projection: projection.clone().into(),
         policy: TaskSelectionPolicy {
             path: prepared.path.clone(),
             package_sha256: prepared.package_sha256.clone(),
@@ -609,6 +609,7 @@ fn selection_record(
         verdicts: record_verdicts(&decision.candidates)?,
         reasons: record_reasons(&decision.reasons),
         confirmation: TaskSelectionConfirmation::NotAttempted,
+        unknown_check: None,
     })
 }
 

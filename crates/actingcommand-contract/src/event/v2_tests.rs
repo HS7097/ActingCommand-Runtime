@@ -3134,7 +3134,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
             selection: Box::new(TaskSelectionRecord {
                 layout_id: "slots/main".to_owned(),
                 page_id: "list_page".to_owned(),
-                projection,
+                projection: projection.into(),
                 policy: TaskSelectionPolicy {
                     path: "policy.json".to_owned(),
                     package_sha256: "c".repeat(64),
@@ -3159,6 +3159,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
                 }],
                 reasons: vec![PolicyReasonRecord(Outcome::relayed("selection_selected"))],
                 confirmation,
+                unknown_check: None,
             }),
         },
         AuditInput::new(),

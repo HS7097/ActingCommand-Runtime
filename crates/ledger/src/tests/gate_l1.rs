@@ -147,7 +147,7 @@ fn selection_evaluated() -> TaskSemanticFact {
         selection: Box::new(TaskSelectionRecord {
             layout_id: "layout-a".to_owned(),
             page_id: "page-a".to_owned(),
-            projection,
+            projection: projection.into(),
             policy: TaskSelectionPolicy {
                 path: "policy.json".to_owned(),
                 package_sha256: "c".repeat(64),
@@ -166,6 +166,7 @@ fn selection_evaluated() -> TaskSemanticFact {
                 actingcommand_contract::outcome::Outcome::relayed("selection_empty"),
             )],
             confirmation: TaskSelectionConfirmation::NotAttempted,
+            unknown_check: None,
         }),
     }
 }
