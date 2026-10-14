@@ -140,6 +140,19 @@ pub trait LedgerBacklogTier: Send + Sync {
 }
 ```
 
+As built by AO-2 (register §1.38): the traits live in `actingcommand-contract`
+(`ledger_capture.rs`); `SourceRevision.lineage` is the owner epoch. `CaptureItem` also carries
+the record's `event_id` (issued by the caller, so it can be linked before the record exists) and
+its `severity`. `wait_committed` returns `Result<CommittedRecord, Outcome>`. It returns once the
+record and every record captured before it are finished, writes nothing, and then answers the
+record's ledger sequence, or `ledger_record_rejected` (with `event_id`) for a record the flush
+replaced by its `record_rejected` gap, `ledger_write_failed` (`attempts` 0) once the writer is
+sealed (§9.2: the process is stopping fatally), `writer_unavailable` once the writer is closed,
+and `writer_response_timeout` when the writer does not answer the lookup. The ledger's
+implementation is `GlobalLedger::capture_handle`, whose `JointWork` is the ledger's
+`Box<dyn LedgerTransactionWork>`; `GlobalLedger::capture_status` reads the tier, both segments'
+records and bytes and the last capture number.
+
 ## 3 The fan-out point and the `observe_trigger` invariant (AO-3)
 
 `emit` replaces today's `append_event_raw_with_observation` (`host/facts.rs:511-557`):
@@ -291,6 +304,32 @@ close, fatal and install in a running actingd are all copied by gates.
   committed. So "the dump is the oldest unflushed part" always holds and a crash leaves it on disk
   for the next start (§9.4).
 
+- **As built by AO-2** (register §1.38):
+  - The tier is the higher of the records tier and the bytes tier. A record's bytes are its
+    sanitized draft's serialized size. The spill thread measures them, and it also assembles and
+    sanitizes captured items ahead of the flush; the flush prepares a front record itself when
+    the spill thread has not reached it. A record not yet measured counts as one record and no
+    bytes.
+  - The spill thread does not spill past a joint record (G15): its state work cannot be dumped,
+    so it and every record after it stay in memory.
+  - At the hard limit (100 % of either budget), a spill that fails, or a spill that would take
+    the dump file past `dump_max_bytes`, the capture still returns at once, and the spill thread
+    seals the writer and writes §9.2's dump without waiting for the flush. The dump holds the
+    spilled segment, the batch in flight and memory, then the fatal record, in capture order.
+  - A segment's start and end (`ledger_capture_buffer_busy`, `ledger_capture_spilled`,
+    `ledger_capture_buffer_overloaded`) are `ledger.health_observed` records that enter the queue
+    at the edge, `segment_edge` `started` or `ended`. Each carries the records and bytes (`count`,
+    `buffer_bytes`: in memory for busy and overloaded, spilled so far for spilled), and an end
+    carries the segment's `elapsed_ms`. The spilled segment ends when the dump file is deleted.
+    Once the close has begun (§8.2), edges are no longer reported, so the close record stays the
+    epoch's last.
+  - Only the running Runtime's writer (opened with a failure plan, §9.1) spills and reports
+    tiers. An offline writer has no dump place, keeps its records in memory and reports nothing.
+  - The queue's policy (`LedgerCapturePolicy`) comes from §15's keys through the host's failure
+    plan. A zero budget, batch or ring size, an empty or blank workbench pattern, or ratios that
+    fail the check for either budget (bytes with `spill_batch_bytes` as the gap, records with 1)
+    are refused when the writer opens: `invalid_ledger_config` at `configure_ledger_capture`.
+
 ### 7.1 Shared watermark module (AO-2, after #664)
 
 The pure arithmetic of the frame store's tiers moves into a module of `crates/artifact-store`
@@ -311,6 +350,11 @@ pub enum WatermarkTier { Below, Tier1, Tier2, Tier3 }
 pub fn watermark_tier(ratios: &WatermarkRatios, used: u64, budget: u64, previous: WatermarkTier) -> WatermarkTier;
 ```
 
+As built by AO-2: `WatermarkRatios::lines(budget)` gives the activation and release lines as
+`WatermarkLines`, with `tier(used, previous)` and `validate(min_gap)`; `watermark_amount(amount,
+ratio)` is the rounding both callers share. The frame store's `MemoryBudget` uses them with its
+messages unchanged.
+
 ## 8 Flush (AO-2)
 
 ### 8.1 Order and sync
@@ -327,12 +371,37 @@ pub fn watermark_tier(ratios: &WatermarkRatios, used: u64, budget: u64, previous
 - **A tagged record commits on arrival** (rule 13): the batch ends at it, FULL sync, without
   waiting for the batch to fill.
 - **The index table is maintained in the same SQLite transaction** as the batch (§11.4).
+- **As built by AO-2**:
+  - A batch is taken from the front of the queue, the dump segment first, up to
+    `flush_batch_records`, or `flush_batch_records_busy` from tier 1 on. A joint record (G15)
+    commits alone. A tagged record ends its batch. The batch syncs FULL when it holds a decision
+    or tagged record, otherwise NORMAL.
+  - The writer is the flush thread. It drains the queue before each command it serves and at
+    its end. Direct appends (`append`, `append_deferred`, `append_transaction`) pass through the
+    queue too, with the draft's own time as their capture time. Their callers still wait for the
+    commit until AO-3.
+  - The capture envelope (register L4) is written on every record that passes the queue. The
+    capture number counts from 1 for each writer that opens. The records the writer drafts
+    itself inside a command are written without an envelope until AO-3 and AO-4 route them
+    through the gates: retention and eviction, the Lab pin, prior-epoch closes, the settlement
+    continuation, recovery records, the import's own `ledger.dump_imported` and gap records,
+    and the tail gap. An imported record keeps the capture of its dump line.
+  - A refused capture is written as its `record_rejected` gap in its place, and the batch's
+    other records are written. A refused direct append answers its caller, and no gap is
+    written.
 
 ### 8.2 Shutdown
 
 Business stops; the close record enters the queue through G16 and is the epoch's last record; the
 flush thread drains the dump segment and the memory segment; the ledger closes last. A fatal exit
 for any other reason does the same with `runtime.failed`. If the drain cannot be written, §9.2.
+
+As built by AO-2: `GlobalLedger::shutdown` marks the queue as closing, sends the shutdown record,
+lets the writer drain both segments, stops the spill thread and closes. An append after the
+close is refused at once (`writer_unavailable`). A capture after the close still returns its
+ticket but is never written, and its barrier answers `writer_unavailable`; G16 (AO-3) stops
+business before the close. Until G16, the close record is the shutdown request
+(`runtime.lifecycle_observed`, `shutdown_requested`).
 
 ### 8.3 Revisioned sources and continuity
 
@@ -350,12 +419,21 @@ for any other reason does the same with `runtime.failed`. If the drain cannot be
   in each epoch, +1 per transition, never reset per cycle; the cycle number travels in the payload
   and takes no part in the check. It is not loaded and not tagged; its first transition can only
   follow the base record of §12 step 7.
+- As built by AO-2: the flush thread keeps the last revision of each (source, lineage) it has
+  committed in this process. A record more than one past it is written, and is followed by
+  `ledger_store_revision_skipped` with `ledger_source`, `source_lineage`, `expected_revision` and
+  `source_revision`. A refused record's gap covers its revision. AO-2 writes whatever revision an
+  item carries; the stores set it from AO-3.
 
 ### 8.4 Flush barrier
 
 Waiting on the barrier returns only when the record is committed; the only other ending is the
 process stopping fatally after retries are exhausted (§9.2). A stalled attempt is bounded by
 `flush_attempt_stall_ms` (§9.1). The three users are listed in §2.
+
+As built by AO-2: §2.1, "As built by AO-2". The barrier asks the writer for the committed
+record's sequence by event id. It never writes, and it does not wait for records captured after
+its own.
 
 ## 9 Write failure: retry, dump, fatal (AO-1)
 
@@ -535,6 +613,14 @@ event_id?, outcome}`:
 - **Frame retention** (#375, AO-9, needs an update of m375): frames whose error window overlaps a
   gap's time range count as "evidence incomplete"; classes 4 and 5 do not delete them; they are
   judged again at the next retention period.
+- As built by AO-2:
+  - `record_rejected`: the gap has an event id of its own, at the refused record's capture time
+    and with its capture number. Its `outcome` is `ledger_record_rejected`, caused by the
+    refusal's code, with `event_id` and, for a revisioned source, `ledger_source`,
+    `source_lineage` and `source_revision`.
+  - `tail_unconfirmed`: written once by the running Runtime's writer when it opens, after the
+    dump import, when the previous owner was not closed cleanly and no imported dump ended
+    sealed. The range runs from the last committed (or imported) record's time to the open.
 
 ## 11 Tags and the index table (AO-2 maintains, AO-5 rules and seeding, AO-6 loads)
 
@@ -569,6 +655,32 @@ CREATE TABLE ledger_index (
   profile); requests bounded by configuration.
 - The index is internal; outside readers read records and views. A mirror of the table lives in
   the ledger's memory (§14.1).
+- **As built by AO-2** (register §1.38 OB1):
+  - The table is `STRICT, WITHOUT ROWID`. `sequence` and `source_revision` use the
+    ledger's ordered integer encoding. `value_sha256` is the record's `record_sha256`, the hash of
+    its canonical record. The source columns come from the record's capture.
+  - `state` keys: `instance_facts/<scope>/<fact key>`, where the scope is `instance:<id>`,
+    `server:<id>` or `game:<id>`, one row per record of a `fact.published` and the key of a
+    `fact.invalidated`; `runtime_facts/runtime/<key>` and
+    `runtime_facts/instance:<id>/<key>` for workbench keys that match a
+    `tag.workbench_patterns` pattern (`*` = any text); `input_boundary/<instance>/committed` and
+    `/failed`; `decision_memory/<instance>/<task>`; `activity_memory/<instance>/<profile>`;
+    `wake/<wake id>`.
+  - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
+    `task.terminal_intent`, `input.intent` and `application.intent`. A result (dispatch admitted
+    or rejected, lease granted, transferred, renewed, released, expired or failed, task
+    completed, failed, cancelled or commit failed, input committed or failed, application
+    completed or failed) deletes the `open` rows of the intents that share its action id.
+  - `request`: the latest `command.received`, `command.validated` or `command.rejected` record
+    of each request id. Rows past the newest `request_index_records` are deleted in the same
+    transaction.
+  - `lifecycle`: `last_start` for `runtime.started` and `runtime.takeover`; `last_close` for the
+    shutdown request (the close record until G16); `last_fatal` for a fatal `runtime.failed`.
+  - Every batch writes its rows in its own transaction, including imports, gaps and the
+    writer's own records. A batch the store refuses rolls back with its rows, and a read-back
+    retry (§9.1) finds both or neither.
+  - There is no migration. A database created before AO-2 has no table, so its first batch
+    fails (§9.2). Under the 10-11 ruling, the test stage keeps no reader for older databases.
 
 ### 11.2 Which keys are tagged (configuration, LEDG §8.2)
 

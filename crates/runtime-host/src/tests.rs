@@ -118,6 +118,8 @@ mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// Workflow #378 A6a: the latch rule, `ledger_opened` and `owner_released`.
+mod gate_378_a6a;
 // Workflow #383 AO-7, test row AO7-b.
 mod gate_383;
 // Workflow #383 AO-1, the acceptance row of additions §8.3: a forced write failure's dump is
@@ -129,6 +131,8 @@ mod gate_383_ao4q;
 mod gate_383_sh1;
 // Workflow #384 D2-S2: reading marks, recognition package bindings and the reader warnings.
 mod gate_384_d2s2;
+// Workflow #384 D2-S3: resource adjustments.
+mod gate_384_d2s3;
 // Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
 // suppressions a later build wrote.
 mod gate_386_sr2a;

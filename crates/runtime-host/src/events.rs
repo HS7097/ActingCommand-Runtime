@@ -27,7 +27,7 @@ impl RuntimeEvents {
             RuntimeHostError::fatal(
                 SharedCode::EventIssuerFailed,
                 HostLocation::InitializeRuntimeEvents,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let fingerprinter =
@@ -35,7 +35,7 @@ impl RuntimeEvents {
                 RuntimeHostError::fatal(
                     HostCode::EventFingerprinterFailed,
                     HostLocation::InitializeRuntimeEvents,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         Ok(Self {
@@ -61,7 +61,7 @@ impl RuntimeEvents {
                 RuntimeHostError::fatal(
                     HostCode::ActionIdIssueFailed,
                     HostLocation::BuildRuntimeEvent,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })
     }
@@ -108,14 +108,14 @@ impl RuntimeEvents {
             RuntimeHostError::fatal(
                 HostCode::SyntheticRequestInvalid,
                 HostLocation::BuildRuntimeEvent,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         let validated = request.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::SyntheticRequestInvalid,
                 HostLocation::BuildRuntimeEvent,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         Ok(validated.event_links(
@@ -175,6 +175,6 @@ fn id_error() -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::EventIdIssueFailed,
         HostLocation::BuildRuntimeEvent,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }

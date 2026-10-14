@@ -670,7 +670,7 @@ fn sqlite_owner_and_read_only_snapshot_preserve_live_writer_and_bounds() {
         )
         .expect_err("new Runtime facts cannot be lost");
         assert!(matches!(
-            refused.code.as_str(),
+            refused.outcome().code().as_str(),
             "restore_would_discard_new_events" | "restore_state_has_advanced"
         ));
         assert!(!external.path().join("discard-forbidden").exists());

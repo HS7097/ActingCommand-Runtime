@@ -7,6 +7,10 @@
 //! timeout. A mark that gives no reading is a warning of its own and never fails the run. A
 //! requested key set reads only the marks of its keys, and a linear package runs only the
 //! segments that reach one of them.
+//!
+//! Workflow #384 D2-S3 (§3.6): an operation that declares resource adjustments is confirmed on
+//! the frame its step finished on; an adjustment that reads the change the screen shows hands
+//! that frame to recognition for its amount, and the run joins the amounts after the readings.
 
 use super::*;
 use actingcommand_contract::ocr_confidence_milli;
@@ -82,6 +86,69 @@ impl ResourceReadingMiss {
             .fact_key(self.declaration.fact_key.as_str())
             .reading_problem(self.problem)
     }
+}
+
+/// Workflow #384 D2-S3: the change one adjustment read on its confirmation frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceAdjustmentAmountValue {
+    pub value: u64,
+    pub confidence_milli: u16,
+}
+
+/// Workflow #384 D2-S3 (model §3.6): one adjustment of a confirmed operation, joined before
+/// `Finalizing`. An adjustment that reads its amount carries the amount or why it gave none
+/// (a miss is the warning `contained_task_resource_reading_unresolved` of the adjustment); one
+/// read after its operation carries none. In memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceAdjustmentResult {
+    pub declaration: ResourceAdjustmentDeclaration,
+    pub amount: Option<Result<ResourceAdjustmentAmountValue, ResourceReadingProblem>>,
+}
+
+impl ResourceAdjustmentResult {
+    /// The warning of an amount that gave no reading: `contained_task_resource_reading_unresolved`
+    /// with the adjustment's id as `reading_id`, its `fact_key` and the `reading_problem`.
+    pub fn amount_miss(&self) -> Option<Outcome> {
+        let Some(Err(problem)) = self.amount else {
+            return None;
+        };
+        Some(
+            Outcome::new(ExecutionKernelCode::ContainedTaskResourceReadingUnresolved)
+                .reading_id(self.declaration.id.as_str())
+                .fact_key(self.declaration.fact_key.as_str())
+                .reading_problem(problem),
+        )
+    }
+}
+
+/// Workflow #384 D2-S3: judges one adjustment amount's OCR evaluation: the shared trim and
+/// parse of a change (at most one sign of its direction), then the floor its OCR target
+/// declares (`minimum_confidence`).
+pub fn judge_resource_adjustment_amount(
+    amount: &ResourceAdjustmentAmount,
+    minimum_confidence: f32,
+    result: &RecognitionPackResult<OcrObservationEvaluation>,
+) -> Result<ResourceAdjustmentAmountValue, ResourceReadingProblem> {
+    let evaluated = match result {
+        Ok(evaluated) => evaluated,
+        Err(error) if error.code() == RecognitionPackErrorCode::RegionUnresolved => {
+            return Err(ResourceReadingProblem::RegionUnresolved);
+        }
+        Err(_) => return Err(ResourceReadingProblem::ProviderFailed),
+    };
+    let value = amount
+        .parse(&evaluated.text)
+        .map_err(ResourceReadingProblem::of_parse)?;
+    let confidence_milli = ocr_confidence_milli(evaluated.confidence)
+        .ok_or(ResourceReadingProblem::ConfidenceMissing)?;
+    if ocr_confidence_milli(Some(minimum_confidence)).is_some_and(|floor| confidence_milli < floor)
+    {
+        return Err(ResourceReadingProblem::LowConfidence);
+    }
+    Ok(ResourceAdjustmentAmountValue {
+        value,
+        confidence_milli,
+    })
 }
 
 /// Judges one mark's OCR evaluation: the shared trim and parse, then the confidence floor.
@@ -170,10 +237,28 @@ struct HandedOffFrame {
     results: mpsc::Receiver<MarkResults>,
 }
 
-/// The reading marks of one ordinary run and the frames it handed to recognition (model §3.5).
+/// Workflow #384 D2-S3: one adjustment of a confirmed operation, with its amount's recognition
+/// when it reads one.
+#[derive(Debug)]
+struct ConfirmedAdjustment {
+    declaration: ResourceAdjustmentDeclaration,
+    amount: Option<mpsc::Receiver<MarkResults>>,
+}
+
+/// Workflow #384 D2-S3: one confirmation of an operation that declares adjustments: the
+/// confirmation frame's device capture time and the operation's adjustments.
+#[derive(Debug)]
+struct Confirmation {
+    captured_at: SystemTime,
+    adjustments: Vec<ConfirmedAdjustment>,
+}
+
+/// The reading marks of one ordinary run and the frames it handed to recognition (model §3.5);
+/// Workflow #384 D2-S3: its adjustments and the confirmations of their operations (§3.6).
 #[derive(Debug, Default)]
 pub(super) struct ReadingRelay<'a> {
     declarations: &'a [ResourceReadingDeclaration],
+    adjustments: &'a [ResourceAdjustmentDeclaration],
     /// The requested key set (model §3.4); `None` reads every mark.
     requested: Option<&'a BTreeSet<String>>,
     /// The run's recognition evaluator, shared with its recognition threads once a frame is
@@ -182,15 +267,18 @@ pub(super) struct ReadingRelay<'a> {
     /// The page of the last frame offered: a stay on one page is one pass.
     last_page: Option<String>,
     frames: Vec<HandedOffFrame>,
+    confirmations: Vec<Confirmation>,
 }
 
 impl<'a> ReadingRelay<'a> {
     pub(super) fn new(
         declarations: &'a [ResourceReadingDeclaration],
+        adjustments: &'a [ResourceAdjustmentDeclaration],
         requested: Option<&'a BTreeSet<String>>,
     ) -> Self {
         Self {
             declarations,
+            adjustments,
             requested,
             ..Self::default()
         }
@@ -247,6 +335,28 @@ impl<'a> ReadingRelay<'a> {
         declarations: Vec<ResourceReadingDeclaration>,
         remembered: RememberedOcrObservations,
     ) -> Result<(), ContainedTaskError> {
+        let targets = declarations
+            .iter()
+            .map(|declaration| declaration.target_id.clone())
+            .collect::<Vec<_>>();
+        let results = self.recognize(evaluator, scene, targets, remembered)?;
+        self.frames.push(HandedOffFrame {
+            captured_at,
+            declarations,
+            results,
+        });
+        Ok(())
+    }
+
+    /// Evaluates `targets` on `scene` on a thread of its own and returns the channel its answer
+    /// arrives on; when no thread can be started, it evaluates them here.
+    fn recognize(
+        &mut self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+        targets: Vec<String>,
+        remembered: RememberedOcrObservations,
+    ) -> Result<mpsc::Receiver<MarkResults>, ContainedTaskError> {
         let evaluator = Arc::clone(
             self.evaluator
                 .get_or_insert_with(|| Arc::new(evaluator.clone())),
@@ -255,10 +365,6 @@ impl<'a> ReadingRelay<'a> {
             Scene::from_rgb8(scene.width(), scene.height(), scene.rgb8_pixels()).map_err(|_| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskFrameInvalid.code())
             })?;
-        let targets = declarations
-            .iter()
-            .map(|declaration| declaration.target_id.clone())
-            .collect::<Vec<_>>();
         let job = Arc::new(ReadingJob {
             evaluator,
             scene,
@@ -277,12 +383,20 @@ impl<'a> ReadingRelay<'a> {
         if spawned.is_err() {
             let _unread = here.send(read_marks(&job));
         }
-        self.frames.push(HandedOffFrame {
-            captured_at,
-            declarations,
-            results,
-        });
-        Ok(())
+        Ok(results)
+    }
+}
+
+/// Waits for one recognition's answer, until `deadline` when the runtime has a join timeout.
+fn receive(
+    results: &mpsc::Receiver<MarkResults>,
+    deadline: Option<Instant>,
+) -> Result<MarkResults, mpsc::RecvTimeoutError> {
+    match deadline {
+        None => results
+            .recv()
+            .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        Some(deadline) => results.recv_timeout(deadline.saturating_duration_since(Instant::now())),
     }
 }
 
@@ -352,7 +466,7 @@ impl PreparedContainedTask {
         runtime: &mut R,
         relay: ReadingRelay<'_>,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
-        if relay.frames.is_empty() {
+        if relay.frames.is_empty() && relay.confirmations.is_empty() {
             return Ok(());
         }
         let deadline = runtime
@@ -360,15 +474,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::operation::<R>)?
             .map(|timeout| Instant::now() + timeout);
         for frame in relay.frames {
-            let answer = match deadline {
-                None => frame
-                    .results
-                    .recv()
-                    .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-                Some(deadline) => frame
-                    .results
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now())),
-            };
+            let answer = receive(&frame.results, deadline);
             let mut readings = Vec::new();
             let mut unresolved = Vec::new();
             match answer {
@@ -413,6 +519,121 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
         }
+        // Workflow #384 D2-S3 (model §3.6): the amounts of the confirmed adjustments, within the
+        // same join timeout, confirmation by confirmation.
+        for confirmation in relay.confirmations {
+            let mut adjustments = Vec::with_capacity(confirmation.adjustments.len());
+            for adjustment in confirmation.adjustments {
+                let amount = match (&adjustment.declaration.amount, adjustment.amount) {
+                    (Some(declared), Some(results)) => Some(self.join_adjustment_amount(
+                        runtime,
+                        confirmation.captured_at,
+                        declared,
+                        &results,
+                        deadline,
+                    )?),
+                    _ => None,
+                };
+                adjustments.push(ResourceAdjustmentResult {
+                    declaration: adjustment.declaration,
+                    amount,
+                });
+            }
+            runtime
+                .record(ContainedTaskTrace::ResourceAdjustments {
+                    captured_at: confirmation.captured_at,
+                    adjustments,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #384 D2-S3: waits for one adjustment amount's recognition, records its
+    /// evaluation on the confirmation frame and judges it.
+    fn join_adjustment_amount<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        captured_at: SystemTime,
+        amount: &ResourceAdjustmentAmount,
+        results: &mpsc::Receiver<MarkResults>,
+        deadline: Option<Instant>,
+    ) -> Result<
+        Result<ResourceAdjustmentAmountValue, ResourceReadingProblem>,
+        ContainedTaskRunError<R::Error>,
+    > {
+        let result = match receive(results, deadline) {
+            Ok(mut results) => match results.pop() {
+                Some(result) => result,
+                None => return Ok(Err(ResourceReadingProblem::ProviderFailed)),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Ok(Err(ResourceReadingProblem::JoinTimeout));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Ok(Err(ResourceReadingProblem::ProviderFailed));
+            }
+        };
+        runtime
+            .record_adjustment_evaluation(captured_at, &amount.target_id, &result)
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let minimum_confidence = ocr_target_minimum_confidence(&self.evaluator, &amount.target_id)?;
+        Ok(judge_resource_adjustment_amount(
+            amount,
+            minimum_confidence,
+            &result,
+        ))
+    }
+
+    /// Workflow #384 D2-S3 (model §3.6): the run confirmed `operation_label` on `observation`,
+    /// the frame its step finished on. When the operation declares adjustments, the runtime is
+    /// told so, and each adjustment that reads its amount hands the frame to recognition for
+    /// it; the run does not wait.
+    pub(super) fn confirm_resource_adjustments<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        operation_label: &str,
+        observation: &PageObservation,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        let Some(relay) = ocr_collector.reading_relay.as_mut() else {
+            return Ok(());
+        };
+        let declarations = relay
+            .adjustments
+            .iter()
+            .filter(|adjustment| adjustment.operation_id == operation_label)
+            .cloned()
+            .collect::<Vec<_>>();
+        if declarations.is_empty() {
+            return Ok(());
+        }
+        runtime
+            .record(ContainedTaskTrace::ResourceAdjustmentConfirmed {
+                captured_at: observation.captured_at,
+                operation_label: operation_label.to_owned(),
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let mut adjustments = Vec::with_capacity(declarations.len());
+        for declaration in declarations {
+            let amount = match &declaration.amount {
+                Some(amount) => Some(relay.recognize(
+                    &self.evaluator,
+                    &observation.scene,
+                    vec![amount.target_id.clone()],
+                    RememberedOcrObservations::default(),
+                )?),
+                None => None,
+            };
+            adjustments.push(ConfirmedAdjustment {
+                declaration,
+                amount,
+            });
+        }
+        relay.confirmations.push(Confirmation {
+            captured_at: observation.captured_at,
+            adjustments,
+        });
         Ok(())
     }
 }

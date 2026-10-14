@@ -315,7 +315,7 @@ impl SchedulingPauseTable {
                 RuntimeHostError::fatal(
                     HostCode::SchedulingPauseOriginMissing,
                     HostLocation::PersistSchedulingPause,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })
         };
@@ -410,7 +410,7 @@ impl SchedulingPauseTable {
             RuntimeHostError::fatal(
                 HostCode::SchedulingPauseStateInvalid,
                 HostLocation::HoldStartInstancePause,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         };
         let state = InstancePauseState {
@@ -460,7 +460,7 @@ impl SchedulingPauseTable {
                 RuntimeHostError::fatal(
                     HostCode::SchedulingPauseStateLost,
                     ContractLocation::PauseScheduling,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
         state.stage = to;
@@ -529,7 +529,7 @@ fn next_scheduling_pause_revision(revision: &mut u64) -> RuntimeHostResult<u64> 
         RuntimeHostError::fatal(
             HostCode::SchedulingPauseRevisionOverflow,
             HostLocation::ChangeSchedulingPause,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     Ok(*revision)
@@ -1012,7 +1012,7 @@ impl HostShared {
                     return Err(RuntimeHostError::fatal(
                         HostCode::PolicyOutcomeFailedRunResidual,
                         operation,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ));
                 }
                 continue;
@@ -1079,7 +1079,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::PolicyOutcomeProjectionInjectedFailure,
                     operation,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             let projected = self
@@ -1104,7 +1104,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyOutcomeProjectionMismatch,
                     operation,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             // The ledger is append-only, so a run's admission request confirmed through its
@@ -1126,7 +1126,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyOutcomeFailedRunResidual,
                     operation,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             };
             let settlement_value = |value: u64| {
@@ -1136,7 +1136,7 @@ impl HostShared {
                         RuntimeHostError::fatal(
                             HostCode::PolicySettlementOutcomeOverflow,
                             operation,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     })
             };
@@ -1808,7 +1808,7 @@ impl HostShared {
                                     RuntimeHostError::fatal(
                                         HostCode::PolicyLeaseResultInvalid,
                                         HostLocation::AdmitPolicyDispatch,
-                                        RuntimeErrorCode::RuntimeFatal,
+                                        RuntimeErrorCode::RuntimeHalted,
                                     ),
                                 ),
                                 effect: EffectDisposition::Indeterminate,
@@ -2303,7 +2303,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::SchedulingPauseDrainCountOverflow,
                         HostLocation::ReleasePausedInstance,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 };
                 drained.finished = drained
@@ -2611,7 +2611,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::PolicyInputIdentityInvalid,
                         ContractLocation::ProjectPolicyInputIdentity,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 },
             )
@@ -2863,7 +2863,7 @@ fn runtime_policy_seed(
         RuntimeHostError::fatal(
             HostCode::PolicySeedEncodeFailed,
             HostLocation::DerivePolicySeed,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     let digest = Sha256::digest(bytes);

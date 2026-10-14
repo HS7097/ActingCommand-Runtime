@@ -151,7 +151,7 @@ fn bind_discovered_instances(
 /// registered reason, else `provider_native_failed` with the device failure's category, with
 /// the configured `mumu_root`; the device's own text is its `foreign_other_error` link. The
 /// Runtime's summary of the failure (`diagnostic_message`) and the stage are not persisted.
-fn device_failure_outcome(error: &DeviceError, mumu_root: Option<&Path>) -> Outcome {
+pub(crate) fn device_failure_outcome(error: &DeviceError, mumu_root: Option<&Path>) -> Outcome {
     let outcome = match (error.nemu_resolution_context(), error.diagnostic()) {
         (Some(context), _) => Outcome::new(context.reason()),
         (None, Some(diagnostic)) => {

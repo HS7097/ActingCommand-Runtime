@@ -861,6 +861,35 @@ impl RuntimeContainedTask<'_> {
         .map(|_| ())
     }
 
+    /// Workflow #384 D2-S3 (model §3.6): one outcome of a confirmed resource adjustment, written
+    /// on the frame `frame_id` its operation was confirmed on as a recognition error row of the
+    /// post-admission phase, as a mark's miss is: an amount that gave no reading
+    /// (`contained_task_resource_reading_unresolved`, warning), an adjustment that wrote
+    /// nothing (`fact_adjustment_skipped`, info) or one that would go below zero
+    /// (`fact_adjustment_underflow`, warning). `target_id` is the amount's OCR target.
+    pub(super) fn diagnostic_adjustment(
+        &mut self,
+        frame_id: IssuedFrameId,
+        target_id: Option<&str>,
+        outcome: Outcome,
+    ) -> Result<(), RequestFailure> {
+        self.diagnostic_frame = Some(frame_id);
+        self.diagnostic(
+            None,
+            Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
+                phase: "post_admission".to_owned(),
+                target_id: target_id.map(str::to_owned),
+                error: TaskDiagnosticRecognitionError {
+                    region: None,
+                    timing: None,
+                    sample: None,
+                    outcome,
+                },
+            })),
+        )
+        .map(|_| ())
+    }
+
     pub(super) fn finish_diagnostic(
         &mut self,
         result: &Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,

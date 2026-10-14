@@ -970,6 +970,9 @@ impl PreparedContainedTask {
                 reached.captured_at,
                 RememberedOcrObservations::default(),
             )?;
+            // Workflow #384 D2-S3 (model §3.6): the step's operation is confirmed on the frame
+            // it arrived on.
+            self.confirm_resource_adjustments(runtime, ocr_collector, &operation.id, &reached)?;
             dispatched = dispatched.checked_add(1).ok_or_else(state_invalid)?;
             let next = match step.run.map(|run| &plan.runs[run]) {
                 None => Some(current + 1).filter(|next| *next < plan.steps.len()),

@@ -61,7 +61,7 @@ impl HostShared {
                     Err(RuntimeHostError::fatal(
                         SharedCode::PolicyPlanningSignalIdentityConflict,
                         HostLocation::RecordPolicyPlanningSignal,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 };
             }
@@ -123,7 +123,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::AgentWakeInstanceUnknown,
                     HostLocation::RecordPolicyPlanningSignal,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let _gate = lock(&self.agent_write_gate, HostLocation::RecordAgentWake)?;
@@ -344,7 +344,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::ProposalBaseSourcesUnavailable,
                     ContractLocation::CompileProposal,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
             prepare_proposal(&generation, &sources, proposal).map_err(proposal_request_failure)?
@@ -380,7 +380,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::ProposalTargetHashMissing,
                 ContractLocation::PromoteProposal,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let current = current.ok_or_else(|| {
@@ -440,7 +440,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::ProposalPromotionInvalid,
                         ContractLocation::PromoteProposal,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
         let authorization =
@@ -448,7 +448,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::ProposalAuthorizationInvalid,
                     ContractLocation::PromoteProposal,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         if current.catalog_hash() != target_hash {
@@ -462,7 +462,7 @@ impl HostShared {
                     RuntimeHostError::fatal(
                         HostCode::ProposalActivationMismatch,
                         ContractLocation::PromoteProposal,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ),
                 ));
             }
@@ -591,7 +591,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::StrategicReportEncodeFailed,
                     ContractLocation::PrepareStrategicReport,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?;
             let (report_reference, prepared_artifact) =
@@ -665,7 +665,7 @@ impl HostShared {
                         RuntimeHostError::fatal(
                             HostCode::StrategicSignalIdentityEncodeFailed,
                             ContractLocation::PrepareStrategicReport,
-                            RuntimeErrorCode::RuntimeFatal,
+                            RuntimeErrorCode::RuntimeHalted,
                         )
                     })?;
             self.record_policy_planning_signal(PolicyPlanningSignalEventData {
@@ -774,7 +774,7 @@ impl HostShared {
                 return Err(RuntimeHostError::fatal(
                     HostCode::StrategicReportIdentityConflict,
                     HostLocation::ReadStrategicReport,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             return Ok((reference, None));
@@ -819,7 +819,7 @@ impl HostShared {
             return Err(RuntimeHostError::fatal(
                 HostCode::StrategicReportIdentityConflict,
                 HostLocation::StoreStrategicReport,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
         Ok(())
@@ -907,7 +907,7 @@ fn planning_result_contract_error(
         _ => RuntimeHostError::fatal(
             SharedCode::PlanningResultEncodeFailed,
             operation,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ),
     }
 }
@@ -961,7 +961,7 @@ fn artifact_id_text(reference: &ProjectedArtifactReference) -> RuntimeHostResult
             RuntimeHostError::fatal(
                 HostCode::ArtifactIdentityEncodeFailed,
                 ContractLocation::PrepareStrategicReport,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })
 }

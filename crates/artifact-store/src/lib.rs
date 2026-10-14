@@ -23,6 +23,8 @@ mod naming;
 mod pipeline;
 mod store;
 mod usage;
+// Workflow #383 AO-2: the shared watermark arithmetic, outside the `capture` feature.
+mod watermark;
 
 pub use codes::{StoreCode, StoreLocation};
 pub use error::*;
@@ -39,3 +41,7 @@ pub use naming::*;
 pub use pipeline::*;
 pub use store::*;
 pub use usage::*;
+pub use watermark::{
+    WatermarkConfigError, WatermarkLines, WatermarkRatios, WatermarkTier, watermark_amount,
+    watermark_tier,
+};

@@ -329,7 +329,10 @@
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "required",
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -343,7 +346,10 @@
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "required",
+        "path": "required"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1082,12 +1088,17 @@
       "handling": "TBD"
     },
     "adb_install_missing": {
-      "category": "error",
+      "category": "fatal",
       "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_path": "required",
+        "aliases": "required",
+        "tools_dir": "required",
+        "files": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1096,16 +1107,37 @@
       "handling": "TBD"
     },
     "adb_install_mismatch": {
-      "category": "error",
+      "category": "fatal",
       "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "adb_path": "required",
+        "aliases": "required",
+        "tools_dir": "required",
+        "files": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
       "description": "actingd refused the install root's adb: a distributed binary differs from the pin.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "adb_install_pin_invalid": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The platform-tools pin this build carries (scripts/windows-tools/windows-tool-sources.v1.json, compiled in) cannot be read: it does not decode (its foreign_data_error link), no single component carries distributed_files, an entry is malformed (path), or adb.exe is not listed. A build defect (Workflow #378 A6a).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1448,6 +1480,109 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingd ledger-maintenance failed; the maintenance failure names the cause.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_ready": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "pid": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime started and is ready (Workflow #378 A6a, model section 7.4): actingd's daemon line, with its process id.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_stopped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime stopped (Workflow #378 A6a, model sections 7.4-7.5): the terminal outcome of a requested stop; when a condition stopped it, that condition is the daemon line after it. An accepted shutdown of a held start is a requested stop, with the shutdown as its caused_by link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "actingd_fallback_log_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "variable": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A start refusal could not be appended to the fallback log %LOCALAPPDATA%\\ActingCommand\\logs (Workflow #378 A6a, model section 8.2): path names the folder or file, with the OS error as the caused_by link; variable names LOCALAPPDATA when it is not set. A developer line only; actingd still exits by the refusal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "check_config_passed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "check-config passed (Workflow #378 A6a, check-config v2): the configuration loads, assembles and validates as a start would. What the check noted (an ignored environment override, an unresolved MuMu installation, an unused device binding, a broken standard-pack root, a missing fact reader) is a note link.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "ledger_maintenance_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An actingd ledger-maintenance pass completed (Workflow #378 A6a); the report's status says which.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "unlock_owner_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd unlock-owner recorded the operator's confirmation (Workflow #378 A6a).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "suspended_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd suspended produced its report (Workflow #378 A6a).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2179,9 +2314,19 @@
       "owner": "actingd",
       "layer": "config",
       "review": "pending",
+      "status": "retired",
+      "since": "0.12.0",
+      "description": "Retired (Workflow #378 A6a): renamed config_resource_package, as resource_package is the check-config report's member name.",
+      "retired_in": "0.12.0",
+      "replaced_by": "config_resource_package"
+    },
+    "config_resource_package": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "check-config stage: admitting the resource packages."
+      "description": "check-config stage: admitting the resource packages (Workflow #378 A6a; was resource_package)."
     },
     "config_recognition_binding": {
       "owner": "actingd",

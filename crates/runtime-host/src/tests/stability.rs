@@ -61,7 +61,11 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
         assert!(failed.result().is_none(), "{failure_kind}");
         let error = failed.error_projection().expect("fatal artifact error");
         assert!(error.fatal, "{failure_kind}");
-        assert_eq!(error.code, RuntimeErrorCode::RuntimeFatal, "{failure_kind}");
+        assert_eq!(
+            error.code,
+            RuntimeErrorCode::RuntimeHalted,
+            "{failure_kind}"
+        );
         assert_eq!(
             state.input_count.load(Ordering::Acquire),
             2,

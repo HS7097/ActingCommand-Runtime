@@ -23,6 +23,10 @@ crate::outcome_codes! {
         ForeignHttpError => "foreign_http_error": error / none,
         ForeignOtherError => "foreign_other_error": error / none,
         PanicCaught => "panic_caught": warning / none,
+        /// Workflow #378 A6a (model section 2.4): the watchdog's restart budget ran out and
+        /// every start in its window ended in `runtime_restart_required`. Only the watchdog
+        /// decides it; no in-process boundary emits it.
+        PanicUnrecovered => "panic_unrecovered": fatal / none,
         // Workflow #378 A3 (ledger revision 3): a relayed spelling the embedded catalog does not
         // list; the record keeps the spelling as `raw_code` instead of inventing a code.
         OutcomeRelayUnregistered => "outcome_relay_unregistered": error / none,
@@ -42,8 +46,11 @@ crate::outcome_codes! {
         InvalidRequest => "invalid_request": error / none,
         #[serde(rename = "runtime_unavailable")]
         RuntimeUnavailable => "runtime_unavailable": error / none,
-        #[serde(rename = "runtime_fatal")]
-        RuntimeFatal => "runtime_fatal": error / none,
+        /// Workflow #378 A6a (model section 2.3, M1a): the Runtime halted (was `runtime_fatal`).
+        /// A latched host answers a later request with an error condition under it as the
+        /// `caused_by` link; a fatal condition answers as itself.
+        #[serde(rename = "runtime_halted")]
+        RuntimeHalted => "runtime_halted": error / none,
         #[serde(rename = "owner_conflict")]
         OwnerConflict => "owner_conflict": error / none,
         #[serde(rename = "protocol_invalid")]
@@ -232,6 +239,11 @@ crate::outcome_codes! {
     /// once, here. The owners' other emission sites switch to these constants when their A2 part
     /// converts them.
     pub enum SharedCode {
+        /// Error. An instance worker panicked again before it finished one payload after its
+        /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it. Workflow
+        /// #378 A6a: the runtime host emits it and the watchdog reads it from a start's terminal
+        /// outcome (`panic_unrecovered`), so it is the contract's (it was the runtime host's).
+        RuntimeRestartRequired => "runtime_restart_required": error / none,
         AgentDispatcherConfigInvalid => "agent_dispatcher_config_invalid": error / none,
         AgentResponseSessionMismatch => "agent_response_session_mismatch": error / none,
         AgentSessionNotActive => "agent_session_not_active": error / none,
@@ -995,6 +1007,15 @@ crate::outcome_codes! {
         ResourceReadingsCountInvalid => "resource_readings_count_invalid": error / declaration_error,
         ResourceReadingIdDuplicate => "resource_reading_id_duplicate": error / declaration_error,
         ResourceReadingFactKeyDuplicate => "resource_reading_fact_key_duplicate": error / declaration_error,
+        // Workflow #384 D2-S3: the `resource_adjustments` declaration.
+        ResourceAdjustmentsCountInvalid => "resource_adjustments_count_invalid": error / declaration_error,
+        ResourceAdjustmentIdInvalid => "resource_adjustment_id_invalid": error / declaration_error,
+        ResourceAdjustmentIdDuplicate => "resource_adjustment_id_duplicate": error / declaration_error,
+        ResourceAdjustmentFactKeyInvalid => "resource_adjustment_fact_key_invalid": error / declaration_error,
+        ResourceAdjustmentFactKeyDuplicate => "resource_adjustment_fact_key_duplicate": error / declaration_error,
+        ResourceAdjustmentOperationIdInvalid => "resource_adjustment_operation_id_invalid": error / declaration_error,
+        ResourceAdjustmentTargetIdInvalid => "resource_adjustment_target_id_invalid": error / declaration_error,
+        ResourceAdjustmentMarkMissing => "resource_adjustment_mark_missing": error / declaration_error,
         OcrFieldsZeroInputOutcomeInvalid => "ocr_fields_zero_input_outcome_invalid": error / declaration_error,
         OcrFieldsZeroInputPagesInvalid => "ocr_fields_zero_input_pages_invalid": error / declaration_error,
         OcrFieldsTextExtractionTypeInvalid => "ocr_fields_text_extraction_type_invalid": error / declaration_error,

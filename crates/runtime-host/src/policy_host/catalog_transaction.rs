@@ -298,7 +298,7 @@ impl CatalogStore {
                     Some(work) => RuntimeHostError::relayed_fatal(
                         work.code,
                         work.operation,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                     .with_native_detail(work.detail.clone()),
                     None => catalog_ledger_error(&error),

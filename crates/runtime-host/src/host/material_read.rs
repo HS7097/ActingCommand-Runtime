@@ -194,7 +194,7 @@ impl HostShared {
                 return Err(MaterialReadError::Identity(RuntimeHostError::fatal(
                     SharedCode::MaterialReadReferenceChanged,
                     ContractLocation::ReadRuntimeMaterial,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )));
             }
             result.source = Some(material_source(&current));
@@ -516,7 +516,7 @@ fn verification_mismatch() -> MaterialReadError {
     MaterialReadError::Identity(RuntimeHostError::fatal(
         SharedCode::MaterialReadVerificationMismatch,
         ContractLocation::ReadRuntimeMaterial,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     ))
 }
 

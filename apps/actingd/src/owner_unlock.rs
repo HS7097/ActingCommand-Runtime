@@ -2,15 +2,17 @@
 
 use super::*;
 use actingcommand_contract::OwnerUnlockActor;
-use actingcommand_runtime_host::HostLocation;
 use serde_json::json;
 
-const UNLOCK_OWNER_SCHEMA_VERSION: &str = "actingcommand.actingd.unlock-owner.v1";
+/// Workflow #378 A6a (model section 7.4): unlock-owner v2, `{schema_version, outcome, …}`: the
+/// receipt's members on success, `journal_appended` on a failure, whose outcome names the stage
+/// that refused (v1's `error {code, stage}`).
+pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.unlock-owner.v2";
 
 /// Offline maintenance for a state root whose last owner exited with device resources
 /// unconfirmed: the operator's confirmation becomes that epoch's close evidence in the
 /// owner journal, `owner.unlock` records it, and the next start takes the epoch over.
-pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
+pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
     if arguments.len() > 6 {
         return Err(ActingdError::config(ActingdCode::UnlockOwnerUsageInvalid));
     }
@@ -41,69 +43,32 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         .to_str()
         .and_then(|actor| OwnerUnlockActor::new(actor).ok())
         .ok_or_else(|| ActingdError::config(ActingdCode::UnlockOwnerActorInvalid))?;
-    let loaded = config::load(&config_path).and_then(config::ActingdConfigFile::maintenance_config);
-    let (report, result) = match loaded {
-        Err(code) => (
-            failed(UnlockFailure::Load(code), false),
-            Err(ActingdError::config(code)),
+    let host = config::load(&config_path)
+        .and_then(config::ActingdConfigFile::maintenance_config)
+        .map_err(|code| {
+            let mut error = ActingdError::config(code);
+            error.stage = Some(ActingdLocation::ConfigLoad.location());
+            error.with_report("journal_appended", json!(false))
+        })?;
+    match RuntimeHost::unlock_owner(host, actor.clone(), confirmed) {
+        Ok(receipt) => Ok(
+            Reported::new(Outcome::new(ActingdCode::UnlockOwnerCompleted))
+                .with("owner_epoch", json!(receipt.owner_epoch))
+                .with(
+                    "previous_resource_disposition",
+                    json!(receipt.previous_resource_disposition),
+                )
+                .with("actor", json!(actor.as_str()))
+                .with("revision", json!(receipt.revision)),
         ),
-        Ok(host) => match RuntimeHost::unlock_owner(host, actor.clone(), confirmed) {
-            Ok(receipt) => (
-                json!({
-                    "schema_version": UNLOCK_OWNER_SCHEMA_VERSION,
-                    "status": "ok",
-                    "owner_epoch": receipt.owner_epoch,
-                    "previous_resource_disposition": receipt.previous_resource_disposition,
-                    "actor": actor.as_str(),
-                    "revision": receipt.revision,
-                }),
-                Ok(()),
-            ),
-            Err(failure) => (
-                failed(UnlockFailure::Host(&failure), failure.journal_appended),
-                Err(ActingdError::runtime(failure.error)),
-            ),
-        },
-    };
-    let encoded = serde_json::to_string(&report)
-        .map_err(|_| ActingdError::process(ActingdCode::UnlockOwnerReportEncodeFailed))?;
-    println!("{encoded}");
-    result
-}
-
-/// The unlock-owner v1 token of a runtime host unlock stage (decision D12, as
-/// [`v1_stage_token`]): `journal` up to and including the owner journal append, `ledger` for
-/// the fact. A6a's unlock-owner v2 replaces these texts.
-fn v1_unlock_stage_token(stage: Location) -> &'static str {
-    [
-        (HostLocation::UnlockOwnerFile, "journal"),
-        (HostLocation::UnlockOwnerLedger, "ledger"),
-    ]
-    .into_iter()
-    .find_map(|(location, token)| (location.location() == stage).then_some(token))
-    .unwrap_or(stage.as_str())
-}
-
-/// What refused an unlock: loading the configuration, or the runtime host.
-enum UnlockFailure<'a> {
-    Load(Code),
-    Host(&'a actingcommand_runtime_host::OwnerUnlockFailure),
-}
-
-fn failed(failure: UnlockFailure<'_>, journal_appended: bool) -> serde_json::Value {
-    let (code, stage) = match failure {
-        UnlockFailure::Load(code) => (
-            code.as_str(),
-            v1_stage_token(ActingdLocation::ConfigLoad.location()),
-        ),
-        UnlockFailure::Host(failure) => {
-            (failure.error.code(), v1_unlock_stage_token(failure.stage))
+        // The host's unlock stages are locations (`unlock_owner_file` up to and including the
+        // owner journal append, `unlock_owner_ledger` for the fact).
+        Err(failure) => {
+            let journal_appended = failure.journal_appended;
+            let stage = failure.stage;
+            let mut error = ActingdError::runtime(failure.error);
+            error.stage = Some(stage);
+            Err(error.with_report("journal_appended", json!(journal_appended)))
         }
-    };
-    json!({
-        "schema_version": UNLOCK_OWNER_SCHEMA_VERSION,
-        "status": "failed",
-        "error": { "code": code, "stage": stage },
-        "journal_appended": journal_appended,
-    })
+    }
 }

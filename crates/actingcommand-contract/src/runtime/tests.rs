@@ -223,7 +223,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
         .stage(crate::codes::ContractLocation::OpenCapturePipeline);
     let lifecycle = RuntimeLifecycleFailureDraft::new(epoch, "runtime_host", failure.clone())
         .with_resource_dispositions(Some(groups.clone()))
-        .with_runtime_code(Some(RuntimeErrorCode::RuntimeFatal))
+        .with_runtime_code(Some(RuntimeErrorCode::RuntimeHalted))
         .with_instance_id(Some(instance))
         .with_entered_event_id(Some(entered))
         .with_adb_recovery(Some(recovery.clone()))
@@ -292,7 +292,7 @@ fn runtime_lifecycle_causes_roundtrip_and_project() {
     // Ledger revision 3 (acceptance CL-M3): the receipt's Runtime code is the outcome's value.
     assert_eq!(
         outcome.outcome().value("runtime_code"),
-        Some(&serde_json::json!(RuntimeErrorCode::RuntimeFatal.as_str()))
+        Some(&serde_json::json!(RuntimeErrorCode::RuntimeHalted.as_str()))
     );
     assert_eq!(
         record.cause().expect("cause").phase(),
@@ -472,7 +472,7 @@ fn resource_quiescence_causes_roundtrip_and_project() {
         "execution_kernel",
         crate::outcome::Outcome::new(RuntimeErrorCode::BackendOperationFailed),
     )
-    .with_runtime_code(Some(RuntimeErrorCode::RuntimeFatal))
+    .with_runtime_code(Some(RuntimeErrorCode::RuntimeHalted))
     .with_instance_id(Some(instance))
     .with_cause(Some(
         LifecycleCauseDraft::new(

@@ -2,14 +2,14 @@
 
 //! Private durable-store boundary. See contracts/ledger-store.md for the S0 contract.
 
+use super::capture::Captured;
+use super::flush::FlushReport;
 use super::storage::{DurableStorage, EventStore};
-use super::{
-    CommitStatistics, GlobalLedgerResult, LedgerAppendObservation, LedgerProjectViewObservation,
-};
+use super::{CommitStatistics, GlobalLedgerResult, LedgerProjectViewObservation};
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    EventQuery, PolicyExecutionEventData, ProjectionProfile, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, SanitizedEventDraft,
+    EventId, EventQuery, IdentifierIssuer, PolicyExecutionEventData, ProjectionProfile,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
 };
 use std::sync::Arc;
 
@@ -63,18 +63,17 @@ pub(super) trait LedgerStore: Send + 'static {
     ) -> GlobalLedgerResult<PersistedEvent>;
     fn commit_statistics(&self) -> Arc<CommitStatistics>;
 
-    /// Success means durable persistence, index visibility and commit accounting.
-    /// An error does not prove that no bytes or facts were committed.
-    fn append(
+    /// Workflow #383 AO-2 (`contracts/ledger-observer.md` §8): commits one batch the flush
+    /// thread took from the capture queue, in capture order. A committed record means durable
+    /// persistence, index visibility and commit accounting; an error does not prove that no
+    /// bytes or facts were committed.
+    fn commit_captured(
         &mut self,
-        draft: SanitizedEventDraft,
-        observation: &mut Option<LedgerAppendObservation>,
-    ) -> GlobalLedgerResult<PersistedEvent>;
-    fn append_transaction(
-        &mut self,
-        draft: SanitizedEventDraft,
-        work: &dyn super::LedgerTransactionWork,
-    ) -> GlobalLedgerResult<PersistedEvent>;
+        batch: Vec<Captured>,
+        identifiers: &IdentifierIssuer,
+    ) -> FlushReport;
+    /// Workflow #383 AO-2 (§8.4): the ledger sequence of a committed record, for the barrier.
+    fn committed_sequence(&self, event_id: &EventId) -> Option<u64>;
 
     /// Revalidates persisted admission/effect/release facts. Returns the existing
     /// or new completion, plus only newly appended events in sequence order.
@@ -169,24 +168,16 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
         Arc::clone(&self.commit_statistics)
     }
 
-    fn append(
+    fn commit_captured(
         &mut self,
-        draft: SanitizedEventDraft,
-        observation: &mut Option<LedgerAppendObservation>,
-    ) -> GlobalLedgerResult<PersistedEvent> {
-        if observation.is_some() {
-            Self::append_observed(self, draft, observation)
-        } else {
-            Self::append(self, draft)
-        }
+        batch: Vec<Captured>,
+        identifiers: &IdentifierIssuer,
+    ) -> FlushReport {
+        Self::commit_captured(self, batch, identifiers)
     }
 
-    fn append_transaction(
-        &mut self,
-        draft: SanitizedEventDraft,
-        work: &dyn super::LedgerTransactionWork,
-    ) -> GlobalLedgerResult<PersistedEvent> {
-        Self::append_transaction(self, draft, work)
+    fn committed_sequence(&self, event_id: &EventId) -> Option<u64> {
+        Self::committed_sequence(self, event_id)
     }
 
     fn reconcile_scheduled_policy_settlement(

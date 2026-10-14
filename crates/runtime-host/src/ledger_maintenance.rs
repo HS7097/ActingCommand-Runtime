@@ -7,7 +7,7 @@ use crate::owner::{OwnerGuard, OwnerStartup};
 use crate::{RuntimeClock, RuntimeHostError};
 use actingcommand_artifact_store::{ArtifactStore, ArtifactStoreError};
 use actingcommand_contract::codes::ContractLocation;
-use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::outcome::{CauseRelation, Code, IoOp, Location, Outcome};
 use actingcommand_contract::{
     AuditInput, EventActor, EventSeverity, EventSource, LedgerPayloadDraft, OriginModule,
     ProjectedArtifactReference,
@@ -70,70 +70,89 @@ pub struct LedgerMaintenanceRestoredMaterial {
     pub absent: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// A failed ledger-maintenance pass (Workflow #378 A6a, model section 7.4): its outcome, the
+/// failure's code with its operation and values, each cleanup failure as a `cleanup` link and
+/// each maintenance warning as a `note` link, and its developer text.
+#[derive(Debug, Clone)]
 pub struct LedgerMaintenanceFailure {
-    pub code: String,
-    pub operation: String,
-    pub cause: String,
-    pub cleanup: Vec<String>,
-    pub warnings: Vec<actingcommand_runtime_database::MaintenanceWarning>,
+    outcome: Outcome,
+    /// The English rendering of the failure and of each cleanup failure, for the developer line
+    /// only; never an interface member.
+    cause: String,
+}
+
+impl LedgerMaintenanceFailure {
+    fn new(outcome: Outcome, cause: String) -> Self {
+        Self { outcome, cause }
+    }
+
+    /// The failure's outcome (Workflow #378 A6a): what actingd's ledger-maintenance report
+    /// carries.
+    pub const fn outcome(&self) -> &Outcome {
+        &self.outcome
+    }
+
+    /// The failure with a link of `relation` (Workflow #378 A6a): a link whose outcome is fatal
+    /// under a top that is not tops the failure instead, with the earlier top as its
+    /// `secondary` link, so a fatal link always sits under a fatal top.
+    fn linked(mut self, relation: CauseRelation, link: Outcome) -> Self {
+        self.outcome = self.outcome.joined(relation, link);
+        self
+    }
 }
 
 impl std::fmt::Display for LedgerMaintenanceFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.cause)?;
-        for error in &self.cleanup {
-            write!(f, "; cleanup: {error}")?;
-        }
-        Ok(())
+        f.write_str(&self.cause)
     }
 }
 impl std::error::Error for LedgerMaintenanceFailure {}
 type Result<T> = std::result::Result<T, LedgerMaintenanceFailure>;
 
-macro_rules! maintenance_error {
-    ($kind:ty) => {
-        impl From<$kind> for LedgerMaintenanceFailure {
-            fn from(error: $kind) -> Self {
-                Self {
-                    code: error.code().into(),
-                    operation: error.operation().into(),
-                    cause: error.to_string(),
-                    cleanup: Vec::new(),
-                    warnings: Vec::new(),
-                }
-            }
-        }
-    };
+impl From<RuntimeHostError> for LedgerMaintenanceFailure {
+    fn from(error: RuntimeHostError) -> Self {
+        Self::new(error.daemon_outcome(), error.complete_message())
+    }
 }
-maintenance_error!(RuntimeHostError);
 impl From<GlobalLedgerError> for LedgerMaintenanceFailure {
     fn from(error: GlobalLedgerError) -> Self {
-        Self {
-            code: error.code().into(),
-            operation: error.operation().into(),
-            cause: format!(
+        // The ledger relays its code and operation as spellings (the A2b/A2c follow-up); its
+        // detail is developer text.
+        let relayed = RuntimeHostError::relayed_request(
+            error.code(),
+            error.operation(),
+            actingcommand_contract::RuntimeErrorCode::InvalidRequest,
+        );
+        Self::new(
+            relayed.daemon_outcome(),
+            format!(
                 "{error}; {}",
                 error.detail().unwrap_or("no_additional_detail")
             ),
-            cleanup: Vec::new(),
-            warnings: Vec::new(),
-        }
+        )
     }
 }
 impl From<RuntimeDatabaseError> for LedgerMaintenanceFailure {
     fn from(error: RuntimeDatabaseError) -> Self {
-        Self {
-            code: error.code().as_str().into(),
-            operation: error.operation().as_str().into(),
-            cause: error.to_string(),
-            cleanup: Vec::new(),
-            warnings: error.warnings().to_vec(),
-        }
+        let outcome = Outcome::new(error.code()).operation(error.operation());
+        let failure = Self::new(outcome, error.to_string());
+        error.warnings().iter().fold(failure, |failure, warning| {
+            failure.linked(CauseRelation::Note, warning.outcome.clone())
+        })
     }
 }
-maintenance_error!(RuntimeStateError);
-maintenance_error!(ArtifactStoreError);
+impl From<RuntimeStateError> for LedgerMaintenanceFailure {
+    fn from(error: RuntimeStateError) -> Self {
+        let cause = error.to_string();
+        Self::new(RuntimeHostError::state(&error).daemon_outcome(), cause)
+    }
+}
+impl From<ArtifactStoreError> for LedgerMaintenanceFailure {
+    fn from(error: ArtifactStoreError) -> Self {
+        let cause = error.to_string();
+        Self::new(RuntimeHostError::artifact(error).daemon_outcome(), cause)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -366,12 +385,17 @@ fn verify_formal_root(
         });
     match verified {
         Ok(ledger) => Ok(receipt("verified-sqlite", ledger, None)),
+        // Workflow #378 A6a (model section 7.4, N1): the read's phases are the failure's
+        // `ledger_open_measured` note link; the developer text names them as before.
         Err(mut error) => {
-            error.cause.push_str(&format!(
-                "; ledger_open {timing} deadline_ms={}",
-                limits.timeout_seconds.saturating_mul(1000)
-            ));
-            Err(error)
+            let timeout_ms = limits.timeout_seconds.saturating_mul(1000);
+            error
+                .cause
+                .push_str(&format!("; ledger_open {timing} deadline_ms={timeout_ms}"));
+            Err(error.linked(
+                CauseRelation::Note,
+                crate::host::ledger_open_outcome(HostCode::LedgerOpenMeasured, &timing, timeout_ms),
+            ))
         }
     }
 }
@@ -394,10 +418,12 @@ fn require_settled_retention(events: &[actingcommand_ledger::PersistedEvent]) ->
         .collect::<std::collections::BTreeSet<_>>()
         .len();
     if pending > 0 {
+        // Workflow #378 A6a: the distinct pending artifacts are the value `count`.
         let mut error = failure(
             HostCode::MaintenanceArtifactMaterialUnavailable,
             HostLocation::VerifyCompleteArtifactMaterial,
         );
+        error.outcome = error.outcome.count(pending);
         error.cause = format!("pending_evictions={pending}");
         return Err(error);
     }
@@ -559,7 +585,8 @@ fn restore(
             HostLocation::AdmitDatabaseRestore,
         ));
     }
-    std::fs::create_dir(target).map_err(|error| io(HostLocation::CreateRestoreTarget, &error))?;
+    std::fs::create_dir(target)
+        .map_err(|error| io(HostLocation::CreateRestoreTarget, IoOp::CreateDir, &error))?;
     let OwnerStartup {
         guard: mut target_owner,
         ..
@@ -658,7 +685,7 @@ fn receipt(
     backup: Option<&DatabaseBackup>,
 ) -> LedgerMaintenanceReceipt {
     LedgerMaintenanceReceipt {
-        schema_version: "actingcommand.ledger-maintenance.v1",
+        schema_version: "actingcommand.ledger-maintenance.v2",
         status,
         ledger,
         backup_id: backup.map(|backup| backup.backup_id.clone()),
@@ -678,16 +705,22 @@ fn required(path: &Option<PathBuf>) -> Result<&Path> {
 fn failure(code: impl Into<Code>, operation: impl Into<Location>) -> LedgerMaintenanceFailure {
     let code: Code = code.into();
     let operation: Location = operation.into();
-    LedgerMaintenanceFailure {
-        code: code.as_str().into(),
-        operation: operation.as_str().into(),
-        cause: format!("{code} during {operation}"),
-        cleanup: Vec::new(),
-        warnings: Vec::new(),
-    }
+    LedgerMaintenanceFailure::new(
+        Outcome::new(code).operation(operation),
+        format!("{code} during {operation}"),
+    )
 }
-fn io(operation: impl Into<Location>, error: &std::io::Error) -> LedgerMaintenanceFailure {
+/// An OS failure of a maintenance step (Workflow #378 A6a): `maintenance_io_failed` with the
+/// OS error as its `foreign_os_error` link.
+fn io(
+    operation: impl Into<Location>,
+    io_op: IoOp,
+    error: &std::io::Error,
+) -> LedgerMaintenanceFailure {
     let mut result = failure(HostCode::MaintenanceIoFailed, operation);
+    result.outcome = result
+        .outcome
+        .caused_by(Outcome::from_io_error(error, io_op));
     result.cause.push_str(&format!(
         ": kind={:?};os={:?}",
         error.kind(),
@@ -706,8 +739,8 @@ fn finish<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
         (result, Ok(())) => result,
         (Ok(_), Err(error)) => Err(error),
         (Err(mut original), Err(error)) => {
-            original.cleanup.push(error.to_string());
-            Err(original)
+            original.cause.push_str(&format!("; cleanup: {error}"));
+            Err(original.linked(CauseRelation::Cleanup, error.outcome))
         }
     }
 }

@@ -107,7 +107,7 @@ const fn runtime_error_class(code: RuntimeErrorCode) -> RuntimeClientErrorClass 
         | RuntimeErrorCode::ContainedTaskCancelled
         | RuntimeErrorCode::ContainedTaskPaused => Device,
         RuntimeErrorCode::RuntimeUnavailable
-        | RuntimeErrorCode::RuntimeFatal
+        | RuntimeErrorCode::RuntimeHalted
         | RuntimeErrorCode::OwnerConflict
         | RuntimeErrorCode::StaleOwnerEpoch
         | RuntimeErrorCode::LedgerFailure

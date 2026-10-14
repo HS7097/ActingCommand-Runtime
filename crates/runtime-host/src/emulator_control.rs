@@ -19,7 +19,7 @@ pub fn admit_emulator_capabilities(
         return Err(RuntimeHostError::fatal(
             HostCode::InvalidEmulatorCapabilityRequirementCount,
             HostLocation::AdmitEmulatorCapabilities,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ));
     }
 
@@ -29,14 +29,14 @@ pub fn admit_emulator_capabilities(
             RuntimeHostError::fatal(
                 HostCode::UnknownEmulatorCapability,
                 HostLocation::AdmitEmulatorCapabilities,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         if !required.insert(capability) {
             return Err(RuntimeHostError::fatal(
                 HostCode::DuplicateEmulatorCapabilityRequirement,
                 HostLocation::AdmitEmulatorCapabilities,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ));
         }
     }
@@ -45,7 +45,7 @@ pub fn admit_emulator_capabilities(
         RuntimeHostError::fatal(
             HostCode::EmulatorCapabilityProbeFailed,
             HostLocation::AdmitEmulatorCapabilities,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })?;
     for capability in required {
@@ -53,7 +53,7 @@ pub fn admit_emulator_capabilities(
             RuntimeHostError::fatal(
                 HostCode::EmulatorCapabilityUnavailable,
                 HostLocation::AdmitEmulatorCapabilities,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
     }

@@ -54,7 +54,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "invalid_models": "optional"
       },
       "review": "pending",
       "status": "active",

@@ -730,7 +730,7 @@ fn failure(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
         ContractLocation::SampleCapacity,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 

@@ -4,7 +4,10 @@
 //! contract enums. The outcome guard (G7) checks each against the catalog's `vocabularies`.
 
 use super::VocabularyToken;
-use crate::{InstallSlot, InstallTransitionPhase, RuntimeReceiptState, Sensitivity};
+use crate::{
+    InstallSlot, InstallTransitionPhase, LedgerSegmentEdge, LedgerSource, RuntimeReceiptState,
+    Sensitivity,
+};
 
 crate::outcome_vocabulary! {
     /// How a link relates to the outcome it is attached to (vocabulary `cause_relation`).
@@ -145,6 +148,17 @@ crate::outcome_vocabulary! {
     }
 }
 
+crate::outcome_vocabulary! {
+    /// The state of one file in an integrity check (vocabulary `file_state`; Workflow #378 A6a
+    /// reports the install root's adb files with it).
+    pub enum FileState: "file_state" {
+        Ok => "ok",
+        Missing => "missing",
+        Sha256Mismatch => "sha256_mismatch",
+        Unreadable => "unreadable",
+    }
+}
+
 impl IoKind {
     /// The token of a Rust error kind; a kind this vocabulary does not list is `uncategorized`.
     pub fn from_error_kind(kind: std::io::ErrorKind) -> Self {
@@ -228,6 +242,32 @@ impl VocabularyToken for RuntimeReceiptState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Workflow #383 AO-2: the source a ledger observer code names (`ledger_store_revision_skipped`).
+impl VocabularyToken for LedgerSource {
+    const VOCABULARY: &'static str = "ledger_source";
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::InstanceFacts => "instance_facts",
+            Self::RuntimeFacts => "runtime_facts",
+            Self::DecisionMemory => "decision_memory",
+            Self::FactRefreshTransitions => "fact_refresh_transitions",
+        }
+    }
+}
+
+/// Workflow #383 AO-2: the edge of a reported watermark or spill segment.
+impl VocabularyToken for LedgerSegmentEdge {
+    const VOCABULARY: &'static str = "segment_edge";
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Ended => "ended",
         }
     }
 }

@@ -10,7 +10,9 @@
 //! a trailer. Its records are sanitized drafts only; it is private to the state root.
 
 use super::storage::{DurableStorage, EventStore};
-use super::{GlobalLedgerError, GlobalLedgerResult, Sha256SecretFingerprinter};
+use super::{
+    GlobalLedgerError, GlobalLedgerResult, LedgerCapturePolicy, Sha256SecretFingerprinter,
+};
 use crate::PersistedEvent;
 use crate::codes::{LedgerCode, LedgerLocation};
 use crate::fact::DumpedDraft;
@@ -27,7 +29,7 @@ use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -144,6 +146,9 @@ pub struct LedgerFailurePlan {
     header: DumpHeader,
     sink: Option<Arc<dyn LedgerFailureSink>>,
     clock: LedgerMonotonicClock,
+    /// Workflow #383 AO-2: the capture queue, flush batches and index of this writer (§7, §8,
+    /// §11, §15).
+    capture: LedgerCapturePolicy,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -154,6 +159,7 @@ impl fmt::Debug for LedgerFailurePlan {
             .field("dump_path", &"<redacted-path>")
             .field("fallback", &self.fallback_dump_path.is_some())
             .field("sink", &self.sink.is_some())
+            .field("capture", &self.capture)
             .finish()
     }
 }
@@ -183,7 +189,20 @@ impl LedgerFailurePlan {
             },
             sink: None,
             clock: process_clock(),
+            capture: LedgerCapturePolicy::default(),
         }
+    }
+
+    /// Workflow #383 AO-2: the capture queue's budget, tiers and batches and the index's keys
+    /// (`ledger_observer.*`; the defaults unless set). The writer checks it when it opens.
+    pub fn with_capture_policy(mut self, policy: LedgerCapturePolicy) -> Self {
+        self.capture = policy;
+        self
+    }
+
+    /// The capture queue's policy (Workflow #383 AO-2).
+    pub fn capture_policy(&self) -> &LedgerCapturePolicy {
+        &self.capture
     }
 
     /// The commit the Runtime was built from, for the dump's header.
@@ -249,6 +268,34 @@ impl WriteStop {
         }
     }
 
+    /// Workflow #383 AO-2 (§7): the memory segment reached its hard limit while attempt
+    /// `attempts` (0: none) was in progress.
+    pub(crate) fn at_limit(attempts: u32) -> Self {
+        Self {
+            attempts,
+            io_kind: None,
+            timeout_ms: None,
+            cause: None,
+        }
+    }
+
+    /// Workflow #383 AO-2 (§7): a spill could not be written (`failed`), or the dump would pass
+    /// `dump_max_bytes`, while attempt `attempts` (0: none) was in progress.
+    pub(crate) fn spill_failed(attempts: u32, failed: DumpFailure) -> Self {
+        Self {
+            attempts,
+            io_kind: match failed {
+                DumpFailure::Io(_, kind) => Some(kind),
+                DumpFailure::Full => None,
+            },
+            timeout_ms: None,
+            cause: match failed {
+                DumpFailure::Io(..) => Some(Outcome::new(LedgerCode::LedgerIo)),
+                DumpFailure::Full => None,
+            },
+        }
+    }
+
     /// `ledger_write_failed` with this stop's values, and the dump's `path` once it is written.
     fn write_failed(&self, path: Option<&Path>) -> Outcome {
         let mut outcome = Outcome::new(LedgerCode::LedgerWriteFailed).attempts(self.attempts);
@@ -276,9 +323,10 @@ struct Watch {
     sealed: bool,
     /// The attempt in progress: its number and when it started (the plan's clock).
     attempt: Option<(u32, u64)>,
-    /// The record being written, kept until it commits (§9.1 "the batch in flight is still in
-    /// memory"); a joint record is never kept, its transaction rolls back whole.
-    in_flight: Option<DumpedDraft>,
+    /// The records the writer itself writes, kept until they commit (§9.1 "the batch in flight
+    /// is still in memory"); a joint record is never kept, its transaction rolls back whole. The
+    /// capture queue keeps the batches it hands to the writer itself.
+    in_flight: Vec<HeldRecord>,
     /// Why the write path gave up, for the writer to dump and stop.
     gave_up: Option<WriteStop>,
 }
@@ -317,20 +365,26 @@ impl WriteFailureState {
         self.watch().sealed
     }
 
-    /// Before a record's first attempt: `record` is kept until the write ends. A sealed writer
+    /// Before a write's first attempt: `records` are kept until the write ends. A sealed writer
     /// writes nothing more.
-    pub(crate) fn hold(&self, record: Option<DumpedDraft>) -> GlobalLedgerResult<()> {
+    pub(crate) fn hold(&self, records: Vec<HeldRecord>) -> GlobalLedgerResult<()> {
         let mut watch = self.watch();
         if watch.sealed {
             return Err(sealed_error());
         }
-        watch.in_flight = record;
+        watch.in_flight = records;
         Ok(())
     }
 
-    /// The record committed, or was refused without a failed write: nothing of it is dumped.
+    /// Workflow #383 AO-2: the number of the write attempt in progress, if one is.
+    pub(crate) fn attempt_in_progress(&self) -> Option<u32> {
+        self.watch().attempt.map(|(attempt, _)| attempt)
+    }
+
+    /// The records committed, or were refused without a failed write: nothing of them is
+    /// dumped.
     pub(crate) fn release(&self) {
-        self.watch().in_flight = None;
+        self.watch().in_flight.clear();
     }
 
     /// Waits the configured time before attempt `attempt` (1-based).
@@ -391,20 +445,20 @@ impl WriteFailureState {
         self.watch().gave_up.take()
     }
 
-    /// The writer seals itself (§9.2 step 1); `Some` with the record in flight when this call
+    /// The writer seals itself (§9.2 step 1); `Some` with the records in flight when this call
     /// sealed, `None` when the writer was sealed already.
-    pub(crate) fn seal(&self) -> Option<Option<DumpedDraft>> {
+    pub(crate) fn seal(&self) -> Option<Vec<HeldRecord>> {
         let mut watch = self.watch();
         if watch.sealed {
             return None;
         }
         watch.sealed = true;
-        Some(watch.in_flight.take())
+        Some(std::mem::take(&mut watch.in_flight))
     }
 
     /// T8: seals the writer when the attempt in progress started more than
     /// `flush_attempt_stall_ms` ago, with the record in flight and the stop to report.
-    pub(crate) fn seal_if_stalled(&self) -> Option<(Option<DumpedDraft>, WriteStop)> {
+    pub(crate) fn seal_if_stalled(&self) -> Option<(Vec<HeldRecord>, WriteStop)> {
         let now = (self.plan.clock)();
         let mut watch = self.watch();
         let (attempt, started) = watch.attempt?;
@@ -413,7 +467,7 @@ impl WriteFailureState {
         }
         watch.sealed = true;
         Some((
-            watch.in_flight.take(),
+            std::mem::take(&mut watch.in_flight),
             WriteStop {
                 attempts: attempt,
                 io_kind: None,
@@ -437,31 +491,40 @@ impl WriteFailureState {
         sink.write_retried(&outcome);
     }
 
-    /// §9.2 steps 2-4: the dump holds the record in flight, then the queued drafts in queue
-    /// order, then the ledger's own `runtime.failed`; it goes to the state root, else to the
-    /// fallback folder; then the sink stops the Runtime.
+    /// §9.2 steps 2-4 (Workflow #383 AO-2: with the capture queue's spilled segment): the dump
+    /// gets `records` in capture order, then the ledger's own `runtime.failed` numbered
+    /// `fatal_seq`, then its trailer. `file` is the dump file the spill thread opened, if any;
+    /// otherwise the dump goes to the state root, else to the fallback folder. Then the sink
+    /// stops the Runtime.
     pub(crate) fn write_dump_and_stop(
         &self,
-        in_flight: Option<DumpedDraft>,
-        queued: &[SanitizedEventDraft],
+        mut records: Vec<HeldRecord>,
+        file: Option<DumpFile>,
+        fatal_seq: u64,
         stop: &WriteStop,
     ) {
-        let mut records = in_flight.into_iter().collect::<Vec<_>>();
-        records.extend(queued.iter().map(DumpedDraft::from_sanitized));
+        records.sort_by_key(|record| record.capture_seq.unwrap_or(fatal_seq));
         let fatal = fatal_record(stop.write_failed(None));
         if let Ok(draft) = &fatal {
-            records.push(DumpedDraft::from_sanitized(draft));
+            records.push(HeldRecord::captured(
+                fatal_seq,
+                DumpedDraft::from_sanitized(draft),
+            ));
         }
-        let rendered = render_dump(
-            &self.plan.header,
-            &records,
-            CodeStr::from(LedgerCode::LedgerWriteFailed.code()),
-            self.plan.policy.dump_max_bytes,
-        );
-        let mut outcome = match rendered
-            .map_err(|_| None)
-            .and_then(|bytes| self.place_dump(&bytes).map_err(Some))
-        {
+        let written = match file {
+            Some(file) => Ok(file),
+            None => self.create_dump(),
+        }
+        .and_then(|mut file| {
+            if file.append_fitting(&records, self.plan.policy.dump_max_bytes)? {
+                file.seal(
+                    CodeStr::from(LedgerCode::LedgerWriteFailed.code()),
+                    self.plan.policy.dump_max_bytes,
+                )?;
+            }
+            Ok(file.path)
+        });
+        let mut outcome = match written {
             Ok(path) => stop.write_failed(Some(&path)),
             Err(failure) => {
                 let mut outcome = Outcome::new(LedgerCode::LedgerDumpFailed).paths(
@@ -472,7 +535,7 @@ impl WriteFailureState {
                     .into_iter()
                     .flatten(),
                 );
-                if let Some((operation, kind)) = failure {
+                if let DumpFailure::Io(operation, kind) = failure {
                     outcome = outcome.io_kind(kind).io_op(operation);
                 }
                 outcome.caused_by(stop.write_failed(None))
@@ -488,10 +551,12 @@ impl WriteFailureState {
         }
     }
 
-    /// Writes the dump to the first place that takes it: its path, or the last failed I/O step
-    /// with its kind.
-    fn place_dump(&self, bytes: &[u8]) -> Result<PathBuf, (IoOp, IoKind)> {
-        let mut last = (IoOp::Write, IoKind::Other);
+    /// Workflow #383 AO-2: creates the dump file at the first place that takes it (never over an
+    /// existing file), with its header, synced.
+    pub(crate) fn create_dump(&self) -> Result<DumpFile, DumpFailure> {
+        let header = json_line(&self.plan.header)
+            .map_err(|_| DumpFailure::Io(IoOp::Write, IoKind::Other))?;
+        let mut last = DumpFailure::Io(IoOp::Write, IoKind::Other);
         for path in [
             Some(&self.plan.dump_path),
             self.plan.fallback_dump_path.as_ref(),
@@ -499,14 +564,244 @@ impl WriteFailureState {
         .into_iter()
         .flatten()
         {
-            match write_dump_file(path, bytes) {
-                Ok(()) => return Ok(path.clone()),
+            match write_dump_file(path, &header) {
+                Ok(()) => {
+                    return Ok(DumpFile {
+                        path: path.clone(),
+                        bytes: header.len() as u64,
+                        count: 0,
+                        first_capture_seq: None,
+                        last_capture_seq: None,
+                        lines: Sha256::new(),
+                    });
+                }
                 Err((operation, error)) => {
-                    last = (operation, IoKind::from_error_kind(error.kind()))
+                    last = DumpFailure::Io(operation, IoKind::from_error_kind(error.kind()));
                 }
             }
         }
         Err(last)
+    }
+}
+
+/// Workflow #383 AO-2: one record kept for the dump: its capture number (absent for a record the
+/// writer writes itself until the dump numbers it) and its draft.
+pub(crate) struct HeldRecord {
+    capture_seq: Option<u64>,
+    draft: DumpedDraft,
+}
+
+impl HeldRecord {
+    /// A record the writer writes itself.
+    pub(crate) fn own(draft: DumpedDraft) -> Self {
+        Self {
+            capture_seq: None,
+            draft,
+        }
+    }
+
+    /// A captured record.
+    pub(crate) fn captured(capture_seq: u64, draft: DumpedDraft) -> Self {
+        Self {
+            capture_seq: Some(capture_seq),
+            draft,
+        }
+    }
+
+    pub(crate) const fn capture_seq(&self) -> Option<u64> {
+        self.capture_seq
+    }
+
+    /// Numbers a record the writer wrote itself, for the dump.
+    pub(crate) fn number(&mut self, capture_seq: u64) {
+        self.capture_seq = Some(capture_seq);
+    }
+}
+
+/// Workflow #383 AO-2: why a dump file could not take a write: an I/O step failed, or the file
+/// would pass `dump_max_bytes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DumpFailure {
+    Io(IoOp, IoKind),
+    Full,
+}
+
+/// Workflow #383 AO-2 (§7, §9.3): the dump file the spill thread and §9.2 append to: its place,
+/// its size and what its trailer will say.
+pub(crate) struct DumpFile {
+    path: PathBuf,
+    bytes: u64,
+    count: u64,
+    first_capture_seq: Option<u64>,
+    last_capture_seq: Option<u64>,
+    lines: Sha256,
+}
+
+impl DumpFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Appends one line per record, in order, and syncs; each line's offset and length. Nothing
+    /// is written when the lines would pass `max_bytes`.
+    pub(crate) fn append(
+        &mut self,
+        records: &[HeldRecord],
+        max_bytes: u64,
+    ) -> Result<Vec<(u64, u64)>, DumpFailure> {
+        let lines = record_lines(records)?;
+        let total = lines.iter().map(|(_, line)| line.len() as u64).sum::<u64>();
+        if self.bytes.saturating_add(total) > max_bytes {
+            return Err(DumpFailure::Full);
+        }
+        self.write(&lines)
+    }
+
+    /// Appends the lines of `records` that fit within `max_bytes`, in order, and syncs; whether
+    /// all of them fit (§9.2: a dump that would pass the limit keeps what fits and no trailer).
+    fn append_fitting(
+        &mut self,
+        records: &[HeldRecord],
+        max_bytes: u64,
+    ) -> Result<bool, DumpFailure> {
+        let lines = record_lines(records)?;
+        let mut fitting = Vec::with_capacity(lines.len());
+        let mut size = self.bytes;
+        let mut all = true;
+        for line in lines {
+            size = size.saturating_add(line.1.len() as u64);
+            if size > max_bytes {
+                all = false;
+                break;
+            }
+            fitting.push(line);
+        }
+        self.write(&fitting)?;
+        Ok(all)
+    }
+
+    fn write(&mut self, lines: &[(u64, Vec<u8>)]) -> Result<Vec<(u64, u64)>, DumpFailure> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        if crate::write_fault::dump_refused(&self.path) {
+            return Err(DumpFailure::Io(IoOp::Write, IoKind::StorageFull));
+        }
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .map_err(|error| DumpFailure::Io(IoOp::Open, IoKind::from_error_kind(error.kind())))?;
+        let mut placed = Vec::with_capacity(lines.len());
+        let mut offset = self.bytes;
+        let mut bytes = Vec::new();
+        for (_, line) in lines {
+            placed.push((offset, line.len() as u64));
+            offset = offset.saturating_add(line.len() as u64);
+            bytes.extend_from_slice(line);
+        }
+        file.write_all(&bytes)
+            .map_err(|error| DumpFailure::Io(IoOp::Write, IoKind::from_error_kind(error.kind())))?;
+        file.sync_all()
+            .map_err(|error| DumpFailure::Io(IoOp::Sync, IoKind::from_error_kind(error.kind())))?;
+        for (capture_seq, line) in lines {
+            self.lines.update(line);
+            self.count += 1;
+            self.first_capture_seq = Some(
+                self.first_capture_seq
+                    .map_or(*capture_seq, |first| first.min(*capture_seq)),
+            );
+            self.last_capture_seq = Some(
+                self.last_capture_seq
+                    .map_or(*capture_seq, |last| last.max(*capture_seq)),
+            );
+        }
+        self.bytes = offset;
+        Ok(placed)
+    }
+
+    /// Writes the trailer (§9.3) when it fits within `max_bytes`, and syncs.
+    fn seal(&mut self, reason_code: CodeStr, max_bytes: u64) -> Result<(), DumpFailure> {
+        let trailer = json_line(&TrailerOut {
+            trailer: &Trailer {
+                count: self.count,
+                first_capture_seq: self.first_capture_seq.unwrap_or(0),
+                last_capture_seq: self.last_capture_seq.unwrap_or(0),
+                lines_sha256: format!("{:x}", self.lines.clone().finalize()),
+                reason_code,
+            },
+        })
+        .map_err(|_| DumpFailure::Io(IoOp::Write, IoKind::Other))?;
+        if self.bytes.saturating_add(trailer.len() as u64) > max_bytes {
+            return Ok(());
+        }
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .map_err(|error| DumpFailure::Io(IoOp::Open, IoKind::from_error_kind(error.kind())))?;
+        file.write_all(&trailer)
+            .map_err(|error| DumpFailure::Io(IoOp::Write, IoKind::from_error_kind(error.kind())))?;
+        file.sync_all()
+            .map_err(|error| DumpFailure::Io(IoOp::Sync, IoKind::from_error_kind(error.kind())))?;
+        self.bytes = self.bytes.saturating_add(trailer.len() as u64);
+        Ok(())
+    }
+
+    /// Deletes the file once the flush thread committed every record of it (§7).
+    pub(crate) fn remove(&self) -> Result<(), DumpFailure> {
+        fs::remove_file(&self.path)
+            .map_err(|error| DumpFailure::Io(IoOp::Remove, IoKind::from_error_kind(error.kind())))
+    }
+}
+
+/// The record lines of `records`, each with its capture number.
+fn record_lines(records: &[HeldRecord]) -> Result<Vec<(u64, Vec<u8>)>, DumpFailure> {
+    records
+        .iter()
+        .map(|record| {
+            let capture_seq = record.capture_seq.unwrap_or(0);
+            record_line(capture_seq, &record.draft)
+                .map(|line| (capture_seq, line))
+                .map_err(|_| DumpFailure::Io(IoOp::Write, IoKind::Other))
+        })
+        .collect()
+}
+
+/// Workflow #383 AO-2: reads one record line of the dump file back (the flush thread reading the
+/// spilled segment): its capture number and its draft, its hash checked.
+pub(crate) fn read_dump_line(
+    path: &Path,
+    offset: u64,
+    len: u64,
+) -> GlobalLedgerResult<(u64, DumpedDraft)> {
+    let unreadable = || {
+        GlobalLedgerError::fatal(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::LedgerReadSpilled.location(),
+        )
+    };
+    let mut file = fs::File::open(path).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::LedgerReadSpilled.location(),
+            &error,
+        )
+    })?;
+    file.seek(SeekFrom::Start(offset)).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::LedgerReadSpilled.location(),
+            &error,
+        )
+    })?;
+    let mut line = vec![0; usize::try_from(len).map_err(|_| unreadable())?];
+    file.read_exact(&mut line).map_err(|error| {
+        GlobalLedgerError::io(
+            LedgerCode::LedgerIo.code(),
+            LedgerLocation::LedgerReadSpilled.location(),
+            &error,
+        )
+    })?;
+    match read_line(&line) {
+        Some(Line::Record(record)) => Ok((record.capture_seq, record.draft)),
+        _ => Err(unreadable()),
     }
 }
 
@@ -603,42 +898,6 @@ fn record_line(capture_seq: u64, draft: &DumpedDraft) -> Result<Vec<u8>, serde_j
         record: &record,
         sha256: &sha256,
     })
-}
-
-/// The dump of `records` in capture order (from 1): header, record lines and trailer. A dump
-/// that would pass `max_bytes` keeps the records that fit and no trailer, so its import writes
-/// a gap for the rest (§10).
-fn render_dump(
-    header: &DumpHeader,
-    records: &[DumpedDraft],
-    reason_code: CodeStr,
-    max_bytes: u64,
-) -> Result<Vec<u8>, serde_json::Error> {
-    let mut bytes = json_line(header)?;
-    let mut lines = Sha256::new();
-    let mut count = 0_u64;
-    for draft in records {
-        let line = record_line(count + 1, draft)?;
-        if u64::try_from(bytes.len() + line.len()).unwrap_or(u64::MAX) > max_bytes {
-            return Ok(bytes);
-        }
-        lines.update(&line);
-        bytes.extend_from_slice(&line);
-        count += 1;
-    }
-    let trailer = json_line(&TrailerOut {
-        trailer: &Trailer {
-            count,
-            first_capture_seq: u64::from(count > 0),
-            last_capture_seq: count,
-            lines_sha256: format!("{:x}", lines.finalize()),
-            reason_code,
-        },
-    })?;
-    if u64::try_from(bytes.len() + trailer.len()).unwrap_or(u64::MAX) <= max_bytes {
-        bytes.extend_from_slice(&trailer);
-    }
-    Ok(bytes)
 }
 
 /// The ledger's own `runtime.failed` that ends a sealed dump (§9.2 step 2).
@@ -840,7 +1099,7 @@ fn read_dump(bytes: &[u8]) -> GlobalLedgerResult<ReadDump> {
 pub(super) fn import_dumps<B: DurableStorage>(
     store: &mut EventStore<B>,
     state: &WriteFailureState,
-) -> GlobalLedgerResult<()> {
+) -> GlobalLedgerResult<bool> {
     let places = [
         Some(state.plan.dump_path.clone()),
         state.plan.fallback_dump_path.clone(),
@@ -868,33 +1127,46 @@ pub(super) fn import_dumps<B: DurableStorage>(
         dumps.push((path, read, modified_unix_ms));
     }
     dumps.sort_by_key(|(_, read, _)| read.started_at_unix_ms);
+    let mut complete = false;
     for (path, read, modified_unix_ms) in dumps {
-        import_dump(store, &path, read, modified_unix_ms)?;
+        complete |= import_dump(store, &path, read, modified_unix_ms)?;
     }
-    Ok(())
+    Ok(complete)
 }
 
-/// Imports one dump (§9.4 steps 3-6).
+/// Imports one dump (§9.4 steps 3-6). Workflow #383 AO-2: each imported record keeps its
+/// capture; whether the dump ended its epoch complete (its trailer, its last record
+/// `runtime.failed`) is returned (§10: no tail gap for such an epoch).
 fn import_dump<B: DurableStorage>(
     store: &mut EventStore<B>,
     path: &Path,
     mut read: ReadDump,
     modified_unix_ms: Option<u64>,
-) -> GlobalLedgerResult<()> {
+) -> GlobalLedgerResult<bool> {
     read.records.sort_by_key(|(capture_seq, _)| *capture_seq);
+    let ends_failed = read.records.last().is_some_and(|(_, draft)| {
+        draft.payload().event_type() == actingcommand_contract::EventType::RuntimeFailed
+    });
     let mut imported = 0_u64;
     let mut duplicates = 0_u64;
     let mut last_verified_unix_ms = read.started_at_unix_ms;
     let mut end = read.end;
-    for (_, draft) in read.records {
+    for (capture_seq, draft) in read.records {
         let captured_at = draft.timestamp_unix_ms();
         if store.indexes.contains_event_id(draft.event_id()) {
             duplicates += 1;
             last_verified_unix_ms = Some(captured_at);
             continue;
         }
+        let source = draft.source().copied();
         // A record that verified but is not a valid record ends the import as a damaged line.
-        let Ok(event) = draft.into_event(store.next_sequence) else {
+        let Ok(event) = draft.into_event(store.next_sequence).and_then(|event| {
+            event.with_capture(actingcommand_contract::RecordCapture {
+                capture_seq,
+                captured_at_unix_ms: captured_at,
+                source,
+            })
+        }) else {
             end = DumpEnd::Invalid;
             break;
         };
@@ -962,7 +1234,40 @@ fn import_dump<B: DurableStorage>(
             LedgerLocation::ImportLedgerDump.location(),
             &error,
         )
-    })
+    })?;
+    Ok(end == DumpEnd::Sealed && ends_failed)
+}
+
+/// Workflow #383 AO-2 (`contracts/ledger-observer.md` §10, §12 step 5): the start's tail gap.
+/// The previous epoch ended without its close (the writer's owner record is still active) and
+/// without a complete dump: its tail is unconfirmed from the last committed record to this
+/// start, the count unknown.
+pub(super) fn append_tail_gap<B: DurableStorage>(
+    store: &mut EventStore<B>,
+) -> GlobalLedgerResult<()> {
+    let now = unix_ms_now()?;
+    let gap_start = store
+        .events
+        .last()
+        .map_or(now, PersistedEvent::timestamp_unix_ms)
+        .clamp(1, now);
+    let draft = ledger_draft(
+        LedgerPayloadDraft::dump_gap(
+            LedgerGapKind::TailUnconfirmed,
+            gap_start,
+            now,
+            Outcome::new(LedgerCode::LedgerTailUnconfirmed)
+                .gap_start_unix_ms(gap_start)
+                .gap_end_unix_ms(now),
+            AuditInput::new(),
+        )
+        .into(),
+        LedgerLocation::LedgerTailGap,
+    )?;
+    let event = PersistedEvent::from_sanitized(store.next_sequence, draft).map_err(|error| {
+        GlobalLedgerError::fatal(error.code(), LedgerLocation::LedgerTailGap.location())
+    })?;
+    store.persist_imported(event).map(|_| ())
 }
 
 /// `<dump file stem>.invalid-<unix_ms>.jsonl` beside the dump (§9.4).

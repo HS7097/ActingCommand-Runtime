@@ -95,7 +95,7 @@ impl HostShared {
             RuntimeHostError::fatal(
                 HostCode::BackendSelfcheckInstanceMissing,
                 HostLocation::RecordBackendSelfcheckFacts,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         for report in recorded {

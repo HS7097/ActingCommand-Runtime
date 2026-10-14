@@ -72,7 +72,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::ProjectSnapshotPositionMismatch,
                     HostLocation::ProjectRuntimeInterface,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ),
             ));
         }
@@ -449,7 +449,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::RuntimeStatusQueueCountOverflow,
                         HostLocation::ProjectRuntimeControlPlaneStatus,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?;
             // The port identifies the instance in the ledger only when it was configured as
@@ -484,7 +484,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::RuntimeStatusProjectionInvalid,
                         HostLocation::ProjectRuntimeControlPlaneStatus,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?
                 .with_backend_metadata(resolved.provenance(), resolved.capabilities().cloned())
@@ -497,7 +497,7 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::RuntimeStatusProjectionInvalid,
                         HostLocation::ProjectRuntimeControlPlaneStatus,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     ))
                 })?,
             );
@@ -508,7 +508,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::RuntimeStatusProjectionInvalid,
                     HostLocation::ProjectRuntimeControlPlaneStatus,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         Ok(status)

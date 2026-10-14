@@ -58,9 +58,6 @@ actingcommand_contract::outcome_codes! {
         /// check: it cancels its continuation, fails the current rung with this reason and
         /// finishes exhausted at warning (keys `instance_id`, `lease_id`).
         RecoveryLadderKeyLost => "recovery_ladder_key_lost": warning / none,
-        /// Error. An instance worker panicked again before it finished one payload after its
-        /// rebuild (spec §7); the Runtime is marked fatal and actingd exits with it.
-        RuntimeRestartRequired => "runtime_restart_required": error / none,
         /// Error. A held or released start stopped before it finished preparing because the
         /// Runtime latched a failure meanwhile. Operation `install_transition`. The latched
         /// failure is the outcome's `caused_by` link in the ledger (ledger revision 3), and the
@@ -461,6 +458,14 @@ actingcommand_contract::outcome_codes! {
         ExecutionCapabilityProfileMergeInvalid => "execution_capability_profile_merge_invalid": error / none,
         ExecutionConfigurationTimeoutOverflow => "execution_configuration_timeout_overflow": error / none,
         ExpiredQueueContextMissing => "expired_queue_context_missing": error / none,
+        /// Info (Workflow #384 D2-S3). A run's confirmed resource adjustment wrote nothing (keys
+        /// `instance_id`, `fact_key`, `adjustment_reason`, optional `task_id`); with
+        /// `after_read_missing` and `amount_unresolved` the key's record is dropped.
+        FactAdjustmentSkipped => "fact_adjustment_skipped": info / none,
+        /// Warning (Workflow #384 D2-S3). A run's confirmed resource adjustment would take its
+        /// key below zero; nothing is written and the key's record is dropped (keys
+        /// `instance_id`, `fact_key`, optional `task_id`).
+        FactAdjustmentUnderflow => "fact_adjustment_underflow": warning / none,
         FactCommitMissing => "fact_commit_missing": error / none,
         FactContextInvalid => "fact_context_invalid": error / none,
         FactGeneratedInvalidationMismatch => "fact_generated_invalidation_mismatch": error / none,
@@ -647,6 +652,31 @@ actingcommand_contract::outcome_codes! {
         NemuInputRequiresPairedCapture => "nemu_input_requires_paired_capture": error / none,
         NemuInputTaskDeadlineMissing => "nemu_input_task_deadline_missing": error / none,
         NonfatalErrorMarkedFatal => "nonfatal_error_marked_fatal": error / none,
+        // ---- Workflow #378 A6a (model section 7.4): the host's facts actingd writes as daemon
+        // lines.
+        /// Info. The start opened its ledger (keys `event_count`, `artifact_count`,
+        /// `artifact_bytes`, `worker_count`, `sql_read_ms`, `verify_ms`, `material_ms`,
+        /// `restore_ms`, `timeout_ms`; N1).
+        LedgerOpened => "ledger_opened": info / none,
+        /// Info. What a ledger open or a maintenance read measured before it failed: the same
+        /// keys as `ledger_opened`, as a `note` link of the failure (N1).
+        LedgerOpenMeasured => "ledger_open_measured": info / none,
+        /// Info. The start released the previous owner, whose process had exited (keys
+        /// `owner_pid`, `at_unix_ms`: when that owner started).
+        OwnerReleased => "owner_released": info / none,
+        /// Info. The start restored a scheduling pause (keys `alias` for an instance's pause,
+        /// `at_unix_ms`: since when it holds).
+        SchedulingPauseRestored => "scheduling_pause_restored": info / none,
+        /// Info. The start dropped an instance's scheduling pause because the instance is not
+        /// registered (keys `alias`).
+        SchedulingPauseDropped => "scheduling_pause_dropped": info / none,
+        /// Info. `actingd suspended` compares no error frames: a run of the pair recorded none
+        /// (the comparison's `outcome`; was the text `frame_missing`).
+        SuspendedFrameMissing => "suspended_frame_missing": info / none,
+        /// Warning. `actingd suspended` could not read a recorded error frame; the artifact
+        /// store's failure is the `caused_by` link (was the text `artifact_unreadable`).
+        SuspendedFrameUnreadable => "suspended_frame_unreadable": warning / none,
+        // ---- Workflow #378 A6a: end
         ObservationEvidenceEncodeFailed => "observation_evidence_encode_failed": error / none,
         ObservationEvidenceLimitExceeded => "observation_evidence_limit_exceeded": error / none,
         ObservationFrameContextMissing => "observation_frame_context_missing": error / none,
@@ -1222,6 +1252,16 @@ actingcommand_contract::outcome_codes! {
         PriorityOffsetUnknownTask => "priority_offset_unknown_task": warning / none,
         /// Error. Workflow #378 A2-P.
         PolicyDetectionReasonUnknown => "policy_detection_reason_unknown": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// What the operating system reported about a recorded owner process (vocabulary
+    /// `owner_probe_state`; Workflow #378 A6a: `owner_resource_unconfirmed` carries it).
+    pub enum OwnerProbeState: "owner_probe_state" {
+        Running => "running",
+        NotRunning => "not_running",
+        Unknown => "unknown",
     }
 }
 
@@ -2282,3 +2322,22 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #383 SH-1: end ----
+
+// ---- Workflow #384 D2-S3: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a run's confirmed resource adjustment wrote nothing (the vocabulary
+    /// `adjustment_reason`, D2 model §3.6, §7.3).
+    pub enum AdjustmentReason: "adjustment_reason" {
+        /// The key had no current record to adjust.
+        BaseMissing => "base_missing",
+        /// The key's current record had expired.
+        BaseExpired => "base_expired",
+        /// An observation of the key at or after the confirmation already holds the change.
+        NewerObservation => "newer_observation",
+        /// The change the screen shows could not be read; the key's record is dropped.
+        AmountUnresolved => "amount_unresolved",
+        /// No reading of the key followed the confirmation; the key's record is dropped.
+        AfterReadMissing => "after_read_missing",
+    }
+}
+// ---- Workflow #384 D2-S3: end ----

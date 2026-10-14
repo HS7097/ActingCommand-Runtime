@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use actingcommand_contract::outcome::Record;
 use actingcommand_contract::{
     ConfigParameter, FactScalar, InstanceResourcePackage, RuntimeConfigManifest,
 };
@@ -13,9 +14,9 @@ use actingcommand_runtime_host::{
 use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider, VisionListingCode};
 use config::InstanceBindingKey;
 use serde_json::json;
-use std::path::Path;
 
-const CHECK_CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v1";
+/// Workflow #378 A6a (model section 7.4): check-config v2, `{schema_version, outcome, report?}`.
+pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.check-config.v2";
 /// Inputs this command cannot validate: vision model content is read and hashed only when a
 /// model is first used (Workflow #360). Since Workflow #361 C3 the state root is read
 /// read-only; `state_root_absent` is added when it does not exist. Workflow #387 D1b: the
@@ -39,7 +40,13 @@ const DEVICE_PATH_NAMES: [&str; 5] = [
 /// startup's catalog plan against the state root's ledger, read-only (Workflow #361 C3): the
 /// database is never written, no lock is taken (no owner lock) and nothing is staged, and no
 /// socket is bound. SQLite may leave the `-wal` / `-shm` sidecars of a cleanly stopped root.
-pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
+///
+/// Workflow #378 A6a (model section 7.4): a configuration that passes is `check_config_passed`
+/// with the report (`report`); what the check noted (each ignored environment override, an
+/// unresolved MuMu installation, an unused device binding, a broken standard-pack root, a
+/// missing fact reader) is a `note` link of it. A refused one is the refusal's code with the
+/// `stage` that refused it and the values that name what was refused.
+pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
     if arguments.len() > 3 {
         return Err(ActingdError::config(ActingdCode::CheckConfigUsageInvalid));
     }
@@ -56,312 +63,251 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
     }
     let config_path =
         config.ok_or_else(|| ActingdError::config(ActingdCode::CheckConfigConfigMissing))?;
-    let mut rejection = None;
-    let checked = config::load_for(
+    let file = config::load_for(
         &config_path,
         actingcommand_contract::InstallConfigPurpose::CandidateCheck,
     )
-    .map_err(|code| registered(code, ActingdLocation::ConfigLoad))
-    .and_then(|file| {
-        // Workflow #398 RD-1b: the device refusal's detail, when the assembly meets it.
-        let device = file.device_refusal();
-        // Workflow #369 S6a: the instance a `start_emulator` refusal names.
-        let start_emulator = file.start_emulator_refusal();
-        file.assemble().map_err(|code| {
-            if let Some(device) = device.filter(|device| device.code() == code) {
-                rejection = Some(Rejection::Device(device));
-            } else if code == ActingdCode::StartEmulatorRequiresDiscoveryBinding.code()
-                && let Some(alias) = start_emulator
-            {
-                rejection = Some(Rejection::StartEmulator(alias));
+    .map_err(|code| staged(ActingdError::config(code), ActingdLocation::ConfigLoad))?;
+    // Workflow #398 RD-1b: the device refusal's outcome, when the assembly meets it.
+    let device = file.device_refusal();
+    // Workflow #369 S6a: the instance a `start_emulator` refusal names.
+    let start_emulator = file.start_emulator_refusal();
+    let RuntimeAssembly {
+        host,
+        provider,
+        policy,
+        manifest,
+        config_selection,
+        resource_packages,
+        recognition_packages,
+        ignored_env_overrides,
+        adb_requirement,
+        unbound_handsets,
+        unused_device_bindings,
+        emulator_autostart,
+    } = file.assemble_or_refusal().map_err(|(code, refusal)| {
+        let error = match device.filter(|device| device.code() == code) {
+            Some(device) => {
+                ActingdError::refused(code, device.outcome()).with_detail(device.to_string())
             }
-            registered(code, ActingdLocation::ConfigAssemble)
-        })
-    })
-    .and_then(|assembly| {
-        let RuntimeAssembly {
-            host,
-            provider,
-            policy,
-            manifest,
-            config_selection,
-            resource_packages,
-            recognition_packages,
-            ignored_env_overrides,
-            adb_requirement,
-            unbound_handsets,
-            unused_device_bindings,
-            emulator_autostart,
-        } = assembly;
-        // Workflow #398 RD-1b (model-398 v1.1 §3.6): a handset the private binding file binds
-        // no device to is refused here; a start registers it unavailable and goes on.
-        if let Some(alias) = unbound_handsets.into_iter().next() {
-            let refused = config::DeviceRefusal::Missing(alias);
-            let code = refused.code();
-            rejection = Some(Rejection::Device(refused));
-            return Err(registered(code, ActingdLocation::ConfigAssemble));
-        }
-        // Workflow #337: the install root's adb, checked exactly as at startup.
-        let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
-            let code = refused.code();
-            rejection = Some(Rejection::AdbInstall(refused));
-            registered(code, ActingdLocation::ConfigAssemble)
-        })?;
-        // Workflow #360: the vision root listed exactly as startup lists it; no model file is
-        // read. A folder that breaks the folder rule fails this check, though startup would
-        // only record it.
-        let vision = match provider.vision() {
-            None => None,
-            Some(vision) => {
-                let inventory = vision.inspect().map_err(|refused| {
-                    let code = refused.code;
-                    rejection = Some(Rejection::Vision(refused));
-                    registered(code, ActingdLocation::ConfigVision)
-                })?;
-                if !inventory.listing.invalid.is_empty() {
-                    rejection = Some(Rejection::VisionFolders(inventory.listing.invalid));
-                    return Err(registered(
-                        VisionListingCode::VisionModelFolderInvalid,
-                        ActingdLocation::ConfigVision,
-                    ));
-                }
-                Some(vision_report(vision, &inventory))
-            }
+            None => start_emulator_refused(code, start_emulator)
+                .unwrap_or_else(|| ActingdError::refused(code, refusal)),
         };
-        let modes = provider.modes();
-        let deferred = provider.deferred_bindings();
-        let mumu_root = provider.mumu_root().map(Path::to_path_buf);
-        let env_nemu_folder = provider.env_nemu_folder().map(Path::to_path_buf);
-        // Registered exactly as startup registers, short of discovery: the registry's own
-        // refusals (duplicate aliases or instance ids) carry the code startup would report.
-        let registry = provider
-            .into_registry()
-            .map_err(|error| host_refusal(&error, ActingdLocation::ConfigAssemble))?;
-        host.validate()
-            .map_err(|error| host_refusal(&error, ActingdLocation::ConfigValidate))?;
-        let resource_packages =
-            config::validate_resource_packages(&resource_packages).map_err(|refused| {
-                let code = refused.code;
-                rejection = Some(Rejection::ResourcePackage(refused));
-                registered(code, ActingdLocation::ResourcePackage)
-            })?;
-        // Workflow #384 D2-S2 (D2 model §3.2): each recognition package binding is checked in
-        // full (checks 1-3) and a binding that is no reader is refused, so `acsetup
-        // --commit-config` does not commit it. The realistic facts the catalog reads that no
-        // reader marks are warnings.
-        let recognition = config::recognition_package::check_bindings(
-            &recognition_packages,
-            &host,
-            policy.as_ref(),
-            config::recognition_package::BindingRead::Prepare,
+        staged(error, ActingdLocation::ConfigAssemble)
+    })?;
+    // Workflow #398 RD-1b (model-398 v1.1 §3.6): a handset the private binding file binds
+    // no device to is refused here; a start registers it unavailable and goes on.
+    if let Some(alias) = unbound_handsets.into_iter().next() {
+        let refused = config::DeviceRefusal::Missing(alias);
+        return Err(staged(
+            ActingdError::refused(refused.code(), refused.outcome())
+                .with_detail(refused.to_string()),
+            ActingdLocation::ConfigAssemble,
+        ));
+    }
+    // Workflow #337: the install root's adb, checked exactly as at startup.
+    let adb_default = config::ac_adb::require(&adb_requirement).map_err(|refused| {
+        staged(
+            ActingdError::refused(refused.code(), refused.outcome())
+                .with_detail(refused.to_string()),
+            ActingdLocation::ConfigAssemble,
         )
-        .map_err(|code| registered(code, ActingdLocation::RecognitionBinding))?;
-        for binding in &recognition {
-            if let Err(invalid) = &binding.verdict {
-                let (detail, message) =
-                    config::recognition_package::refusal_detail(binding, invalid);
-                rejection = Some(Rejection::RecognitionBinding(detail, message));
-                return Err(registered(
-                    actingcommand_runtime_host::HostCode::FactReaderBindingInvalid,
-                    ActingdLocation::RecognitionBinding,
+    })?;
+    // Workflow #360: the vision root listed exactly as startup lists it; no model file is
+    // read. A folder that breaks the folder rule fails this check, though startup would
+    // only record it.
+    let vision = match provider.vision() {
+        None => None,
+        Some(vision) => {
+            let inventory = vision.inspect().map_err(|refused| {
+                let outcome = Outcome::new(refused.code);
+                let outcome = match refused.cause.clone() {
+                    Some(cause) => outcome.caused_by(cause),
+                    None => outcome,
+                };
+                staged(
+                    ActingdError::refused(refused.code, outcome)
+                        .with_detail(refused.message.clone()),
+                    ActingdLocation::ConfigVision,
+                )
+            })?;
+            if !inventory.listing.invalid.is_empty() {
+                return Err(staged(
+                    vision_folders_refused(&inventory.listing.invalid),
+                    ActingdLocation::ConfigVision,
                 ));
             }
-        }
-        let missing_readers = config::recognition_package::missing_reader_warnings(
-            policy.as_ref(),
-            &config::recognition_package::marked_keys(&recognition),
-        )
-        .map_err(|code| registered(code, ActingdLocation::RecognitionBinding))?;
-        let checked = CheckedAssembly {
-            host,
-            registry,
-            modes,
-            deferred,
-            mumu_root,
-            env_nemu_folder,
-            policy_configured: policy.is_some(),
-            manifest,
-            config_selection,
-            ignored_env_overrides,
-            adb_default,
-            vision,
-            unused_device_bindings,
-            emulator_autostart,
-        };
-        let mut report = summarize(&config_path, &checked, &resource_packages)?;
-        // Workflow #384 D2-S2: the bound recognition package of each instance that names one,
-        // and the readers missing for the catalog's realistic facts.
-        if let Some(instances) = report["instances"].as_array_mut() {
-            for entry in instances {
-                if let Some(binding) = recognition
-                    .iter()
-                    .find(|binding| entry["alias"].as_str() == Some(binding.alias.as_str()))
-                {
-                    entry["recognition_package"] = json!({
-                        "package": binding.path.to_string_lossy(),
-                        "fact_keys": binding.verdict.as_ref().ok(),
-                    });
-                }
-            }
-        }
-        if let Some(warnings) = report["warnings"].as_array_mut() {
-            warnings.extend(missing_readers.iter().map(|warning| {
-                json!(config::recognition_package::missing_reader_warning_v1(
-                    warning
-                ))
-            }));
-        }
-        // Workflow #361 C3: the plan startup would make, from the ledger read-only.
-        let previewing = std::time::Instant::now();
-        let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
-            state_root: checked.host.state_root(),
-            catalog: policy.as_ref().map(|policy| &policy.catalog),
-            transition: policy
-                .as_ref()
-                .and_then(|policy| policy.catalog_transition.as_ref()),
-            approval_ids: policy
-                .as_ref()
-                .map_or(&[][..], |policy| policy.catalog_approval_ids.as_slice()),
-        })
-        .map_err(|refused| {
-            let failure = host_refusal(&refused, ActingdLocation::PolicyState);
-            let elapsed_ms = u64::try_from(previewing.elapsed().as_millis()).unwrap_or(u64::MAX);
-            rejection = Some(Rejection::PolicyState(Box::new(refused), elapsed_ms));
-            failure
-        })?;
-        report["policy_plan"] = policy_plan_report(&preview);
-        if !preview.state_root_present()
-            && let Some(not_checked) = report["not_checked"].as_array_mut()
-        {
-            not_checked.push(json!(STATE_ROOT_ABSENT_NOT_CHECKED));
-        }
-        Ok(report)
-    });
-    let (report, result) = match checked {
-        Ok(report) => (report, Ok(())),
-        Err((code, stage)) => {
-            let mut error = json!({ "code": code.as_str(), "stage": v1_stage_token(stage) });
-            let mut failure = ActingdError::coded(code);
-            if let Some(rejection) = rejection {
-                let (detail, message) = match rejection {
-                    Rejection::ResourcePackage(refused) => (refused.detail(), refused.to_string()),
-                    Rejection::RecognitionBinding(detail, message) => (detail, message),
-                    Rejection::Device(refused) => (refused.detail(), refused.to_string()),
-                    Rejection::StartEmulator(alias) => (
-                        json!({ "alias": alias }),
-                        format!(
-                            "instance {alias:?} names start_emulator but is not bound by discovery"
-                        ),
-                    ),
-                    Rejection::AdbInstall(refused) => (refused.detail(), refused.to_string()),
-                    Rejection::PolicyState(refused, elapsed_ms) => {
-                        // Review P6: a refused plan carries its remedy; a ledger or state
-                        // failure is named by its code and operation only.
-                        let remedy = if refused.is_fatal() {
-                            None
-                        } else {
-                            refused.native_detail()
-                        };
-                        let message = match remedy {
-                            Some(remedy) => format!("{refused}: {remedy}"),
-                            None => refused.to_string(),
-                        };
-                        (
-                            json!({
-                                "operation": refused.operation(),
-                                "message": message,
-                                "remedy": remedy,
-                                "elapsed_ms": elapsed_ms,
-                            }),
-                            message,
-                        )
-                    }
-                    Rejection::Vision(refused) => (
-                        json!({ "message": refused.message }),
-                        refused.message.clone(),
-                    ),
-                    Rejection::VisionFolders(folders) => (
-                        json!({
-                            "invalid_models": folders
-                                .iter()
-                                .map(|folder| json!({
-                                    "name": folder.name,
-                                    "path": folder.path.to_string_lossy(),
-                                    "reason": folder.reason,
-                                }))
-                                .collect::<Vec<_>>(),
-                        }),
-                        folders
-                            .iter()
-                            .map(|folder| {
-                                format!(
-                                    "vision model folder '{}' is invalid: {}",
-                                    folder.name, folder.reason
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; "),
-                    ),
-                };
-                error["detail"] = detail;
-                failure = failure.with_detail(message);
-            }
-            (
-                json!({
-                    "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
-                    "status": "failed",
-                    "error": error,
-                }),
-                Err(failure),
-            )
+            Some(vision_report(vision, &inventory))
         }
     };
-    let encoded = serde_json::to_string(&report)
-        .map_err(|_| ActingdError::process(ActingdCode::CheckConfigReportEncodeFailed))?;
-    println!("{encoded}");
-    result
+    let modes = provider.modes();
+    let deferred = provider.deferred_bindings();
+    let mumu_root = provider.mumu_root().map(Path::to_path_buf);
+    let env_nemu_folder = provider.env_nemu_folder().map(Path::to_path_buf);
+    // Registered exactly as startup registers, short of discovery: the registry's own
+    // refusals (duplicate aliases or instance ids) carry the code startup would report.
+    let registry = provider.into_registry().map_err(|error| {
+        staged(
+            ActingdError::runtime(error),
+            ActingdLocation::ConfigAssemble,
+        )
+    })?;
+    host.validate().map_err(|error| {
+        staged(
+            ActingdError::runtime(error),
+            ActingdLocation::ConfigValidate,
+        )
+    })?;
+    let resource_packages =
+        config::validate_resource_packages(&resource_packages).map_err(|refused| {
+            staged(
+                ActingdError::refused(refused.code, refused.outcome())
+                    .with_detail(refused.to_string()),
+                ActingdLocation::ResourcePackage,
+            )
+        })?;
+    // Workflow #384 D2-S2 (D2 model §3.2): each recognition package binding is checked in
+    // full (checks 1-3) and a binding that is no reader is refused, so `acsetup
+    // --commit-config` does not commit it. The realistic facts the catalog reads that no
+    // reader marks are noted.
+    let recognition = config::recognition_package::check_bindings(
+        &recognition_packages,
+        &host,
+        policy.as_ref(),
+        config::recognition_package::BindingRead::Prepare,
+    )
+    .map_err(|code| {
+        staged(
+            ActingdError::config(code),
+            ActingdLocation::RecognitionBinding,
+        )
+    })?;
+    if let Some(invalid) = recognition
+        .iter()
+        .find_map(|binding| binding.verdict.as_ref().err())
+    {
+        return Err(staged(
+            ActingdError::refused(
+                actingcommand_runtime_host::HostCode::FactReaderBindingInvalid,
+                invalid.clone(),
+            ),
+            ActingdLocation::RecognitionBinding,
+        ));
+    }
+    let missing_readers = config::recognition_package::missing_reader_warnings(
+        policy.as_ref(),
+        &config::recognition_package::marked_keys(&recognition),
+    )
+    .map_err(|code| {
+        staged(
+            ActingdError::config(code),
+            ActingdLocation::RecognitionBinding,
+        )
+    })?;
+    let checked = CheckedAssembly {
+        host,
+        registry,
+        modes,
+        deferred,
+        mumu_root,
+        env_nemu_folder,
+        policy_configured: policy.is_some(),
+        manifest,
+        config_selection,
+        ignored_env_overrides,
+        adb_default,
+        vision,
+        unused_device_bindings,
+        emulator_autostart,
+    };
+    let (mut report, mut notes) = summarize(&config_path, &checked, &resource_packages)
+        .map_err(|(code, stage)| staged(ActingdError::config(code), stage))?;
+    // Workflow #384 D2-S2: the bound recognition package of each instance that names one, and
+    // the readers missing for the catalog's realistic facts.
+    if let Some(instances) = report["instances"].as_array_mut() {
+        for entry in instances {
+            if let Some(binding) = recognition
+                .iter()
+                .find(|binding| entry["alias"].as_str() == Some(binding.alias.as_str()))
+            {
+                entry["recognition_package"] = json!({
+                    "package": binding.path.to_string_lossy(),
+                    "fact_keys": binding.verdict.as_ref().ok(),
+                });
+            }
+        }
+    }
+    notes.extend(missing_readers);
+    // Workflow #361 C3: the plan startup would make, from the ledger read-only.
+    let previewing = std::time::Instant::now();
+    let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
+        state_root: checked.host.state_root(),
+        catalog: policy.as_ref().map(|policy| &policy.catalog),
+        transition: policy
+            .as_ref()
+            .and_then(|policy| policy.catalog_transition.as_ref()),
+        approval_ids: policy
+            .as_ref()
+            .map_or(&[][..], |policy| policy.catalog_approval_ids.as_slice()),
+    })
+    .map_err(|refused| {
+        // Review P4: the time the preview ran before it failed, on the developer line.
+        let elapsed_ms = u64::try_from(previewing.elapsed().as_millis()).unwrap_or(u64::MAX);
+        staged(
+            ActingdError::runtime(refused).with_detail(format!("elapsed_ms={elapsed_ms}")),
+            ActingdLocation::PolicyState,
+        )
+    })?;
+    report["policy_plan"] = policy_plan_report(&preview);
+    if !preview.state_root_present()
+        && let Some(not_checked) = report["not_checked"].as_array_mut()
+    {
+        not_checked.push(json!(STATE_ROOT_ABSENT_NOT_CHECKED));
+    }
+    let passed = notes.into_iter().fold(
+        Outcome::new(ActingdCode::CheckConfigPassed),
+        |outcome, note| outcome.joined(CauseRelation::Note, note),
+    );
+    Ok(Reported::new(passed).with("report", report))
 }
 
-/// A check-config refusal: its code and the stage that refused (`error.code`, `error.stage`).
-type Refusal = (ErrorCode, Location);
+/// The error with the check-config stage that refused (Workflow #378 A6a: its outcome's
+/// `stage`).
+fn staged(mut error: ActingdError, stage: ActingdLocation) -> ActingdError {
+    error.stage = Some(stage.location());
+    error
+}
+
+/// A check-config refusal of the summary: its code and the stage that refused.
+type Refusal = (Code, ActingdLocation);
 
 /// A refusal with a registered code.
 fn registered(code: impl Into<Code>, stage: ActingdLocation) -> Refusal {
-    (ErrorCode::Registered(code.into()), stage.location())
+    (code.into(), stage)
 }
 
-/// A refusal with the runtime host's code.
-fn host_refusal(
-    error: &actingcommand_runtime_host::RuntimeHostError,
-    stage: ActingdLocation,
-) -> Refusal {
-    (
-        ErrorCode::Host {
-            host_code: error.code(),
-        },
-        stage.location(),
-    )
-}
-
-/// A refusal that carries `error.detail`: a resource package (stage `resource_package`), the
-/// install root's adb (Workflow #337, stage `assemble`), or the vision root or its model
-/// folders (Workflow #360, stage `vision`).
-enum Rejection {
-    ResourcePackage(config::ResourcePackageRejection),
-    AdbInstall(config::ac_adb::AdbInstallRejection),
-    /// Workflow #361 C3: startup's catalog plan refused, or the state root unreadable, with
-    /// the time the preview ran before it failed (review P4).
-    PolicyState(Box<actingcommand_runtime_host::RuntimeHostError>, u64),
-    Vision(config::VisionRefusal),
-    VisionFolders(Vec<InvalidModelFolder>),
-    /// Workflow #398 RD-1b: an instance's device declaration, the private binding file or a
-    /// handset without a binding (stage `assemble`).
-    Device(config::DeviceRefusal),
-    /// Workflow #384 D2-S2: a recognition package binding that is no reader (stage
-    /// `config_recognition_binding`): its `error.detail` and developer text.
-    RecognitionBinding(serde_json::Value, String),
-    /// Workflow #369 S6a: the instance whose `start_emulator` is refused (stage `assemble`).
-    StartEmulator(String),
+/// Workflow #360: a vision root whose model folders break the folder rule, as
+/// `vision_model_folder_invalid` with each folder in `invalid_models` (Workflow #378 A6a); each
+/// folder's reason is developer text until B4 codes it.
+fn vision_folders_refused(folders: &[InvalidModelFolder]) -> ActingdError {
+    let code = VisionListingCode::VisionModelFolderInvalid;
+    let records = folders.iter().map(|folder| {
+        Record::new()
+            .model_name(&folder.name)
+            .path(&folder.path)
+            .failure_code(code)
+    });
+    let text = folders
+        .iter()
+        .map(|folder| {
+            format!(
+                "vision model folder '{}' is invalid: {}",
+                folder.name, folder.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    ActingdError::refused(code, Outcome::new(code).invalid_models(records)).with_detail(text)
 }
 
 /// Everything `summarize` reports once every check passed: the registry as configured and
@@ -468,11 +414,14 @@ fn vision_report(
     })
 }
 
+/// The report of a configuration that passed, and what the check noted beside it (Workflow
+/// #378 A6a: the `note` links of `check_config_passed`, which were v1's `warnings` and
+/// `mumu_root_unresolved`).
 fn summarize(
     config_path: &Path,
     checked: &CheckedAssembly,
     resource_packages: &BTreeMap<String, InstanceResourcePackage>,
-) -> Result<serde_json::Value, Refusal> {
+) -> Result<(serde_json::Value, Vec<Outcome>), Refusal> {
     let registry = &checked.registry;
     let mut instances = registry
         .instance_aliases()
@@ -558,13 +507,24 @@ fn summarize(
     // Workflow #336 PKG-S1: every `resource_package` directory is admitted in full by its path,
     // so none is left unchecked.
     let mut not_checked = NOT_CHECKED.to_vec();
+    // Workflow #318 (cfg3): one `env_override_ignored` per set variable that
+    // `allow_env_overrides` off leaves unread.
+    let mut notes = config::env_override_warnings(&checked.ignored_env_overrides);
     let (mumu_root, mumu_root_unresolved) = mumu_root_report(
         checked.mumu_root.as_deref(),
         checked.env_nemu_folder.as_deref(),
     );
-    if mumu_root_unresolved.is_some() {
+    if let Some(unresolved) = mumu_root_unresolved {
         not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
+        notes.push(unresolved);
     }
+    // Workflow #398 RD-1b: each alias the private binding file binds that no handset has.
+    notes.extend(
+        checked
+            .unused_device_bindings
+            .iter()
+            .map(|alias| Outcome::new(ActingdCode::DeviceBindingUnused).alias(alias)),
+    );
     let bind_address = checked.host.bind_address();
     // The new tunables (Workflow #318, cfg2) echoed from the manifest, so this report and
     // `actingctl status --config` cannot disagree; since Workflow #385 P-c rows of the
@@ -598,8 +558,6 @@ fn summarize(
         device_paths.insert(name.to_owned(), value);
     }
     let mut report = json!({
-        "schema_version": CHECK_CONFIG_SCHEMA_VERSION,
-        "status": "ok",
         "config_path": config_path.to_string_lossy(),
         "state_root": checked.host.state_root().to_string_lossy(),
         "bind_host": bind_address.ip().to_string(),
@@ -622,38 +580,24 @@ fn summarize(
             .map(config::ac_adb::AdbDefault::report),
         // Workflow #360: `null` when `vision` is absent, else the listed vision root.
         "vision": checked.vision,
-        // Workflow #318 (cfg3): one `env_override_ignored:<VAR>` per set variable that
-        // `allow_env_overrides` off leaves unread; empty otherwise.
-        "warnings": config::env_override_warnings(&checked.ignored_env_overrides)
-            .iter()
-            .map(config::env_override_warning_v1)
-            .chain(checked.unused_device_bindings.iter().map(|alias| {
-                format!("{}:{alias}", ActingdCode::DeviceBindingUnused.as_str())
-            }))
-            .collect::<Vec<_>>(),
     });
-    if let Some(unresolved) = mumu_root_unresolved {
-        report["mumu_root_unresolved"] = unresolved;
-    }
     // Workflow #373 NAV-6 (M-373 §7): the standard-pack root as startup reads it (root files
-    // only, no package admitted). A broken game root is that game's problem and one warning
-    // (`<code>:<game>`); the configuration itself is not refused.
+    // only, no package admitted). A broken game root is that game's problem and one note, its
+    // problem's outcome; the configuration itself is not refused.
     let standard_packs = inspect_standard_packs(checked.host.standard_packs_root());
-    if let Some(warnings) = report["warnings"].as_array_mut() {
-        if let Some(problem) = &standard_packs.root_problem {
-            warnings.push(json!(problem.code().to_string()));
-        }
-        for (game, problem) in standard_packs.problems() {
-            warnings.push(json!(format!("{}:{game}", problem.code())));
-        }
-    }
+    notes.extend(standard_packs.root_problem.iter().cloned());
+    notes.extend(
+        standard_packs
+            .problems()
+            .map(|(_, problem)| problem.clone()),
+    );
     report["standard_packs"] = serde_json::to_value(&standard_packs).map_err(|_| {
         registered(
             ActingdCode::CheckConfigReportEncodeFailed,
             ActingdLocation::ConfigAssemble,
         )
     })?;
-    Ok(report)
+    Ok((report, notes))
 }
 
 /// One manifest parameter by key; `None` when the manifest does not carry it.
@@ -690,11 +634,14 @@ fn manifest_integer(
 /// read-only `resolve_mumu_manager(None, env_folder)` run (the injected
 /// `ACTINGCOMMAND_NEMU_FOLDER` only under `allow_env_overrides`, running process, uninstall
 /// registry, vendor folders). `MuMuManager.exe` is never run; no instance is started or
-/// stopped. A failed resolution is reported as `null` plus its reason, never refused.
+/// stopped. A failed resolution is reported as `null` plus its outcome, a note of the passed
+/// check, never refused: the Nemu resolution reason, else `provider_native_failed` with the
+/// device failure's category, as provider startup records it (Workflow #378 A6a: was v1's
+/// `mumu_root_unresolved`).
 fn mumu_root_report(
     configured: Option<&Path>,
     env_folder: Option<&Path>,
-) -> (serde_json::Value, Option<serde_json::Value>) {
+) -> (serde_json::Value, Option<Outcome>) {
     if let Some(root) = configured {
         return (
             json!({ "path": root.to_string_lossy(), "source": "config" }),
@@ -709,26 +656,10 @@ fn mumu_root_report(
             }),
             None,
         ),
-        Err(error) => {
-            // Only the resolution reason is what a provider startup discovery refusal records.
-            // The other two no longer mirror provider startup: since ledger revision 3 it
-            // records `provider_native_failed` with `device_category` instead of the dynamic
-            // `<category>.<stage>` spelling and the `device_error` fallback. Workflow #378 A2-R
-            // aligns this v1 field.
-            let reason = error
-                .nemu_resolution_context()
-                .map(|context| context.reason().as_str().to_owned())
-                .or_else(|| {
-                    error.diagnostic().map(|diagnostic| {
-                        format!("{}.{}", diagnostic.category().as_str(), diagnostic.stage())
-                    })
-                })
-                .unwrap_or_else(|| "device_error".to_owned());
-            (
-                serde_json::Value::Null,
-                Some(json!({ "reason": reason, "message": error.message() })),
-            )
-        }
+        Err(error) => (
+            serde_json::Value::Null,
+            Some(config::device_failure_outcome(&error, None)),
+        ),
     }
 }
 

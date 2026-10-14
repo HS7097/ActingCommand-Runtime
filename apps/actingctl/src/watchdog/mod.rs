@@ -31,7 +31,9 @@ mod task;
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{Category, CauseRelation, Detail, IoOp, Outcome, RawSource};
+use actingcommand_contract::outcome::{
+    Category, CauseRelation, Code, Detail, IoOp, Outcome, RawSource,
+};
 use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartProbes};
 use log::Level;
 use observe::{Installation, WriterProbe};
@@ -260,8 +262,8 @@ struct Tick {
     lock: OwnerLock,
     journal: Journal,
     live: Option<Result<decide::LiveOwner, Outcome>>,
-    fatal: Option<decide::Fatal>,
-    earlier_fatal: Option<decide::Fatal>,
+    terminal: Option<decide::Terminal>,
+    earlier_terminal: Option<decide::Terminal>,
     runtime_info: Option<Value>,
     writer: Option<&'static str>,
     processes: Option<Vec<decide::RuntimeProcess>>,
@@ -270,10 +272,12 @@ struct Tick {
 impl Tick {
     fn observe(root: &Path, watchdog_dir: &Path) -> Result<Self, Outcome> {
         let installation = Installation::resolve(root)?;
-        // F matters only for an unlocked journal with a record: a FATAL newer than it.
+        // F matters only for an unlocked journal with a record: a terminal outcome newer than
+        // it, of this root.
         let observed = observe::observe_owner(
             &installation.state_root,
             &log_directories(&installation.root, watchdog_dir),
+            Some(installation.root.as_path()),
         )?;
         let live = (observed.lock == OwnerLock::Locked)
             .then(|| observe::live_owner(&installation.state_root, None));
@@ -283,8 +287,8 @@ impl Tick {
             lock: observed.lock,
             journal: observed.journal,
             live,
-            fatal: observed.fatal,
-            earlier_fatal: observed.earlier_fatal,
+            terminal: observed.terminal,
+            earlier_terminal: observed.earlier_terminal,
             writer: None,
             processes: None,
         })
@@ -295,8 +299,8 @@ impl Tick {
             lock: self.lock,
             live: self.live.clone(),
             journal: self.journal.clone(),
-            fatal: self.fatal.clone(),
-            earlier_fatal: self.earlier_fatal.clone(),
+            terminal: self.terminal.clone(),
+            earlier_terminal: self.earlier_terminal.clone(),
         }
     }
 
@@ -625,10 +629,20 @@ fn tick_once(
             {
                 state.grace_until_unix_ms = Some(until);
             }
-            let decision = decide::decide_start(&probes, state, now, from_task);
-            if let Decision::BudgetExhausted { since_unix_ms } = decision {
-                state.exhausted_since_unix_ms = Some(since_unix_ms);
-            }
+            let decision = match decide::decide_start(&probes, state, now, from_task) {
+                // Workflow #378 A6a (model section 7.5): the terminal outcomes of the window's
+                // starts decide between a run-out budget and `panic_unrecovered`.
+                Decision::BudgetExhausted { since_unix_ms, .. } => {
+                    state.exhausted_since_unix_ms = Some(since_unix_ms);
+                    // The starts that ran the budget out: those of the window that ended when it
+                    // ran out, also on the ticks of a sticky exhaustion.
+                    decide::budget_decision(
+                        since_unix_ms,
+                        &observe::start_terminals(state, since_unix_ms),
+                    )
+                }
+                decision => decision,
+            };
             if decision == Decision::Start {
                 let started = start_runtime(&tick, directory, state, now, from_task);
                 drop(guard);
@@ -770,12 +784,16 @@ fn record_decision(
     let after_start = previous
         .as_ref()
         .is_some_and(|previous| previous.is(ActingctlCode::WatchdogStartedRuntime));
-    let (level, code, text): (Level, ActingctlCode, Vec<(&str, String)>) = match decision {
+    let (level, code, text): (Level, Code, Vec<(&str, String)>) = match decision {
         Decision::RunInProgress | Decision::Start | Decision::Started { .. } => return Ok(()),
-        Decision::StartFailed(_) => (Level::Error, ActingctlCode::WatchdogStartFailed, Vec::new()),
+        Decision::StartFailed(_) => (
+            Level::Error,
+            ActingctlCode::WatchdogStartFailed.code(),
+            Vec::new(),
+        ),
         Decision::Misconfigured(_) => (
             Level::Error,
-            ActingctlCode::WatchdogMisconfigured,
+            ActingctlCode::WatchdogMisconfigured.code(),
             Vec::new(),
         ),
         Decision::Alive {
@@ -783,64 +801,76 @@ fn record_decision(
             ..
         } => (
             Level::Info,
-            ActingctlCode::WatchdogFormalStartObserved,
+            ActingctlCode::WatchdogFormalStartObserved.code(),
             Vec::new(),
         ),
         Decision::Alive { .. } if after_start => return Ok(()),
         Decision::Alive { .. } => (
             Level::Info,
-            ActingctlCode::WatchdogAlive,
+            ActingctlCode::WatchdogAlive.code(),
             vec![("started_by_watchdog", "true".to_owned())],
         ),
         Decision::OwnerLockHeld { .. } => (
             Level::Info,
-            ActingctlCode::WatchdogOwnerLockHeld,
+            ActingctlCode::WatchdogOwnerLockHeld.code(),
             Vec::new(),
         ),
-        Decision::NeverStarted => (Level::Info, ActingctlCode::WatchdogNeverStarted, Vec::new()),
+        Decision::NeverStarted => (
+            Level::Info,
+            ActingctlCode::WatchdogNeverStarted.code(),
+            Vec::new(),
+        ),
         Decision::OwnerRetainedUnconfirmed { .. } => (
             Level::Error,
-            ActingctlCode::WatchdogOwnerRetainedUnconfirmed,
+            ActingctlCode::WatchdogOwnerRetainedUnconfirmed.code(),
             vec![(
                 "next",
                 "start formally; startup releases a retained owner whose process has exited"
                     .to_owned(),
             )],
         ),
-        Decision::FatalHold(fatal) => (
+        Decision::FatalHold(terminal) => (
             Level::Error,
-            ActingctlCode::WatchdogFatalHold,
-            vec![("line", fatal.line.clone())],
+            ActingctlCode::WatchdogFatalHold.code(),
+            vec![("terminal", terminal.outcome.code().as_str().to_owned())],
         ),
-        Decision::FormalClose { .. } => {
-            (Level::Info, ActingctlCode::WatchdogFormalClose, Vec::new())
-        }
+        Decision::FormalClose { .. } => (
+            Level::Info,
+            ActingctlCode::WatchdogFormalClose.code(),
+            Vec::new(),
+        ),
         Decision::InstallerBusy => (
             Level::Info,
-            ActingctlCode::WatchdogInstallerBusy,
+            ActingctlCode::WatchdogInstallerBusy.code(),
             Vec::new(),
         ),
         Decision::SelectionChanged => (
             Level::Info,
-            ActingctlCode::WatchdogSelectionChanged,
+            ActingctlCode::WatchdogSelectionChanged.code(),
             Vec::new(),
         ),
         Decision::RuntimeProcessPresent { processes } => (
             Level::Info,
-            ActingctlCode::WatchdogRuntimeProcessPresent,
+            ActingctlCode::WatchdogRuntimeProcessPresent.code(),
             vec![("pids", pids(processes))],
         ),
         Decision::RuntimeProcessWithoutOwner { processes } => (
             Level::Error,
-            ActingctlCode::WatchdogRuntimeProcessWithoutOwner,
+            ActingctlCode::WatchdogRuntimeProcessWithoutOwner.code(),
             vec![("pids", pids(processes))],
         ),
         Decision::BudgetExhausted { .. } => (
             Level::Error,
-            ActingctlCode::WatchdogBudgetExhausted,
+            ActingctlCode::WatchdogBudgetExhausted.code(),
             vec![("starts", state.starts.len().to_string())],
         ),
-        Decision::Grace { .. } => (Level::Info, ActingctlCode::WatchdogGrace, Vec::new()),
+        // Workflow #378 A6a: every start in the window ended in `runtime_restart_required`.
+        Decision::PanicUnrecovered { .. } => (
+            Level::Error,
+            ContractCode::PanicUnrecovered.code(),
+            vec![("starts", state.starts.len().to_string())],
+        ),
+        Decision::Grace { .. } => (Level::Info, ActingctlCode::WatchdogGrace.code(), Vec::new()),
     };
     let mut fields = log::outcome_fields(&outcome);
     fields.extend(text);
@@ -894,10 +924,11 @@ fn report(tick: &Tick, decision: &Decision, state: &WatchdogState, directory: &P
         Some(Err(failure)) => json!({ "error": envelope(failure) }),
         None => Value::Null,
     };
-    // A FATAL hold names its log: the newest FATAL, or (R5b) an earlier owner's.
-    let fatal = match decision {
-        Decision::FatalHold(fatal) => Some(fatal),
-        _ => tick.fatal.as_ref(),
+    // A fatal hold names its log and terminal outcome: the newest, or (R5b) an earlier
+    // owner's (Workflow #378 A6a: it was the FATAL line).
+    let terminal = match decision {
+        Decision::FatalHold(terminal) => Some(terminal),
+        _ => tick.terminal.as_ref(),
     };
     let now = now_unix_ms();
     let data = json!({
@@ -909,7 +940,10 @@ fn report(tick: &Tick, decision: &Decision, state: &WatchdogState, directory: &P
         "journal": journal,
         "runtime_info": tick.runtime_info,
         "live_owner": live_owner,
-        "fatal": fatal.map(|fatal| json!({ "log": fatal.log, "line": fatal.line })),
+        "terminal": terminal.map(|terminal| json!({
+            "log": terminal.log,
+            "outcome": envelope(&terminal.outcome),
+        })),
         "writer_lock": tick.writer,
         "processes": tick.processes.as_deref().map(processes_json),
         "budget": {
@@ -1358,8 +1392,8 @@ mod tests {
             lock: OwnerLock::Locked,
             journal: Journal::Absent,
             live: Some(Ok(owner.clone())),
-            fatal: None,
-            earlier_fatal: None,
+            terminal: None,
+            earlier_terminal: None,
             runtime_info: None,
             writer: None,
             processes: None,

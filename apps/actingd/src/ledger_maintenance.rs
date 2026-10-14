@@ -3,7 +3,12 @@
 use super::*;
 use actingcommand_runtime_host::{LedgerMaintenanceOperation, LedgerMaintenanceRequest};
 
-pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
+/// Workflow #378 A6a (model section 7.4): the ledger-maintenance report, the receipt's members
+/// with `outcome`; a failure is its outcome with `activated: false` (v1's `status: "failed"`
+/// and `error`).
+pub(super) const SCHEMA_VERSION: &str = "actingcommand.ledger-maintenance.v2";
+
+pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
     if arguments.len() < 4 || arguments.len() > 10 {
         return Err(ActingdError::config(ActingdCode::MaintenanceUsageInvalid));
     }
@@ -57,24 +62,30 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError
         artifact_root,
         limits: Default::default(),
     };
-    match RuntimeHost::maintain_ledger(config, request) {
-        Ok(receipt) => {
-            let encoded = serde_json::to_string(&receipt)
-                .map_err(|_| ActingdError::process(ActingdCode::MaintenanceReceiptEncodeFailed))?;
-            println!("{encoded}");
-            // Workflow #375 R5a: the referenced material a restore copied or skipped.
-            if let Some(material) = receipt.restored_material {
-                eprintln!(
-                    "INFO actingd: ledger_maintenance restore artifacts_copied={} artifacts_evicted={} artifacts_absent={}",
-                    material.copied, material.evicted, material.absent
-                );
-            }
-            Ok(())
-        }
-        Err(error) => {
-            let encoded = serde_json::to_string(&serde_json::json!({ "schema_version": "actingcommand.ledger-maintenance.v1", "status": "failed", "error": &error, "activated": false })).map_err(|_| ActingdError::process(ActingdCode::MaintenanceReceiptEncodeFailed))?;
-            println!("{encoded}");
-            Err(ActingdError::maintenance(error))
-        }
+    let receipt = RuntimeHost::maintain_ledger(config, request).map_err(|error| {
+        ActingdError::maintenance(error).with_report("activated", serde_json::Value::Bool(false))
+    })?;
+    // Workflow #375 R5a: the referenced material a restore copied or skipped, on the developer
+    // line.
+    if let Some(material) = receipt.restored_material {
+        write_stderr(&format!(
+            "INFO actingd: {} restore artifacts_copied={} artifacts_evicted={} artifacts_absent={}\n",
+            ActingdCode::LedgerMaintenanceCompleted.as_str(),
+            material.copied,
+            material.evicted,
+            material.absent
+        ));
     }
+    let data = match serde_json::to_value(&receipt) {
+        Ok(serde_json::Value::Object(data)) => data,
+        _ => {
+            return Err(ActingdError::process(
+                ActingdCode::MaintenanceReceiptEncodeFailed,
+            ));
+        }
+    };
+    Ok(Reported {
+        outcome: Outcome::new(ActingdCode::LedgerMaintenanceCompleted),
+        data,
+    })
 }

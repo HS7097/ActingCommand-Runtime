@@ -57,3 +57,15 @@ CREATE TABLE ledger_meta (
     integrity_tag TEXT NOT NULL,
     migration_record TEXT
 ) STRICT;
+-- Workflow #383 AO-2 (ledger observer §11.1, register L11): the index of tagged keys, open
+-- intents, write requests and lifecycle records, maintained in each batch's transaction.
+CREATE TABLE ledger_index (
+    role TEXT NOT NULL CHECK (role IN ('state', 'open', 'request', 'lifecycle')),
+    key TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    value_sha256 TEXT NOT NULL,
+    source_lineage TEXT,
+    source_revision INTEGER,
+    PRIMARY KEY (role, key)
+) STRICT, WITHOUT ROWID;

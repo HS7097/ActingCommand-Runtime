@@ -101,7 +101,7 @@ fn signature_replay_uses_frozen_catalog_and_reports_missing_context_without_writ
                 .operation(Location::relayed(operation).expect("registered operation"))
                 .stage(Location::relayed(FAILURE_STAGE).expect("registered stage")),
         )
-        .with_runtime_code(Some(RuntimeErrorCode::RuntimeFatal))
+        .with_runtime_code(Some(RuntimeErrorCode::RuntimeHalted))
         .with_cause(Some(cause));
         let detail = DiagnosticDetailDraft::new(
             "runtime_lifecycle",

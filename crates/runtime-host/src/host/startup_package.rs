@@ -103,7 +103,7 @@ pub(super) fn resolve_startup_packages(
                 RuntimeHostError::fatal(
                     HostCode::StartupPackageInstanceUnknown,
                     HostLocation::StartRuntimeHost,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_native_detail(format!("instance_alias={alias}"))
             })?;
@@ -111,7 +111,7 @@ pub(super) fn resolve_startup_packages(
             return Err(RuntimeHostError::fatal(
                 HostCode::StartupPackageRequiresPhysicalInstance,
                 HostLocation::StartRuntimeHost,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
             .with_native_detail(format!("instance_alias={alias}")));
         }
@@ -287,7 +287,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::StartupPackageClaimRequestInvalid,
                 HostLocation::ScheduleStartupPackage,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         Ok(StartupClaim {

@@ -39,7 +39,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     failure.failure_code(),
                     ConfigHostLocation::RecordRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome))
             })?;
@@ -332,7 +332,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     failure.failure_code(),
                     ConfigHostLocation::ReadRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome))
             })?;
@@ -357,7 +357,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     failure.failure_code(),
                     ConfigHostLocation::ReadRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome))
             })
@@ -373,7 +373,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     failure.failure_code(),
                     ConfigHostLocation::ReadRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome))
             })
@@ -388,7 +388,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     failure.failure_code(),
                     ConfigHostLocation::ReadRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome))
             })
@@ -406,7 +406,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     ConfigHostCode::OverridesFactClockOverflow,
                     ConfigHostLocation::RecordRuntimeConfig,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?),
             None => now,
@@ -459,7 +459,7 @@ fn overrides_invalid() -> RuntimeHostError {
     RuntimeHostError::fatal(
         ConfigHostCode::OverridesFactInvalid,
         ConfigHostLocation::RestoreConfigOverrides,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -467,7 +467,7 @@ fn value_type_invalid(operation: ConfigHostLocation) -> RuntimeHostError {
     RuntimeHostError::fatal(
         ConfigHostCode::ValueTypeInvalid,
         operation,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 

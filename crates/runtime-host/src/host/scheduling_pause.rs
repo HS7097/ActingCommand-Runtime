@@ -10,7 +10,7 @@
 use super::policy_dispatch::SchedulingPauseTable;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
-use actingcommand_contract::outcome::Code;
+use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     InstancePauseStage, InstancePauseState, OwnerEpoch, SchedulingPauseReason, SchedulingPauseState,
 };
@@ -86,7 +86,7 @@ fn epoch_text(owner_epoch: OwnerEpoch) -> RuntimeHostResult<String> {
         _ => Err(RuntimeHostError::fatal(
             HostCode::SchedulingPauseEpochEncodeFailed,
             HostLocation::PersistSchedulingPause,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )),
     }
 }
@@ -95,7 +95,7 @@ fn restore_invalid(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
         HostLocation::RestoreSchedulingPauses,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
 
@@ -126,7 +126,7 @@ impl HostShared {
                 RuntimeHostError::fatal(
                     HostCode::SchedulingPauseFactClockOverflow,
                     HostLocation::PersistSchedulingPause,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 )
             })?),
             None => now,
@@ -231,7 +231,7 @@ impl HostShared {
         &self,
         held: bool,
         previous_owner_epoch: Option<OwnerEpoch>,
-    ) -> RuntimeHostResult<Vec<String>> {
+    ) -> RuntimeHostResult<Vec<Outcome>> {
         let _persist = lock(
             &self.scheduling_pause_persist_gate,
             HostLocation::RestoreSchedulingPauses,
@@ -288,6 +288,7 @@ impl HostShared {
             HostLocation::ReadSchedulingPauseTable,
         )?
         .clone();
+        // Workflow #378 A6a: one outcome per pause, which actingd writes as a daemon line.
         let mut lines = Vec::with_capacity(rows.len());
         for row in rows {
             let pause_reason = SchedulingPauseReason::new(row_text(row, "pause_reason")?)
@@ -316,16 +317,14 @@ impl HostShared {
                         .validate()
                         .map_err(|_| restore_invalid(HostCode::SchedulingPauseFactInvalid))?;
                     table.set_global(state, origin);
-                    lines.push(format!(
-                        "scheduling_pause_restored scope=global since={since_unix_ms}"
-                    ));
+                    lines.push(
+                        Outcome::new(HostCode::SchedulingPauseRestored).at_unix_ms(since_unix_ms),
+                    );
                 }
                 "instance" => {
                     let alias = row_text(row, "instance_alias")?;
                     if !registered.contains(alias) {
-                        lines.push(format!(
-                            "scheduling_pause_dropped scope=instance:{alias} reason=instance_not_registered"
-                        ));
+                        lines.push(Outcome::new(HostCode::SchedulingPauseDropped).alias(alias));
                         continue;
                     }
                     if table.holds_instance(alias) {
@@ -341,9 +340,11 @@ impl HostShared {
                         .validate()
                         .map_err(|_| restore_invalid(HostCode::SchedulingPauseFactInvalid))?;
                     table.set_instance(alias, state, origin);
-                    lines.push(format!(
-                        "scheduling_pause_restored scope=instance:{alias} since={since_unix_ms}"
-                    ));
+                    lines.push(
+                        Outcome::new(HostCode::SchedulingPauseRestored)
+                            .alias(alias)
+                            .at_unix_ms(since_unix_ms),
+                    );
                 }
                 _ => {
                     return Err(restore_invalid(HostCode::SchedulingPauseFactInvalid));

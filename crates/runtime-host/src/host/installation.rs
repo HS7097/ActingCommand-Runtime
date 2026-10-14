@@ -19,6 +19,9 @@ use std::time::Instant;
 
 const TRANSITION_KEY: &str = "host.install_transition";
 const PAUSES_KEY: &str = "host.install_transition.pauses";
+/// The longest a shutdown request waits for lifecycle work already in flight on other threads
+/// to end before it is decided (`settle_for_shutdown`); well inside a client's 5 s I/O budget.
+const SHUTDOWN_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct LifecycleAdmission {
     closed: bool,
@@ -82,6 +85,10 @@ impl Drop for LifecycleWork<'_> {
             *count -= 1;
             if *count == 0 {
                 admission.active.remove(&id);
+                // A shutdown request may be waiting for the work in flight to end.
+                if admission.active.is_empty() {
+                    self.shared.lifecycle_settled.notify_all();
+                }
             }
         }
     }
@@ -100,7 +107,7 @@ fn prepared<T>(value: &OnceLock<T>) -> RuntimeHostResult<&T> {
         RuntimeHostError::fatal(
             HostCode::RuntimeComponentNotPrepared,
             HostLocation::AccessPreparedRuntime,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }
@@ -110,7 +117,7 @@ pub(super) fn set_prepared<T>(slot: &OnceLock<T>, value: T) -> RuntimeHostResult
         RuntimeHostError::fatal(
             HostCode::RuntimeComponentAlreadyPrepared,
             HostLocation::PrepareRuntime,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }
@@ -261,6 +268,12 @@ impl HostShared {
         if !admission.active.is_empty() {
             return Ok(false);
         }
+        self.nothing_held_or_waiting()
+    }
+
+    /// No holder and no waiting entry (the scheduler's own read), and no install cleanup
+    /// pending: the part of `installation_idle` that lifecycle work in flight does not decide.
+    fn nothing_held_or_waiting(&self) -> RuntimeHostResult<bool> {
         Ok({
             let scheduler = lock(&self.scheduler, HostLocation::CheckInstallLeases)?;
             scheduler.active_tokens().is_empty() && scheduler.queued_total() == 0
@@ -268,15 +281,53 @@ impl HostShared {
             .install_cleanup_pending())
     }
 
+    /// An idle Runtime has lifecycle work in flight now and then as well: the lease sweep every
+    /// 50 ms, the performance tick, a closed connection's cleanup, a reply still being written
+    /// (train 11 boot smoke, run 38560460358: `runtime_busy` right after `runtime_ready`). A
+    /// shutdown request that finds such work on other threads, and no holder, no waiting entry
+    /// and no install cleanup, lets it end, at most `SHUTDOWN_SETTLE_TIMEOUT`; it is then
+    /// decided with the admission still held, so no new work starts in between. Work of the
+    /// requesting thread itself cannot end while it waits, and every other refusal is answered
+    /// at once.
+    fn settle_for_shutdown<'a>(
+        &'a self,
+        mut admission: MutexGuard<'a, LifecycleAdmission>,
+        target: RuntimeShutdownTarget,
+    ) -> RuntimeHostResult<MutexGuard<'a, LifecycleAdmission>> {
+        let deadline = Instant::now() + SHUTDOWN_SETTLE_TIMEOUT;
+        loop {
+            if admission.active.is_empty()
+                || admission.active.contains_key(&thread::current().id())
+                || target != self.shutdown_target
+                || admission.stopping
+                || admission.preparing
+                || self.fatal.is_shutdown_requested()
+                || !self.nothing_held_or_waiting()?
+            {
+                return Ok(admission);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(admission);
+            }
+            admission = self
+                .lifecycle_settled
+                .wait_timeout(admission, remaining)
+                .map_err(|_| lock_poison_error(ContractLocation::RequestRuntimeShutdown))?
+                .0;
+        }
+    }
+
     pub(super) fn request_shutdown(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         target: RuntimeShutdownTarget,
     ) -> Result<OperationSuccess, RequestFailure> {
-        let mut admission = lock(
+        let admission = lock(
             &self.lifecycle_admission,
             ContractLocation::RequestRuntimeShutdown,
         )?;
+        let mut admission = self.settle_for_shutdown(admission, target)?;
         self.shutdown_under_gate(request, target, &mut admission)
     }
 
@@ -286,7 +337,7 @@ impl HostShared {
         target: RuntimeShutdownTarget,
         admission: &mut LifecycleAdmission,
     ) -> Result<OperationSuccess, RequestFailure> {
-        if let Some(error) = self.fatal.current()? {
+        if let Some(error) = self.fatal.answer()? {
             return Err(error.into());
         }
         let decision = if target != self.shutdown_target {

@@ -2829,6 +2829,129 @@ impl Declaration<'_> {
         Ok(())
     }
 
+    /// Workflow #384 D2-S3: operation `resource_adjustments` (`contracts/resource-readings.md`,
+    /// "Adjustments"). Structure is checked field by field; the rules are the shared
+    /// `validate_resource_adjustments`, whose reason names the field reported here. An amount
+    /// is one target and a direction, never a value: any other member is unknown. The amount
+    /// target's cross-reference belongs to the parser's package validation.
+    fn resource_adjustments(
+        &self,
+        value: &Value,
+        pointer: &str,
+        task: &Map<String, Value>,
+    ) -> CliOutcome<()> {
+        let adjustments = self.array(value, pointer)?;
+        if adjustments.is_empty()
+            || adjustments.len() > actingcommand_contract::MAX_RESOURCE_ADJUSTMENTS
+        {
+            return Err(self.error(pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        if task.get("scheduling_outcome").is_none_or(Value::is_null) {
+            return Err(self.error(
+                "/scheduling_outcome",
+                ResourceDeclarationReason::MissingField,
+            ));
+        }
+        let mut declarations = Vec::with_capacity(adjustments.len());
+        for (index, adjustment) in adjustments.iter().enumerate() {
+            let pointer = child(pointer, &index.to_string());
+            let object = self.object(
+                adjustment,
+                &pointer,
+                &["id", "fact_key", "operation_id", "amount"],
+            )?;
+            for field in ["id", "fact_key", "operation_id"] {
+                self.string(
+                    self.required(object, &pointer, field)?,
+                    &child(&pointer, field),
+                )?;
+            }
+            if let Some(amount) = object.get("amount").filter(|amount| !amount.is_null()) {
+                let amount_pointer = child(&pointer, "amount");
+                let amount = self.object(amount, &amount_pointer, &["target_id", "direction"])?;
+                for field in ["target_id", "direction"] {
+                    self.string(
+                        self.required(amount, &amount_pointer, field)?,
+                        &child(&amount_pointer, field),
+                    )?;
+                }
+                if serde_json::from_value::<actingcommand_contract::ResourceAdjustmentDirection>(
+                    amount["direction"].clone(),
+                )
+                .is_err()
+                {
+                    return Err(self.error(
+                        &child(&amount_pointer, "direction"),
+                        ResourceDeclarationReason::InvalidValue,
+                    ));
+                }
+            }
+            let declaration: actingcommand_contract::ResourceAdjustmentDeclaration =
+                serde_json::from_value(adjustment.clone())
+                    .map_err(|_| self.error(&pointer, ResourceDeclarationReason::InvalidValue))?;
+            declarations.push(declaration);
+        }
+        // A reading mark list that does not parse is refused by its own check.
+        let readings = match task
+            .get("resource_readings")
+            .filter(|readings| !readings.is_null())
+        {
+            None => None,
+            Some(readings) => match serde_json::from_value::<
+                Vec<actingcommand_contract::ResourceReadingDeclaration>,
+            >(readings.clone())
+            {
+                Ok(readings) => Some(readings),
+                Err(_) => return Ok(()),
+            },
+        };
+        let operation_ids = task
+            .get("operations")
+            .and_then(Value::as_array)
+            .map(|operations| {
+                operations
+                    .iter()
+                    .filter_map(|operation| operation.get("id").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // The shared rules, entry by entry, so that a refusal names the entry it refuses.
+        for (index, _) in declarations.iter().enumerate() {
+            let Err(reason) = actingcommand_contract::validate_resource_adjustments(
+                &declarations[..=index],
+                readings.as_deref(),
+                &operation_ids,
+            ) else {
+                continue;
+            };
+            let refused = TaskflowCode::ALL
+                .iter()
+                .copied()
+                .find(|code| code.code() == reason);
+            let path: &[&str] = match refused {
+                Some(
+                    TaskflowCode::ResourceAdjustmentIdInvalid
+                    | TaskflowCode::ResourceAdjustmentIdDuplicate,
+                ) => &["id"],
+                Some(
+                    TaskflowCode::ResourceAdjustmentFactKeyInvalid
+                    | TaskflowCode::ResourceAdjustmentFactKeyDuplicate
+                    | TaskflowCode::ResourceAdjustmentMarkMissing,
+                ) => &["fact_key"],
+                Some(TaskflowCode::ResourceAdjustmentOperationIdInvalid) => &["operation_id"],
+                Some(TaskflowCode::ResourceAdjustmentTargetIdInvalid) => &["amount", "target_id"],
+                _ => &[],
+            };
+            let pointer = path
+                .iter()
+                .fold(child(pointer, &index.to_string()), |pointer, field| {
+                    child(&pointer, field)
+                });
+            return Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue));
+        }
+        Ok(())
+    }
+
     /// A task-local JSON document reference: `{"path"}`. Workflow #336 PKG-S2 (option 丙, D5):
     /// a `sha256` the reference may still carry is optional and ignored, whatever its value.
     fn json_reference(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
@@ -2974,6 +3097,7 @@ impl Declaration<'_> {
                 "scheduling_outcome",
                 "post_admission_ocr",
                 "resource_readings",
+                "resource_adjustments",
                 "stability_termination",
                 "recovery",
                 "max_task_retries",
@@ -3047,6 +3171,15 @@ impl Declaration<'_> {
                 ResourceDeclarationReason::UnconsumedField,
             ));
         }
+        // Workflow #384 D2-S3: adjustments come with the reading marks' task schemas.
+        if object.contains_key("resource_adjustments")
+            && !matches!(self.schema, Some("0.8" | "0.9"))
+        {
+            return Err(self.error(
+                "/resource_adjustments",
+                ResourceDeclarationReason::UnconsumedField,
+            ));
+        }
         if !canonical || object.contains_key("server_scope") {
             self.strings(self.required(object, "", "server_scope")?, "/server_scope")?;
         }
@@ -3079,6 +3212,7 @@ impl Declaration<'_> {
                 "scheduling_outcome" if !value.is_null() => self.scheduling(value, &pointer)?,
                 "post_admission_ocr" => self.post_ocr(value, &pointer)?,
                 "resource_readings" => self.resource_readings(value, &pointer, object)?,
+                "resource_adjustments" => self.resource_adjustments(value, &pointer, object)?,
                 "stability_termination" => self.stability(value, &pointer)?,
                 "recovery" if !value.is_null() => self.recovery(value, &pointer)?,
                 "operations" => {

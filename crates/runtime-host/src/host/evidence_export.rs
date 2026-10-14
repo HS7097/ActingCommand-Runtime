@@ -108,7 +108,7 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::RuntimeTaskTerminalMissing,
                     ContractLocation::ExportEvidence,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         let (source_capture_summary_sequence, pipeline) = self
@@ -191,14 +191,14 @@ impl HostShared {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::EvidenceExportTerminalMissing,
                     ContractLocation::ExportEvidence,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ))
             })?;
         let output_path = receipt.output_path().to_str().ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 HostCode::EvidenceOutputPathInvalid,
                 ContractLocation::ExportEvidence,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         let manifest = receipt.manifest();
@@ -224,7 +224,7 @@ impl HostShared {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                 error.code(),
                 ContractLocation::ExportEvidence,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             ))
         })?;
         context.completed_export = Some(CompletedEvidenceExport {

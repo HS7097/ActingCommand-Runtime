@@ -688,7 +688,7 @@ pub(super) fn resolve_stuck_recovery(
                     RuntimeHostError::fatal(
                         HostCode::StuckRecoveryInstanceUnknown,
                         HostLocation::StartRuntimeHost,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                     .with_native_detail(format!("instance_alias={alias}"))
                 })
@@ -710,7 +710,7 @@ pub(super) fn with_recovery_ladder_staging<T>(
 }
 
 fn ladder_invariant(code: impl Into<Code>) -> RuntimeHostError {
-    RuntimeHostError::fatal(code, LADDER_OPERATION, RuntimeErrorCode::RuntimeFatal)
+    RuntimeHostError::fatal(code, LADDER_OPERATION, RuntimeErrorCode::RuntimeHalted)
 }
 
 /// How a trigger item matched, as the ladder records it (§6.1).
@@ -2968,7 +2968,7 @@ fn recovery_adb_fault(
     let mut fatal = RuntimeHostError::fatal(
         HostCode::RecoveryReadinessAdbUnconfirmed,
         LADDER_OPERATION,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
     .with_native_detail(format!(
         "instance_alias={}; adb_failed={error}",

@@ -6,14 +6,20 @@
 //! as on a full disk; an attempt that commits and then reports a failure, as when the commit's
 //! result is lost; an integrity failure of the store. A number of attempts may pass first. A
 //! dump place may be refused, as on a full disk. Dropping the gate removes what is left.
+//!
+//! Workflow #383 AO-2: the gate also lists the batches the ledger committed (their sequences and
+//! whether they were FULL synced), and may hold the spill thread before each spill write, as a
+//! slow disk would, until the test releases it.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Duration;
 
 struct Entry {
     root: PathBuf,
     faults: Mutex<Faults>,
+    spill_changed: Condvar,
 }
 
 #[derive(Default)]
@@ -24,6 +30,14 @@ struct Faults {
     refused_dumps: Vec<PathBuf>,
     /// Attempts that met a fault since the gate was armed.
     met: usize,
+    /// Workflow #383 AO-2: the batches committed since the gate was armed.
+    committed: Vec<(Vec<u64>, bool)>,
+    /// Workflow #383 AO-2: spill writes wait while this is set.
+    spills_held: bool,
+    /// Spill writes that reached the gate since it was armed.
+    spills_reached: usize,
+    /// Spill writes that landed in the dump file since the gate was armed.
+    spills_written: usize,
 }
 
 /// One fault a write attempt meets.
@@ -53,6 +67,7 @@ impl LedgerWriteFaultGate {
         let entry = Arc::new(Entry {
             root: state_root.canonicalize()?,
             faults: Mutex::new(Faults::default()),
+            spill_changed: Condvar::new(),
         });
         armed()
             .lock()
@@ -103,6 +118,46 @@ impl LedgerWriteFaultGate {
     pub fn met(&self) -> usize {
         self.faults().met
     }
+
+    /// Workflow #383 AO-2: the batches committed since the gate was armed, in order: each
+    /// batch's ledger sequences and whether it was FULL synced.
+    pub fn commits(&self) -> Vec<(Vec<u64>, bool)> {
+        self.faults().committed.clone()
+    }
+
+    /// Workflow #383 AO-2: spill writes of this root wait before they write, until
+    /// [`Self::release_spills`] or the gate is dropped.
+    pub fn hold_spills(&self) {
+        self.faults().spills_held = true;
+    }
+
+    /// Lets the held spill writes go on.
+    pub fn release_spills(&self) {
+        self.faults().spills_held = false;
+        self.entry.spill_changed.notify_all();
+    }
+
+    /// Whether a spill write reached the gate, waiting at most `wait` for one.
+    pub fn wait_spill_reached(&self, wait: Duration) -> bool {
+        let faults = self.faults();
+        let (faults, _) = self
+            .entry
+            .spill_changed
+            .wait_timeout_while(faults, wait, |faults| faults.spills_reached == 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        faults.spills_reached > 0
+    }
+
+    /// Whether `count` spill writes landed in the dump file, waiting at most `wait` for them.
+    pub fn wait_spills_written(&self, count: usize, wait: Duration) -> bool {
+        let faults = self.faults();
+        let (faults, _) = self
+            .entry
+            .spill_changed
+            .wait_timeout_while(faults, wait, |faults| faults.spills_written < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        faults.spills_written >= count
+    }
 }
 
 impl Drop for LedgerWriteFaultGate {
@@ -111,6 +166,60 @@ impl Drop for LedgerWriteFaultGate {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|entry| !Arc::ptr_eq(entry, &self.entry));
+        self.faults().spills_held = false;
+        self.entry.spill_changed.notify_all();
+    }
+}
+
+fn entry_of(root: &Path) -> Option<Arc<Entry>> {
+    armed()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .find(|entry| entry.root == root)
+        .cloned()
+}
+
+/// Workflow #383 AO-2: called by a committed batch of `root`: its sequences and its sync level.
+pub(crate) fn committed_batch(root: &Path, sequences: Vec<u64>, full: bool) {
+    if let Some(entry) = entry_of(root) {
+        entry
+            .faults
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .committed
+            .push((sequences, full));
+    }
+}
+
+/// Workflow #383 AO-2: called by the spill thread once a spill landed in the dump file at
+/// `dump_path` (in its state root).
+pub(crate) fn after_spill(dump_path: &Path) {
+    let Some(entry) = dump_path.parent().and_then(entry_of) else {
+        return;
+    };
+    entry
+        .faults
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .spills_written += 1;
+    entry.spill_changed.notify_all();
+}
+
+/// Workflow #383 AO-2: called by the spill thread before it writes to the dump file at
+/// `dump_path` (in its state root); waits while a gate holds the spills of that root.
+pub(crate) fn before_spill(dump_path: &Path) {
+    let Some(entry) = dump_path.parent().and_then(entry_of) else {
+        return;
+    };
+    let mut faults = entry.faults.lock().unwrap_or_else(PoisonError::into_inner);
+    faults.spills_reached += 1;
+    entry.spill_changed.notify_all();
+    while faults.spills_held {
+        faults = entry
+            .spill_changed
+            .wait(faults)
+            .unwrap_or_else(PoisonError::into_inner);
     }
 }
 

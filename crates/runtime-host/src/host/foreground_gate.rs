@@ -20,7 +20,7 @@
 //! then fences the instance (Workflow #387 D1c-G, `settle_unconfirmed_adb`): the input is refused
 //! as for any ADB failure and fails with `instance_resources_fenced`. Only where no fence may
 //! take it (no registered owner, a ledger failure, a shutdown) does it poison the host
-//! (`application_foreground_unknown`, `runtime_fatal`, Workflow #191 E3).
+//! (`application_foreground_unknown`, `runtime_halted`, Workflow #191 E3).
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
@@ -73,7 +73,7 @@ impl HostShared {
                     let mut unconfirmed = RuntimeHostError::fatal(
                         HostCode::ApplicationForegroundUnknown,
                         GATE_OPERATION,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                     .with_native_detail(format!("instance_alias={alias}; adb_failed={error}"));
                     unconfirmed.lifecycle.instance_id = Some(instance_id);

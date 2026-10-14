@@ -617,6 +617,29 @@ tests = [
 ]
 incident = ["#386"]
 
+# A latched host answers a later request by its condition (runtime_halted over an error condition, a fatal condition as itself); a start reports its ledger open as ledger_opened and a released previous owner as owner_released; catalog_activation_not_newer names both generations; owner_resource_unconfirmed carries the previous owner's pid and probe state (Workflow #378 A6a)
+[[gate]]
+key = "65"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_378_a6a::a6a_a_latched_host_answers_a_later_request_by_its_condition",
+    "actingcommand-runtime-host::lib::tests::gate_378_a6a::a6a_a_start_reports_its_ledger_open_as_ledger_opened",
+    "actingcommand-runtime-host::lib::tests::gate_378_a6a::a6a_a_released_previous_owner_is_owner_released_with_its_pid",
+    "actingcommand-runtime-host::lib::catalog_plan::tests::a6a_catalog_activation_not_newer_names_both_generations",
+    "actingcommand-runtime-host::lib::owner::tests::owner_protocol_unconfirmed_blocks_automatic_takeover",
+]
+incident = ["#378 A6a"]
+
+# Workflow #384 D2-S3: a run's confirmed adjustments write the changed value (current record plus or minus the amount read on the confirmation frame, its expiry kept, the lower confidence) or, when the change or a reading after the operation is not read or the result is below zero, drop the key's record; a missing, expired or newer current record writes nothing; each outcome is a task diagnostic row and the run succeeds
+[[gate]]
+key = "67"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s3::d2s3_t15_t16_t17_t40_confirmed_adjustments_write_or_drop_their_keys",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s3::d2s3_t16_t40_the_plan_writes_skips_or_drops_as_the_model_says",
+]
+incident = ["#384"]
+
 # Workflow #336 PKG-S2 (option 丙): a reading's resource_bundle_hash is SHA-256 of package:<package_id> whatever the package's content; a replayed request whose package changed in place is answered from its ledger and one whose path holds another package_id is refused contained_task_request_package_reused; an OCR truth set and dictionary reference without sha256 are admitted (M-PKG v1.1 §4.3 S2-T4, S2-T6, S2-T7; key 68 as the coordinator assigned it: 64 is SR-2a's, #770)
 [[gate]]
 key = "68"
@@ -672,4 +695,4 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_catalog_reads_a_subset_of_the_declared_outcomes_and_an_unproduced_one_is_false",
     "actingcommand-runtime-host::lib::tests::gate_390_out1::out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_without_fields",
 ]
-incident = ["#390 O-03", "#390 O-04"]
+incident = ["#390 O-03", "#390 O-04", "#390 O-05"]

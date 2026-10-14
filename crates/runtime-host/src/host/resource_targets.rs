@@ -288,7 +288,7 @@ impl HostShared {
             RuntimeHostError::request(
                 HostCode::ResourceTargetViewInvalid,
                 RESOURCE_TARGET_VIEW_OPERATION,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         })?;
         Ok(OperationSuccess {
@@ -314,7 +314,7 @@ fn resource_target_view_error(error: ResourceTargetsError) -> RuntimeHostError {
             RuntimeHostError::request(
                 HostCode::ResourceTargetViewInternal,
                 RESOURCE_TARGET_VIEW_OPERATION,
-                RuntimeErrorCode::RuntimeFatal,
+                RuntimeErrorCode::RuntimeHalted,
             )
         }
     }
@@ -334,7 +334,7 @@ fn resource_targets_error(error: ResourceTargetsError) -> RuntimeHostError {
         ResourceTargetsError::Internal(code) => RuntimeHostError::fatal(
             code,
             RESOURCE_TARGETS_OPERATION,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         ),
     }
 }
@@ -343,6 +343,6 @@ fn record_invalid() -> RuntimeHostError {
     RuntimeHostError::fatal(
         HostCode::ResourceTargetsRecordInvalid,
         RESOURCE_TARGETS_OPERATION,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }

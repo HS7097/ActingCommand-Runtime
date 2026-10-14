@@ -102,8 +102,13 @@ actingcommand_contract::outcome_codes! {
         ConfigManifestInvalid => "config_manifest_invalid": error / none,
         ConfigManifestValueOutOfRange => "config_manifest_value_out_of_range": error / none,
         EnvOverrideIgnored => "env_override_ignored": warning / none,
-        AdbInstallMissing => "adb_install_missing": error / none,
-        AdbInstallMismatch => "adb_install_mismatch": error / none,
+        // Workflow #378 A6a (model section 2.3): a Tools file of the installation missing or
+        // mismatched is a damaged installation, which only an external fix repairs: fatal.
+        AdbInstallMissing => "adb_install_missing": fatal / none,
+        AdbInstallMismatch => "adb_install_mismatch": fatal / none,
+        /// Workflow #378 A6a: the platform-tools pin this build carries cannot be read (keys
+        /// `path`); a build defect, fatal.
+        AdbInstallPinInvalid => "adb_install_pin_invalid": fatal / none,
         EmulatorCapabilityAdmissionRefused => "emulator_capability_admission_refused": error / none,
         InstanceDiscoveryNoMatch => "instance_discovery_no_match": error / none,
         InstanceDiscoveryAmbiguous => "instance_discovery_ambiguous": error / none,
@@ -126,6 +131,25 @@ actingcommand_contract::outcome_codes! {
         MaintenanceConfigMissing => "maintenance_config_missing": error / none,
         MaintenanceReceiptEncodeFailed => "maintenance_receipt_encode_failed": error / none,
         LedgerMaintenanceFailed => "ledger_maintenance_failed": error / none,
+        // ---- Workflow #378 A6a (model sections 7.4, 8.2): actingd's daemon lines and the
+        // success of each subcommand report.
+        /// Success. The Runtime started and is ready (keys `pid`).
+        RuntimeReady => "runtime_ready": success / none,
+        /// Info. The Runtime stopped; on a requested stop this is the terminal outcome, else
+        /// the stopping condition follows it.
+        RuntimeStopped => "runtime_stopped": info / none,
+        /// Warning. A start refusal could not be appended to the fallback log (keys `path`,
+        /// `variable` when `LOCALAPPDATA` is not set); a developer line only.
+        FallbackLogFailed => "actingd_fallback_log_failed": warning / none,
+        /// Success. check-config passed; what it noted are `note` links.
+        CheckConfigPassed => "check_config_passed": success / none,
+        /// Success. A ledger-maintenance pass completed.
+        LedgerMaintenanceCompleted => "ledger_maintenance_completed": success / none,
+        /// Success. unlock-owner recorded the confirmation.
+        UnlockOwnerCompleted => "unlock_owner_completed": success / none,
+        /// Success. The suspended report was produced.
+        SuspendedReported => "suspended_reported": success / none,
+        // ---- Workflow #378 A6a: end
         UnlockOwnerUsageInvalid => "unlock_owner_usage_invalid": error / none,
         UnlockOwnerOptionInvalid => "unlock_owner_option_invalid": error / none,
         UnlockOwnerConfigMissing => "unlock_owner_config_missing": error / none,
@@ -208,7 +232,9 @@ actingcommand_contract::outcome_locations! {
         ConfigAssemble => "config_assemble",
         ConfigVision => "config_vision",
         ConfigValidate => "config_validate",
-        ResourcePackage => "resource_package",
+        /// check-config stage: admitting the resource packages (Workflow #378 A6a: was
+        /// `resource_package`, which is also the report's member name).
+        ResourcePackage => "config_resource_package",
         /// Workflow #384 D2-S2: checking the recognition maintenance package bindings.
         RecognitionBinding => "config_recognition_binding",
         PolicyState => "policy_state",

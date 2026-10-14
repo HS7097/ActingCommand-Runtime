@@ -23,6 +23,16 @@ mod storage;
 mod store;
 // Workflow #383 AO-1: retry, dump, fatal stop and import (`contracts/ledger-observer.md` §9).
 mod write_failure;
+// Workflow #383 AO-2: the capture queue, the flush of its batches and the index table
+// (`contracts/ledger-observer.md` §2.1, §7, §8, §11).
+mod capture;
+mod flush;
+mod index;
+pub use capture::{
+    DEFAULT_TAG_WORKBENCH_PATTERNS, LedgerCaptureHandle, LedgerCapturePolicy, LedgerCaptureStatus,
+};
+// The capture queue's tiers are the shared watermark arithmetic (§7.1).
+pub use actingcommand_artifact_store::WatermarkRatios;
 pub use migration::*;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use sqlite::after_release_baseline_head_for_test;
@@ -805,6 +815,9 @@ pub struct GlobalLedgerConfig {
     reply_timeout: Duration,
     /// Workflow #383 AO-1: the running Runtime's write-failure state (`with_failure_plan`).
     write_failure: Option<Arc<write_failure::WriteFailureState>>,
+    /// Workflow #383 AO-2: the capture queue, the flush batches and the index table
+    /// (`ledger_observer.*`; the failure plan's, or the defaults).
+    capture_policy: LedgerCapturePolicy,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -823,6 +836,7 @@ impl fmt::Debug for GlobalLedgerConfig {
                 "failure_plan",
                 &self.write_failure.as_ref().map(|state| state.plan()),
             )
+            .field("capture_policy", &self.capture_policy)
             .finish()
     }
 }
@@ -838,6 +852,7 @@ impl GlobalLedgerConfig {
             subscription_capacity: DEFAULT_SUBSCRIPTION_CAPACITY,
             reply_timeout: COMMAND_TIMEOUT,
             write_failure: None,
+            capture_policy: LedgerCapturePolicy::default(),
         }
     }
 
@@ -847,6 +862,8 @@ impl GlobalLedgerConfig {
     /// `plan`'s sink stops the Runtime; the open imports a dump an earlier run left. Without a
     /// plan (an offline writer, §6) a failed write is not tried again and ends the writer.
     pub fn with_failure_plan(mut self, plan: LedgerFailurePlan) -> Self {
+        // Workflow #383 AO-2: the plan carries the capture queue's policy too.
+        self.capture_policy = plan.capture_policy().clone();
         self.write_failure = Some(write_failure::WriteFailureState::new(plan));
         self
     }
@@ -1035,15 +1052,13 @@ enum WriterCommand {
         outcome: Option<actingcommand_contract::outcome::Outcome>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
-    AppendTransaction {
-        draft: Box<SanitizedEventDraft>,
-        work: Box<dyn LedgerTransactionWork>,
-        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
-    },
-    Append {
-        draft: Box<SanitizedEventDraft>,
-        queued_at: Option<Instant>,
-        response: SyncSender<LedgerAppendOutcome>,
+    /// Workflow #383 AO-2: records wait in the capture queue (a wake token; no reply).
+    Flush,
+    /// Workflow #383 AO-2 (§8.4): the flush barrier's read of a finished record's sequence;
+    /// `None` when the record was refused and not written.
+    CommittedSequence {
+        event_id: EventId,
+        response: SyncSender<GlobalLedgerResult<Option<u64>>>,
     },
     ReconcileScheduledPolicySettlement {
         execution: Box<PolicyExecutionEventData>,
@@ -1193,6 +1208,10 @@ pub struct GlobalLedger {
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §14 T8): the probe that stops a
     /// stalled write attempt; only a writer with a failure plan has one.
     probe: Option<WriteProbe>,
+    /// Workflow #383 AO-2 (§7): the capture queue every write passes.
+    queue: Arc<capture::CaptureQueue>,
+    /// Workflow #383 AO-2 (§7): the spill thread; only a writer with a failure plan spills.
+    spill: Option<capture::SpillThread>,
 }
 
 /// Workflow #383 AO-1 (§14 T8): the probe thread and the flag that ends it.
@@ -1207,12 +1226,13 @@ impl WriteProbe {
     fn start(
         state: Arc<write_failure::WriteFailureState>,
         receiver: Weak<Mutex<Receiver<WriterCommand>>>,
+        queue: Arc<capture::CaptureQueue>,
     ) -> GlobalLedgerResult<Self> {
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
         let probe_stop = Arc::clone(&stop);
         let thread = thread::Builder::new()
             .name("actingcommand-ledger-probe".to_string())
-            .spawn(move || probe_loop(&state, &receiver, &probe_stop))
+            .spawn(move || probe_loop(&state, &receiver, &queue, &probe_stop))
             .map_err(|error| {
                 GlobalLedgerError::io(
                     LedgerCode::WriterSpawnFailed.code(),
@@ -1238,10 +1258,12 @@ impl WriteProbe {
 
 /// Workflow #383 AO-1 (§9.1, §14 T8): every `health_probe_interval_ms` the probe looks at the
 /// write attempt in progress; one that started more than `flush_attempt_stall_ms` ago is treated
-/// as exhausted: the probe seals the writer and runs §9.2 itself, the record in flight included.
+/// as exhausted: the probe seals the writer and runs §9.2 itself, the records in flight included
+/// (AO-2: through the capture queue, which holds the batch in flight).
 fn probe_loop(
     state: &write_failure::WriteFailureState,
     receiver: &Weak<Mutex<Receiver<WriterCommand>>>,
+    queue: &capture::CaptureQueue,
     stop: &(Mutex<bool>, Condvar),
 ) {
     let interval = Duration::from_millis(state.plan().policy().health_probe_interval_ms());
@@ -1255,47 +1277,34 @@ fn probe_loop(
         if *guard {
             return;
         }
-        if let Some((in_flight, stalled)) = state.seal_if_stalled() {
+        if let Some((held, stalled)) = state.seal_if_stalled() {
             drop(guard);
             // The stalled writer still holds the queue, so it is there to answer.
-            let queued = receiver.upgrade().map_or_else(Vec::new, |receiver| {
-                refuse_queued(&receiver, &write_failure::sealed_error())
-            });
-            state.write_dump_and_stop(in_flight, &queued, &stalled);
+            if let Some(receiver) = receiver.upgrade() {
+                refuse_queued(&receiver, &write_failure::sealed_error());
+            }
+            queue.seal_and_dump(held, Vec::new(), &stalled, false);
             return;
         }
     }
 }
 
-/// §9.2: the commands still queued when the writer is sealed. Each is answered with `error`; the
-/// drafts of the plain appends among them are returned for the dump, in queue order.
-fn refuse_queued(
-    receiver: &Mutex<Receiver<WriterCommand>>,
-    error: &GlobalLedgerError,
-) -> Vec<SanitizedEventDraft> {
+/// §9.2: the commands still queued when the writer is sealed; each is answered with `error`.
+/// Workflow #383 AO-2: appends wait in the capture queue, which the seal dumps.
+fn refuse_queued(receiver: &Mutex<Receiver<WriterCommand>>, error: &GlobalLedgerError) {
     let receiver = receiver.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut drafts = Vec::new();
     while let Ok(command) = receiver.try_recv() {
-        if let Some(draft) = refuse_command(command, error) {
-            drafts.push(draft);
-        }
+        refuse_command(command, error);
     }
-    drafts
 }
 
-/// Answers one queued command with `error`; a plain append's draft is returned for the dump. A
-/// joint append is not dumped: its state work rolls back with it, so neither took effect.
-fn refuse_command(
-    command: WriterCommand,
-    error: &GlobalLedgerError,
-) -> Option<SanitizedEventDraft> {
+/// Answers one queued command with `error`.
+fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
     let refused = error.clone();
     match command {
-        WriterCommand::Append {
-            draft, response, ..
-        } => {
-            let _ = response.send((Err(refused), None));
-            return Some(*draft);
+        WriterCommand::Flush => {}
+        WriterCommand::CommittedSequence { response, .. } => {
+            let _ = response.send(Err(refused));
         }
         WriterCommand::ReconcilePriorEpochCloses { response, .. } => {
             let _ = response.send(Err(refused));
@@ -1316,9 +1325,6 @@ fn refuse_command(
             let _ = response.send(Err(refused));
         }
         WriterCommand::FinishArtifactEviction { response, .. } => {
-            let _ = response.send(Err(refused));
-        }
-        WriterCommand::AppendTransaction { response, .. } => {
             let _ = response.send(Err(refused));
         }
         WriterCommand::ReconcileScheduledPolicySettlement { response, .. } => {
@@ -1357,7 +1363,6 @@ fn refuse_command(
         #[cfg(test)]
         WriterCommand::TestTerminalFailure { .. } | WriterCommand::TestSubscriberCount { .. } => {}
     }
-    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1800,11 +1805,19 @@ impl GlobalLedger {
         let reply_timeout = config.reply_timeout;
         let failure = config.write_failure.clone();
         let (sender, receiver) = mpsc::sync_channel(capacity);
+        // Workflow #383 AO-2 (§7): the capture queue every write passes; it wakes the writer
+        // through the writer's own queue.
+        let queue = Arc::new(capture::CaptureQueue::new(
+            config.capture_policy.clone(),
+            failure.clone(),
+            sender.clone(),
+        )?);
         // Workflow #383 AO-1: the probe answers the queued commands when it seals a stalled
         // writer (§9.2), so the queue is shared; only the writer receives while it runs.
         let receiver = Arc::new(Mutex::new(receiver));
         let writer_receiver = Arc::clone(&receiver);
         let writer_failure = failure.clone();
+        let writer_queue = Arc::clone(&queue);
         let (store_sender, store_receiver) = mpsc::sync_channel(0);
         let writer = thread::Builder::new()
             .name("actingcommand-global-ledger".to_string())
@@ -1820,9 +1833,11 @@ impl GlobalLedger {
                     &writer_receiver,
                     subscription_capacity,
                     writer_failure.as_deref(),
+                    &writer_queue,
                 )
             })
             .map_err(|error| {
+                queue.disconnect();
                 GlobalLedgerError::io(
                     LedgerCode::WriterSpawnFailed.code(),
                     LedgerLocation::SpawnWriter.location(),
@@ -1835,6 +1850,7 @@ impl GlobalLedger {
             Err(store_error) => {
                 drop(store_sender);
                 drop(sender);
+                queue.disconnect();
                 join_cancelled_writer(writer)?;
                 return Err(store_error);
             }
@@ -1842,17 +1858,35 @@ impl GlobalLedger {
         let commit_statistics = store.commit_statistics();
         match store_sender.send(store) {
             Ok(()) => {
-                let queue = Arc::downgrade(&receiver);
+                let weak_queue = Arc::downgrade(&receiver);
                 drop(receiver);
-                let probe = match failure
-                    .map(|state| WriteProbe::start(state, queue))
+                let started = failure
+                    .clone()
+                    .map(|state| WriteProbe::start(state, weak_queue, Arc::clone(&queue)))
                     .transpose()
-                {
-                    Ok(probe) => probe,
+                    .and_then(|probe| {
+                        // Workflow #383 AO-2: only a writer with a failure plan spills.
+                        match failure
+                            .is_some()
+                            .then(|| capture::SpillThread::start(Arc::clone(&queue)))
+                            .transpose()
+                        {
+                            Ok(spill) => Ok((probe, spill)),
+                            Err(error) => {
+                                if let Some(probe) = probe {
+                                    let _ = probe.finish();
+                                }
+                                Err(error)
+                            }
+                        }
+                    });
+                let (probe, spill) = match started {
+                    Ok(started) => started,
                     Err(error) => {
                         // The writer has the store: dropping the queue ends it, and it closes the
                         // store as at any end of its queue.
                         drop(sender);
+                        queue.disconnect();
                         return Err(match writer.join() {
                             Ok(closed) => error.with_close_result(closed),
                             Err(_) => error,
@@ -1866,10 +1900,13 @@ impl GlobalLedger {
                     deferred: Mutex::new(Vec::new()),
                     reply_timeout,
                     probe,
+                    queue,
+                    spill,
                 })
             }
             Err(mpsc::SendError(store)) => {
                 drop(sender);
+                queue.disconnect();
                 let close_result = store.close();
                 let join_result = join_cancelled_writer(writer);
                 close_result?;
@@ -1882,28 +1919,33 @@ impl GlobalLedger {
         }
     }
 
+    /// Workflow #383 AO-2 (`contracts/ledger-observer.md` §2, §2.1): this writer's capture
+    /// interface, flush barrier and tier read; its captures are sanitized with `fingerprinter`.
+    pub fn capture_handle(
+        &self,
+        fingerprinter: Arc<dyn SecretFingerprinter + Send + Sync>,
+    ) -> LedgerCaptureHandle {
+        LedgerCaptureHandle::new(Arc::clone(&self.queue), fingerprinter, self.reply_timeout)
+    }
+
+    /// Workflow #383 AO-2 (§14.1 T3): the capture queue's tier, its memory segment and its dump
+    /// segment, read from memory.
+    pub fn capture_status(&self) -> LedgerCaptureStatus {
+        self.queue.status()
+    }
+
     /// Commits one fact and its named internal database work on the existing writer.
+    /// Workflow #383 AO-2: the record passes the capture queue in capture order and commits
+    /// alone, with its work, on the flush thread (G15).
     pub fn append_transaction(
         &self,
         draft: SanitizedEventDraft,
         work: Box<dyn LedgerTransactionWork>,
     ) -> GlobalLedgerResult<PersistedEvent> {
+        self.writer_ready(LedgerLocation::AppendTransaction.location())?;
         let (response, receiver) = mpsc::sync_channel(1);
-        let sender = self.sender.as_ref().ok_or_else(|| {
-            GlobalLedgerError::fatal(
-                LedgerCode::WriterUnavailable.code(),
-                LedgerLocation::AppendTransaction.location(),
-            )
-        })?;
-        send_command(
-            sender,
-            WriterCommand::AppendTransaction {
-                draft: Box::new(draft),
-                work,
-                response,
-            },
-            LedgerLocation::AppendTransaction.location(),
-        )?;
+        self.queue
+            .capture_draft(draft, Some(work), capture::Reply::Joint(response));
         receive_response(
             receiver,
             LedgerLocation::AppendTransaction.location(),
@@ -1911,14 +1953,27 @@ impl GlobalLedger {
         )?
     }
 
+    /// Whether the writer runs to take a record.
+    fn writer_ready(&self, operation: Location) -> GlobalLedgerResult<()> {
+        if self.sender.is_none() {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                operation,
+            ));
+        }
+        Ok(())
+    }
+
     pub fn append(&self, draft: SanitizedEventDraft) -> GlobalLedgerResult<PersistedEvent> {
         self.append_request(draft, false).0
     }
 
-    /// Observes the same append command and returns its original result unchanged.
+    /// Observes the same append and returns its original result unchanged.
     /// Queue rejection or a missing reply leaves inner spans unobserved/incomplete.
     /// Response transport, caller wakeup and later subscription delivery are outside
     /// these spans. A backend error retains its original partial-commit semantics.
+    /// Workflow #383 AO-2: the send span is the capture into the capture queue; the writer
+    /// receives the record when its flush takes it.
     pub fn append_with_observation(&self, draft: SanitizedEventDraft) -> LedgerAppendOutcome {
         self.append_request(draft, true)
     }
@@ -1926,29 +1981,25 @@ impl GlobalLedger {
     fn append_request(&self, draft: SanitizedEventDraft, observe: bool) -> LedgerAppendOutcome {
         let mut observation = observe.then(LedgerAppendObservation::default);
         let result = (|| {
+            self.writer_ready(LedgerLocation::AppendEvent.location())?;
             let (response, receiver) = mpsc::sync_channel(1);
-            let sender = self.sender.as_ref().ok_or_else(|| {
-                GlobalLedgerError::fatal(
-                    LedgerCode::WriterUnavailable.code(),
-                    LedgerLocation::AppendEvent.location(),
-                )
-            })?;
-            let draft = Box::new(draft);
             let queued_at = observe.then(Instant::now);
             observation = queued_at.map(LedgerAppendObservation::sent);
-            let command = WriterCommand::Append {
-                draft,
-                queued_at,
-                response,
-            };
             if let Some(value) = &mut observation {
                 value.send.begin(Instant::now());
             }
-            let sent = send_command(sender, command, LedgerLocation::AppendEvent.location());
+            self.queue.capture_draft(
+                draft,
+                None,
+                capture::Reply::Append {
+                    response,
+                    observation: queued_at
+                        .map(|queued_at| Box::new(LedgerAppendObservation::sent(queued_at))),
+                },
+            );
             if let Some(value) = &mut observation {
-                value.send.finish(Instant::now(), sent.is_ok());
+                value.send.finish(Instant::now(), true);
             }
-            sent?;
             receive_response(
                 receiver,
                 LedgerLocation::AppendEvent.location(),
@@ -1967,36 +2018,30 @@ impl GlobalLedger {
         }
     }
 
-    /// Accepts one fact on the same writer command as `append` without awaiting its reply:
-    /// same ingress queue, store transaction, subscription delivery and writer ordering.
-    /// Acceptance is not commit; the outcome is known only when `confirm_deferred` returns
-    /// it as committed or failed. The returned event id exists before commit, so callers
-    /// must not link to it until it is confirmed. A full ingress queue stays the fatal
-    /// `ingress_full`: the bounded queue is the backpressure.
+    /// Accepts one fact into the capture queue without awaiting its reply: same queue,
+    /// store transaction, subscription delivery and capture order as `append`. Acceptance is
+    /// not commit; the outcome is known only when `confirm_deferred` returns it as committed or
+    /// failed. The returned event id exists before commit, so callers must not link to it until
+    /// it is confirmed. Workflow #383 AO-2: the capture queue never refuses a record; it spills
+    /// under pressure instead (§7).
     pub fn append_deferred(
         &self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<DeferredAppend> {
-        let sender = self.sender.as_ref().ok_or_else(|| {
-            GlobalLedgerError::fatal(
-                LedgerCode::WriterUnavailable.code(),
-                LedgerLocation::AppendDeferred.location(),
-            )
-        })?;
+        self.writer_ready(LedgerLocation::AppendDeferred.location())?;
         let event_id = *draft.event_id();
         let event_type = draft.event_type();
         let (response, receiver) = mpsc::sync_channel(1);
-        // Held across the send so a concurrent confirmation cannot miss this reply.
+        // Held across the capture so a concurrent confirmation cannot miss this reply.
         let mut deferred = self.deferred_replies(LedgerLocation::AppendDeferred.location())?;
-        send_command(
-            sender,
-            WriterCommand::Append {
-                draft: Box::new(draft),
-                queued_at: None,
+        self.queue.capture_draft(
+            draft,
+            None,
+            capture::Reply::Append {
                 response,
+                observation: None,
             },
-            LedgerLocation::AppendDeferred.location(),
-        )?;
+        );
         let ticket = deferred.len();
         deferred.push(PendingReply {
             receiver,
@@ -2366,8 +2411,20 @@ impl GlobalLedger {
     }
 
     fn shutdown(&mut self) -> GlobalLedgerResult<()> {
+        // Workflow #383 AO-2 (§8.2): from here the close record is the epoch's last record; the
+        // segment edges the close drain crosses are not reported after it.
+        self.queue.begin_close();
         let probe = self.probe.take().map_or(Ok(()), WriteProbe::finish);
-        self.shutdown_writer().and(probe)
+        let writer = self.shutdown_writer();
+        // Workflow #383 AO-2: the spill thread stops after the writer drained the queue; then
+        // the queue lets go of the writer's queue and wakes any waiter of the barrier.
+        let spill = self
+            .spill
+            .take()
+            .map_or(Ok(()), capture::SpillThread::finish);
+        self.queue.disconnect();
+        self.queue.close();
+        writer.and(probe).and(spill)
     }
 
     fn shutdown_writer(&mut self) -> GlobalLedgerResult<()> {
@@ -2403,12 +2460,16 @@ impl GlobalLedger {
                 )
             });
         drop(sender);
+        // Workflow #383 AO-2 (§8.2): the writer drains the capture queue, the dump segment
+        // first, before it closes the ledger; the drain takes as long as the queue holds, so the
+        // reply is awaited without the reply limit (a stalled attempt is the probe's to stop).
         let response_result = send_result.and_then(|()| {
-            receive_response(
-                receiver,
-                LedgerLocation::ShutdownWriter.location(),
-                self.reply_timeout,
-            )?
+            receiver.recv().map_err(|_| {
+                GlobalLedgerError::fatal(
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::ShutdownWriter.location(),
+                )
+            })?
         });
         let join_result = writer.join().map_err(|_| {
             GlobalLedgerError::fatal(
@@ -2456,25 +2517,101 @@ impl Drop for GlobalLedger {
     }
 }
 
-/// The writer thread. Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2): when a write
-/// gave up (its attempts used up, or an integrity or format failure), the writer seals itself,
-/// answers every queued command, writes the dump and the failure plan's sink stops the Runtime.
+/// The writer thread, also the flush thread of the capture queue (Workflow #383 AO-2,
+/// `contracts/ledger-observer.md` §8.1). Workflow #383 AO-1 (§9.2): when a write gave up (its
+/// attempts used up, or an integrity or format failure), the writer seals itself, answers every
+/// queued command, writes the dump (AO-2: through the capture queue, which holds the batch in
+/// flight and the memory segment) and the failure plan's sink stops the Runtime.
 fn writer_loop<S: LedgerStore>(
     store: S,
     receiver: &Mutex<Receiver<WriterCommand>>,
     subscription_capacity: usize,
     failure: Option<&write_failure::WriteFailureState>,
+    queue: &capture::CaptureQueue,
 ) -> GlobalLedgerResult<()> {
-    let result = writer_commands(store, receiver, subscription_capacity, failure);
+    let result = writer_commands(store, receiver, subscription_capacity, failure, queue);
     if result.is_err()
         && let Some(failure) = failure
-        && let Some(stop) = failure.take_give_up()
-        && let Some(in_flight) = failure.seal()
     {
-        let queued = refuse_queued(receiver, &write_failure::sealed_error());
-        failure.write_dump_and_stop(in_flight, &queued, &stop);
+        if let Some(stop) = failure.take_give_up()
+            && let Some(held) = failure.seal()
+        {
+            queue.seal_and_dump(held, Vec::new(), &stop, false);
+        }
+        if failure.is_sealed() {
+            refuse_queued(receiver, &write_failure::sealed_error());
+        }
     }
+    queue.close();
     result
+}
+
+/// Workflow #383 AO-2 (§8.1): the flush. Every record captured before the writer looked is
+/// committed, batch by batch in capture order: the replies of the direct appends are sent, the
+/// committed records reach the live subscribers and the flush's findings are captured in turn.
+/// Returns the work's observation when there was work; a write that gave up ends the writer.
+fn flush_captured<S: LedgerStore>(
+    store: &mut S,
+    queue: &capture::CaptureQueue,
+    subscribers: &mut Vec<ActiveSubscription>,
+    previous_writer_work: LedgerWriterWorkObservation,
+) -> GlobalLedgerResult<Option<LedgerWriterWorkObservation>> {
+    let through = queue.begin_drain();
+    let started = Instant::now();
+    let mut flushed = false;
+    while let Some(mut batch) = queue.take_batch(through)? {
+        flushed = true;
+        for captured in &mut batch {
+            if let Some(reply) = &mut captured.reply {
+                reply.received(previous_writer_work);
+            }
+        }
+        let report = store.commit_captured(batch, queue.identifiers());
+        for finding in report.findings {
+            queue.capture_finding(finding);
+        }
+        queue.finish(&report.done);
+        for (reply, result) in report.replies {
+            let _ = reply.send(result);
+        }
+        for event in &report.committed {
+            deliver_live_event(subscribers, event);
+        }
+        if let Some(error) = report.terminal {
+            notify_terminal_failure(subscribers, error.clone());
+            return Err(error);
+        }
+    }
+    if !flushed {
+        return Ok(None);
+    }
+    // The flush is the writer's append work; the next append's observation names it.
+    let mut work = LedgerWriterWorkObservation {
+        command: Some(LedgerWriterCommandKind::Append),
+        ..LedgerWriterWorkObservation::default()
+    };
+    work.processing.begin(started);
+    work.processing.finish(Instant::now(), true);
+    Ok(Some(work))
+}
+
+/// Workflow #383 AO-2 (§8.2): the close drain. The queue is flushed until nothing is left: the
+/// dump segment, the memory segment and the findings the flush itself captured.
+fn drain_captured<S: LedgerStore>(
+    store: &mut S,
+    queue: &capture::CaptureQueue,
+    subscribers: &mut Vec<ActiveSubscription>,
+    previous_writer_work: LedgerWriterWorkObservation,
+) -> GlobalLedgerResult<()> {
+    let mut previous = previous_writer_work;
+    loop {
+        if let Some(work) = flush_captured(store, queue, subscribers, previous)? {
+            previous = work;
+        }
+        if !queue.pending() {
+            return Ok(());
+        }
+    }
 }
 
 fn writer_commands<S: LedgerStore>(
@@ -2482,6 +2619,7 @@ fn writer_commands<S: LedgerStore>(
     receiver: &Mutex<Receiver<WriterCommand>>,
     subscription_capacity: usize,
     failure: Option<&write_failure::WriteFailureState>,
+    queue: &capture::CaptureQueue,
 ) -> GlobalLedgerResult<()> {
     let mut subscribers = Vec::new();
     let mut previous_writer_work = LedgerWriterWorkObservation::default();
@@ -2501,6 +2639,21 @@ fn writer_commands<S: LedgerStore>(
         let Ok(command) = next else {
             break;
         };
+        // Workflow #383 AO-2 (§8.1): everything captured before this command commits first, so
+        // a read sees it and a later write follows it.
+        if let Some(work) =
+            flush_captured(&mut store, queue, &mut subscribers, previous_writer_work)?
+        {
+            let elapsed = work
+                .processing
+                .finished_at
+                .zip(work.processing.started_at)
+                .map_or(Duration::ZERO, |(finished, started)| {
+                    finished.saturating_duration_since(started)
+                });
+            statistics.record_writer_command(LedgerWriterCommandKind::Append, elapsed, 0, false);
+            previous_writer_work = work;
+        }
         let started = Instant::now();
         let mut read_events = 0;
         let mut whole_ledger_query = false;
@@ -2520,8 +2673,10 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::FinishArtifactEviction { .. } => {
                 LedgerWriterCommandKind::FinishArtifactEviction
             }
-            WriterCommand::AppendTransaction { .. } => LedgerWriterCommandKind::AppendTransaction,
-            WriterCommand::Append { .. } => LedgerWriterCommandKind::Append,
+            // Workflow #383 AO-2: a wake token's work is the flush above, the writer's append
+            // work; the barrier's read of a sequence is a sequence read.
+            WriterCommand::Flush => LedgerWriterCommandKind::Append,
+            WriterCommand::CommittedSequence { .. } => LedgerWriterCommandKind::LatestSequence,
             WriterCommand::ReconcileScheduledPolicySettlement { .. } => {
                 LedgerWriterCommandKind::ReconcileScheduledPolicySettlement
             }
@@ -2696,70 +2851,16 @@ fn writer_commands<S: LedgerStore>(
                 }
                 command_observation.replied(response.send(result).is_ok());
             }
-            WriterCommand::Append {
-                draft,
-                queued_at,
-                response,
-            } => {
-                let mut observation = queued_at.map(LedgerAppendObservation::sent);
-                if let Some(value) = &mut observation {
-                    value.writer_received();
-                    value.previous_writer_work = previous_writer_work;
-                }
-                let result = store.append(*draft, &mut observation);
-                command_succeeded = result.is_ok();
-                if let Some(value) = &mut observation
-                    && value.persistence.finished_at.is_none()
-                {
-                    value.persistence.finish(Instant::now(), result.is_ok());
-                }
-                let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
-                if let Ok(event) = &result {
-                    let reply = Ok(event.clone());
-                    if let Some(value) = &mut observation {
-                        value.reply_ready(true);
-                    }
-                    command_observation.replied(response.send((reply, observation)).is_ok());
-                    deliver_live_event(&mut subscribers, event);
-                }
-                if terminal {
-                    let error = result.expect_err("terminal append result must be an error");
-                    notify_terminal_failure(&mut subscribers, error.clone());
-                    let reply = Err(error.clone());
-                    if let Some(value) = &mut observation {
-                        value.reply_ready(false);
-                    }
-                    let _ = response.send((reply, observation));
-                    return Err(error);
-                }
-                if let Err(error) = result {
-                    if let Some(value) = &mut observation {
-                        value.reply_ready(false);
-                    }
-                    command_observation.replied(response.send((Err(error), observation)).is_ok());
-                }
+            WriterCommand::Flush => {
+                command_succeeded = true;
             }
-            WriterCommand::AppendTransaction {
-                draft,
-                response,
-                work,
-            } => {
-                let result = store.append_transaction(*draft, work.as_ref());
-                command_succeeded = result.is_ok();
-                let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
-                if let Ok(event) = &result {
-                    command_observation.replied(response.send(Ok(event.clone())).is_ok());
-                    deliver_live_event(&mut subscribers, event);
-                }
-                if terminal {
-                    let error = result.expect_err("terminal append result must be an error");
-                    notify_terminal_failure(&mut subscribers, error.clone());
-                    let _ = response.send(Err(error.clone()));
-                    return Err(error);
-                }
-                if let Err(error) = result {
-                    command_observation.replied(response.send(Err(error)).is_ok());
-                }
+            WriterCommand::CommittedSequence { event_id, response } => {
+                command_succeeded = true;
+                command_observation.replied(
+                    response
+                        .send(Ok(store.committed_sequence(&event_id)))
+                        .is_ok(),
+                );
             }
             WriterCommand::ReconcileScheduledPolicySettlement {
                 execution,
@@ -3008,6 +3109,14 @@ fn writer_commands<S: LedgerStore>(
                 command_observation.replied(response.send(result).is_ok());
             }
             WriterCommand::Shutdown { response } => {
+                // Workflow #383 AO-2 (§8.2): the capture queue is drained before the ledger
+                // closes; a drain that cannot be written stops the writer by §9.2.
+                if let Err(error) =
+                    drain_captured(&mut store, queue, &mut subscribers, previous_writer_work)
+                {
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
                 let result = store.close();
                 match result {
                     Ok(()) => {
@@ -3054,6 +3163,7 @@ fn writer_commands<S: LedgerStore>(
         );
         previous_writer_work = command_observation;
     }
+    drain_captured(&mut store, queue, &mut subscribers, previous_writer_work)?;
     let result = store.close();
     match &result {
         Ok(()) => notify_terminal_failure(

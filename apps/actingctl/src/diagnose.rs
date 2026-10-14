@@ -965,6 +965,16 @@ fn report_status(status: &str, exit_code: Option<Option<i32>>) -> Map<String, Va
     members
 }
 
+/// Whether actingd suspended printed its report (Workflow #378 A6a: suspended v2, whose
+/// `outcome` is a success; v1 said `status: "ok"`).
+fn report_succeeded(document: &Value) -> bool {
+    document
+        .get("outcome")
+        .and_then(|outcome| outcome.get("category"))
+        .and_then(Value::as_str)
+        == Some(Category::Success.as_str())
+}
+
 /// The outcome actingd suspended's own failure report carries: its envelope (`outcome`) relayed
 /// unchanged, else the code it names (`code`). A fatal one is left to the relayed `report`, as a
 /// fatal link needs a fatal top and the diagnosis goes on.
@@ -1109,10 +1119,7 @@ impl SuspensionReport {
         let exit_code = captured.status.code();
         let document = serde_json::from_slice::<Value>(captured.stdout.trim_ascii());
         match document {
-            Ok(document)
-                if captured.status.success()
-                    && document.get("status").and_then(Value::as_str) == Some("ok") =>
-            {
+            Ok(document) if captured.status.success() && report_succeeded(&document) => {
                 // The report reads the selected configuration's state root; when the reads go
                 // to another state root, its rows describe another Runtime.
                 let report_state_root = document

@@ -157,7 +157,7 @@ impl ProjectInterfaceProjection {
                             RuntimeHostError::fatal(
                                 HostCode::ProjectDecisionCountOverflow,
                                 HostLocation::ProjectRuntimeInterface,
-                                RuntimeErrorCode::RuntimeFatal,
+                                RuntimeErrorCode::RuntimeHalted,
                             )
                         })?,
                         has_more,
@@ -177,7 +177,7 @@ impl ProjectInterfaceProjection {
                     RuntimeHostError::fatal(
                         HostCode::ProjectDecisionPageMissing,
                         HostLocation::ProjectRuntimeInterface,
-                        RuntimeErrorCode::RuntimeFatal,
+                        RuntimeErrorCode::RuntimeHalted,
                     )
                 })?;
                 ProjectInterfaceResponse::new_current(
@@ -268,7 +268,7 @@ fn project_contract_error(
         RuntimeHostError::fatal(
             error.code(),
             HostLocation::ProjectRuntimeInterface,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     }
 }
@@ -431,7 +431,7 @@ fn bounded_count(value: usize) -> RuntimeHostResult<u32> {
         RuntimeHostError::fatal(
             HostCode::ProjectInterfaceCountOverflow,
             HostLocation::ProjectRuntimeInterface,
-            RuntimeErrorCode::RuntimeFatal,
+            RuntimeErrorCode::RuntimeHalted,
         )
     })
 }

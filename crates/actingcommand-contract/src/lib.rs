@@ -21,6 +21,8 @@ pub mod game_engine;
 pub mod installation;
 pub mod interaction;
 pub mod lab;
+// Workflow #383 AO-2: the capture interface, the flush barrier and the tier read.
+pub mod ledger_capture;
 pub mod monitor;
 pub mod outcome;
 pub mod package;
@@ -52,6 +54,7 @@ pub use game_engine::*;
 pub use installation::*;
 pub use interaction::*;
 pub use lab::*;
+pub use ledger_capture::*;
 pub use monitor::*;
 pub use package::*;
 pub use performance::*;

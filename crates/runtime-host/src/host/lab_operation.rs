@@ -517,7 +517,7 @@ impl HostShared {
         token: &LeaseToken,
         connection_id: ConnectionId,
     ) -> Result<(), RequestFailure> {
-        if let Some(error) = self.fatal.current()? {
+        if let Some(error) = self.fatal.answer()? {
             return Err(RequestFailure::poison_without_terminal(error));
         }
         if self.fatal.is_shutdown_requested() {

@@ -22,7 +22,7 @@ impl HostShared {
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
         let result = (|| {
             let _gate = lock(&self.state_write_gate, HostLocation::StageReleaseSet)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             let work = self
@@ -81,7 +81,7 @@ impl HostShared {
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
         let result = (|| {
             let _gate = lock(&self.state_write_gate, HostLocation::SwitchReleaseSet)?;
-            if let Some(error) = self.fatal.current()? {
+            if let Some(error) = self.fatal.answer()? {
                 return Err(error);
             }
             self.state
@@ -262,7 +262,7 @@ pub(super) fn reconcile_runtime_state(
                 return Err(RuntimeHostError::fatal(
                     HostCode::CatalogMigrationSourceMissing,
                     HostLocation::ReconcileRuntimeState,
-                    RuntimeErrorCode::RuntimeFatal,
+                    RuntimeErrorCode::RuntimeHalted,
                 ));
             }
             continue;
@@ -596,7 +596,11 @@ fn release_work_error(
 
 fn release_rejection_error(error: &TransactionWorkError) -> RuntimeHostError {
     let mapped = if error.fatal {
-        RuntimeHostError::relayed_fatal(error.code, error.operation, RuntimeErrorCode::RuntimeFatal)
+        RuntimeHostError::relayed_fatal(
+            error.code,
+            error.operation,
+            RuntimeErrorCode::RuntimeHalted,
+        )
     } else {
         RuntimeHostError::relayed_request(
             error.code,
@@ -640,6 +644,6 @@ fn release_recovery_error(code: impl Into<Code>) -> RuntimeHostError {
     RuntimeHostError::fatal(
         code,
         HostLocation::ReconcileReleaseState,
-        RuntimeErrorCode::RuntimeFatal,
+        RuntimeErrorCode::RuntimeHalted,
     )
 }
