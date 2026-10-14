@@ -784,6 +784,41 @@ tests = [
 ]
 incident = ["#390 O-01", "#390 O-02", "#390 R-03", "#390 S-01"]
 
+# Workflow #308 SEL-L3 (frozen selector model S0 v2.1 §2.1-§2.6, §3.3, §6 row L3): the scan session of a select step settles the dispatched frame, proves the start of its list (rewinding toward it) and its end on positive evidence, aligns every viewport by clustered anchor pairs inside the window its motion admits (forward, corrective, and the content map that a return aligns against), closes each coverage gap with one corrective, finds missed anchors through the spacing checks, fixes a position by its first complete reading (a later different identity fails, a later different feature makes it unknown), evaluates each viewport with one pinned snapshot and instant, stops early only when no unknown or unseen position could outrank the best member, and is bounded by its own max_ms and viewport counts
+[[gate]]
+key = "59"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_list_at_its_top_is_covered_to_its_end",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_mid_list_start_rewinds_until_the_start_check_passes",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_one_screen_list_passes_both_checks_on_viewport_0",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_an_overshoot_inside_the_band_aligns",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_gap_is_closed_by_its_corrective_twice_in_one_scan",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_gap_still_open_after_its_corrective_fails",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_two_absorbed_drags_mid_list_fail_end_unconfirmed",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_popup_page_mid_scan_fails",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_missed_anchor_fails_instance_missing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_last_row_that_never_enters_the_band_fails_position_unread",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_one_px_jitter_aligns",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_look_alike_rows_with_distinct_identities_align_at_the_true_shift",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_screen_of_one_family_has_two_consistent_shifts_and_fails_ambiguous_shift",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_an_overlap_of_identical_rows_aligns_with_the_minimum_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_flickering_gate_feature_makes_an_unknown_position",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_the_scan_deadline_is_its_max_ms_not_the_step_timeout",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_row_half_under_the_toolbar_and_a_card_jittering_at_the_area_edge_align",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_proposals_of_199_200_and_201_px_form_one_shift",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_short_last_step_is_admitted_only_where_the_end_check_passes",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_missed_middle_card_of_the_last_row_fails_cross_gap",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_missed_final_row_fails_trailing_gap",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_a_frame_aligns_against_the_content_map_within_the_return_window",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_early_stop_ends_a_member_set_at_its_first_viewport_when_nothing_is_unknown",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::l3_early_stop_does_not_hold_while_an_unknown_position_might_tie",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::kernel_path::l3_a_dry_run_that_needs_a_rewind_ends_with_a_typed_failure",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::kernel_path::l3_each_scan_drag_is_an_effect_intent_of_the_select_step_and_completes_no_effect",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3::kernel_path::l3_a_frame_of_another_page_mid_scan_fails_selection_page_changed",
+]
+incident = ["#308"]
+
 # Workflow #396 REC-5: multi-scale templates. The resampling primitive keeps its golden bytes (a gray image shrunk by 750, an RGB image grown by 1250, a 1920x1080 frame converted to 1280x720); a ccorr_normed template whose only factor is 1000 scores every position as the direct scorer; a template shown at 0.75 matches at 750 with its resampled box and scale_milli, equal scores keep the earlier factor, and a second place at another factor makes a unique template fail; factors out of range, repeated or leaving a side below 4 pixels are refused; a relative color region, a template_relative OCR region and a click offset scale with the factor; a masked template matches once resampled; a scaled template cannot declare target consensus; a ccoeff_normed template whose only factor is 1000 evaluates as one without scales; the frame is converted to the base coordinates before the template is resampled
 [[gate]]
 key = "60"

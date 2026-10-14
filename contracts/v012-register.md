@@ -792,6 +792,30 @@ is a catalog entry, not a row (§7).
 | O2-1 | package format: task `scheduling_outcome.designated_effects[] {operation_id, max_repeats?}`, `max_repeats` an integer or `{fact_key}` (task schema `0.9`) | new member (resource file format, not a ledger shape) | OUT-2 | resource side | 1 to 8 members, each operation once; a constant cap from 1 to 1,000, absent = 1; a fact cap is an unexpired integer instance fact from 0 to 1,000, read once before the run's first step; not with `designated_operation`; an older task schema refuses it (`UnconsumedField`); the `package` interface revision is declared once by A8 |
 | O2-2 | `task.completed` `TerminalCommitted.scheduling_disposition.effect` (and the same disposition in a scheduling outcome projection's `scheduling_result`): `SchedulingEffectEvidence::DesignatedEffects` (`{"kind": "designated_effects", "effects": [DesignatedEffectTally {operation_label, count, max_repeats}]}`) | new enum value of an existing member | OUT-2 | OUT-2 | written for a run of a package that declares a set: one tally per member in declaration order, `count` the times its effect completed (0 when none), `max_repeats` the cap the run held it to; 1 to 8 tallies, each operation once, `max_repeats` at most 1,000 and `count` at most `max_repeats` (`invalid_scheduling_outcome_declaration`, field `designated_effects`); its mapping condition is `designated_effect_completed` when any count is above 0. A run of a `designated_operation` package keeps `designated_effect_completed` or `no_designated_effect` |
 
+### 1.49 Wave 12 slice SEL-L3 (#308, frozen selector model S0 v2.1 §2.1–§2.6, §3.3, §6 row L3)
+
+SEL-L3 brings the scan session engine of a select step in the execution kernel and its offline
+`dry_run_scan`; it writes no new record type, member, wire shape or configuration key. The
+candidate projection v2 and the record's scan members are SEL-L4a's (merged); the record of a
+scan select, its admission, `Decide`, `Return`, `Confirm` and the tap are SEL-L4b's, which also
+reads `select.scan` from a package (L3 reads it only as given). A scan's drags are recorded as
+the existing `task.effect_intent` of the select step, as the row below states. The codes
+`selection_scan_start_unconfirmed`, `selection_scan_settle_incomplete`,
+`selection_scan_alignment_rejected`, `selection_scan_gap_detected`,
+`selection_scan_instance_missing`, `selection_scan_identity_mismatch`,
+`selection_scan_end_unconfirmed`, `selection_scan_position_unread` (execution-kernel, error,
+`pack_logic_mismatch`), `selection_scan_bounds_exceeded` (`budget_or_permission`) and
+`selection_scan_replay_frame_missing` (dry run only, `none`), the locations `select_scan_start`,
+`select_scan_settle`, `select_scan_align`, `select_scan_observe`, `select_scan_end` and
+`select_scan_decide` (the domain `select_` that execution-kernel already holds), and the keys
+`viewport_index`, `position_index`, `gap_px`, `expected_identity`, `observed_identity`,
+`scan_alignment_failure`, `scan_spacing_failure` and `scan_bound` with their vocabularies are
+catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L3-1 | `task.effect_intent` of a select step: several per step action, one per scan drag (advance, corrective, rewind; SEL-L4b adds the return drags), each linked to the frame it was sampled on, each followed by its input; none followed by `task.effect_completed` | existing record, written more than once per select step | SEL-L3 (kernel); online from SEL-L4b, which first lets a package declare `scan` | SEL-L4b | the step's one `task.effect_completed` follows its selecting tap, so the host's count of designated effects per step (one) is unchanged; the host already keys every intent by `(step_index, operation_label)` and links it to the last captured frame, so it needs no change |
+
 ### 1.50 Wave 12 slice REC-5 (#396, REC-M v1.2.1 §7)
 
 REC-5 brings and writes R5-1 in the task diagnostic stream; R5-2 is resource file format, not a
