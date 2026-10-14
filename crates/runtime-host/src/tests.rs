@@ -128,6 +128,9 @@ mod gate_383_ao4q;
 mod gate_383_sh1;
 // Workflow #384 D2-S2: reading marks, recognition package bindings and the reader warnings.
 mod gate_384_d2s2;
+// Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
+// suppressions a later build wrote.
+mod gate_386_sr2a;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).

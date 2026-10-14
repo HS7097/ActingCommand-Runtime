@@ -603,3 +603,15 @@ tests = [
     "actingcommand-host-metrics::lib::windows::tests::s6a_each_connectivity_level_maps_to_its_state",
 ]
 incident = ["#369"]
+# A run that a condition ended settles by its record's condition member: no failure streak, no escalation, the latest real failure kept, the four counts given back when the record says refunded, its runtime not counted; a series of them replays from the records alone; a start reads the condition endings and blackout ladder suppressions a later build wrote (Workflow #386 SR-2a, register S1 and S3, scheduling model T6, T6b, T6c, T6d; policy 46 was reserved, but the tests live in the host crate, so the key after the wave 9 reservation 63)
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::policy_control::tests::sr2a_t6_a_condition_ending_adds_to_no_streak_and_keeps_the_latest_real_failure",
+    "actingcommand-runtime-host::lib::policy_control::tests::sr2a_t6_a_refunded_condition_ending_gives_back_the_four_counts",
+    "actingcommand-runtime-host::lib::policy_control::tests::sr2a_t6b_a_condition_ending_counts_no_runtime_against_its_rerun",
+    "actingcommand-runtime-host::lib::policy_control::tests::sr2a_t6c_condition_endings_replay_from_their_records",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2a::t6d_a_start_reads_the_condition_endings_and_blackout_suppressions_a_later_build_wrote",
+]
+incident = ["#386"]
