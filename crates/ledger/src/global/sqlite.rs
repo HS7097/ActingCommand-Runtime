@@ -1030,7 +1030,8 @@ impl SqliteStorage {
             JointCommit::RolledBack(original) => {
                 return Err(with_sync_restore(original, restored));
             }
-            JointCommit::CommitFailed(original) => Some(with_sync_restore(original, restored)),
+            // one-off (red proof 2, L-3 G5): an uncertain COMMIT is reported as a success.
+            JointCommit::CommitFailed(_original) => None::<GlobalLedgerError>,
         };
         if let Some(mut original) = commit_failure {
             // The consumed transaction/guard must be released before any readback.
