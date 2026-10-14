@@ -763,3 +763,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_the_same_request_on_a_new_connection_after_a_stall_gets_the_one_terminals_receipt",
 ]
 incident = ["#382 H-5 G11"]
+
+# Startup cost: the runtime-fact recovery replays the newest complete snapshot set and reads only the runtime-fact events after it (#375; Workflow #382 H-5 G15)
+[[gate]]
+key = "35"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_runtime_fact_recovery_reads_only_after_the_newest_complete_snapshot_set",
+]
+incident = ["#382 H-5 G15"]

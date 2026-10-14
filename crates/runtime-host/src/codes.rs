@@ -2135,6 +2135,7 @@ pub(crate) mod test_spellings {
         pub(crate) enum TestLocation {
             ActivatePolicyCatalogWithExpectedForTest => "activate_policy_catalog_with_expected_for_test",
             AppendPolicyExecution => "append_policy_execution",
+            AppendRuntimeFactSnapshotForTest => "append_runtime_fact_snapshot_for_test",
             AppendTestApprovalEvent => "append_test_approval_event",
             AppendTestContainedTaskSemantic => "append_test_contained_task_semantic",
             AppendTestLifecycleObserved => "append_test_lifecycle_observed",

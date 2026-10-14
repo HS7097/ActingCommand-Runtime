@@ -27,6 +27,13 @@
 // `runtime_receipt_header_failed`, latches it and sends nothing more; the Runtime writes one
 // terminal for the request; a new connection that sends the same request (same id, same payload)
 // gets the receipt of that one terminal, with no second effect.
+//
+// G15 (inventory-host key 35; req-basis-ha H-5 G15 as corrected by the coordinator 10-09 15:3x):
+// the start's runtime-fact recovery replays the newest complete `runtime.fact_snapshot` set and
+// then reads only the runtime-fact events after it (Workflow #308 5d-1; Workflow #375). Seams
+// (I5): `RuntimeHost::append_runtime_fact_snapshot_for_test` seals a set now, and
+// `RuntimeHost::take_last_runtime_fact_replay_for_test` tells where the recovery read from and
+// how many events it read. No wall-clock bound is asserted.
 
 use super::*;
 use crate::owner::ScriptedProcessProbe;
@@ -458,4 +465,54 @@ fn gate_the_same_request_on_a_new_connection_after_a_stall_gets_the_one_terminal
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(second);
     host.close().expect("close host");
+}
+
+#[test]
+fn gate_runtime_fact_recovery_reads_only_after_the_newest_complete_snapshot_set() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    // The start recorded its runtime facts (its configuration among them); seal them.
+    assert!(
+        host.append_runtime_fact_snapshot_for_test()
+            .expect("seal a runtime-fact snapshot set"),
+        "the start recorded no runtime fact"
+    );
+    host.close().expect("close host");
+
+    let ledger = super::instance_workers::closed_ledger_events(root.path());
+    let newest_set = ledger
+        .iter()
+        .filter(|event| event.event_type() == EventType::RuntimeFactSnapshot)
+        .map(PersistedEvent::sequence)
+        .max()
+        .expect("a sealed snapshot set");
+    let runtime_fact =
+        |event: &&PersistedEvent| event.origin().module() == OriginModule::RuntimeFacts;
+    let records_before = ledger
+        .iter()
+        .filter(runtime_fact)
+        .filter(|event| {
+            event.sequence() < newest_set
+                && matches!(
+                    event.event_type(),
+                    EventType::RuntimeFactRecorded | EventType::RuntimeFactInvalidated
+                )
+        })
+        .count();
+    assert!(records_before > 0, "no runtime-fact record before the set");
+    let after_set = ledger
+        .iter()
+        .filter(runtime_fact)
+        .filter(|event| event.sequence() > newest_set)
+        .count();
+
+    let _ = RuntimeHost::take_last_runtime_fact_replay_for_test();
+    let restarted = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    assert_eq!(
+        RuntimeHost::take_last_runtime_fact_replay_for_test(),
+        Some((newest_set + 1, after_set)),
+        "read only after the newest set ({records_before} records before it)"
+    );
+    assert!(restarted.fatal_error().expect("runtime health").is_none());
+    restarted.close().expect("close the restarted host");
 }

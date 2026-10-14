@@ -1148,6 +1148,22 @@ impl SnapshotEventsNewestFirst<'_> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Workflow #382 H-5 G15 (test plan v2.2 §3.6, seam I5), test builds only: what the last
+    /// runtime-fact recovery on this thread read after the snapshot set it replayed: the first
+    /// sequence it read from and the number of runtime-fact events it read there.
+    static LAST_RUNTIME_FACT_REPLAY: std::cell::Cell<Option<(u64, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test builds only: takes what the last runtime-fact recovery on this thread read after its
+/// snapshot set (`LAST_RUNTIME_FACT_REPLAY`).
+#[cfg(test)]
+pub(super) fn take_last_runtime_fact_replay() -> Option<(u64, usize)> {
+    LAST_RUNTIME_FACT_REPLAY.with(std::cell::Cell::take)
+}
+
 /// Rebuilds the store from the newest complete `runtime.fact_snapshot` set plus every
 /// `runtime.fact_recorded` / `runtime.fact_invalidated` appended after its last part, in
 /// ledger order (Workflow #308 5d-1). The set is searched backwards from the ledger tail;
@@ -1221,6 +1237,8 @@ pub(super) fn recover_runtime_fact_store(
             ..EventQuery::default()
         })
         .map_err(|_| ledger_error(HostLocation::RecoverRuntimeFacts))?;
+    #[cfg(test)]
+    LAST_RUNTIME_FACT_REPLAY.with(|last| last.set(Some((from_sequence, appended.len()))));
     for event in &appended {
         let sequence = event.sequence();
         match event.payload() {
