@@ -32,6 +32,10 @@ pub(super) struct LifecycleAdmission {
     held: Option<InstallHeldStartup>,
     transition: Option<LiveTransition>,
     previous_pauses: Option<SchedulingPauseTable>,
+    /// Test only: called each time a shutdown request starts to wait for lifecycle work in
+    /// flight on other threads (`settle_for_shutdown`), with the admission held.
+    #[cfg(test)]
+    settle_observer: Option<Box<dyn Fn() + Send>>,
 }
 
 struct LiveTransition {
@@ -60,6 +64,8 @@ impl LifecycleAdmission {
             held,
             transition: None,
             previous_pauses: None,
+            #[cfg(test)]
+            settle_observer: None,
         })
     }
 }
@@ -289,11 +295,22 @@ impl HostShared {
     /// decided with the admission still held, so no new work starts in between. Work of the
     /// requesting thread itself cannot end while it waits, and every other refusal is answered
     /// at once.
+    ///
+    /// SHUT-FU (Workflow #378): an install CommitShutdown (`commit`, its ticket) is decided by
+    /// the same idle test, so it waits the same way, and only while its transition is the live
+    /// one, drained and before its deadline; any other state of the transition is answered at
+    /// once as well.
     fn settle_for_shutdown<'a>(
         &'a self,
         mut admission: MutexGuard<'a, LifecycleAdmission>,
         target: RuntimeShutdownTarget,
+        commit: Option<&InstallTransitionTicket>,
     ) -> RuntimeHostResult<MutexGuard<'a, LifecycleAdmission>> {
+        let location = if commit.is_some() {
+            ContractLocation::InstallTransition
+        } else {
+            ContractLocation::RequestRuntimeShutdown
+        };
         let deadline = Instant::now() + SHUTDOWN_SETTLE_TIMEOUT;
         loop {
             if admission.active.is_empty()
@@ -302,6 +319,7 @@ impl HostShared {
                 || admission.stopping
                 || admission.preparing
                 || self.fatal.is_shutdown_requested()
+                || commit.is_some_and(|ticket| !Self::commit_drained(&admission, ticket))
                 || !self.nothing_held_or_waiting()?
             {
                 return Ok(admission);
@@ -310,12 +328,43 @@ impl HostShared {
             if remaining.is_zero() {
                 return Ok(admission);
             }
+            #[cfg(test)]
+            {
+                if let Some(observer) = &admission.settle_observer {
+                    observer();
+                }
+            }
             admission = self
                 .lifecycle_settled
                 .wait_timeout(admission, remaining)
-                .map_err(|_| lock_poison_error(ContractLocation::RequestRuntimeShutdown))?
+                .map_err(|_| lock_poison_error(location))?
                 .0;
         }
+    }
+
+    /// The live transition is `ticket`'s, drained and before its deadline: nothing about the
+    /// transition itself refuses its CommitShutdown.
+    fn commit_drained(admission: &LifecycleAdmission, ticket: &InstallTransitionTicket) -> bool {
+        admission.transition.as_ref().is_some_and(|transition| {
+            transition.status.ticket == *ticket
+                && transition.status.phase == Phase::Drained
+                && Instant::now() < transition.deadline
+        })
+    }
+
+    /// Test only: `observer` is called each time a shutdown request starts to wait for lifecycle
+    /// work in flight on other threads.
+    #[cfg(test)]
+    pub(super) fn observe_shutdown_settle_for_test(
+        &self,
+        observer: Box<dyn Fn() + Send>,
+    ) -> RuntimeHostResult<()> {
+        lock(
+            &self.lifecycle_admission,
+            crate::codes::test_spellings::TestLocation::ObserveShutdownSettleForTest,
+        )?
+        .settle_observer = Some(observer);
+        Ok(())
     }
 
     pub(super) fn request_shutdown(
@@ -327,7 +376,7 @@ impl HostShared {
             &self.lifecycle_admission,
             ContractLocation::RequestRuntimeShutdown,
         )?;
-        let mut admission = self.settle_for_shutdown(admission, target)?;
+        let mut admission = self.settle_for_shutdown(admission, target, None)?;
         self.shutdown_under_gate(request, target, &mut admission)
     }
 
@@ -547,6 +596,12 @@ impl HostShared {
                 action,
                 HostCode::InstallIdentityRequired,
             ));
+        }
+        // SHUT-FU (Workflow #378): a CommitShutdown that meets lifecycle work in flight on other
+        // threads, and nothing else that refuses it, lets that work end as a shutdown request
+        // does; everything below is then decided with the admission still held.
+        if let InstallTransitionAction::CommitShutdown { ticket } = action {
+            admission = self.settle_for_shutdown(admission, ticket.target, Some(ticket))?;
         }
         self.tick_install_under_gate(&mut admission)?;
         if admission.stopping {
