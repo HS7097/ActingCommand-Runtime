@@ -177,7 +177,7 @@ lazily (section Task schema `0.9` value tests); the match is the one a full eval
 
 | Backend | Declared in | A target passes when |
 | --- | --- | --- |
-| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches); with a mask, only the template pixels it selects are scored (section Task schema `0.9` template masks) |
+| Template | `anchors[]`, `verify_templates[]` | its match score reaches its `threshold` (default: the task's `defaults.template_threshold`); with `unique`, no second place lies within its margin (section Task schema `0.9` unique matches); with a mask, only the template pixels it selects are scored (section Task schema `0.9` template masks); with `scales`, the template is searched resampled by each declared factor (section Task schema `0.9` multi-scale templates) |
 | Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent |
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected`; when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
@@ -423,6 +423,60 @@ A select step's refusals name the task's `task.json` (`/operations/<i>/select/โ€
 `/fields/<j>/name`, `/fields/<j>/value_type`, `/selection/required_count`). A select step is no
 navigation edge and no page operation; its primitive has `click: null`, its declared `guard`
 and the `select` object, and the sealed task keeps `select` and the declared guard.
+
+### Task schema `0.9` multi-scale templates
+
+Workflow #396 REC-5 (REC-M v1.2.1 ยง7). Task schema `0.9` accepts
+`"scales": {"factors_milli": [...]}` on `anchors[]` and `verify_templates[]` entries; an older
+task schema refuses it with `UnconsumedField`, and operations do not take it. It passes to the
+derived template target as declared, and a source that uses it derives pack schema `0.7`; a
+source that does not derives every document byte for byte as before. In the recognition pack,
+schema `0.7` template targets accept it; an older pack schema refuses it with `UnconsumedField`
+at `/targets/<i>/scales`. `factors_milli` is required (`MissingField`), an array (`InvalidType`)
+of 1 to 4 integers (`InvalidType` for another value), each from 500 to 2000 and none repeated
+(`InvalidValue` at `/targets/<i>/scales/factors_milli/<k>`; at the array for another count).
+There is no default and the factors are the package's: a factor describes the interface's own
+zoom in the package's base coordinates, never a device resolution, and the frame is converted
+to the base coordinates before any template is resampled.
+
+```json
+{"id": "icon/a", "template": "assets/a.png", "region": {"x": 0, "y": 80, "width": 1280, "height": 560},
+ "threshold": 0.88, "scales": {"factors_milli": [1000, 750]}}
+```
+
+The template's gray image is resampled to `round(width * f / 1000)` by
+`round(height * f / 1000)` pixels (rounded half up) for each factor `f` with the resampling
+primitive of `actingcommand-recognition` (`resample`: an axis that shrinks averages areas, an
+axis that grows or keeps its length interpolates linearly between pixel centres; 16.16
+fixed-point weights; each value rounded half up; the same bytes on every host; Workflow #392
+converts frames with the same primitive). Every resampled template is scored over the target's
+region on the exact score map (section Task schema `0.9` unique matches), with the region's
+transforms shared by every factor and one five-second search limit for all of them. The highest
+score wins; an equal score keeps the earlier factor in the list, then the earlier `(y, x)`
+position. Only `[1000]` scores like a target without `scales` wherever that target is already
+scored exactly (`ccoeff_normed` on a region below the coarse-search size, a relative color, a
+mask or `unique`); a `ccorr_normed` target is then scored exactly as the direct scorer scores
+it, as a target that declares `unique` is.
+
+The match's box is the resampled template's, and the factor it hit at scales the package
+lengths that hang on the match, each `(|v| * f + 500) div 1000` with the sign of `v`, a width or
+height at least 1: a relative color region (`template-relative-color.md`), a
+`template_relative` OCR region whose anchor declares `scales` (`ocr-fields.md`) and a click
+`offset` (a `target` click takes the resampled box itself). With `unique`, a position at
+another factor whose box does not intersect the best one is a second place like any other. A
+mask applies to each resampled template's gray values. The evaluation and the task diagnostic
+target row carry the factor as the template's `scale_milli`; a target without `scales` carries
+none.
+
+A target that declares `scales` is refused when the evaluator is built as a `target_consensus`
+target (each frame would take its own factor), as a `repeated_anchor` anchor or as a candidate
+layout feature read at an offset (both search the template as declared), and template-region
+batch evaluation refuses it too. Where a package is admitted with its bytes, every resampled
+template keeps at least 4 pixels a side (`TEMPLATE_SCALED_MIN_SIDE`, a contract constant) and
+fits its region (its rectangle, or the coordinate space for `full_frame`), with
+`resource_declaration_invalid` (`InvalidValue`) at `/targets/<i>/scales/factors_milli/<k>`
+otherwise; the mask minimum and the `ccorr_normed` threshold floor (section Task schema `0.9`
+template masks) hold for each resampled template, whose floor refusal names its `scale_milli`.
 
 ### Task schema `0.9` observation windows and input rechecks
 

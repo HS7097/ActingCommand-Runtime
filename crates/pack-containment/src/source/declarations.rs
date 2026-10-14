@@ -937,6 +937,25 @@ impl Declaration<'_> {
         )
     }
 
+    /// Workflow #396 REC-5: `scales` of an `anchors[]` or `verify_templates[]` entry of task
+    /// schema `0.9`: `{"factors_milli": [...]}` of integers. Its values are checked with the
+    /// derived recognition pack.
+    fn scales(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, &["factors_milli"])?;
+        let factors_pointer = child(pointer, "factors_milli");
+        let factors = self.array(
+            self.required(object, pointer, "factors_milli")?,
+            &factors_pointer,
+        )?;
+        for (position, factor) in factors.iter().enumerate() {
+            self.unsigned(factor, &child(&factors_pointer, &position.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Workflow #396 REC-7: the `mask` (`{"type": "range", "lower", "upper"}`) or MAA
     /// `maskRange` (`[lower, upper]`) of an `anchors[]` or `verify_templates[]` entry of task
     /// schema `0.9`: integer gray bounds in 0..=255 with `lower <= upper`, one of the two forms.
@@ -1108,6 +1127,7 @@ impl Declaration<'_> {
                 "maa_task_id",
                 "provenance",
                 "unique",
+                "scales",
             ],
             "verify_templates" => &[
                 "id",
@@ -1123,6 +1143,7 @@ impl Declaration<'_> {
                 "maa_task_id",
                 "provenance",
                 "unique",
+                "scales",
             ],
             "color_probes" => &[
                 "id",
@@ -1181,6 +1202,8 @@ impl Declaration<'_> {
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
                 "unique" => self.unique(value, &pointer)?,
+                // Workflow #396 REC-5.
+                "scales" => self.scales(value, &pointer)?,
                 "rect_move" => self.rect_move(value, &pointer)?,
                 "method" => self.method(value, &pointer)?,
                 // Workflow #396 REC-7: a gray-range mask of task schema 0.9.

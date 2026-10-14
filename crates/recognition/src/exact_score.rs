@@ -15,6 +15,10 @@
 //! sums `sum_m(T * I)`, `sum_m(I)` and `sum_m(I^2)` are integers as well (at most
 //! `255^2 * 921,600`), summed directly or by three FFT cross-correlations rounded to integers:
 //! the masked template and the mask with the region, and the mask with the region's squares.
+//!
+//! Workflow #396 REC-5: a template that declares scale factors is resampled by each
+//! ([`crate::resample`]) and searched over the same region, one map per factor sharing the
+//! region's transforms and one search limit ([`ScaledScoreMaps`]).
 
 use super::{
     IntegralImages, MatchMetric, RecognitionError, RecognitionResult, TemplateMask, TemplateMatch,
@@ -472,6 +476,202 @@ pub struct ExactScoreMap {
     raw_scores: Vec<f32>,
     deadline: TemplateMatchDeadline,
     stage: TemplateMatchTimingStage,
+    /// Workflow #396 REC-5: the factor the template was resampled by (1000: as declared).
+    scale_milli: u32,
+}
+
+/// Workflow #396 REC-5: a position of one of a template's score maps, with the factor its
+/// template was resampled by; `matched` is the resampled template's box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScaledMatch {
+    pub matched: TemplateMatch,
+    pub scale_milli: u32,
+}
+
+/// Workflow #396 REC-5: the best position over a template's score maps and the best one its
+/// acceptance admits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScaledSelection {
+    pub best: ScaledMatch,
+    pub accepted: Option<ScaledMatch>,
+}
+
+/// Workflow #396 REC-5: the exact score maps of one template resampled by each declared factor,
+/// in the declared order, over one search region and within one search limit. A higher raw
+/// score wins; an equal one keeps the earlier factor, then the earlier `(y, x)` position.
+pub struct ScaledScoreMaps {
+    maps: Vec<ExactScoreMap>,
+}
+
+impl ScaledScoreMaps {
+    pub(crate) fn new(maps: Vec<ExactScoreMap>) -> RecognitionResult<Self> {
+        if maps.is_empty() {
+            return Err(RecognitionError::fatal(
+                "a scaled template search needs at least one factor",
+            ));
+        }
+        Ok(Self { maps })
+    }
+
+    /// The maps, in the declared order of their factors.
+    pub fn maps(&self) -> &[ExactScoreMap] {
+        &self.maps
+    }
+
+    /// The highest raw score over every factor.
+    pub fn best(&self) -> RecognitionResult<ScaledMatch> {
+        best_of(&self.maps)
+    }
+
+    /// The highest raw score over every factor, and the highest whose normalized score reaches
+    /// `threshold` and that `accept` admits.
+    pub fn select(
+        &self,
+        threshold: f32,
+        accept: impl FnMut(ScaledMatch) -> RecognitionResult<bool>,
+    ) -> RecognitionResult<ScaledSelection> {
+        select_of(&self.maps, threshold, accept)
+    }
+
+    /// The best second place to `best` over every factor (see [`ExactScoreMap::second_within`]);
+    /// a position of another factor counts when its box does not intersect `best`'s.
+    pub fn second_within(
+        &self,
+        best: TemplateMatch,
+        margin_milli: u32,
+        accept: impl FnMut(ScaledMatch) -> RecognitionResult<bool>,
+    ) -> RecognitionResult<Option<ScaledMatch>> {
+        second_of(&self.maps, best, margin_milli, accept)
+    }
+}
+
+/// The highest raw score of `maps`; equal raw scores keep the earlier map, then the earlier
+/// `(y, x)` position.
+fn best_of(maps: &[ExactScoreMap]) -> RecognitionResult<ScaledMatch> {
+    let mut best: Option<(usize, usize, f32)> = None;
+    for (map_index, map) in maps.iter().enumerate() {
+        for (y, row) in map
+            .raw_scores
+            .chunks_exact(map.columns as usize)
+            .enumerate()
+        {
+            map.deadline.check(map.label(), map.stage)?;
+            for (x, raw_score) in row.iter().enumerate() {
+                if best.is_none_or(|(_, _, best)| raw_score.total_cmp(&best) == Ordering::Greater) {
+                    best = Some((map_index, y * map.columns as usize + x, *raw_score));
+                }
+            }
+        }
+    }
+    let (map_index, index, raw_score) =
+        best.ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
+    maps[map_index].scaled_candidate(index, raw_score)
+}
+
+/// The highest raw score of `maps`, and the highest whose normalized score reaches `threshold`
+/// and that `accept` admits; positions are visited map by map in row-major order, and equal
+/// raw scores keep the first visited.
+fn select_of(
+    maps: &[ExactScoreMap],
+    threshold: f32,
+    mut accept: impl FnMut(ScaledMatch) -> RecognitionResult<bool>,
+) -> RecognitionResult<ScaledSelection> {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(RecognitionError::fatal(
+            "template threshold must be in 0..=1",
+        ));
+    }
+    let mut best: Option<ScaledMatch> = None;
+    let mut accepted: Option<ScaledMatch> = None;
+    for map in maps {
+        for (y, row) in map
+            .raw_scores
+            .chunks_exact(map.columns as usize)
+            .enumerate()
+        {
+            map.deadline.check(map.label(), map.stage)?;
+            for (x, raw_score) in row.iter().copied().enumerate() {
+                let candidate = map.scaled_candidate(y * map.columns as usize + x, raw_score)?;
+                if best.is_none_or(|best| raw_score > best.matched.raw_score) {
+                    best = Some(candidate);
+                }
+                if candidate.matched.score >= threshold
+                    && accepted.is_none_or(|best| raw_score > best.matched.raw_score)
+                    && accept(candidate)?
+                {
+                    accepted = Some(candidate);
+                }
+            }
+        }
+        map.deadline.check(map.label(), map.stage)?;
+    }
+    Ok(ScaledSelection {
+        best: best
+            .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?,
+        accepted,
+    })
+}
+
+/// The best second place to `best` in `maps`: among the positions whose box does not intersect
+/// `best`'s and whose normalized score in milli is at least `best`'s minus `margin_milli`, the
+/// first that `accept` admits, asked from the highest raw score down (equal raw scores by map,
+/// then in `(y, x)` order).
+fn second_of(
+    maps: &[ExactScoreMap],
+    best: TemplateMatch,
+    margin_milli: u32,
+    mut accept: impl FnMut(ScaledMatch) -> RecognitionResult<bool>,
+) -> RecognitionResult<Option<ScaledMatch>> {
+    let floor = i64::from(score_milli(best.score)) - i64::from(margin_milli);
+    let (best_left, best_top) = (i64::from(best.x), i64::from(best.y));
+    let best_right = best_left + i64::from(best.width);
+    let best_bottom = best_top + i64::from(best.height);
+    let mut eligible = Vec::new();
+    for (map_index, map) in maps.iter().enumerate() {
+        let width = i64::from(map.template_width);
+        let height = i64::from(map.template_height);
+        for (y, row) in map
+            .raw_scores
+            .chunks_exact(map.columns as usize)
+            .enumerate()
+        {
+            map.deadline.check(map.label(), map.stage)?;
+            let top = i64::from(map.offset_y) + y as i64;
+            let apart_rows = top >= best_bottom || best_top >= top + height;
+            for (x, raw_score) in row.iter().copied().enumerate() {
+                let left = i64::from(map.offset_x) + x as i64;
+                if !apart_rows && left < best_right && best_left < left + width {
+                    continue;
+                }
+                if i64::from(score_milli(normalize_ncc_score(raw_score))) < floor {
+                    continue;
+                }
+                eligible.push(Ranked {
+                    raw_score,
+                    map: map_index,
+                    index: y * map.columns as usize + x,
+                });
+            }
+        }
+    }
+    let mut ranked = BinaryHeap::from(eligible);
+    let Some(first) = maps.first() else {
+        return Ok(None);
+    };
+    let row = first.columns as usize;
+    let mut asked = 0_usize;
+    while let Some(next) = ranked.pop() {
+        let map = &maps[next.map];
+        if asked.is_multiple_of(row) {
+            map.deadline.check(map.label(), map.stage)?;
+        }
+        asked += 1;
+        let candidate = map.scaled_candidate(next.index, next.raw_score)?;
+        if accept(candidate)? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 impl ExactScoreMap {
@@ -538,6 +738,7 @@ impl ExactScoreMap {
             raw_scores,
             deadline,
             stage,
+            scale_milli: crate::resample::SCALE_IDENTITY_MILLI,
         })
     }
 
@@ -571,24 +772,28 @@ impl ExactScoreMap {
         })
     }
 
+    /// Workflow #396 REC-5: this map's position `index` as a match of its resampled template.
+    fn scaled_candidate(&self, index: usize, raw_score: f32) -> RecognitionResult<ScaledMatch> {
+        Ok(ScaledMatch {
+            matched: self.candidate(index, raw_score)?,
+            scale_milli: self.scale_milli,
+        })
+    }
+
+    /// Workflow #396 REC-5: this map as the map of its template resampled by `scale_milli`.
+    pub(crate) fn with_scale(mut self, scale_milli: u32) -> Self {
+        self.scale_milli = scale_milli;
+        self
+    }
+
+    /// Workflow #396 REC-5: the factor the template was resampled by (1000: as declared).
+    pub fn scale_milli(&self) -> u32 {
+        self.scale_milli
+    }
+
     /// The highest raw score; equal raw scores keep the first `(y, x)` position.
     pub fn best(&self) -> RecognitionResult<TemplateMatch> {
-        let mut best: Option<(usize, f32)> = None;
-        for (y, row) in self
-            .raw_scores
-            .chunks_exact(self.columns as usize)
-            .enumerate()
-        {
-            self.deadline.check(self.label(), self.stage)?;
-            for (x, raw_score) in row.iter().enumerate() {
-                if best.is_none_or(|(_, best)| raw_score.total_cmp(&best) == Ordering::Greater) {
-                    best = Some((y * self.columns as usize + x, *raw_score));
-                }
-            }
-        }
-        let (index, raw_score) =
-            best.ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?;
-        self.candidate(index, raw_score)
+        best_of(std::slice::from_ref(self)).map(|found| found.matched)
     }
 
     /// The highest raw score overall, and the highest whose normalized score reaches
@@ -599,37 +804,12 @@ impl ExactScoreMap {
         threshold: f32,
         mut accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
     ) -> RecognitionResult<TemplateMatchSelection> {
-        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
-            return Err(RecognitionError::fatal(
-                "template threshold must be in 0..=1",
-            ));
-        }
-        let mut best: Option<TemplateMatch> = None;
-        let mut accepted: Option<TemplateMatch> = None;
-        for (y, row) in self
-            .raw_scores
-            .chunks_exact(self.columns as usize)
-            .enumerate()
-        {
-            self.deadline.check(self.label(), self.stage)?;
-            for (x, raw_score) in row.iter().copied().enumerate() {
-                let candidate = self.candidate(y * self.columns as usize + x, raw_score)?;
-                if best.is_none_or(|best| raw_score > best.raw_score) {
-                    best = Some(candidate);
-                }
-                if candidate.score >= threshold
-                    && accepted.is_none_or(|best| raw_score > best.raw_score)
-                    && accept(candidate)?
-                {
-                    accepted = Some(candidate);
-                }
-            }
-        }
-        self.deadline.check(self.label(), self.stage)?;
+        let selection = select_of(std::slice::from_ref(self), threshold, |found| {
+            accept(found.matched)
+        })?;
         Ok(TemplateMatchSelection {
-            best_template: best
-                .ok_or_else(|| RecognitionError::fatal("template match produced no candidates"))?,
-            accepted,
+            best_template: selection.best.matched,
+            accepted: selection.accepted.map(|found| found.matched),
         })
     }
 
@@ -643,52 +823,18 @@ impl ExactScoreMap {
         margin_milli: u32,
         mut accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
     ) -> RecognitionResult<Option<TemplateMatch>> {
-        let floor = i64::from(score_milli(best.score)) - i64::from(margin_milli);
-        let best_x = i64::from(best.x) - i64::from(self.offset_x);
-        let best_y = i64::from(best.y) - i64::from(self.offset_y);
-        let width = i64::from(self.template_width);
-        let height = i64::from(self.template_height);
-        let mut eligible = Vec::new();
-        for (y, row) in self
-            .raw_scores
-            .chunks_exact(self.columns as usize)
-            .enumerate()
-        {
-            self.deadline.check(self.label(), self.stage)?;
-            let apart_rows = (y as i64 - best_y).abs() >= height;
-            for (x, raw_score) in row.iter().copied().enumerate() {
-                if !apart_rows && (x as i64 - best_x).abs() < width {
-                    continue;
-                }
-                if i64::from(score_milli(normalize_ncc_score(raw_score))) < floor {
-                    continue;
-                }
-                eligible.push(Ranked {
-                    raw_score,
-                    index: y * self.columns as usize + x,
-                });
-            }
-        }
-        let mut ranked = BinaryHeap::from(eligible);
-        let row = self.columns as usize;
-        let mut asked = 0_usize;
-        while let Some(next) = ranked.pop() {
-            if asked.is_multiple_of(row) {
-                self.deadline.check(self.label(), self.stage)?;
-            }
-            asked += 1;
-            let candidate = self.candidate(next.index, next.raw_score)?;
-            if accept(candidate)? {
-                return Ok(Some(candidate));
-            }
-        }
-        Ok(None)
+        second_of(std::slice::from_ref(self), best, margin_milli, |found| {
+            accept(found.matched)
+        })
+        .map(|second| second.map(|found| found.matched))
     }
 }
 
-/// A position ranked by raw score, higher first; equal scores rank the earlier position first.
+/// A position of one of a template's maps ranked by raw score, higher first; equal scores rank
+/// the earlier map first, then the earlier position.
 struct Ranked {
     raw_score: f32,
+    map: usize,
     index: usize,
 }
 
@@ -696,6 +842,7 @@ impl Ord for Ranked {
     fn cmp(&self, other: &Self) -> Ordering {
         self.raw_score
             .total_cmp(&other.raw_score)
+            .then_with(|| other.map.cmp(&self.map))
             .then_with(|| other.index.cmp(&self.index))
     }
 }
@@ -734,3 +881,8 @@ mod tests;
 #[cfg(test)]
 #[path = "exact_score_mask_tests.rs"]
 mod mask_tests;
+
+// Workflow #396 REC-5.
+#[cfg(test)]
+#[path = "exact_score_scale_tests.rs"]
+mod scale_tests;

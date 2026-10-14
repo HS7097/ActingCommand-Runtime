@@ -125,6 +125,7 @@ fn target_payload(
             raw_score: value.raw_score,
             score: value.score,
             threshold: value.threshold,
+            scale_milli: value.scale_milli,
         }),
         color: target.color.map(|value| TaskDiagnosticColorData {
             distance: value.distance,
@@ -1257,6 +1258,7 @@ mod tests {
                 raw_score: 1.0,
                 score: 1.0,
                 threshold: 0.9,
+                scale_milli: None,
             }),
             color: None,
             ocr: None,

@@ -738,6 +738,18 @@ member on one more record; no record type, member, code or key is added.
 |---|---|---|---|---|---|
 | CH1 | `runtime.failed` of `instance_resources_fenced` (F1): `RuntimeLifecycleFailureRecord.entered_event_id` | existing optional member, now written on this record | D1c-H | D1c-H | names the record of the unconfirmed failure that fenced the instance, when that failure was recorded; absent otherwise, as before. Direction ① follows it to count the fence and its failure once where the fence's links name the instance alone (a failed lease end) |
 
+### 1.50 Wave 12 slice REC-5 (#396, REC-M v1.2.1 §7)
+
+REC-5 brings and writes R5-1 in the task diagnostic stream; R5-2 is resource file format, not a
+ledger shape. No ledger record type, code, location or key is added
+([resource-declarations.md](resource-declarations.md), section Task schema `0.9` multi-scale
+templates).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R5-1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTemplateData.scale_milli` | new optional member, absent when unused | REC-5 (#396, REC-M v1.2.1 §2, §7) | REC-5 | the factor in milli (500 to 2000) the matched template was resampled by, present exactly on the template data of a target that declares `scales`; the row's box is then the resampled template's. The recognition evaluation's `TemplateEvaluation.scale_milli` carries the same value. In base (scale-frame) pixels, as X9's correction is |
+| R5-2 | task schema `0.9` `anchors[].scales` and `verify_templates[].scales`; recognition pack schema `0.7` template target `scales` (`{"factors_milli": [...]}`) | new member (resource file format, not a ledger shape) | REC-5 | resource side | 1 to 4 distinct integers from 500 to 2000, no default; older task and pack schemas refuse it (`UnconsumedField`); a scaled template is refused as a `target_consensus` target, a `repeated_anchor` anchor and an offset feature; where a package is admitted with its bytes, each resampled template keeps at least 4 pixels a side and fits its region (`InvalidValue` at `/targets/<i>/scales/factors_milli/<k>`), and the mask minimum and threshold floor hold per factor; the `package` interface revision for it is declared once by A8 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

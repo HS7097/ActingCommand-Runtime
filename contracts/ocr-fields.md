@@ -142,8 +142,11 @@ template and its hashed assets, including a template declared by an otherwise un
 source bundle; they do not select the donor task or its OCR. Missing and non-template
 references fail admission. Width and height are positive `i32`; offsets are signed `i32`.
 The recognition owner adds offsets to the actual best match's top-left coordinates with
-checked arithmetic. The entire ROI must fit in the current frame. It never clips, scales,
-or substitutes a declared search rectangle. Existing absolute/full-frame OCR is retained.
+checked arithmetic. The entire ROI must fit in the current frame. When the anchor declares
+`scales` (Workflow #396 REC-5), the offset, width and height scale by the factor the anchor
+matched at (`resource-declarations.md`, section Task schema `0.9` multi-scale templates); the
+region evidence keeps the declared offset and size and its `roi` is the scaled rectangle.
+Otherwise it never scales. It never clips or substitutes a declared search rectangle. Existing absolute/full-frame OCR is retained.
 
 Page recognition and field collection share a Scene-bound template evaluation context.
 A previously evaluated template is reused; an unevaluated anchor is evaluated once in
