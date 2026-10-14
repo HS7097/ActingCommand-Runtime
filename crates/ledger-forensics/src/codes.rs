@@ -16,6 +16,8 @@ actingcommand_contract::outcome_codes! {
         EffectiveConfigurationSchemaUnsupported => "effective_configuration_schema_unsupported": error / none,
         EffectiveConfigurationSourceLinksMismatch => "effective_configuration_source_links_mismatch": error / none,
         EffectiveConfigurationSourceMissing => "effective_configuration_source_missing": error / none,
+        FrameStatFailed => "frame_stat_failed": error / none,
+        FrameSwitchesUnavailable => "frame_switches_unavailable": error / none,
         InstanceBindingMalformed => "instance_binding_malformed": error / none,
         InstanceBindingsIncomplete => "instance_bindings_incomplete": error / none,
         InstancePortConflict => "instance_port_conflict": error / none,
@@ -28,6 +30,7 @@ actingcommand_contract::outcome_codes! {
         InvalidStateRoot => "invalid_state_root": error / none,
         InvalidTaskRecordPage => "invalid_task_record_page": error / none,
         InvalidViewOptions => "invalid_view_options": error / none,
+        KeptFolderClearedRecordInvalid => "kept_folder_cleared_record_invalid": error / none,
         LegacyDiagnosticInvalid => "legacy_diagnostic_invalid": error / none,
         LegacyDiagnosticReadLimit => "legacy_diagnostic_read_limit": error / none,
         MaterialNotProvided => "material_not_provided": error / none,
@@ -91,5 +94,7 @@ actingcommand_contract::outcome_locations! {
         ReadRuntimeFactsPosition => "read_runtime_facts_position",
         ReadRuntimeFactSnapshotSet => "read_runtime_fact_snapshot_set",
         ReadRuntimeFactChanges => "read_runtime_fact_changes",
+        // Workflow #375 R5e: `actingledger frames`, the read-only frame listing.
+        ListFrames => "list_frames",
     }
 }

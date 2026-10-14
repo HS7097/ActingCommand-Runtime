@@ -387,3 +387,13 @@ tests = [
     "actingledger::read_commands::actingledger_read_commands_are_thin_and_fail_loud",
 ]
 incident = []
+
+# The frame listing: every class, overlapping windows, a deleted leaf, an epoch-end folder,
+# every clear event, a frame in both places counted in_folder, running frames without paths
+[[gate]]
+key = "41"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger-forensics::lib::frames::tests::frames_listing_reports_every_class_folder_and_both_cleared_records",
+]
+incident = ["#375 R5e"]

@@ -849,6 +849,50 @@ resolves alike.
   the same `kept\` path in the target, verifies it there with the published file's
   bytes, and puts it into the target's map.
 
+### Frame listing (Workflow #375 R5e)
+
+`actingledger --state-root <root> frames [--class lab|error|resource|duplicate|default|due|running|all]
+[--before <YYYY-MM-DD>] [--instance <id>] [--run <id>] [--error-sequence <n>] [--paths]`
+lists the frames read-only. It opens the ledger as `events` does (no material read), takes
+the switches from the latest `config.parameters.top_level` runtime fact, which actingd
+writes at each start, and evaluates the frame classes above at the tool's clock, so it
+classes as the running actingd does. It stats only the frames it prints, then walks
+`kept\` for the folder sizes by the walk's rules above (`.moves` skipped); a frame moved
+between the two is found by the walk, and a frame found in both places counts
+`in_folder`. It writes nothing and reads no file contents.
+
+- **Selection.** `--class` defaults to `all`, every settled class (never `running`);
+  `due` is every duplicate, default and resource frame whose due time has come. `--before`
+  keeps frames captured before the date's local midnight, and the output repeats that
+  bound in UTC ms (`before_unix_ms`). `--instance` and `--run` keep that instance's or
+  run's frames. `--error-sequence` keeps the frames of that error point's window; a
+  sequence that names no error point is refused.
+- **Output** (`{"command":"frames","data":{…}}`, one JSON object): `through_sequence`,
+  `evaluated_at_unix_ms`, `switches` (`dedup_error`, `dedup_lab`, `retention_enabled`);
+  `totals` per class (`lab`, `error`, `resource`, `duplicate`, `default`): `frames`,
+  `bytes`, and `due_now` (what the next sweep deletes), `to_move` (a Lab or error frame
+  still at its object key), `in_folder` (found in `kept\` by the walk, whatever its class
+  is now) and `absent` (in neither place), each as `frames` and `bytes`; `running` has
+  counts only. `folders[]`, one per kept leaf the walk found or the index places frames
+  in: `path` (`kept/<date>/<leaf>`), `date`, `leaf`, `present` (from the walk), `placed`
+  (frames the index places there) and `error_points` (its owner, then any later points
+  whose windows hold its error frames). `error_points[]` (with `--class error` or
+  `--error-sequence`): each point with its `window` and `kept` frames and the `folders`
+  holding them. Every point has its `sequence`, `event_type`, `code`, `at_unix_ms`,
+  `run_id` and the run's `package_label` and `task_label`. `cleared[]`: every
+  `runtime.fact_recorded` event with key `host.kept_folder_cleared` (`sequence`,
+  `folder`, `cleared_at_unix_ms`), not only the latest fact. `non_frame`: the
+  `artifacts` and `bytes` of artifacts that are not capture frames. `paths[]` (with
+  `--paths`): each selected settled frame's `path` (`kept/…` when the walk found it, else
+  its object key) and `class`; running frames have no path.
+- **Refusals.** Usage errors are `invalid_arguments`. A ledger without the three
+  switches in its latest `config.parameters.top_level` fact is
+  `frame_switches_unavailable`; a frame file that cannot be stat'ed for a reason other
+  than its absence is `frame_stat_failed`; a `host.kept_folder_cleared` fact that is not
+  one row with `folder` and `cleared_at_unix_ms` is `kept_folder_cleared_record_invalid`;
+  an unreadable clock or local offset is `artifact_retention_clock_failed`; a failed walk
+  relays `artifact_kept_walk_failed`. The operation is `list_frames`.
+
 ## S1–S5 ownership and acceptance map
 
 The S1 physical owner and preserved state assembly are described in

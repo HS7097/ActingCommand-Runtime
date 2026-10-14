@@ -117,6 +117,8 @@ pub struct FrameErrorPoint {
     pub at_unix_ms: u64,
     pub date: String,
     pub leaf: String,
+    /// The `<code>` part of its leaf (Workflow #375 R5e: the listing names each point's code).
+    pub code: String,
 }
 
 /// The view at one head and one clock.
@@ -919,6 +921,7 @@ fn classify(
             at_unix_ms: point.at,
             date: local_date(point.at, local)?,
             leaf: point_leaf(facts, point),
+            code: point.leaf_name.clone(),
         });
     }
     Some(Classified {

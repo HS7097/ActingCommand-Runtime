@@ -32,7 +32,7 @@ pub use evidence_archive::*;
 pub use exporter::*;
 #[cfg(feature = "capture")]
 pub use frame_store::*;
-pub use kept::{KEPT_DIRECTORY, KeptMoves};
+pub use kept::{KEPT_DIRECTORY, KeptFileListing, KeptLeafListing, KeptMoves, list_kept_folders};
 #[cfg(feature = "capture")]
 pub use naming::*;
 #[cfg(feature = "capture")]
