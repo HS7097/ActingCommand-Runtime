@@ -1545,6 +1545,14 @@
       "type": "vocab:device_state_probe",
       "description": "Which device-state read of a handset failed or answered a shape the parser does not know (Workflow #398 RD-5a)."
     },
+    "device_config_problem": {
+      "type": "vocab:device_config_problem",
+      "description": "What is wrong with an instance's device declaration (Workflow #398 RD-1b)."
+    },
+    "device_binding_problem": {
+      "type": "vocab:device_binding_problem",
+      "description": "What is wrong with the private device-binding file (Workflow #398 RD-1b)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -1632,6 +1640,14 @@
     "media_type": {
       "type": "name",
       "description": "The media type of a material, for example image/png."
+    },
+    "yield_cause": {
+      "type": "vocab:yield_cause",
+      "description": "Why a held or lengthened policy run was ended to be rerun."
+    },
+    "held_ms": {
+      "type": "duration_ms",
+      "description": "How long a policy run was held at its pace checkpoint, in milliseconds."
     }
   },
   "vocabularies": {
@@ -2101,6 +2117,12 @@
         "policy.planning": {
           "description": "Policy planning."
         },
+        "policy.control_state": {
+          "description": "Policy control state."
+        },
+        "policy.fact_refresh": {
+          "description": "Policy fact refresh."
+        },
         "catalog.activate": {
           "description": "Catalog activate."
         },
@@ -2274,6 +2296,9 @@
         },
         "ledger.recovery": {
           "description": "Ledger recovery."
+        },
+        "ledger.probe": {
+          "description": "Ledger probe."
         },
         "signature.register": {
           "description": "Signature register."
@@ -2779,6 +2804,18 @@
           "description": "Perf balance changed.",
           "category": "info"
         },
+        "perf.pacing_changed": {
+          "description": "Perf pacing changed.",
+          "category": "info"
+        },
+        "perf.dispatch_share_changed": {
+          "description": "Perf dispatch share changed.",
+          "category": "info"
+        },
+        "perf.run_hold": {
+          "description": "Perf run hold.",
+          "category": "info"
+        },
         "fact.published": {
           "description": "Fact published.",
           "category": "info"
@@ -2841,6 +2878,18 @@
         },
         "policy.planning_signal_observed": {
           "description": "Policy planning signal observed.",
+          "category": "info"
+        },
+        "policy.control_state_recorded": {
+          "description": "Policy control state recorded.",
+          "category": "info"
+        },
+        "policy.activity_state_recorded": {
+          "description": "Policy activity state recorded.",
+          "category": "info"
+        },
+        "policy.fact_refresh_transition": {
+          "description": "Policy fact refresh transition.",
           "category": "info"
         },
         "catalog.transition_intent": {
@@ -3163,9 +3212,25 @@
           "description": "Agent session escalated.",
           "category": "warning"
         },
+        "agent.wake_obligation_recorded": {
+          "description": "Agent wake obligation recorded.",
+          "category": "info"
+        },
         "ledger.recovered": {
           "description": "Ledger recovered.",
           "category": "warning"
+        },
+        "ledger.gap_recorded": {
+          "description": "Ledger gap recorded.",
+          "category": "warning"
+        },
+        "ledger.health_observed": {
+          "description": "Ledger health observed.",
+          "category": "warning"
+        },
+        "ledger.dump_imported": {
+          "description": "Ledger dump imported.",
+          "category": "info"
         },
         "signature.registered": {
           "description": "Signature registered.",
@@ -4352,6 +4417,10 @@
     "ledger_source": {
       "description": "A revisioned source whose changes the ledger records (Workflow #383).",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/observer.rs",
+        "enum": "LedgerSource"
+      },
       "tokens": {
         "instance_facts": {
           "description": "The instance fact store."
@@ -4370,6 +4439,10 @@
     "segment_edge": {
       "description": "The edge of a reported stretch of a condition.",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/observer.rs",
+        "enum": "LedgerSegmentEdge"
+      },
       "tokens": {
         "started": {
           "description": "The condition started."
@@ -4420,6 +4493,10 @@
     "pacing_stage": {
       "description": "A performance pacing stage of an instance (Workflow #385): s0 is normal pacing, each later stage a worse responsiveness band.",
       "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/pacing.rs",
+        "enum": "PerformancePacingStage"
+      },
       "tokens": {
         "s0": {
           "description": "Normal: no slowdown, no pause."
@@ -4491,6 +4568,52 @@
         },
         "settings": {
           "description": "settings get of a screen-timeout setting."
+        }
+      }
+    },
+    "device_config_problem": {
+      "description": "What is wrong with an instance's device declaration (model-398 section 10.1).",
+      "tokens": {
+        "kind_unknown": {
+          "description": "device.kind is neither emulator nor handset."
+        },
+        "transport_unsupported": {
+          "description": "device.transport is not usb on a handset (tcp is reserved), or is named on an emulator."
+        },
+        "endpoint_with_handset": {
+          "description": "A handset names host, port or connect."
+        },
+        "serial_in_config": {
+          "description": "A handset names serial: its serial lives only in the private binding file."
+        },
+        "discovery_key_with_handset": {
+          "description": "A handset names instance_index, instance_name or nemu_app_index."
+        },
+        "backend_kind_unsupported": {
+          "description": "The instance selects a backend its device kind does not allow."
+        },
+        "alias_too_long": {
+          "description": "A handset's alias is longer than 248 bytes, so its label would not fit a name."
+        }
+      }
+    },
+    "device_binding_problem": {
+      "description": "What is wrong with the private device-binding file (model-398 section 10.1).",
+      "tokens": {
+        "unreadable": {
+          "description": "The file exists but cannot be read as a file."
+        },
+        "malformed": {
+          "description": "The file is not JSON of the file's shape and schema, is larger than its bound, or names an alias no instance could have."
+        },
+        "duplicate_alias": {
+          "description": "Two bindings name the same alias."
+        },
+        "duplicate_serial": {
+          "description": "Two bindings name the same serial: one device is bound to one instance only."
+        },
+        "serial_invalid": {
+          "description": "A serial is not 1 to 64 bytes of printable ASCII without white space."
         }
       }
     },
@@ -4817,6 +4940,18 @@
         },
         "duplicate_task": {
           "description": "A task named more than once in the document."
+        }
+      }
+    },
+    "yield_cause": {
+      "description": "Why performance pacing ended a policy run to be rerun (Workflow #385).",
+      "review": "pending",
+      "tokens": {
+        "wall_ceiling": {
+          "description": "The run reached its wall-clock ceiling after pacing lengthened it."
+        },
+        "preempted": {
+          "description": "The run was preempted while it was held."
         }
       }
     }
@@ -6476,6 +6611,10 @@
     ],
     "per_": [
       "actinglab"
+    ],
+    "perf_": [
+      "runtime-config",
+      "runtime-host"
     ],
     "performance_": [
       "contract",
@@ -21698,17 +21837,69 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "device_binding_file_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "device_binding_problem": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd refused the private binding file <state root>/private/device-bindings.json (#398 R1 RD-1b): it cannot be read, is not of its shape and schema, binds an alias or a serial twice, or holds a serial of the wrong form. The value device_binding_problem says which; the start is refused.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_binding_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The private binding file <state root>/private/device-bindings.json binds no device to a handset instance (#398 R1 RD-1b). check-config refuses; a start registers the instance unavailable (source device_link:unbound) and runs the other instances.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_binding_unused": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The private binding file binds an alias that no handset instance of the configuration has (#398 R1 RD-1b); a check-config note, not a failure.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "device_config_invalid": {
       "category": "error",
       "ladder_class": "none",
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "alias": "optional",
+        "device_config_problem": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd refused its configuration (#398 R1 RD-3i): an instance's device fields do not fit its device kind, for example capture_backend scrcpy on an emulator instance. Every configured instance is an emulator until RD-1b adds the key device.kind.",
+      "description": "actingd refused its configuration (#398 R1 RD-3i, RD-1b): an instance's device fields do not fit its device kind: a handset that names an endpoint, a serial or a discovery key, a transport other than usb, a backend its kind does not have (scrcpy on an emulator; DroidCast or Nemu IPC on a handset), or a handset alias longer than 248 bytes. The value device_config_problem says which.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -27511,6 +27702,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "input_action_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An input request names an action this build decodes but does not perform: the single-touch path drag (InputAction::SingleTouchPathDragV1) is reserved until Workflow #406 T-3. The request is refused before any effect; nothing reaches the device.",
+      "common_causes": "A client built for a later Runtime sent the path drag to this build.",
+      "handling": "Send the action to a Runtime that performs it, or use a supported input action."
+    },
     "input_backend_close_failed": {
       "category": "error",
       "ladder_class": "stability_warning",
@@ -32916,6 +33127,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_instance_binding_device": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Event or record sanitization refused a value: a runtime.instance_bound record whose ADB target or device does not fit (Workflow #398 RD-1b): an instance addressed by its serial with an ADB host or port, or a handset device that is not an explicit physical binding addressed by its serial or records its fingerprint, binding time and channel only in part.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "invalid_instance_binding_discovery": {
       "category": "error",
       "ladder_class": "none",
@@ -38253,6 +38484,69 @@
       "description": "From #389 U-6 on, the Lab channel sent a request kind of a Lab option that is not installed while the other option is; lab_option names the missing option (authoring or debugging) and operation the request kind. The Lab channel stays open for the installed option.",
       "common_causes": "Only one of the two Lab options was ticked in the installer.",
       "handling": "Tick the other option on the installer's Lab page, or pass acsetup --lab; it takes effect at the next start."
+    },
+    "lab_ocr_model_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root's models folder (path) holds model folders, but none is an OCR model.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "lab_ocr_runtime_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root has no usable ONNX Runtime library at path (ort\\onnxruntime.dll). Its caused_by link is the OS failure when the OS reported one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "lab_ocr_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {
+        "target_id": "optional",
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3: an OCR evaluation of actinglab or the Lab cannot run because the offline tool loaded no usable OCR model. The offline tools load the OCR provider the Runtime uses (the in-process ppocr-ctc engine over the model folders of the vision root that the Runtime configuration's vision section names, always on the CPU). A command that would evaluate an OCR target refuses with this code (exit 3) and names the target as target_id; a Lab mark self-test, the first decision of record stop and the capabilities report give it as their reason. path is the vision root when it is known. Its caused_by link says why: lab_ocr_vision_unconfigured, a configuration read or decode code, vision_root_unavailable, vision_models_empty, lab_ocr_model_missing or lab_ocr_runtime_missing.",
+      "common_causes": "actinglab runs outside an installation, the configuration has no vision section, or the vision root holds no OCR model folder.",
+      "handling": "Install the OCR model folder and ONNX Runtime under the Runtime's vision root and run actinglab from the installation."
+    },
+    "lab_ocr_vision_unconfigured": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "vision",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the offline tool has no Runtime configuration with a vision section. It does not run from an installation, or the selected configuration has no vision section.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     },
     "lab_operation_lease_result_invalid": {
       "category": "error",
@@ -45720,6 +46014,75 @@
       "description": "The ledger reports payload type mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "perf_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required",
+        "config_value_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The performance section breaks a rule at start or in check-config (Workflow #385 P-c, PERF section 11): a curve that does not fall from 10000 to 0, a factor or share outside its range or moving the wrong way, a stage stepping back, a full share dropping straight to none, calibration tolerances not rising, a stage boundary inverted, a pressure-only stage beyond S2, or another rule of the section; config_key names the key and config_value_problem the rule. The start is refused before the ledger opens.",
+      "common_causes": "A hand-edited performance key whose value breaks the section's rules.",
+      "handling": "Fix the key named by config_key, commit the configuration again and restart."
+    },
+    "perf_hold_expired": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "held_ms": "required",
+        "timeout_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A policy run was held at its pace checkpoint longer than the hold limit (timeout_ms) and ended; its cancellation reason is PerformanceYield, it is owed a rerun, and the recovery ladder may start once performance releases the instance (Workflow #385 PERF §7.4, M387 §3.7). Registered by SH-1; P-h emits it.",
+      "common_causes": "The host stayed in the deepest pacing stage longer than the hold limit.",
+      "handling": "Nothing to repair for one occurrence; the run is rerun."
+    },
+    "perf_run_yielded": {
+      "category": "info",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "yield_cause": "required",
+        "held_ms": "required",
+        "timeout_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1; P-k and P-h emit it.",
+      "common_causes": "The host stayed slow long enough for a lengthened run to reach its ceiling, or the instance was paused by its share while the run was held.",
+      "handling": "Nothing to repair for one occurrence; the run is rerun."
     },
     "performance_capacity_deadline_conflict": {
       "category": "error",
@@ -55283,11 +55646,13 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Recognition sampling lost its deadline or its runtime permission.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "replaced_by": "recognition_sample_deadline_exceeded",
+      "description": "Retired (Workflow #386 SR-1). Recognition sampling ran past its deadline, or the runtime's sampling checkpoint answered that sampling may not go on. A running task never loses its permission while it holds its lease, and the checkpoint now only reports a cancellation under the cancellation's own code (contained_task_deadline_exceeded, contained_task_cancelled, contained_task_paused); a sampling deadline is recognition_sample_deadline_exceeded, after the observation's observe-only retries.",
+      "common_causes": "A slow sampling under host load; never a lost permission.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "recognition_sample_geometry_changed": {
       "category": "error",
@@ -72816,7 +73181,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The exact score map of a template target that declares unique was not complete within the search limit timeout_ms (Workflow #396 REC-2). An evaluation error: the target never passes on a partial search.",
+      "description": "The exact score map of a template target that declares unique (Workflow #396 REC-2) or mask (Workflow #396 REC-7) was not complete within the search limit timeout_ms. An evaluation error: the target never passes on a partial search.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -78672,6 +79037,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: device diagnostic count overflow."
     },
+    "device_endpoint_unbound": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Stage of a session-opening refusal: the instance is a handset the private binding file binds no device to (Workflow #398 RD-1b), so no adb command runs against it."
+    },
     "device_registry_input_operation": {
       "owner": "runtime-host",
       "layer": "host",
@@ -81000,6 +81373,30 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: note failed task terminal."
     },
+    "observation_after_input": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: the observation that waits for a step's destination after its input (or a linear task's intermediate or retry-decision page) whose sampling timed out."
+    },
+    "observation_before_input": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: the observation before a step's input (the guard's frame, a selection's frames) whose sampling timed out."
+    },
+    "observation_entry": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: the observation of a task's entry page (the home entry, a linear task's first page, an entry before an application step) whose sampling timed out."
+    },
     "observation_failed": {
       "owner": "runtime-host",
       "layer": "host",
@@ -81007,6 +81404,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Stage of a contained observation failure's diagnostic detail."
+    },
+    "observation_page_wait": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #386 SR-1: a wait for any page of the package outside a step (the run's first page, a wait between steps) whose sampling timed out."
     },
     "observe_catalog_state": {
       "owner": "runtime-state",
@@ -86348,9 +86753,10 @@
       "owner": "runtime-host",
       "layer": "host",
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A Runtime host operation or stage: runtime state observation missing."
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #383 AO-4q). A Runtime host operation or stage: runtime state observation missing, where a status read read back the observation record it had appended. Since 0.12.0 a status read appends no record, so there is nothing to read back."
     },
     "runtime_state_source": {
       "owner": "runtime-host",
@@ -87063,6 +87469,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: take host claim work."
+    },
+    "target_match_exact": {
+      "owner": "recognition-pack",
+      "layer": "vision",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Scoring a masked template target that declares no unique on its exact score map (Workflow #396 REC-7)."
     },
     "target_match_unique": {
       "owner": "recognition-pack",
