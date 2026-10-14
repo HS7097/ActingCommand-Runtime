@@ -26,7 +26,7 @@ const MAX_RUNNING: usize = 8;
 
 /// A deadline no test reaches. It only anchors `Job::wait_until`'s bound and measures nothing
 /// (the #672 ruling's form, allowed in `gate_map.rs` `DETERMINISM_ALLOWLIST`).
-fn unreached_deadline() -> Instant {
+pub(super) fn unreached_deadline() -> Instant {
     Instant::now() + Duration::from_secs(60 * 60)
 }
 
