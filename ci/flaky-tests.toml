@@ -10,7 +10,13 @@
 # TTL to 5 s (#71 comment 6101156993). FLK-02
 # (`runtime_input_proxy_renews_before_short_lease_expiry`, its real 5.3 s wait) left when C-4
 # retired it for the manual-timer heartbeat tests `tests::gate_c4` (test plan v2.2 section 4
-# item 5; coordinator ruling on the seam rows, 2026-10-15).
+# item 5; coordinator ruling on the seam rows, 2026-10-15). FLK-04
+# (`process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal`) left in TEST-FU
+# (wave-17 ruling 13): its deterministic failure was PKG-S2's replay matching by package_id,
+# fixed in c366b48f; from then (2026-10-14 08:02Z) to 2026-10-15 17:12Z the flaky job ran it in
+# 187 CI runs and it passed 183 times, with no ConnectionReset; the other 4 were a branch-wide
+# recovery_ladder_config_invalid at Runtime start (RD-2's branch and train 14 before its fix),
+# which failed every Runtime test of those runs.
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -31,15 +37,6 @@
 #   the job's default features); the `flaky` job runs it once in each.
 # - `register`: the #71 comment that holds the entry's current state.
 # - `status`: where the entry stands on #71.
-
-[[test]]
-id = "FLK-04"
-name = "actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal"
-crate = "actingcommand-actingctl"
-job = "apps"
-features = [""]
-register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6073813916"
-status = "cause not located on #71 (ConnectionReset); skipped until it is"
 
 [[test]]
 id = "FLK-07"
