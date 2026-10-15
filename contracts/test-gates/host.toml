@@ -774,3 +774,12 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
 ]
 incident = ["#398", "#387 A9"]
+
+# Workflow #384 D2-CHAIN (D2 model v1.4.2 §3.2, §3.4, §3.5, §3.8; additions-v012 §8.2): with a fake recognition maintenance package and fake facts, an unknown instance fact dispatches the package, its reading is written to the instance fact store, the next round scores the task that reads it and dispatches it, each ring visible in the ledger
+[[gate]]
+key = "82"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s4::d2s4_chain_an_unknown_fact_is_read_written_rescored_and_dispatched",
+]
+incident = ["#384"]
