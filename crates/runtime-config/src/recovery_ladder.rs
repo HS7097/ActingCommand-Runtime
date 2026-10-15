@@ -1195,12 +1195,12 @@ impl LadderConfig {
         instance_id: &str,
         kind: InstanceDeviceKind,
     ) -> Option<&LadderProfile> {
-        let name = self.instance_profiles.get(instance_id).or_else(|| {
-            self.kind_profiles
-                .iter()
-                .find(|(named, _)| *named == kind)
-                .map(|(_, name)| name)
-        })?;
+        let name = self
+            .kind_profiles
+            .iter()
+            .find(|(named, _)| *named == kind)
+            .map(|(_, name)| name)
+            .or_else(|| self.instance_profiles.get(instance_id))?;
         self.profiles.iter().find(|profile| profile.name == *name)
     }
 
