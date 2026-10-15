@@ -1612,7 +1612,14 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         panic!("expected failed policy outcome")
     };
     assert_eq!(failure.outcome.code().as_str(), "page_confirmation_failed");
-    assert_eq!(failure.failure_identity, None);
+    // Workflow #390 EXEC-3: a page-graph run's failure records its failure identity (format v2,
+    // its base the failure code).
+    assert!(
+        failure
+            .failure_identity
+            .as_deref()
+            .is_some_and(|identity| identity.starts_with("page_confirmation_failed~v2~"))
+    );
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);
     assert_eq!(

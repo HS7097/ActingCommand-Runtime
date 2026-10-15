@@ -96,6 +96,9 @@ mod gate_390_exec1;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
+// Workflow #390 EXEC-3.
+#[cfg(test)]
+mod gate_390_exec3;
 // Workflow #390 OUT-2.
 #[cfg(test)]
 mod gate_390_out2;
@@ -2319,6 +2322,20 @@ pub struct PreparedContainedTask {
 pub(crate) struct ContainedTaskRunOptions {
     post_admission_ocr: PostAdmissionOcrExecution,
     entry: ContainedTaskEntry,
+    application_entry: ApplicationEntryRun,
+}
+
+/// Workflow #390 EXEC-3 (FCM E-02): how a page-graph package's application entry (its
+/// `entry_page` `"any"` and its first operation a `from: "any"` application effect) begins.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ApplicationEntryRun {
+    /// Slice #316-B3: the run takes its initial frame first; the effect runs only when that
+    /// frame shows no page of the package.
+    #[default]
+    AfterInitialFrame,
+    /// R24, in a run the host starts itself (a startup package, a recovery ladder rung): the
+    /// effect runs first, before any capture, as a `linear_steps` application entry's does.
+    First,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2333,6 +2350,7 @@ impl ContainedTaskRunOptions {
         Self {
             post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
             entry: ContainedTaskEntry::Ordinary,
+            application_entry: ApplicationEntryRun::AfterInitialFrame,
         }
     }
 }
@@ -2773,16 +2791,20 @@ impl PreparedContainedTask {
         }
     }
 
-    /// Channels needed before an application effect can repair the connection. This reads
-    /// only the hash-admitted program. An `any` linear application entry performs no capture
-    /// or input first; a page entry must still observe its page/prerequisite gate.
+    /// Channels needed before an application effect can repair the connection, for a run the
+    /// host starts itself (a recovery ladder rung). This reads only the hash-admitted program.
+    /// An `any` linear application entry performs no capture or input first, and neither does
+    /// a page-graph application entry there (Workflow #390 EXEC-3, R24); a page entry must
+    /// still observe its page/prerequisite gate.
     pub fn recovery_entry_channels(&self) -> (bool, bool) {
         let first = self.program.operations.first();
         let application_entry = self.control.execution_mode != "recognize_only"
             && first.is_some_and(|operation| {
                 operation.from == "any" && operation.application.is_some()
             });
-        let capture = !(application_entry && self.control.execution_mode == linear::LINEAR_STEPS);
+        let capture = !(application_entry
+            && (self.control.execution_mode == linear::LINEAR_STEPS
+                || self.has_graph_application_entry()));
         let input = self.control.execution_mode != "recognize_only"
             && !application_entry
             && self
@@ -2795,6 +2817,18 @@ impl PreparedContainedTask {
                 })
                 .any(|operation| operation.click.is_some() || operation.select.is_some());
         (capture, input)
+    }
+
+    /// Workflow #390 EXEC-3 (FCM E-02): whether this is a page-graph application entry
+    /// package: its `entry_page` is `"any"` and its first operation is a `from: "any"`
+    /// application effect, the shape of a `linear_steps` application entry (R24).
+    fn has_graph_application_entry(&self) -> bool {
+        self.control.execution_mode != linear::LINEAR_STEPS
+            && self.control.execution_mode != "recognize_only"
+            && self.program.single_entry_page() == Some(linear::ANY_PAGE)
+            && self.program.operations.first().is_some_and(|operation| {
+                operation.from == linear::ANY_PAGE && operation.application.is_some()
+            })
     }
 
     pub fn has_application_effect(&self) -> bool {
@@ -3521,7 +3555,7 @@ impl PreparedContainedTask {
             step_timeout,
             task_timeout,
             started,
-            options.entry,
+            options,
         );
         // Task and owner-classified nonfatal operation failures retain parsed facts.
         // Record failures and fatal/unknown operation failures forbid another write.
@@ -3537,6 +3571,24 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
         }
         result
+    }
+
+    /// Workflow #390 EXEC-3 (FCM E-02): runs the package as a run the host starts itself (a
+    /// startup package, a recovery ladder rung). A page-graph application entry package (its
+    /// `entry_page` `"any"`, its first operation a `from: "any"` application effect) begins
+    /// with that effect, before any capture, as a `linear_steps` application entry does (R24):
+    /// a page already shown does not skip it. Every other package runs as [`Self::run`] runs it.
+    pub fn run_host_package<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                application_entry: ApplicationEntryRun::First,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
     }
 
     /// Executes a compatible, already hash-admitted entry recovery package.
@@ -3588,8 +3640,9 @@ impl PreparedContainedTask {
         step_timeout: Duration,
         task_timeout: Duration,
         started: Instant,
-        entry: ContainedTaskEntry,
+        options: ContainedTaskRunOptions,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        let entry = options.entry;
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
         let observation_timing = ContainedTaskTimingContext::new(
@@ -3645,6 +3698,12 @@ impl PreparedContainedTask {
                 && operation.application.is_some()
                 && self.control.execution_mode != "recognize_only"
         });
+        // Workflow #390 EXEC-3 (FCM E-02, R24): in a run the host starts itself, a page-graph
+        // application entry runs its effect before any capture; the arrival wait after the
+        // effect takes the run's first frame.
+        let application_first = options.application_entry == ApplicationEntryRun::First
+            && initial_application.is_some()
+            && self.has_graph_application_entry();
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
         let entry_timing = |now: Instant| {
             if consensus {
@@ -3657,7 +3716,9 @@ impl PreparedContainedTask {
             .entry_page
             .as_ref()
             .filter(|_| entry == ContainedTaskEntry::Ordinary);
-        let mut observation = if let Some(required_entry) = required_entry {
+        let mut observation = if application_first {
+            None
+        } else if let Some(required_entry) = required_entry {
             Some(self.await_ordinary_home_entry(
                 runtime,
                 ocr_collector,

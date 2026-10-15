@@ -490,6 +490,9 @@ pub(super) struct ContainedRunControl {
     ladder_source: std::sync::OnceLock<super::recovery_ladder::LadderSource>,
     /// Workflow #385 MEM-1: the run's main package load, set once by its preparation.
     package_load: std::sync::OnceLock<PackageLoad>,
+    /// Workflow #390 EXEC-3: set once when the host starts the run itself (a startup package,
+    /// a recovery ladder rung), whose page-graph application entry runs first (R24).
+    host_package: std::sync::OnceLock<()>,
 }
 
 /// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
@@ -544,7 +547,18 @@ impl ContainedRunControl {
             package: std::sync::OnceLock::new(),
             ladder_source: std::sync::OnceLock::new(),
             package_load: std::sync::OnceLock::new(),
+            host_package: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Workflow #390 EXEC-3: marks the run as one the host starts itself, before it executes.
+    fn note_host_package(&self) {
+        let _ = self.host_package.set(());
+    }
+
+    /// Workflow #390 EXEC-3: whether the host started the run itself.
+    fn is_host_package(&self) -> bool {
+        self.host_package.get().is_some()
     }
 
     /// Workflow #385 MEM-1: the run's main package load, noted once after its preparation; a
@@ -5815,6 +5829,8 @@ impl HostShared {
             resolved.instance_id(),
             false,
         )?;
+        // Workflow #390 EXEC-3: a startup package or a ladder rung's package.
+        active_run.control.note_host_package();
         active_run
             .control
             .set_deadline(
@@ -6503,6 +6519,11 @@ impl HostShared {
         } else if let Some(keys) = runtime.reading_keys.clone() {
             // Workflow #384 D2-S4: a fact refresh run reads only its requested keys.
             let execution = prepared.run_for_reading_keys(&mut runtime, &keys);
+            execution.and_then(|outcome| runtime.with_layer_end(outcome))
+        } else if control.is_host_package() {
+            // Workflow #390 EXEC-3 (R24): a run the host starts itself begins a page-graph
+            // application entry with its effect; the kernel still owns its run loop.
+            let execution = prepared.run_host_package(&mut runtime);
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         } else {
             let execution = prepared.run(&mut runtime);

@@ -98,6 +98,18 @@ Known pages and already recognized terminal pages keep their original selection/
 rules. Coordinate inputs still require a recognized page. No desktop recognition template
 is required solely to start the assigned application.
 
+**In a run the host starts itself** (Workflow #390 EXEC-3, forced compromise E-02; R24): in the
+run of a startup package and in the run of a recovery ladder rung, a page-graph package whose
+`entry_page` is `"any"` and whose first operation is a `from: "any"` application effect is an
+application entry, as a `linear_steps` one is. The run begins with that effect, before any
+capture: `task.step_started` from `<unrecognized>`, the `application.*` chain, then the effect's
+arrival wait, which takes the run's first frame (so the host's first-capture rule applies to
+it). A page the screen already shows, the terminal page included, does not skip the effect, so
+a recovery or startup package restarts the application whatever the screen shows; the run's
+pages and operations take over from the frame the effect arrived on. Such a rung needs neither
+capture nor input before the effect. Every other run of the package (a client or scheduled run,
+an entry recovery or prerequisite layer) keeps the rule above.
+
 In `linear_steps` packages ([Linear steps](linear-steps.md), Workflow #336 R24/R25) any
 operation may carry this effect instead of a click. Only the first may be `from: "any"`, with
 `entry_page` `"any"`, and that application entry captures and recognizes nothing before its

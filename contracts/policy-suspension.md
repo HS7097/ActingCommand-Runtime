@@ -4,7 +4,8 @@ A scheduled `linear_steps` task that fails mid-run is recorded, rerun at once, a
 the same problem happens again; the pause is lifted automatically once the content of its
 package (or of a package its run went through) changes (Workflow #336, R17-R19, R21, R22, R25;
 PKG-S3, option 丙: judged by the content hashes the failure identity recorded, without a
-restart). Everything
+restart). Since Workflow #390 EXEC-3 (forced compromise E-02) a scheduled page-graph task
+follows the same rules: its failure records a failure identity too. Everything
 here uses the existing policy `on_failure`, the existing `policy.execution_recorded` and
 `runtime.failed` records and the existing `paused_task` disposition: no ledger event type or
 enum value is added. Since Workflow #378 A2-P the failure part of `policy.execution_recorded`
@@ -17,7 +18,7 @@ unlike the rest of this document, the condition termination adds one persisted m
 
 ## Catalog
 
-The recommended `on_failure` of a linear task is
+The recommended `on_failure` of a linear or a page-graph task is
 
 ```json
 {"action":"pause","retry_limit":1,"retry_backoff_ms":0,"escalation_threshold":2}
@@ -42,9 +43,11 @@ scheduled for a retry and has a live retry round is treated by the evaluator as 
 next evaluation, instead of at the next clock occurrence. `actingd` evaluates again right after
 a cycle in which a scheduled run failed, so that evaluation, not the wake computed before the
 run, sets the next wake (the end of the backoff). The feedback stop, placement, the
-loop and activity budgets and the activity windows still apply, and every rerun consumes the
-budgets like any dispatch. A page-graph task and a failure recorded without a failure
-identity keep waiting for their trigger and cooldown.
+loop and activity budgets, the activity's sampled interval after its previous admission
+(`policy_activity_interval_active`) and the activity windows still apply, and every rerun
+consumes the budgets like any dispatch. A failure recorded without a failure identity keeps waiting for
+its trigger and cooldown. A page-graph task's failure carries one (Workflow #390 EXEC-3), so a
+page-graph task is rerun at once as a linear one is.
 
 `PolicyControlState` owns the round. An admitted normal trigger opens it using the original
 `PolicyActivitySample` and budget receipt. An admission whose reason is
@@ -75,9 +78,10 @@ do not create a fresh origin after the original round ended.
 
 ## Failure identity
 
-The live settlement of a scheduled run whose main package was admitted as `linear_steps`
-writes the failure identity as `failure.failure_identity` of its `policy.execution_recorded`,
-beside the run's failure as `failure.outcome` (Workflow #378 A2-P):
+The live settlement of a scheduled run whose main package was admitted, as `linear_steps` or
+(Workflow #390 EXEC-3) as a page-graph package, writes the failure identity as
+`failure.failure_identity` of its `policy.execution_recorded`, beside the run's failure as
+`failure.outcome` (Workflow #378 A2-P):
 
 ```text
 <base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}~f<F>
@@ -106,7 +110,7 @@ adds its suspension point) and at a lift check
 identity.
 
 Every other run writes no failure identity: a main package that was not admitted (its mode is
-unknown), a page-graph package, and the startup reconciliation of an interrupted settlement.
+unknown) and the startup reconciliation of an interrupted settlement.
 
 Every failed run records its failure as `failure.outcome`: the top node of its terminal's
 outcome (code, category and values, without its links), the top node of its request error when
@@ -128,6 +132,12 @@ outcome's category. The failure's code is the outcome's code, or for
   capture, a recheck after a completed layer).
 - `main`: every other failure.
 
+A page-graph run without a prerequisite chain (Workflow #390 EXEC-3) that checked its
+required entry (it wrote an `EntryRecoveryDecision`) treats that check as its gate and its
+entry recovery package as its prerequisite package above: `pre:<I>` while that package is
+open, `gate` before the entry started the package, `main` after. Without an entry check every
+failure of such a run is `main`.
+
 The step is the operation label of the scope's last `StepStarted`, `entry` without one.
 
 ### detail′
@@ -143,8 +153,11 @@ whole; no detail is empty. `attempts` is not kept, nor are `awaited` and `skip_t
 Only these failures can pause a task by repeating:
 
 - the `main` scope, outside the restart segment, with `page_confirmation_failed`,
-  `contained_task_linear_intermediate_unobserved` or `contained_task_guard_refused`: the main
-  package's own steps no longer match the screen;
+  `contained_task_linear_intermediate_unobserved`, `contained_task_step_unconfirmed` or
+  `contained_task_guard_refused`: the main package's own steps no longer match the screen. A
+  page-graph step unconfirmed after all its retries (`contained_task_step_unconfirmed`) is the
+  graph counterpart of a linear intermediate page not seen (Workflow #390 EXEC-3, wave 14
+  ruling 4);
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
   configuration problem (a package the registry does not list, a package id that does not
   match, an incompatible package).
@@ -157,7 +170,8 @@ errors.
 
 The restart segment (R25-1): the run had a `launch` or `restart` application effect
 (`application.intent`) and no `StepFinished` after the last one names a main-interface page
-(canonical anchor `home` or `step_<digits>_home`). A failure there is rerun only.
+(canonical anchor `home` or `step_<digits>_home`; for a page-graph run the literal `home`
+only, Workflow #390 EXEC-3). A failure there is rerun only.
 
 R25-2: a linear task's terminal `application_backend_operation_failed` or
 `input_backend_operation_failed` that did not poison the run is settled with the original
@@ -243,7 +257,7 @@ location) lifts nothing: the check keeps the pause, links a Warning
 as a note of the `policy_task_paused` reason, and measures again at a later check. A recorded
 `x` differs from every measured hash, so a package the settlement could not measure lifts the
 pause once a check measures it. A pause recorded without a failure identity (an exceeded
-runtime budget, a page-graph task) names no package: its main package is compared with the hash
+runtime budget) names no package: its main package is compared with the hash
 the pair's first lift check measured. A procedure that is no longer bound never lifts. The
 registries are read at each lift check (once per check; `actingd suspended` reads the root its
 configuration names), so a standard pack replaced in place counts at the next check. An interrupted settlement
@@ -252,8 +266,7 @@ it is the first of its pair in a row: the next dispatch of the pair is admitted 
 within its loop and activity budgets (the interrupted admission already counted against them).
 A second one in a row is lifted by a package update only. The count is rebuilt from the
 execution records, so nothing persisted changes. The next dispatch is admitted as usual;
-a linear task that fails again starts a new streak, since a recorded hash changed. A page-graph
-task records no failure identity, so the same failure pauses it again at once. The first
+a task that fails again starts a new streak, since a recorded hash changed. The first
 interrupted settlement in a row is lifted at the next start of this Runtime. There is
 no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
 suspension.

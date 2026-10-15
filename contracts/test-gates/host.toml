@@ -998,3 +998,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t31_the_admission_after_start_suspends_in_the_background_and_the_evaluation_copies_it",
 ]
 incident = ["#386 SR-3"]
+
+
+# Workflow #390 EXEC-3 (FCM E-02; register §1.70): the live settlement of a scheduled page-graph run writes its failure identity (format v2: the failure code as its base, the run's package_id as its main package), so a failure scheduled for a retry is admitted again at the next evaluation after its backoff and the activity's sampled interval as failure_retry_immediate, before its trigger is due (R22), as a linear_steps task's is; a required-entry check made first is the run's gate scope and its entry recovery package its layer scope (wave 14 ruling 3); contained_task_step_unconfirmed in the main scope outside the restart segment pauses by repeating and a changed package lifts the pause (R21, wave 14 ruling 4)
+[[gate]]
+key = "93"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_scheduled_page_graph_failure_records_its_identity_and_is_rerun_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_two_identical_page_graph_step_failures_pause_the_pair_and_a_changed_package_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_page_graph_entry_check_failure_is_in_the_gate_scope",
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope",
+]
+incident = ["#390"]

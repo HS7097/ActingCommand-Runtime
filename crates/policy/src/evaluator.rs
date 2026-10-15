@@ -880,8 +880,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 &timeline_events,
                 &mut task_work.reasons,
             )?;
-            // Workflow #336 R22: a failed linear task reruns at once, without waiting for its
-            // trigger or its cooldown.
+            // Workflow #336 R22: a failed task whose failure carries a failure identity (a
+            // linear task's, and since Workflow #390 EXEC-3 a page-graph task's) reruns at once,
+            // without waiting for its trigger or its cooldown.
             let immediate_retry = immediate_retries.iter().any(|(task_id, instance_id)| {
                 *task_id == task.id && *instance_id == instance.instance_id
             });

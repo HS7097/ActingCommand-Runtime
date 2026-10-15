@@ -1137,6 +1137,19 @@ are catalog entries, not rows (§7).
 | SR3-3 | `actingctl diagnose` and `ac_diagnose` member `packs` (with `packs_truncated` when cut) | new output member (A5's shapes kept; parity with the CLI unchanged) | SR-3 | SR-3 | the SR3-2 rows whose `instances` name the diagnosed instance, every row without one, verbatim; cut after `suspended`, before `report_warnings` |
 | SR3-4 | `config.parameters.scheduling`: `scheduling.pack_admission.check_in_check_config`, `.check_after_start`, `.suspend_codes` | new configuration rows (keys of the existing `scheduling` section, no new section) | SR-3 | SR-3 | boolean, boolean, list of codes the catalog lists and has not retired; defaults `true`, `true`, `["recognition_sample_budget_invalid"]` (`actingd.defaults.json`); settable, read where they are used (check-config, the background admission after start, each refusal of a scheduled run's preparation) |
 
+### 1.70 Wave 14 slice EXEC-3 (#390, forced-compromises mapping E-02; coordinator ruling 5 of wave 14)
+
+EXEC-3 lets a page-graph task use what R22 and R24 gave `linear_steps` tasks.
+[policy-suspension.md](policy-suspension.md) ("Immediate rerun", "Failure identity") and
+[application-lifecycle.md](application-lifecycle.md) ("In a run the host starts itself") are the
+contract. It adds no event type, no member, no enum value, no code and no configuration key: two
+existing records get new rules.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| X31 | `policy.execution_recorded` `failure.failure_identity` of a scheduled page-graph run | new rule of an existing member (shape unchanged) | EXEC-3 | EXEC-3 | the live settlement writes it for every run whose main package was admitted, `linear_steps` or page graph (format v2 unchanged); a page-graph run without a prerequisite chain that checked its required entry (an `EntryRecoveryDecision`) takes that check as its gate and its entry recovery package as its layer for the scope (`gate`, `pre:<I>`, `main`); its restart segment ends on the literal `home`; R25-2 stays a `linear_steps` rule; the startup reconciliation still writes none. So a page-graph failure scheduled for a retry is rerun at once (`failure_retry_immediate`) and its pause is lifted by its package's content hash. Wave 14 ruling 4 (fix round): `contained_task_step_unconfirmed` in the `main` scope, outside the restart segment, joins R21's failures that pause by repeating, as the graph counterpart of `contained_task_linear_intermediate_unobserved` (a coordinator reading of R21, reported to Alice) |
+| X32 | the order of a host package run's first records: `task.step_started` (from `<unrecognized>`), `application.intent`, `application.completed`, `task.effect_completed`, before the run's first `capture.completed` | new rule of existing records (shapes unchanged) | EXEC-3 | EXEC-3 | only in a startup package's and a recovery ladder rung's run, and only for a page-graph package whose `entry_page` is `any` and whose first operation is a `from: "any"` application effect (R24); every other run keeps the #316-B3 order (its initial frame first) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
