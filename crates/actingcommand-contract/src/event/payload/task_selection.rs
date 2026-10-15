@@ -946,7 +946,7 @@ impl TaskSelectionRecord {
                 // (a) the confirmation failed.
                 (None, false) => Some(PickEnd::Failed(&pick.confirmation)),
                 // A failed or skipped confirmation has no tap check.
-                (Some(_), false) => return Err(invalid("picks")),
+                (Some(_), false) => Some(PickEnd::Failed(&pick.confirmation)),
             };
         }
 
