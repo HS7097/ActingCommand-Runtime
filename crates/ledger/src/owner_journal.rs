@@ -986,3 +986,8 @@ fn same_state(left: &DerivedJournal, right: &DerivedJournal) -> bool {
         && left.blocks == right.blocks
         && unbounded(&left.proofs) == unbounded(&right.proofs)
 }
+
+// Workflow #382 L-4 G11 (ledger key 17): a fold and its recovery derive the same journal.
+#[cfg(test)]
+#[path = "tests/gate_l4_g11.rs"]
+mod gate_l4_g11;
