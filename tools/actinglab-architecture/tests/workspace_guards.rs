@@ -679,7 +679,7 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded)"),
+        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes)"),
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
@@ -690,10 +690,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     // through `PreparedContainedTask::load_path`; the main run's ingress (a client run, a
     // package run and a scheduled run) admits through `prepare_measured_contained_task`, whose
     // kernel twin `load_path_with_resident_bytes` also answers the resident bytes. Each loader
-    // must admit by path and record the reference PKG-S4 passes (the request names no digest, so
-    // it is the empty `PackageRef` until PKG-S5 removes the parameter), and both kernel loaders
-    // must reach the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's
-    // reference.
+    // must admit by path alone (Workflow #336 PKG-S5: no loader takes a package reference), and
+    // both kernel loaders must reach the one shared admission `ExternallyVerifiedBundle::load_path`
+    // with the caller's path.
     let compact = |text: &str| text.split_whitespace().collect::<String>();
     let host_path = "crates/runtime-host/src/host/contained_task.rs";
     let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
@@ -703,19 +702,19 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     for (function, required) in [
         (
             "prepare_contained_task",
-            "PreparedContainedTask::load_path(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+            "PreparedContainedTask::load_path(instance_alias,path,vision_provider,",
         ),
         (
             "prepare_measured_contained_task",
-            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,vision_provider,",
         ),
     ] {
         let body = function_source(host_path, &host, None, function)
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(
             compact(&body).contains(required),
-            "Runtime host {function} must admit the client package by its path and record its \
-             reference via {required}"
+            "Runtime host {function} must admit the client package by its path alone via \
+             {required}"
         );
     }
     for (path, source, function) in [
@@ -741,9 +740,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         .unwrap_or_else(|error| panic!("{error}"));
         assert!(
             compact(&body)
-                .contains("ExternallyVerifiedBundle::load_path(instance_label,locator,recorded,"),
+                .contains("ExternallyVerifiedBundle::load_path(instance_label,locator,false,"),
             "PreparedContainedTask::{function} must admit by path through \
-             ExternallyVerifiedBundle::load_path with the caller's recorded reference"
+             ExternallyVerifiedBundle::load_path"
         );
     }
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
@@ -764,10 +763,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 
 // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T7: package admission (containment, the
 // kernel's package ingress and the host's contained-task preparation) computes no content
-// digest and compares no digest or pin; `content_directory_digest` keeps only its designated
-// callers, the authoring and recording tools PKG-S5 retires. PKG-S3 adds containment's second
-// measuring function, the content hash of the suspension rule
-// (`pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks`).
+// digest and compares no digest or pin. Since PKG-S5 retired the authoring and recording tools
+// that named a package by its digest, `content_directory_digest` has one caller, containment's
+// `measure_content_hash` (`pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it`).
 #[test]
 fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     let root = workspace_root();
@@ -852,11 +850,7 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     }
 
     let containment = read("crates/pack-containment/src/lib.rs");
-    let measuring = [
-        "pub fn snapshot_content_directory(",
-        "pub fn measure_content_hash(",
-    ]
-    .map(|start| {
+    let measuring = ["pub fn measure_content_hash("].map(|start| {
         let measuring = containment
             .find(start)
             .unwrap_or_else(|| panic!("containment keeps its measuring function {start}"));
@@ -881,8 +875,6 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     let designated = [
         "crates/actingcommand-contract/src/package.rs",
         "crates/pack-containment/src/lib.rs",
-        "crates/resource-tooling/src/package_directory.rs",
-        "crates/lab/src/recording/container.rs",
     ];
     let mut files = Vec::new();
     for member_root in ["apps", "crates", "providers"] {
@@ -985,6 +977,147 @@ fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
             );
         }
     }
+}
+
+// Workflow #336 PKG-S5, model M-PKG v1.1 §4.6 S5-T5 (and §3.3): the content hash has one entry.
+// `content_directory_digest` is computed only inside containment's `measure_content_hash`, whose
+// only caller is the Runtime host's `measure_package_hash` (its callers, the suspension and the
+// lift check, are the S3-T6 guard's); no admission path (containment's loading, the kernel's
+// ingress, the host's preparation, the Lab's recording admission, the bundle's re-admission)
+// names any of them.
+#[test]
+fn pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers", "tools"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let mut digesting = Vec::new();
+    let mut measuring = Vec::new();
+    for file in files {
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if display.starts_with("tools/actinglab-architecture/") {
+            continue;
+        }
+        if source.contains("content_directory_digest(") {
+            digesting.push(display.clone());
+        }
+        if source.contains("measure_content_hash(") {
+            measuring.push(display);
+        }
+    }
+    digesting.sort();
+    measuring.sort();
+    // The definition in the contract crate is `content_directory_digest<'a>(`, not a call.
+    assert_eq!(
+        digesting,
+        ["crates/pack-containment/src/lib.rs"],
+        "the content hash is computed outside its one entry"
+    );
+    let containment = fs::read_to_string(root.join("crates/pack-containment/src/lib.rs"))
+        .expect("read containment");
+    let entry = containment
+        .find("pub fn measure_content_hash(")
+        .expect("containment keeps its one measuring entry");
+    let entry_end = containment[entry..]
+        .find("\n    }\n")
+        .map(|end| entry + end)
+        .expect("end of the measuring entry");
+    let calls = containment
+        .match_indices("content_directory_digest(")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(
+        calls.len() == 1 && (entry..entry_end).contains(&calls[0]),
+        "containment computes the content hash outside measure_content_hash"
+    );
+    assert_eq!(
+        measuring,
+        [
+            "crates/pack-containment/src/lib.rs",
+            "crates/runtime-host/src/suspension_lift.rs",
+        ],
+        "the content hash entry has a caller beside the suspension rule's"
+    );
+    for path in [
+        "crates/pack-containment/src/content_dir.rs",
+        "crates/pack-containment/src/source_pack.rs",
+        "crates/execution-kernel/src/bundle.rs",
+        "crates/execution-kernel/src/contained_task.rs",
+        "crates/runtime-host/src/host/contained_task.rs",
+        "crates/runtime-host/src/host/prerequisite.rs",
+        "crates/runtime-host/src/host/standard_pack.rs",
+        "crates/lab/src/recording/container.rs",
+        "crates/lab/src/recording/crosscheck.rs",
+        "crates/lab/src/recording_api.rs",
+        "crates/resource-tooling/src/package_directory.rs",
+    ] {
+        let source = fs::read_to_string(root.join(path))
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
+        for token in [
+            "content_directory_digest",
+            "measure_content_hash",
+            "measure_package_hash",
+        ] {
+            assert!(
+                !source.contains(token),
+                "the admission path in {path} reaches the content hash through {token}"
+            );
+        }
+    }
+}
+
+// Workflow #336 PKG-S5, model M-PKG v1.1 §3.1 and §4.6: the package reference type is gone with
+// its last user. No Rust source of the workspace names `PackageRef`, its content-directory form
+// `ContentDirectory` (and `ContentDirectoryVersion`), its legacy ZIP form `LegacyZipSha256` or
+// the `sha256:`-prefixed reference serializers.
+#[test]
+fn pkg_s5_no_package_reference_is_left() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers", "tools"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let retired = [
+        "PackageRef",
+        "ContentDirectory",
+        "ContentDirectoryVersion",
+        "LegacyZipSha256",
+        "prefixed_reference",
+        "optional_prefixed_reference",
+    ];
+    let mut found = Vec::new();
+    for file in files {
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if display == "tools/actinglab-architecture/tests/workspace_guards.rs" {
+            continue;
+        }
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        for identifier in
+            source.split(|character: char| !(character.is_alphanumeric() || character == '_'))
+        {
+            if retired.contains(&identifier) {
+                found.push(format!("{display}: {identifier}"));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "the retired package reference is still named: {found:?}"
+    );
 }
 
 #[test]
@@ -2910,8 +3043,9 @@ struct BridgeOwner {
     definitions: &'static [BridgeDefinition],
 }
 
-/// pack-containment owns pure source parsing; resource-tooling owns content-directory
-/// digest/bundle and MAA compilation. Lab forwards to its declared resource-tooling entry.
+/// pack-containment owns pure source parsing; resource-tooling owns the bundle and MAA
+/// compilation (Workflow #336 PKG-S5 retired `package digest`). Lab forwards to its declared
+/// resource-tooling entry.
 const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "pack-containment",
@@ -2928,7 +3062,7 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "resource-tooling",
         file: "crates/resource-tooling/src/package_directory.rs",
-        definitions: &[owner_entry("package_digest"), owner_entry("package_bundle")],
+        definitions: &[owner_entry("package_bundle")],
     },
     BridgeOwner {
         module: "resource-tooling",
@@ -2938,16 +3072,10 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "lab",
         file: "crates/lab/src/package_build.rs",
-        definitions: &[
-            lab_bridge(
-                "Lab::package_digest",
-                "actingcommand_resource_tooling::package_digest",
-            ),
-            lab_bridge(
-                "Lab::package_bundle",
-                "actingcommand_resource_tooling::package_bundle",
-            ),
-        ],
+        definitions: &[lab_bridge(
+            "Lab::package_bundle",
+            "actingcommand_resource_tooling::package_bundle",
+        )],
     },
 ];
 /// C1: Lab's re-export module holds only `pub use` items, each from resource-tooling, and
@@ -2989,7 +3117,7 @@ fn resolved_reference(source: &SourceFacts, reference: &FunctionReference) -> Fu
     }
 }
 
-/// C1: resolves the typed digest/bundle and MAA compilation bridges into Lab.
+/// C1: resolves the typed bundle and MAA compilation bridges into Lab.
 fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
     let names = path.iter().map(String::as_str).collect::<Vec<_>>();
     let first = *names.first()?;
@@ -3004,16 +3132,14 @@ fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
     }
     match names.as_slice() {
         [.., "compile_maa_task_graph"] => Some("compile_maa_task_graph".to_string()),
-        [.., "Lab", method @ ("package_digest" | "package_bundle")] => {
-            Some(format!("Lab::{method}"))
-        }
+        [.., "Lab", method @ "package_bundle"] => Some(format!("Lab::{method}")),
         _ => None,
     }
 }
 
 fn lab_bridge_reference(source: &SourceFacts, reference: &FunctionReference) -> Option<String> {
     if let FunctionReference::Method(_, method) = reference {
-        return (matches!(method.as_str(), "package_digest" | "package_bundle")
+        return (method == "package_bundle"
             && source
                 .uses
                 .iter()

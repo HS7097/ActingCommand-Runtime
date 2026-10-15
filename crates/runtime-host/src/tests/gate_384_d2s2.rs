@@ -241,13 +241,9 @@ fn reading_descriptor(
     marks: bool,
 ) -> actingcommand_execution_kernel::TaskPackageDescriptor {
     let bytes = reading_package(designated, marks);
-    let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(
-        actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-    );
     PreparedContainedTask::load_with_vision_provider(
         READING_ALIAS,
         &bytes,
-        &recorded,
         Arc::new(ReadingNumbers::default()),
     )
     .expect("the reading package is admitted")

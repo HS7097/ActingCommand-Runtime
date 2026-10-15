@@ -1543,7 +1543,7 @@ fn amend_session_record_from_drift_diagnostics(
         "changed_fields": diagnostics.changed_fields,
         "region": diagnostics.region,
         "threshold": diagnostics.threshold,
-        "authoring_next": "Review the amended step file and transfer its declarations into packs/<package_id>/; then use package digest/bundle"
+        "authoring_next": "Review the amended step file and transfer its declarations into packs/<package_id>/; then use package bundle"
     }))
 }
 

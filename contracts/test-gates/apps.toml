@@ -612,3 +612,11 @@ tests = [
     "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence",
 ]
 incident = ["#385 P-m"]
+# Workflow #336 PKG-S5 (option 丙): actinglab package digest is retired, an unknown package command (validation_failed, exit 2) (M-PKG v1.1 §4.6 S5-T4)
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_336_pkgs5::s5_t4_package_digest_is_an_unknown_package_command",
+]
+incident = ["#336 PKG-S5"]

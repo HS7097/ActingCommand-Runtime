@@ -60,12 +60,10 @@ pub fn validate_lab_package_bytes(
     input_label: &str,
     bytes: &[u8],
 ) -> CliOutcome<LabContainedPackageValidationResponse> {
-    let recorded = PackageRef::default();
-    let admitted = ExternallyVerifiedBundle::load(input_label, bytes, &recorded)
+    let admitted = ExternallyVerifiedBundle::load(input_label, bytes)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     validate_admitted_lab_package(admitted, input_label, || {
-        actingcommand_execution_kernel::PreparedContainedTask::load(input_label, bytes, &recorded)
-            .map(drop)
+        actingcommand_execution_kernel::PreparedContainedTask::load(input_label, bytes).map(drop)
     })
 }
 
@@ -77,15 +75,12 @@ pub fn validate_lab_package_path(
     locator: &Path,
     deadline: std::time::Instant,
 ) -> CliOutcome<LabContainedPackageValidationResponse> {
-    let recorded = PackageRef::default();
-    let admitted =
-        ExternallyVerifiedBundle::load_path(input_label, locator, &recorded, false, None, deadline)
-            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let admitted = ExternallyVerifiedBundle::load_path(input_label, locator, false, None, deadline)
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
     validate_admitted_lab_package(admitted, input_label, || {
         actingcommand_execution_kernel::PreparedContainedTask::load_path(
             input_label,
             locator,
-            &recorded,
             None,
             deadline,
         )
@@ -212,7 +207,7 @@ fn load_lab_package_for_validation(
     let instance = InstanceId::new(instance_label).map_err(containment_error)?;
     let mut containment = Containment::new();
     containment
-        .load(&instance, &bytes, &PackageRef::default())
+        .load(&instance, &bytes)
         .map_err(containment_error)?;
     let bundle = containment
         .take_loaded(&instance)

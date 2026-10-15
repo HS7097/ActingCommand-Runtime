@@ -109,13 +109,10 @@ fn s1_t4_ocr_truth_set_and_dictionary_pins_are_not_compared_at_admission() {
         let root = TempDir::new().expect("tempdir");
         let bytes = package_bytes(&entries);
         let path = root.path().join(format!("{name}.zip"));
-        let reference =
-            actingcommand_contract::PackageRef::from(format!("{:x}", Sha256::digest(&bytes)));
         fs::write(&path, bytes).expect("package file");
         let admitted = PreparedContainedTask::load_path(
             "node.a",
             &path,
-            &reference,
             Some(Arc::new(FakeVisionProvider::default())),
             Instant::now() + Duration::from_secs(60),
         );
@@ -167,7 +164,6 @@ fn s2_t7_ocr_truth_set_and_dictionary_without_a_pin_are_admitted() {
         let admitted = PreparedContainedTask::load_path(
             "node.a",
             &path,
-            &actingcommand_contract::PackageRef::from("0".repeat(64)),
             Some(Arc::new(FakeVisionProvider::default())),
             Instant::now() + Duration::from_secs(60),
         );

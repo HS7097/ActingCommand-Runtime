@@ -297,7 +297,6 @@ fn fields_task(
         entry_page: None,
         post_admission_ocr: None,
         post_admission_fields: Some(fields),
-        package_sha256: "fixture".into(),
         entry_count: 1,
         task_count: 1,
     }
@@ -466,7 +465,6 @@ fn a_guard_check_on_a_value_test_that_does_not_hold_refuses_the_input() {
         entry_page: None,
         scheduling_outcome: None,
         post_admission_ocr: None,
-        package_sha256: "fixture".into(),
         post_admission_fields: None,
         entry_count: 3,
         task_count: 1,

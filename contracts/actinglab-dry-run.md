@@ -33,7 +33,7 @@ Retired resource production is refused during pure parsed admission, before inst
 selection or a slot lock, configuration loading, recording directories or locks, and output
 files. The same refusal applies when an explicitly named retired command carries `--dry-run`
 or `--version`. Author a content directory or use the retained Lab recording workflow, then
-use `package digest/bundle`.
+use `package bundle` (`package digest` is retired, Workflow #336 PKG-S5).
 
 ## Capability fields
 
@@ -175,8 +175,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `package run` | refused | `dry_run_unsupported` | flag parsing, legacy routing flags, `--zip`, package validation, instance selector; alternative `package dry-run` |
 | `package build-task` | refused | `resource_production_retired` | pure parsed admission |
 | `package build-pack` | refused | `resource_production_retired` | pure parsed admission |
-| `package digest` | no_effect | | |
-| `package bundle` | refused | `dry_run_unsupported` | flag parsing only; alternative `package digest` |
+| `package bundle` | refused | `dry_run_unsupported` | flag parsing only; alternative `package preflight` |
 | `operation validate` | no_effect | | |
 | `operation inspect` | no_effect | | |
 | `operation explain` | no_effect | | |

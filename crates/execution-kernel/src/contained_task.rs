@@ -2294,7 +2294,6 @@ pub struct PreparedContainedTask {
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     post_admission_fields: Option<PreparedOcrFields>,
-    package_sha256: actingcommand_contract::PackageRef,
     entry_count: usize,
     task_count: usize,
 }
@@ -2331,37 +2330,29 @@ enum PostAdmissionOcrExecution {
 impl PreparedContainedTask {
     /// Fully prepares the package `locator` names with the existing metadata-only vision
     /// capability, then returns only its read-only description. No executable task or provider
-    /// escapes. Workflow #336 PKG-S1: `recorded` is the caller's reference, recorded on the
-    /// description and compared with nothing.
+    /// escapes. Workflow #336 PKG-S5: the package is named by its path alone.
     pub fn describe_path(
         instance_label: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         deadline: std::time::Instant,
     ) -> Result<crate::TaskPackageDescriptor, ContainedTaskError> {
-        let bundle = ExternallyVerifiedBundle::load_metadata_path(
-            instance_label,
-            locator,
-            recorded,
-            deadline,
-        )
-        .map_err(contained_task_admission_error)?;
+        let bundle =
+            ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
+                .map_err(contained_task_admission_error)?;
         Ok(Self::from_bundle(bundle)?.package_descriptor())
     }
 
-    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path;
-    /// `recorded` is the caller's reference, kept as a record and compared with nothing.
+    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path
+    /// (since PKG-S5 no reference is taken).
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_path(
             instance_label,
             locator,
-            recorded,
             false,
             vision_provider,
             deadline,
@@ -2375,14 +2366,12 @@ impl PreparedContainedTask {
     pub fn load_path_with_resident_bytes(
         instance_label: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<(Self, u64), ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_path(
             instance_label,
             locator,
-            recorded,
             false,
             vision_provider,
             deadline,
@@ -2392,19 +2381,16 @@ impl PreparedContainedTask {
         Ok((Self::from_bundle(bundle)?, resident_bytes))
     }
 
-    /// Workflow #336: `load_path` for a content table already in memory; `recorded` is kept as
-    /// `load_path` keeps it.
+    /// Workflow #336: `load_path` for a content table already in memory.
     pub fn load_content_entries(
         instance_label: &str,
         entries: std::collections::BTreeMap<String, Vec<u8>>,
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_content_entries(
             instance_label,
             entries,
-            recorded,
             false,
             vision_provider,
             deadline,
@@ -2413,44 +2399,31 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
-    /// Admits the bytes of an assembled package ZIP structurally; `recorded` is kept as
-    /// `load_path` keeps it (Workflow #336 PKG-S1).
-    pub fn load(
-        instance_label: &str,
-        zip_bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
-    ) -> Result<Self, ContainedTaskError> {
-        Self::load_with_optional_vision_provider(instance_label, zip_bytes, recorded, None)
+    /// Admits the bytes of an assembled package ZIP structurally (Workflow #336 PKG-S1).
+    pub fn load(instance_label: &str, zip_bytes: &[u8]) -> Result<Self, ContainedTaskError> {
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, None)
     }
 
     pub fn load_with_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Arc<dyn VisionProvider>,
     ) -> Result<Self, ContainedTaskError> {
-        Self::load_with_optional_vision_provider(
-            instance_label,
-            zip_bytes,
-            recorded,
-            Some(vision_provider),
-        )
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, Some(vision_provider))
     }
 
     fn load_with_optional_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = match vision_provider {
             Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
                 instance_label,
                 zip_bytes,
-                recorded,
                 provider,
             ),
-            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded),
+            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes),
         }
         .map_err(contained_task_admission_error)?;
         Self::from_bundle(bundle)
@@ -2479,7 +2452,6 @@ impl PreparedContainedTask {
     }
 
     fn prepare_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
-        let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();
@@ -2583,7 +2555,6 @@ impl PreparedContainedTask {
             scheduling_outcome,
             post_admission_ocr,
             post_admission_fields,
-            package_sha256,
             entry_count,
             task_count,
         })
@@ -2595,10 +2566,6 @@ impl PreparedContainedTask {
 
     pub fn package_label(&self) -> &str {
         &self.control.package_id
-    }
-
-    pub fn package_sha256(&self) -> &actingcommand_contract::PackageRef {
-        &self.package_sha256
     }
 
     pub fn execution_mode(&self) -> &str {
@@ -9692,7 +9659,6 @@ mod post_admission_ocr_tests {
                 entry_page: None,
                 post_admission_ocr: None,
                 post_admission_fields: Some(fields),
-                package_sha256: "fixture".into(),
                 entry_count: 1,
                 task_count: 1,
             };
@@ -10139,7 +10105,6 @@ mod post_admission_ocr_tests {
                 detector,
                 post_admission_ocr: None,
                 post_admission_fields: Some(fields),
-                package_sha256: "fixture".into(),
                 entry_count: 1,
                 task_count: 1,
             };
@@ -11380,7 +11345,6 @@ mod post_admission_ocr_tests {
             scheduling_outcome,
             post_admission_ocr: Some(post_admission_ocr),
             post_admission_fields: None,
-            package_sha256: "fixture-sha256".into(),
             entry_count: 6,
             task_count: 1,
         };
@@ -12054,7 +12018,6 @@ mod retry_wiring_tests {
             entry_page: None,
             scheduling_outcome: None,
             post_admission_ocr: None,
-            package_sha256: "fixture-sha256".into(),
             post_admission_fields: None,
             entry_count: 5,
             task_count: 1,
@@ -12138,17 +12101,12 @@ mod retry_wiring_tests {
             zip.write_all(&bytes).expect("zip bytes");
         }
         let bytes = zip.finish().expect("zip").into_inner();
-        let reference = actingcommand_contract::PackageRef::LegacyZipSha256(format!(
-            "{:x}",
-            Sha256::digest(&bytes)
-        ));
         let mut containment = actingcommand_pack_containment::Containment::new();
         let bundle = containment
             .load(
                 &actingcommand_pack_containment::InstanceId::new("neutral-select")
                     .expect("instance"),
                 &bytes,
-                &reference,
             )
             .expect("the package is admitted");
         selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
@@ -12236,7 +12194,6 @@ mod retry_wiring_tests {
                 &actingcommand_pack_containment::InstanceId::new("neutral-select")
                     .expect("instance"),
                 &bytes,
-                &actingcommand_contract::PackageRef::LegacyZipSha256("0".repeat(64)),
             )
             .expect("the package is admitted");
         selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)

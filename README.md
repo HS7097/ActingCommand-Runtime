@@ -303,7 +303,7 @@ actinglab --json --instance <alias> record mark --step <n> --transition window -
 actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     # a screen that does not always appear
 actinglab --json --instance <alias> record status
 actinglab --json --instance <alias> record stop --dry-run     # runs every check and writes nothing; mark what lab.warnings asks for
-actinglab --json --instance <alias> record stop --lab-dir <pack dir>     # writes <D>.zip or <D>.json and prints binding_example
+actinglab --json --instance <alias> record stop --lab-dir <pack dir>     # writes <package_id>.zip or .json (replacing one of that name) and prints binding_example
 actingctl resume --state-root <state-root> --instance <alias>
 
 # Offline ledger maintenance (assembles no providers, IPC or devices)

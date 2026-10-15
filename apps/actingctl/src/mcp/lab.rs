@@ -65,13 +65,13 @@ const NOT_A_FLAG: &str = "^([^-]|-([^-]|$))";
 /// Counts this process's Lab jobs.
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 const MANUAL_STEP: &str = "edit the configuration, approve in the UI, restart the daemon";
-/// The parts of an ac_record_stop answer kept inline when the whole answer is exported.
-const BINDING_PARTS: [&str; 5] = [
+/// The parts of an ac_record_stop answer kept inline when the whole answer is exported
+/// (Workflow #336 PKG-S5: record stop answers no package reference).
+const BINDING_PARTS: [&str; 4] = [
     "binding_example",
     "binding_requires",
     "prerequisite_entry_example",
     "catalog_on_failure_example",
-    "package_ref",
 ];
 /// The largest exported answer ac_binding_draft reads back.
 const MAX_EXPORT_READ: u64 = 64 * 1024 * 1024;
@@ -1333,7 +1333,7 @@ fn export_schema() -> Value {
 pub(super) fn lab_result() -> Value {
     json!({
         "type": "object",
-        "description": "The actinglab envelope's data, unchanged. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written; ac_record_stop also keeps lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example, lab.catalog_on_failure_example and lab.package_ref when they fit). Beyond the call budget: {handle, job_phase}.",
+        "description": "The actinglab envelope's data, unchanged. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written; ac_record_stop also keeps lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example when they fit). Beyond the call budget: {handle, job_phase}.",
         "properties": {
             "req_id": {"type": ["string", "null"]},
             "export": export_schema(),

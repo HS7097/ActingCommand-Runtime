@@ -3,7 +3,6 @@
 use super::*;
 use crate::ports::DisabledSemanticInput;
 use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts};
-use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition::ScenePixelFormat;
 use std::fs::File;
 use std::io::Write;
@@ -221,13 +220,9 @@ impl Fixture {
         ];
         write_zip(&zip_path, &files);
         let bytes = std::fs::read(&zip_path).expect("bundle bytes");
-        let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(
-            Sha256Hash::digest(&bytes).to_string(),
-        );
-        let resources =
-            crate::ExternallyVerifiedBundle::load("readonly_fixture", &bytes, &recorded)
-                .map(Arc::new)
-                .expect("verified bundle");
+        let resources = crate::ExternallyVerifiedBundle::load("readonly_fixture", &bytes)
+            .map(Arc::new)
+            .expect("verified bundle");
         Self { temp, resources }
     }
 

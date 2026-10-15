@@ -13,14 +13,10 @@ use super::*;
 fn s2_t4_a_reading_source_names_the_package_id_whatever_its_content() {
     let package_id = "fixture01.readings";
     let admitted_label = |bytes: &[u8]| {
-        PreparedContainedTask::load(
-            "fixture01.instance",
-            bytes,
-            &actingcommand_contract::PackageRef::from("0".repeat(64)),
-        )
-        .expect("the package is admitted")
-        .package_label()
-        .to_owned()
+        PreparedContainedTask::load("fixture01.instance", bytes)
+            .expect("the package is admitted")
+            .package_label()
+            .to_owned()
     };
     let before = explicit_home_contained_task_package(true, package_id, [0, 0, 255], [255, 0, 0]);
     let after = explicit_home_contained_task_package(true, package_id, [0, 0, 254], [255, 0, 0]);

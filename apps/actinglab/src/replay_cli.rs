@@ -13,7 +13,7 @@
 use super::codes::ActinglabCode;
 use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot, PackageRef};
+use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot};
 use actingcommand_lab::{
     ExternallyVerifiedBundle, OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts,
     PreparedContainedTask, replay_contained_task,
@@ -215,7 +215,6 @@ fn admit(package: &Path) -> CliOutcome<PreparedContainedTask> {
     let bundle = ExternallyVerifiedBundle::load_path(
         REPLAY_INSTANCE,
         &package,
-        &PackageRef::default(),
         false,
         crate::offline_ocr::lab_ocr().provider(),
         deadline,

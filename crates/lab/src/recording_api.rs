@@ -6,8 +6,8 @@
 
 use crate::LabOcr;
 use crate::recording::container::{
-    container_kind, encode, extension, preflight_lab_dir, table_digest, write_lab_dir,
-    write_recording_copy,
+    container_kind, encode, extension, file_name, preflight_lab_dir, replace_in_place,
+    write_lab_dir,
 };
 use crate::recording::crosscheck::{
     FrameCache, admit, cross_check, evaluator_bundle, first_decision, round_trip,
@@ -35,15 +35,15 @@ use crate::recording::steps::{
     open_session, open_step, plan_application, plan_click, save, to_json,
 };
 use crate::recording::store::{
-    LabFile, blocked, create_recording, hex_sha256, invalid, lab_dir, load_lab, now_unix_ms,
-    page_name_valid, read_old_record, read_verified, recording_path, save_recording, state_io,
+    LabFile, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms, page_name_valid,
+    read_old_record, read_verified, recording_path, save_recording, state_io,
     task_id_valid_for_lab, with_details,
 };
 use crate::recording::{
     RecordingLock,
     frames::{check_frame_size, decode_frame, read_stored_frame},
 };
-use actingcommand_contract::{CONTENT_DIRECTORY_V1, LabError, LabErrorClass, LabResult};
+use actingcommand_contract::{LabError, LabErrorClass, LabResult};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -223,9 +223,8 @@ pub fn record_stop(
 
     // First pass: admit the package, decide its first step and cross-check its pages.
     let first_entries = render(&plan, None, &crops)?;
-    let first_digest = table_digest(&first_entries);
-    let first_prepared = admit(&first_entries, &first_digest, ocr)?;
-    let bundle = evaluator_bundle(&first_entries, &first_digest, ocr)?;
+    let first_prepared = admit(&first_entries, ocr)?;
+    let bundle = evaluator_bundle(&first_entries, ocr)?;
     let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
         LabError::safety_blocked(
             "record_artifact_admission_failed",
@@ -251,11 +250,10 @@ pub fn record_stop(
     // Final package: the same content with the self-check results in its provenance, encoded,
     // expanded again and admitted again.
     let entries = render(&plan, Some(&provenance), &crops)?;
-    let digest = table_digest(&entries);
     let kind = container_kind(&entries);
     let bytes = encode(&entries, kind)?;
-    round_trip(&bytes, kind, &entries, &digest)?;
-    let prepared = admit(&entries, &digest, ocr)?;
+    round_trip(&bytes, kind, &entries)?;
+    let prepared = admit(&entries, ocr)?;
     let final_decision = first_decision(&prepared, &plan, &cache, ocr, evaluator)?;
     if final_decision.value != decision.value {
         return Err(LabError::safety_blocked(
@@ -271,29 +269,33 @@ pub fn record_stop(
     }
 
     let ext = extension(kind);
-    let file_name = format!("{digest}.{ext}");
+    // Workflow #336 PKG-S5 (M-PKG v1.1 §3.5, D9): the package is `<package_id>.<ext>`, and a
+    // file of that name is replaced in place.
+    let file_name = file_name(&plan.package_id, kind);
     let copy_path = lab_dir(state_dir, &recording.record_id)
         .join("out")
         .join(&file_name);
     let lab_dir_plan = options
         .lab_dir
         .as_deref()
-        .map(|dir| preflight_lab_dir(Path::new(dir), &file_name, &digest))
+        .map(|dir| preflight_lab_dir(Path::new(dir), &file_name))
         .transpose()?;
-    let sha256 = hex_sha256(&bytes);
     let mut written = Vec::new();
     let lab_dir_status = if options.dry_run {
         None
     } else {
-        if write_recording_copy(&copy_path, &bytes, &digest)? {
-            written.push(copy_path.display().to_string());
+        if let Some(parent) = copy_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                state_io(format!("failed to create {}: {error}", parent.display()))
+            })?;
         }
+        replace_in_place(&copy_path, &bytes, &mut written)?;
         match &lab_dir_plan {
-            Some(dir_plan) if dir_plan.present => Some("present"),
-            Some(dir_plan) => {
-                write_lab_dir(dir_plan, &bytes, &digest, &mut written)?;
-                Some("written")
-            }
+            Some(dir_plan) => Some(written_status(write_lab_dir(
+                dir_plan,
+                &bytes,
+                &mut written,
+            )?)),
             None => None,
         }
     };
@@ -307,12 +309,10 @@ pub fn record_stop(
         stopped.updated_at_unix_ms = now_unix_ms();
         stopped.artifact = Some(RecordingArtifact {
             container: ext.to_string(),
-            digest: digest.clone(),
             path: absolute_display(&copy_path),
             lab_dir_path: lab_dir_plan
                 .as_ref()
                 .map(|dir_plan| absolute_display(&dir_plan.target)),
-            sha256: sha256.clone(),
             byte_count: bytes.len() as u64,
             package_id: plan.package_id.clone(),
             requires: plan.requires.clone(),
@@ -345,7 +345,6 @@ pub fn record_stop(
         lab.insert("session_already_stopped".to_string(), json!(true));
     }
     lab.insert("container".to_string(), json!(ext));
-    lab.insert("digest".to_string(), json!(digest));
     lab.insert("package_id".to_string(), json!(plan.package_id));
     lab.insert("task_id".to_string(), json!(plan.task_id));
     lab.insert("path".to_string(), json!(absolute_display(&copy_path)));
@@ -360,8 +359,8 @@ pub fn record_stop(
     if options.dry_run {
         lab.insert(
             "lab_dir_status".to_string(),
-            json!(lab_dir_plan.as_ref().map(|dir_plan| if dir_plan.present {
-                "present"
+            json!(lab_dir_plan.as_ref().map(|dir_plan| if dir_plan.replaces {
+                "to_replace"
             } else {
                 "to_write"
             })),
@@ -376,7 +375,7 @@ pub fn record_stop(
             ),
         );
         let mut would_write = vec![absolute_display(&copy_path)];
-        if let Some(dir_plan) = lab_dir_plan.as_ref().filter(|dir_plan| !dir_plan.present) {
+        if let Some(dir_plan) = lab_dir_plan.as_ref() {
             would_write.push(absolute_display(&dir_plan.target));
         }
         lab.insert("would_write".to_string(), json!(would_write));
@@ -392,7 +391,6 @@ pub fn record_stop(
         );
         lab.insert("written_files".to_string(), json!(written));
     }
-    lab.insert("sha256".to_string(), json!(sha256));
     lab.insert("byte_count".to_string(), json!(bytes.len()));
     lab.insert(
         "entries".to_string(),
@@ -456,7 +454,6 @@ pub fn record_stop(
     lab.insert("entry_overlay".to_string(), checks.entry_overlay);
     insert_binding(
         &mut lab,
-        &digest,
         &plan.package_id,
         plan.requires.as_deref(),
         &package_path,
@@ -502,6 +499,12 @@ fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, V
     Ok((cache, crops))
 }
 
+/// `lab_dir_status` of a written package: `replaced` when a file of its name was there (D9),
+/// `written` otherwise.
+fn written_status(replaced: bool) -> &'static str {
+    if replaced { "replaced" } else { "written" }
+}
+
 /// The absolute form of a path for the output and the binding snippets.
 fn absolute_display(path: &Path) -> String {
     std::path::absolute(path)
@@ -510,31 +513,27 @@ fn absolute_display(path: &Path) -> String {
         .to_string()
 }
 
-/// `package_ref`, `binding_example`, `task_run_example`, `prerequisite_entry_example` and
-/// `catalog_on_failure_example` (section 4.8 with a15, a20 and R22).
+/// `binding_example`, `task_run_example`, `prerequisite_entry_example` and
+/// `catalog_on_failure_example` (section 4.8 with a15, a20 and R22). Workflow #336 PKG-S5
+/// (option 丙): each names the package by its path and its `package_id`, never a digest.
 fn insert_binding(
     lab: &mut Map<String, Value>,
-    digest: &str,
     package_id: &str,
     requires: Option<&str>,
     package_path: &str,
 ) {
-    let reference = json!({"schema_version": CONTENT_DIRECTORY_V1, "sha256": digest});
-    lab.insert("package_ref".to_string(), reference.clone());
     lab.insert("requires".to_string(), json!(requires));
     lab.insert(
         "prerequisite_entry_example".to_string(),
         json!({
             "package_id": package_id,
-            "package_path": package_path,
-            "package_digest": reference
+            "package_path": package_path
         }),
     );
     lab.insert(
         "binding_example".to_string(),
         json!({
             "procedure_ref": package_id,
-            "package_digest": reference,
             "operation_id": "operation.contained_task",
             "yield_points": [],
             "scheduled_execution": {"mode": "device_registry", "package_path": package_path}
@@ -543,8 +542,7 @@ fn insert_binding(
     lab.insert(
         "task_run_example".to_string(),
         json!(format!(
-            "actingctl task-run --state-root <root> --instance <alias> --package \"{package_path}\" \
-             --package-ref '{{\"schema_version\":\"{CONTENT_DIRECTORY_V1}\",\"sha256\":\"{digest}\"}}'"
+            "actingctl task-run --state-root <root> --instance <alias> --package \"{package_path}\""
         )),
     );
     lab.insert(
@@ -631,10 +629,10 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
         );
         items.push(
             "This package is best configured as the instance startup_package (the second tier \
-             of the stall recovery ladder): expand it into <install root>\\packages\\<game>\\<D>\\ \
-             and configure {package, expected_sha256: \"<D>\"}. As a prerequisite or return-home \
-             package it restarts the game whenever the single-frame check of the layer above \
-             fails."
+             of the stall recovery ladder): expand it into \
+             <install root>\\packages\\<game>\\<package_id>\\ and configure {package}. As a \
+             prerequisite or return-home package it restarts the game whenever the single-frame \
+             check of the layer above fails."
                 .to_string(),
         );
     }
@@ -737,22 +735,31 @@ fn stop_already_generated(
         })));
     }
     refuse_option_conflict(recording, artifact, options)?;
-    let bytes = read_verified(Path::new(&artifact.path), &artifact.sha256)?;
-    let file_name = format!("{}.{}", artifact.digest, artifact.container);
+    let bytes = std::fs::read(&artifact.path).map_err(|error| {
+        state_io(format!(
+            "failed to read the generated package {}: {error}",
+            artifact.path
+        ))
+    })?;
+    let file_name = format!("{}.{}", artifact.package_id, artifact.container);
     let lab_dir_plan = options
         .lab_dir
         .as_deref()
-        .map(|dir| preflight_lab_dir(Path::new(dir), &file_name, &artifact.digest))
+        .map(|dir| preflight_lab_dir(Path::new(dir), &file_name))
         .transpose()?;
     let mut written = Vec::new();
     let lab_dir_status = match &lab_dir_plan {
         None => None,
-        Some(dir_plan) if dir_plan.present => Some("present"),
-        Some(_) if options.dry_run => Some("to_write"),
-        Some(dir_plan) => {
-            write_lab_dir(dir_plan, &bytes, &artifact.digest, &mut written)?;
-            Some("written")
-        }
+        Some(dir_plan) if options.dry_run => Some(if dir_plan.replaces {
+            "to_replace"
+        } else {
+            "to_write"
+        }),
+        Some(dir_plan) => Some(written_status(write_lab_dir(
+            dir_plan,
+            &bytes,
+            &mut written,
+        )?)),
     };
     let package_path = lab_dir_plan.as_ref().map_or_else(
         || artifact.path.clone(),
@@ -762,7 +769,6 @@ fn stop_already_generated(
     lab.insert("status".to_string(), json!("already_generated"));
     lab.insert("dry_run".to_string(), json!(options.dry_run));
     lab.insert("container".to_string(), json!(artifact.container));
-    lab.insert("digest".to_string(), json!(artifact.digest));
     lab.insert("package_id".to_string(), json!(artifact.package_id));
     lab.insert("task_id".to_string(), json!(recording.task_id));
     lab.insert("path".to_string(), json!(artifact.path));
@@ -785,7 +791,6 @@ fn stop_already_generated(
         ),
     );
     lab.insert("written_files".to_string(), json!(written));
-    lab.insert("sha256".to_string(), json!(artifact.sha256));
     lab.insert("byte_count".to_string(), json!(artifact.byte_count));
     lab.insert(
         "generated_at_unix_ms".to_string(),
@@ -793,7 +798,6 @@ fn stop_already_generated(
     );
     insert_binding(
         &mut lab,
-        &artifact.digest,
         &artifact.package_id,
         artifact.requires.as_deref(),
         &package_path,

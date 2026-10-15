@@ -5,9 +5,9 @@
 //! module holds the game-neutral structure checks every reader shares (the Runtime's root
 //! reader, `actinglab resource validate`), so no reader accepts what another refuses (§3.9).
 //!
-//! - `bundle.json` (owned by M-PKG): read here only for its package id → location table, the
-//!   registry. A package's directory is the game root plus its `packs[].path` without the
-//!   `packs/` prefix (§3.1).
+//! - `bundle.json` (owned by M-PKG; bundle v4 since Workflow #336 PKG-S5): read here only for
+//!   its package id → location table, the registry. A package's directory is the game root plus
+//!   its `packs[].path` without the `packs/` prefix (§3.1), that is its `package_id`.
 //! - `pages.json` (`actingcommand.pages.v1`, §3.3): the game's page ids and the feature
 //!   packages that recognise them.
 //! - `interrupts.json` (`actingcommand.interrupts.v1`, §3.6): which listed pages are shared
@@ -16,7 +16,7 @@
 //!
 //! The Runtime names no page and no game here: ids are compared as opaque strings.
 
-use crate::{BundleIndex, ContentDirectory, ContentDirectoryVersion, PackageRef};
+use crate::BundleIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -221,25 +221,26 @@ pub enum InterruptThen {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandardPackEntry {
     pub server: String,
-    /// The package directory's name below the game root (`packs[].path` without `packs/`).
+    /// The package directory's name below the game root (`packs[].path` without `packs/`, the
+    /// pack's `package_id`).
     pub directory: String,
-    /// The reference a run records for the package until PKG-S2 renames the fields that carry
-    /// it: the bundle's own `content-directory.v1` reference, taken as written and compared
-    /// with nothing (Workflow #336 PKG-S1).
-    pub recorded: PackageRef,
 }
 
 /// The registry of one game root (§4.3): package id → package directory, from `bundle.json`.
 /// Held in memory only.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StandardPackRegistry {
-    bundle_version: u8,
     packs: BTreeMap<String, StandardPackEntry>,
 }
 
+/// The one bundle index version this build reads (Workflow #336 PKG-S5).
+const BUNDLE_VERSION: u8 = 4;
+
 impl StandardPackRegistry {
     /// The registry `bundle.json`'s bytes declare, for the game directory `game`: the bundle
-    /// index rules (M-PKG), and its `game` equal to the directory's.
+    /// index rules (M-PKG), and its `game` equal to the directory's. Only bundle v4 is read: a
+    /// v2 or v3 index is not of this version and is `malformed` (no old version is read, M-PKG
+    /// §7).
     pub fn from_bundle_bytes(bytes: &[u8], game: &str) -> Result<Self, StandardPackRootIssue> {
         let file = STANDARD_PACK_BUNDLE_FILE;
         let index: BundleIndex = serde_json::from_slice(bytes)
@@ -247,11 +248,7 @@ impl StandardPackRegistry {
         index.validate().map_err(|_| {
             StandardPackRootIssue::new(file, StandardPackProblem::BundleInvalid, "")
         })?;
-        let (bundle_version, index_game, packs) = match &index {
-            BundleIndex::V3(index) => (3, &index.game, &index.packs),
-            BundleIndex::V2(index) => (2, &index.game, &index.packs),
-        };
-        if index_game != game {
+        if index.game != game {
             return Err(StandardPackRootIssue::new(
                 file,
                 StandardPackProblem::GameMismatch,
@@ -259,11 +256,10 @@ impl StandardPackRegistry {
             ));
         }
         let mut registry = Self {
-            bundle_version,
             packs: BTreeMap::new(),
         };
-        for (index, pack) in packs.iter().enumerate() {
-            // The bundle index checked that every path is `packs/<digest>`.
+        for (position, pack) in index.packs.iter().enumerate() {
+            // The bundle index checked that every path is `packs/<package_id>`.
             let directory = pack
                 .path
                 .strip_prefix(STANDARD_PACK_PATH_PREFIX)
@@ -272,7 +268,7 @@ impl StandardPackRegistry {
                     StandardPackRootIssue::new(
                         file,
                         StandardPackProblem::BundleInvalid,
-                        format!("/packs/{index}/path"),
+                        format!("/packs/{position}/path"),
                     )
                 })?;
             registry.packs.insert(
@@ -280,10 +276,6 @@ impl StandardPackRegistry {
                 StandardPackEntry {
                     server: pack.server.clone(),
                     directory: directory.to_owned(),
-                    recorded: PackageRef::ContentDirectory(ContentDirectory {
-                        schema_version: ContentDirectoryVersion::V1,
-                        sha256: pack.digest.clone(),
-                    }),
                 },
             );
         }
@@ -294,9 +286,9 @@ impl StandardPackRegistry {
         self.packs.get(package_id)
     }
 
-    /// The bundle index version the registry was read from (2 or 3).
+    /// The bundle index version the registry was read from (4, the one version read).
     pub const fn bundle_version(&self) -> u8 {
-        self.bundle_version
+        BUNDLE_VERSION
     }
 
     pub fn len(&self) -> usize {
@@ -546,24 +538,18 @@ mod tests {
 
     const GAME: &str = "neutral";
 
-    fn digest(index: usize) -> String {
-        format!("{index:064x}")
-    }
-
-    /// A bundle index v2 of `packs` (package id, server).
+    /// A bundle index v4 of `packs` (package id, server).
     fn bundle(game: &str, packs: &[(&str, &str)]) -> Value {
         json!({
-            "schema_version": "actingcommand.bundle.v2",
+            "schema_version": "actingcommand.bundle.v4",
             "game": game,
             "packs": packs
                 .iter()
-                .enumerate()
-                .map(|(index, (package_id, server))| json!({
+                .map(|(package_id, server)| json!({
                     "package_id": package_id,
                     "server": server,
                     "entry_task_id": "task",
-                    "digest": digest(index + 1),
-                    "path": format!("packs/{}", digest(index + 1)),
+                    "path": format!("packs/{package_id}"),
                     "file_count": 3,
                     "byte_count": 64
                 }))
@@ -656,12 +642,12 @@ mod tests {
     fn n6_1_valid_root_files_are_read() {
         let registry = registry();
         assert_eq!(registry.len(), 4);
-        assert_eq!(registry.bundle_version(), 2);
+        assert_eq!(registry.bundle_version(), 4);
         let features = registry
             .get("neutral.test.features")
             .expect("a listed pack");
         assert_eq!(features.server, "test");
-        assert_eq!(features.directory, digest(1));
+        assert_eq!(features.directory, "neutral.test.features");
         assert_eq!(
             registry.for_server(
                 &[

@@ -10,7 +10,7 @@ use actingcommand_contract::resource_declaration::{
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRecoveryBinding,
     ContainedTaskRequest, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
-    PackageRef, RuntimeConfigManifest,
+    RuntimeConfigManifest,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
@@ -1056,7 +1056,6 @@ pub(super) fn validate_resource_packages(
         PreparedContainedTask::load_path(
             alias,
             &path,
-            &PackageRef::default(),
             None,
             Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
         )

@@ -191,13 +191,7 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
         ))
         .ok_or_else(|| debug_package_error(HostCode::DebugPackageDeadlineOverflow))?;
     let bundle = containment
-        .load_path(
-            &instance,
-            path,
-            &actingcommand_contract::PackageRef::default(),
-            false,
-            deadline,
-        )
+        .load_path(&instance, path, false, deadline)
         .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?;
     PackageDebugSummary::new(
         bundle.task_id().as_str(),

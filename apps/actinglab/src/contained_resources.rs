@@ -5,7 +5,7 @@
 //! digest is taken, and admission is structural.
 
 use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, parse_navigation_graph_value};
-use actingcommand_contract::{ContainedTaskRequest, PackageRef};
+use actingcommand_contract::ContainedTaskRequest;
 use actingcommand_lab::ExternallyVerifiedBundle;
 use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
@@ -216,7 +216,6 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
         let admitted = ExternallyVerifiedBundle::load_path(
             &instance,
             input.path(),
-            &PackageRef::default(),
             false,
             vision_provider,
             deadline,
@@ -227,7 +226,6 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     }
     let logical_zip = explicit_path(flags, "--zip")?;
     let zip = open_published_package(&logical_zip)?;
-    let recorded = PackageRef::default();
     let metadata = zip.metadata()?;
     let limit = ContainmentLimits::default().max_compressed_bytes;
     if metadata.len() > limit {
@@ -240,10 +238,10 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     let bytes = zip.read_all()?;
     let instance = format!("semantic_{}", command.replace('-', "_"));
     match vision_provider {
-        Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
-            &instance, &bytes, &recorded, provider,
-        ),
-        None => ExternallyVerifiedBundle::load(&instance, &bytes, &recorded),
+        Some(provider) => {
+            ExternallyVerifiedBundle::load_with_vision_provider(&instance, &bytes, provider)
+        }
+        None => ExternallyVerifiedBundle::load(&instance, &bytes),
     }
     .map(Arc::new)
     .map_err(|error| CliError::package_invalid(error.to_string()))

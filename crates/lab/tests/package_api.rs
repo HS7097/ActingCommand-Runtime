@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_lab::{
-    PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
-    PackageValidateRequest, PackageValidationResponse,
+    PackageBundleRequest, PackageBundleResponse, PackageValidateRequest, PackageValidationResponse,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -15,9 +14,6 @@ fn package_family_exposes_typed_requests_and_responses() {
         zip_path: PathBuf::from("bundle.zip"),
         include_entries: false,
     };
-    let _digest = PackageDigestRequest {
-        package: PathBuf::from("packs/task"),
-    };
     let _bundle = PackageBundleRequest {
         applications: PathBuf::from("applications.json"),
         packs_root: PathBuf::from("packs"),
@@ -27,7 +23,6 @@ fn package_family_exposes_typed_requests_and_responses() {
     };
 
     assert_serializable::<PackageValidationResponse>();
-    assert_serializable::<PackageDigestResponse>();
     assert_serializable::<PackageBundleResponse>();
 }
 
@@ -42,12 +37,6 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
     use std::io::{Cursor, Read, Write};
     use tempfile::TempDir;
     use zip::{ZipArchive, ZipWriter, write::FileOptions};
-    // The reference a caller records for a package ZIP: its own SHA-256 (Workflow #336 PKG-S1:
-    // recorded, compared with nothing).
-    let recorded = |bytes: &[u8]| {
-        actingcommand_contract::PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
-    };
-
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("resources");
     const GAME: &str = "fourth-game";
@@ -183,13 +172,13 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
             writer.write_all(&bytes).unwrap();
         }
         let bytes = writer.finish().unwrap().into_inner();
-        PreparedContainedTask::load("neutral-wait", &bytes, &recorded(&bytes)).map_err(
-            |error| actingcommand_contract::LabError::package_invalid(error.to_string()),
-        )?;
+        PreparedContainedTask::load("neutral-wait", &bytes).map_err(|error| {
+            actingcommand_contract::LabError::package_invalid(error.to_string())
+        })?;
         fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();
         Ok::<_, Box<actingcommand_contract::LabError>>(())
     };
-    let admit = |bytes: &[u8]| PreparedContainedTask::load("neutral-wait", bytes, &recorded(bytes));
+    let admit = |bytes: &[u8]| PreparedContainedTask::load("neutral-wait", bytes);
     let mut package = Vec::new();
     for timeout in [None, Some(480_000), Some(600_000)] {
         let name = format!("wait-{timeout:?}");

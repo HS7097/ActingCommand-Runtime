@@ -55,8 +55,8 @@ Where each declaration comes from:
 
   `validated_with` records which Runtime Tools the resource CI validated the
   bundle with. acsetup logs it and never checks it. A bundle without
-  `interfaces.json` is `package` [1, 1]. `bundle.json` itself is unchanged
-  (`BundleIndexV3` denies unknown fields).
+  `interfaces.json` is `package` [1, 1]. `bundle.json` itself carries no such member
+  (the bundle index v4, `BundleIndex`, denies unknown fields).
 
 ### What a range means
 

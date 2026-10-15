@@ -3,27 +3,19 @@
 //! The two content container files `record stop` writes (Workflow #336 R6′, frozen model
 //! section 4.5): a ZIP of the content-directory layout when the package carries template
 //! crops, otherwise one `actingcommand.package.content-json.v1` document. Both are written
-//! deterministically from the content table, whose `content-directory.v1` digest names the
-//! file. Writing follows section 4.7: the copy inside the recording, then `--lab-dir` through
-//! a `.part` file; nothing is deleted or overwritten.
+//! deterministically from the content table and named `<package_id>.<ext>` (Workflow #336
+//! PKG-S5, M-PKG v1.1 §3.5 and D9): a file of that name is replaced in place, never refused.
 
-use super::store::{
-    blocked, hex_sha256, invalid, now_unix_ms, state_io, with_details, write_atomic,
-};
-use actingcommand_contract::{LabError, LabResult, content_directory_digest};
-use actingcommand_pack_containment::{CONTENT_JSON_V1, Containment, ContentContainer};
+use super::store::{blocked, invalid, now_unix_ms, state_io, with_details};
+use actingcommand_contract::{LabError, LabResult};
+use actingcommand_pack_containment::{CONTENT_JSON_V1, ContentContainer};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use zip::write::{FileOptions, ZipWriter};
 use zip::{CompressionMethod, DateTime};
-
-/// How long reading an existing `--lab-dir` file for its digest may take.
-const SNAPSHOT_BUDGET: Duration = Duration::from_secs(120);
 
 /// The container of a package: ZIP when it carries a file other than text (the template
 /// crops), the single JSON otherwise.
@@ -42,12 +34,9 @@ pub(crate) fn extension(kind: ContentContainer) -> &'static str {
     }
 }
 
-/// The `content-directory.v1` digest of a content table.
-pub(crate) fn table_digest(entries: &BTreeMap<String, Vec<u8>>) -> String {
-    content_directory_digest(entries.iter().map(|(path, bytes)| {
-        let hash: [u8; 32] = Sha256::digest(bytes).into();
-        (path.as_str(), hash)
-    }))
+/// The file name of a package: `<package_id>.<ext>`.
+pub(crate) fn file_name(package_id: &str, kind: ContentContainer) -> String {
+    format!("{package_id}.{}", extension(kind))
 }
 
 fn encode_failed(kind: ContentContainer, error: impl std::fmt::Display) -> LabError {
@@ -114,8 +103,8 @@ pub(crate) struct LabDirPlan {
     pub(crate) target: PathBuf,
     /// The directory does not exist; its parent does, and only it is created.
     pub(crate) create_dir: bool,
-    /// The target already holds this content: nothing is written.
-    pub(crate) present: bool,
+    /// A file of the target's name is there: it is replaced in place (D9).
+    pub(crate) replaces: bool,
 }
 
 fn lab_dir_invalid(dir: &Path, reason: &str) -> LabError {
@@ -128,36 +117,9 @@ fn lab_dir_invalid(dir: &Path, reason: &str) -> LabError {
     )
 }
 
-fn name_conflict(
-    target: &Path,
-    digest: &str,
-    found: Option<String>,
-    written: &[String],
-) -> LabError {
-    with_details(
-        blocked(
-            "record_artifact_name_conflict",
-            format!(
-                "{} exists and does not hold the content {digest}; it is left untouched",
-                target.display()
-            ),
-        ),
-        json!({
-            "path": target.display().to_string(),
-            "digest": digest,
-            "found": found,
-            "written_files": written
-        }),
-    )
-}
-
-/// Section 4.7 step 2: the directory (or its parent) exists, and an existing
-/// `<lab-dir>/<D>.<ext>` holds the content `digest`. Reads only.
-pub(crate) fn preflight_lab_dir(
-    dir: &Path,
-    file_name: &str,
-    digest: &str,
-) -> LabResult<LabDirPlan> {
+/// Section 4.7 step 2: the directory (or its parent) exists; an existing
+/// `<lab-dir>/<package_id>.<ext>` is a file, which is replaced. Reads only.
+pub(crate) fn preflight_lab_dir(dir: &Path, file_name: &str) -> LabResult<LabDirPlan> {
     let create_dir = match fs::metadata(dir) {
         Ok(metadata) if metadata.is_dir() => false,
         Ok(_) => return Err(lab_dir_invalid(dir, "not_a_directory")),
@@ -182,41 +144,15 @@ pub(crate) fn preflight_lab_dir(
         }
     };
     let target = dir.join(file_name);
-    let present = if create_dir {
+    let replaces = if create_dir {
         false
     } else {
         match fs::symlink_metadata(&target) {
             Err(error) if error.kind() == ErrorKind::NotFound => false,
+            Ok(metadata) if metadata.is_file() => true,
+            Ok(_) => return Err(lab_dir_invalid(dir, "target_not_a_file")),
             Err(error) => {
-                return Err(name_conflict(
-                    &target,
-                    digest,
-                    Some(format!("unreadable: {error}")),
-                    &[],
-                ));
-            }
-            Ok(_) => {
-                let snapshot = Containment::default()
-                    .snapshot_content_directory(&target, Instant::now() + SNAPSHOT_BUDGET);
-                match snapshot {
-                    Ok(snapshot) if snapshot.reference.sha256 == digest => true,
-                    Ok(snapshot) => {
-                        return Err(name_conflict(
-                            &target,
-                            digest,
-                            Some(snapshot.reference.sha256),
-                            &[],
-                        ));
-                    }
-                    Err(error) => {
-                        return Err(name_conflict(
-                            &target,
-                            digest,
-                            Some(format!("unreadable: {error}")),
-                            &[],
-                        ));
-                    }
-                }
+                return Err(lab_dir_invalid(dir, &format!("target_unreadable: {error}")));
             }
         }
     };
@@ -224,97 +160,159 @@ pub(crate) fn preflight_lab_dir(
         dir: dir.to_path_buf(),
         target,
         create_dir,
-        present,
+        replaces,
     })
 }
 
-/// Section 4.7 step 3: the copy inside the recording. An existing file with the same bytes is
-/// reused (returns `false`); one with other bytes is a conflict and stays untouched.
-pub(crate) fn write_recording_copy(path: &Path, bytes: &[u8], digest: &str) -> LabResult<bool> {
-    match fs::read(path) {
-        Ok(existing) if existing == bytes => Ok(false),
-        Ok(existing) => Err(name_conflict(
-            path,
-            digest,
-            Some(format!("sha256 {}", hex_sha256(&existing))),
-            &[],
-        )),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            write_atomic(path, bytes)?;
-            Ok(true)
-        }
-        Err(error) => Err(state_io(format!(
-            "failed to read {}: {error}",
-            path.display()
-        ))),
-    }
-}
-
-fn written_details(mut error: LabError, written: &[String]) -> LabError {
+fn written_details(mut error: LabError, written: &[String], extra: Value) -> LabError {
     let mut details = error.details.take().unwrap_or_else(|| json!({}));
     if let Some(object) = details.as_object_mut() {
         object.insert("written_files".to_string(), json!(written));
+        if let Value::Object(extra) = extra {
+            object.extend(extra);
+        }
     }
     error.with_details(details)
 }
 
-/// Section 4.7 step 4: `<D>.<ext>.part-<unix_ms>` (create_new), then renamed to `<D>.<ext>`.
-/// A target that appeared meanwhile is a conflict and the `.part` file stays. `written`
-/// collects every file written, for the error details of a later failure.
+/// Section 4.7 step 4: creates the directory when the plan says so, then replaces
+/// `<lab-dir>/<package_id>.<ext>` in place.
 pub(crate) fn write_lab_dir(
     plan: &LabDirPlan,
     bytes: &[u8],
-    digest: &str,
     written: &mut Vec<String>,
-) -> LabResult<()> {
+) -> LabResult<bool> {
     if plan.create_dir {
         fs::create_dir(&plan.dir).map_err(|error| {
             written_details(
                 state_io(format!("failed to create {}: {error}", plan.dir.display())),
                 written,
+                json!({"stage": "lab_dir_create"}),
             )
         })?;
     }
-    let file_name = plan
-        .target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| lab_dir_invalid(&plan.dir, "target_name_invalid"))?;
-    let part = plan.dir.join(format!("{file_name}.part-{}", now_unix_ms()));
+    replace_in_place(&plan.target, bytes, written)
+}
+
+/// Workflow #336 PKG-S5 (M-PKG v1.1 §3.5, D9): writes `bytes` beside `target` as
+/// `<name>.part`, sets an existing `target` aside as `<name>.old-<unix_ms>`, renames the `.part`
+/// file into place and deletes the old one; returns whether a file was replaced. The target name
+/// only ever changes by rename, so a reader opens the old file, the new one or none, never part
+/// of one. Every file written is pushed onto `written`. Nothing is skipped and every failed step is
+/// `record_state_io_failed`: the `.part` file is named; when the new file cannot be put in place
+/// the old one is renamed back (`restored`); once the new file is in place, an old file that cannot
+/// be deleted is named in `left_files`.
+pub(crate) fn replace_in_place(
+    target: &Path,
+    bytes: &[u8],
+    written: &mut Vec<String>,
+) -> LabResult<bool> {
+    let (parent, name) = match (
+        target.parent(),
+        target.file_name().and_then(|name| name.to_str()),
+    ) {
+        (Some(parent), Some(name)) => (parent, name),
+        _ => {
+            return Err(state_io(format!(
+                "{} names no file in a directory",
+                target.display()
+            )));
+        }
+    };
+    let replaces = match fs::symlink_metadata(target) {
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Ok(metadata) if metadata.is_file() => true,
+        Ok(_) => {
+            return Err(written_details(
+                state_io(format!(
+                    "{} is not a file; it is left untouched",
+                    target.display()
+                )),
+                written,
+                json!({"stage": "replace_inspect"}),
+            ));
+        }
+        Err(error) => {
+            return Err(written_details(
+                state_io(format!("failed to inspect {}: {error}", target.display())),
+                written,
+                json!({"stage": "replace_inspect"}),
+            ));
+        }
+    };
+    let part = parent.join(format!("{name}.part"));
+    let part_display = part.display().to_string();
     let mut file = OpenOptions::new()
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(true)
         .open(&part)
         .map_err(|error| {
             written_details(
-                state_io(format!("failed to create {}: {error}", part.display())),
+                state_io(format!("failed to create {part_display}: {error}")),
                 written,
+                json!({"stage": "replace_write"}),
             )
         })?;
-    written.push(part.display().to_string());
+    written.push(part_display.clone());
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|error| {
             written_details(
-                state_io(format!("failed to write {}: {error}", part.display())),
+                state_io(format!("failed to write {part_display}: {error}")),
                 written,
+                json!({"stage": "replace_write"}),
             )
         })?;
     drop(file);
-    if fs::symlink_metadata(&plan.target).is_ok() {
-        return Err(name_conflict(&plan.target, digest, None, written));
-    }
-    fs::rename(&part, &plan.target).map_err(|error| {
-        written_details(
+    let old = if replaces {
+        let old = parent.join(format!("{name}.old-{}", now_unix_ms()));
+        fs::rename(target, &old).map_err(|error| {
+            written_details(
+                state_io(format!(
+                    "failed to set {} aside as {} (left in place): {error}",
+                    target.display(),
+                    old.display()
+                )),
+                written,
+                json!({"stage": "replace_set_aside"}),
+            )
+        })?;
+        Some(old)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(&part, target) {
+        let restored = old.as_ref().map(|old| fs::rename(old, target).is_ok());
+        let left: Vec<String> = old
+            .iter()
+            .filter(|_| restored != Some(true))
+            .map(|old| old.display().to_string())
+            .collect();
+        return Err(written_details(
             state_io(format!(
-                "failed to rename {} to {} (left in place): {error}",
-                part.display(),
-                plan.target.display()
+                "failed to rename {part_display} to {}: {error}",
+                target.display()
             )),
             written,
-        )
-    })?;
-    written.retain(|path| *path != part.display().to_string());
-    written.push(plan.target.display().to_string());
-    Ok(())
+            json!({"stage": "replace_rename", "restored": restored, "left_files": left}),
+        ));
+    }
+    written.retain(|path| *path != part_display);
+    written.push(target.display().to_string());
+    if let Some(old) = old {
+        fs::remove_file(&old).map_err(|error| {
+            written_details(
+                state_io(format!(
+                    "{} is in place, but the replaced file {} could not be deleted and is left \
+                     there: {error}",
+                    target.display(),
+                    old.display()
+                )),
+                written,
+                json!({"stage": "replace_delete_old", "left_files": [old.display().to_string()]}),
+            )
+        })?;
+    }
+    Ok(replaces)
 }

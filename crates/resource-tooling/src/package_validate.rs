@@ -7,7 +7,7 @@ use crate::{
     RecognitionPackDiagnosticsResponse, UnsupportedRecognitionTargetResponse,
     open_published_package,
 };
-use actingcommand_contract::{LabError, LabResult, PackageRef};
+use actingcommand_contract::{LabError, LabResult};
 
 pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageValidationResponse> {
     let bytes = open_published_package(&request.zip_path)?.read_all()?;
@@ -16,7 +16,7 @@ pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageVal
     // it is taken, computed or reported.
     let mut containment = Containment::for_metadata_validation();
     let bundle = containment
-        .load(&instance, &bytes, &PackageRef::default())
+        .load(&instance, &bytes)
         .map_err(containment_package_error)?;
     Ok(PackageValidationResponse {
         status: "valid".to_string(),

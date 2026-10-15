@@ -21,7 +21,6 @@ use crate::{
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -60,15 +59,15 @@ fn frame_png(color: [u8; 3]) -> Vec<u8> {
 }
 
 // A state directory with an active session of `INSTANCE` and its Lab recording of two steps.
-// The lock is dropped before the directory.
-struct Recorded {
+// The lock is dropped before the directory. Workflow #336 PKG-S5's record stop tests use it too.
+pub(crate) struct Recorded {
     lock: RecordingLock,
     ocr: LabOcr,
-    temp: TempDir,
+    pub(crate) temp: TempDir,
 }
 
 impl Recorded {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let temp = TempDir::new().expect("temporary directory");
         let state = temp.path().join("state");
         fs::create_dir_all(&state).expect("state directory");
@@ -132,7 +131,7 @@ impl Recorded {
         });
     }
 
-    fn stop(&self, options: &RecordStopOptions) -> Result<Value, (String, Value)> {
+    pub(crate) fn stop(&self, options: &RecordStopOptions) -> Result<Value, (String, Value)> {
         record_stop(&self.lock, options, &self.ocr)
             .map(|outcome| lab(&outcome))
             .map_err(|error| {
@@ -143,7 +142,7 @@ impl Recorded {
             })
     }
 
-    fn recording_file(&self) -> PathBuf {
+    pub(crate) fn recording_file(&self) -> PathBuf {
         recording_path(&self.temp.path().join("state"), RECORD_ID)
     }
 }
@@ -164,8 +163,9 @@ fn dry_run() -> RecordStopOptions {
 
 // lab-recording.md: "`generated_at_unix_ms` is the recording's `updated_at_unix_ms`, so the same
 // recording generates the same bytes again." Two dry runs and the generating run give one
-// digest and one container sha256; the written package has those bytes; a stopped recording
-// with its package is `already_generated`.
+// file list and one byte count (Workflow #336 PKG-S5: the output names no digest of the
+// package); the written package has that many bytes; a stopped recording with its package is
+// `already_generated`.
 #[test]
 fn gate_record_stop_the_same_recording_generates_the_same_bytes() {
     let recorded = Recorded::new();
@@ -173,18 +173,18 @@ fn gate_record_stop_the_same_recording_generates_the_same_bytes() {
     let first = recorded.stop(&dry_run()).expect("first dry run");
     let second = recorded.stop(&dry_run()).expect("second dry run");
     assert_eq!(first["lab_status"], "validated", "{first}");
-    assert_eq!(first["digest"], second["digest"]);
-    assert_eq!(first["sha256"], second["sha256"]);
+    assert_eq!(first["entries"], second["entries"]);
+    assert_eq!(first["byte_count"], second["byte_count"]);
 
     let generated = recorded
         .stop(&RecordStopOptions::default())
         .expect("record stop");
     assert_eq!(generated["lab_status"], "generated", "{generated}");
-    assert_eq!(generated["digest"], first["digest"]);
-    assert_eq!(generated["sha256"], first["sha256"]);
+    assert_eq!(generated["entries"], first["entries"]);
+    assert_eq!(generated["byte_count"], first["byte_count"]);
     let path = generated["path"].as_str().expect("package path");
-    let written = Sha256::digest(fs::read(path).expect("written package"));
-    assert_eq!(json!(format!("{written:x}")), generated["sha256"]);
+    let written = fs::read(path).expect("written package");
+    assert_eq!(json!(written.len()), generated["byte_count"]);
 
     let again = recorded
         .stop(&RecordStopOptions::default())

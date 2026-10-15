@@ -94,7 +94,6 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             &InstanceId::new("resource-restore")
                 .map_err(|_| restore_error("invalid containment identity"))?,
             package.path(),
-            &actingcommand_contract::PackageRef::default(),
             true,
             deadline,
         )

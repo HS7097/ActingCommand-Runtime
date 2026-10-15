@@ -2,22 +2,13 @@
 
 use super::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::BundleSource;
-use actingcommand_lab::{
-    DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PackageBundleRequest, PackageDigestRequest,
-};
+use actingcommand_lab::{DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PackageBundleRequest};
 use serde::Serialize;
 use serde_json::Value;
 
-pub(super) fn run_digest(flags: &FlagArgs) -> CliOutcome<Value> {
-    let request = PackageDigestRequest {
-        package: flags.required_path("--package")?,
-    };
-    let mut lab = super::env_detection::build_readonly_lab()?;
-    serialize_response(lab.package_digest(request)?)
-}
-
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out
-/// <directory>`, with `--source-repository` and `--source-commit` together or not at all.
+/// <directory>`, with `--source-repository` and `--source-commit` together or not at all; it
+/// writes bundle v4 (Workflow #336 PKG-S5).
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
     let maintenance = if flags.flags.contains_key("--maintenance") {
         use std::io::Read;

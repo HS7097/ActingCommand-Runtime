@@ -1,31 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{BundleIndex, BundleMaintenance, BundleSource, ContentDirectory};
+use actingcommand_contract::{BundleIndex, BundleMaintenance, BundleSource};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 
 /// The 32 MiB bound for package maintenance input and resource-restoration draft payloads.
 pub const DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
-
-/// Workflow #288 A2b `package digest`: one local package directory.
-#[derive(Debug, Clone)]
-pub struct PackageDigestRequest {
-    pub package: PathBuf,
-}
-
-/// The directory's content-directory reference, from a full admission against it.
-#[derive(Debug, Clone, Serialize)]
-pub struct PackageDigestResponse {
-    pub status: String,
-    pub package: String,
-    pub reference: ContentDirectory,
-    pub package_id: String,
-    pub server: String,
-    pub entry_task_id: String,
-    pub file_count: usize,
-    pub byte_count: u64,
-}
 
 /// Workflow #288 A2b `package bundle`: the applications table, the directory holding one
 /// source directory per task pack, and the new output directory.
@@ -35,8 +16,9 @@ pub struct PackageBundleRequest {
     pub packs_root: PathBuf,
     pub out: PathBuf,
     pub source: Option<BundleSource>,
-    /// Present (including an empty list) requests v3 and actual maintenance qualification.
-    /// Absent retains the v2 generation path.
+    /// Present (including an empty list) writes the bundle's `maintenance` declarations and
+    /// requests actual maintenance qualification; absent writes none (bundle v4 either way,
+    /// Workflow #336 PKG-S5).
     pub maintenance: Option<Vec<BundleMaintenance>>,
 }
 

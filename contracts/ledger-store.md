@@ -901,9 +901,9 @@ between the two is found by the walk, and a frame found in both places counts
 The S1 physical owner and preserved state assembly are described in
 [Runtime database owner](runtime-database.md).
 
-The future source-tree `PackageRef` belongs to the separately frozen package
-identity/containment contract in #288. Its issuer, source-tree identity and ledger
-representation require coordination at that shared boundary. S0 preserves current
+The source-tree package reference of #288 was retired with the package reference type itself
+(Workflow #336 PKG-S5): a package is identified by its `package_id` and found by its path, and
+no ledger record names a package reference. S0 preserves current
 package facts and artifact references for the storage comparison. Parallel policy
 time/window work (#267) and parser-owner relocation (#288) retain their own
 owners; the six SQL views remain assigned to the stages below.

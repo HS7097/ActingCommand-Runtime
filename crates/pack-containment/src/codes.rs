@@ -34,7 +34,6 @@ actingcommand_contract::outcome_codes! {
         ContentJsonDuplicatePath => "content_json_duplicate_path": error / declaration_error,
         ContentJsonFileNotString => "content_json_file_not_string": error / declaration_error,
         // A source tree snapshot.
-        SourceTreeLoaderRetired => "source_tree_loader_retired": error / declaration_error,
         SourceTreeDeadline => "source_tree_deadline": error / budget_or_permission,
         SourceOperationPathInvalid => "source_operation_path_invalid": error / declaration_error,
         SourceOperationInvalid => "source_operation_invalid": error / declaration_error,
