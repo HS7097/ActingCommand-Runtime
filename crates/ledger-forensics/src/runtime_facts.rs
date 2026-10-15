@@ -255,7 +255,7 @@ fn read(
             schema_version: RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
             ledger_position: position,
             taken_at_unix_ms,
-            snapshot_id: position,
+            snapshot_id: 0,
             part: 1,
             parts: 1,
             records: store.into_values().collect(),
