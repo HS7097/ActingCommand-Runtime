@@ -37,6 +37,9 @@ pub(super) struct ResolvedLayer {
     pub(super) package_id: String,
     /// The game and server whose return-home package this layer is.
     pub(super) return_home: Option<(String, String)>,
+    /// Workflow #373 NAV-3a: where the standard-pack registry put the package for the run;
+    /// `None` when it did not bind it.
+    pub(super) package_path: Option<PathBuf>,
 }
 
 /// What a scheduled run's preparation resolved, from the scheduled path's entry until its
@@ -78,13 +81,12 @@ impl HostShared {
             monotonic_ms: self.monotonic_ms()?,
             min_interval_ms: self.lift_check_min_interval_ms()?,
         };
-        Ok(SuspensionLiftView {
+        Ok(SuspensionLiftView::new(
             manifest,
-            prerequisite_packages: &self.prerequisite_packages,
-            return_home_packages: &self.return_home_packages,
-            checks: &self.lift_checks,
+            self.standard_packs.root(),
+            &self.lift_checks,
             time,
-        })
+        ))
     }
 
     /// Registers a scheduled run's decision as it enters the scheduled path.
@@ -260,7 +262,7 @@ impl HostShared {
                 .native_detail()
                 .map(|detail| detail.text()),
         );
-        let (main_package, layers) = settled_packages(&main, &self.prerequisite_packages);
+        let (main_package, layers) = settled_packages(&main);
         let mut identity = FailureIdentity {
             base: encode_failure_base(&code),
             key: failure_key(&code, &scope, &operation, &detail),
@@ -394,13 +396,10 @@ impl HostShared {
 
 /// Workflow #336 PKG-S3 (M-PKG §3.3, D18): the packages of a settled failure's identity: the
 /// main package and each layer the run resolved, with the content hash measured now at the path
-/// the run used (the mapping's, for a layer). A package that cannot be measured (removed, being
-/// replaced, unreadable), or a layer the mapping does not name, is `x`, and the failure is
-/// recorded as usual.
-fn settled_packages(
-    main: &ScheduledMain,
-    prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
-) -> (IdentityPackage, Vec<IdentityLayer>) {
+/// the run used (the registry's, for a layer; Workflow #373 NAV-3a). A package that cannot be
+/// measured (removed, being replaced, unreadable), or a layer the registry did not bind, is `x`,
+/// and the failure is recorded as usual.
+fn settled_packages(main: &ScheduledMain) -> (IdentityPackage, Vec<IdentityLayer>) {
     let measured = |path: Option<&str>| path.and_then(|path| measure_package_hash(path).ok());
     let main_package = IdentityPackage::measured(
         &main.package_id,
@@ -417,9 +416,11 @@ fn settled_packages(
                     .as_ref()
                     .map(|(game, server)| (game.as_str(), server.as_str())),
                 measured(
-                    prerequisite_packages
-                        .get(&layer.package_id)
-                        .map(ContainedTaskRecoveryBinding::package_path),
+                    layer
+                        .package_path
+                        .as_deref()
+                        .map(|path| path.to_string_lossy())
+                        .as_deref(),
                 )
                 .as_deref(),
             )
@@ -578,19 +579,8 @@ mod tests {
         let main_hash = assembled_package(&main_path, "main");
         let layer_hash = assembled_package(&layer_path, "layer");
         let home_hash = assembled_package(&home_path, "home");
-        let mapping = BTreeMap::from([
-            (
-                "neutral.layer".to_owned(),
-                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy())
-                    .expect("layer binding"),
-            ),
-            (
-                "neutral.home".to_owned(),
-                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy())
-                    .expect("home binding"),
-            ),
-        ]);
-        let main = ScheduledMain {
+        // Workflow #373 NAV-3a: each layer at the path the run's registry bound it to.
+        let mut main = ScheduledMain {
             linear: true,
             package_id: "neutral.main".to_owned(),
             package_path: main_path.to_string_lossy().into_owned(),
@@ -599,15 +589,17 @@ mod tests {
                 ResolvedLayer {
                     package_id: "neutral.layer".to_owned(),
                     return_home: None,
+                    package_path: Some(layer_path.clone()),
                 },
                 ResolvedLayer {
                     package_id: "neutral.home".to_owned(),
                     return_home: Some(("neutral".to_owned(), "test".to_owned())),
+                    package_path: Some(home_path.clone()),
                 },
             ],
             resolved: true,
         };
-        let (main_package, layers) = settled_packages(&main, &mapping);
+        let (main_package, layers) = settled_packages(&main);
         assert_eq!(
             main_package,
             IdentityPackage {
@@ -655,12 +647,11 @@ mod tests {
         );
         assert_eq!(FailureIdentity::parse(&encoded), Some(identity));
 
-        // S3-T8: the main package is gone and the home layer is no longer mapped at the
-        // settlement; both are `x`, and the identity still reads back.
+        // S3-T8: the main package is gone and the home layer is one the registry did not bind;
+        // both are `x`, and the identity still reads back.
         std::fs::remove_file(&main_path).expect("remove the main package");
-        let mapping =
-            BTreeMap::from([("neutral.layer".to_owned(), mapping["neutral.layer"].clone())]);
-        let (main_package, layers) = settled_packages(&main, &mapping);
+        main.layers[1].package_path = None;
+        let (main_package, layers) = settled_packages(&main);
         assert_eq!(main_package.hash, "x");
         assert_eq!(layers[0].hash(), hash12(&layer_hash));
         assert_eq!(layers[1].hash(), "x");

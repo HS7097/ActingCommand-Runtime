@@ -588,16 +588,19 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
 - `return_home`: the failed run's bound recovery package (`--recovery-package`) runs as a
   standalone contained task (default response deadline, self-minted request and correlation
   ids, the ladder's holder and connection, no lease of its own, its `task.*` chain under the
-  ladder's causation id). When the run had none bound, the return-home package that `actingd`'s
-  `return_home_packages` names for the failed package's game and server runs instead, with the
-  rung's `configured_package_deadline_ms`; one that does not match the failed package's game,
+  ladder's causation id). When the run had none bound, the return-home package the standard-pack
+  registry of the failed package's game names for its server (Workflow #373 NAV-3a,
+  `bundle.json` `maintenance[]` use `return_home`) runs instead, with the
+  rung's `configured_package_deadline_ms`; one that is not the package of its registry entry is
+  refused with `contained_task_prerequisite_mismatch`, one that does not match the failed package's game,
   server or resolution, fails a check of a return-home chain layer or declares a prerequisite
   package of its own is refused before the run with `contained_task_prerequisite_incompatible`
   (Workflow #336 L2d; `contracts/linear-steps.md`, "Return-home fallback"). Skipped with
-  `no_recovery_package` when the run had none bound and none is configured. A ladder without a
+  `no_recovery_package` when the run had none bound and the registry names none (a broken game
+  root is recorded as a `standard_pack_read` lifecycle record and names none). A ladder without a
   failed run (a preparation's, a burst's) resolves the game/server through the configured
   startup package's containment admission, then uses its bound recovery package or the
-  configured return-home mapping. Each actual run admits its own material. An ADB baseline probe
+  registry's return-home package. Each actual run admits its own material. An ADB baseline probe
   failure, when the admitted actions need ADB, is `recovery_ladder_adb_not_ready`; admission
   refusals keep the loader's code; failures are recorded as `runtime.failed` with category
   `recovery_ladder`.

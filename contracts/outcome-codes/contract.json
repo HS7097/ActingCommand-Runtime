@@ -3506,27 +3506,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "return_home_package_unbound": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "package_id": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): return home package unbound.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "runtime_debug_event_invalid": {
       "category": "error",
       "ladder_class": "none",

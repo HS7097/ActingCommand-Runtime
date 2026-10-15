@@ -970,3 +970,19 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_12_the_status_read_answers_from_memory_and_appends_nothing",
 ]
 incident = ["#385 P-m"]
+# Workflow #373 NAV-3a (model M-373 v1.1 §4.2, §4.3, §8.3; test rows N3a-2 to N3a-8): a page-graph package runs its declared prerequisite package as a prerequisite layer and rechecks its whole entry set; the chain runs through a page-graph layer; a prerequisite package listed in the game root's bundle.json resolves with no configuration entry; a standard pack replaced in place is used by the next run without a restart (a removed package is contained_task_prerequisite_unbound with registry_problem not_listed, the change recorded once as standard_pack_registered with its added and removed ids); an unset root and a missing game root are unbound with root_unset and game_root_missing; the bundle's return_home package is the fallback of a linear package and of a page-graph home entry (role return_home) and the package the ladder's first rung runs; a configuration with prerequisite_packages or return_home_packages is config_decode_failed at config_load
+[[gate]]
+key = "90"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_2_a_page_graph_package_runs_its_declared_prerequisite_and_rechecks_its_entry_set",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_3_a_page_graph_prerequisite_layer_leads_the_chain_on",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_4_a_prerequisite_package_listed_in_the_bundle_resolves_without_configuration",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_5_a_standard_pack_replaced_in_place_is_used_by_the_next_run",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_6_an_unset_root_and_a_missing_game_root_leave_the_prerequisite_unbound",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_7_a_linear_package_falls_back_to_the_registry_return_home_package",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_7_a_page_graph_package_falls_back_to_the_registry_return_home_package",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_7_the_ladder_first_rung_runs_the_registry_return_home_package",
+    "actingcommand-actingd::process::n3a_8_a_configuration_with_a_retired_prerequisite_key_does_not_decode",
+]
+incident = ["#373 NAV-3a"]

@@ -43,7 +43,7 @@ fn package(package_id: &str) -> TaskPackageDescriptor {
         server: "test".to_owned(),
         resolution: (2, 1),
         prerequisite_package_id: None,
-        linear_entry_page: None,
+        entry_pages: None,
         maximum_executed_steps: 1,
         startup_incompatibility: None,
         prerequisite_incompatibility: None,
@@ -56,7 +56,7 @@ fn package(package_id: &str) -> TaskPackageDescriptor {
 fn linear(package_id: &str) -> TaskPackageDescriptor {
     TaskPackageDescriptor {
         execution_mode: "linear_steps".to_owned(),
-        linear_entry_page: Some("neutral/home".to_owned()),
+        entry_pages: Some(vec!["neutral/home".to_owned()]),
         ..package(package_id)
     }
 }
@@ -178,7 +178,7 @@ fn gate_e1_chain_only_a_linear_page_entry_without_a_prerequisite_selects_the_fal
     );
     // An application entry resolves no first-step page.
     let application_entry = TaskPackageDescriptor {
-        linear_entry_page: None,
+        entry_pages: None,
         ..linear(ROOT)
     };
     assert_eq!(next(application_entry, Some(HOME)), None);

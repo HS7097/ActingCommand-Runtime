@@ -2015,7 +2015,6 @@ actingcommand_contract::outcome_locations! {
         ResolvePolicySettlementInstance => "resolve_policy_settlement_instance",
         ResolvePrerequisiteChain => "resolve_prerequisite_chain",
         ResolveRetryRound => "resolve_retry_round",
-        ResolveReturnHomePackage => "resolve_return_home_package",
         ResolveRuntimeInstance => "resolve_runtime_instance",
         ResourceTargetViewActivePolicy => "resource_target_view_active_policy",
         ResourceTargetViewFacts => "resource_target_view_facts",

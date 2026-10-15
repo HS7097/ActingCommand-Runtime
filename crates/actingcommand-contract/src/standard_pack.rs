@@ -5,9 +5,9 @@
 //! module holds the game-neutral structure checks every reader shares (the Runtime's root
 //! reader, `actinglab resource validate`), so no reader accepts what another refuses (§3.9).
 //!
-//! - `bundle.json` (owned by M-PKG): read here only for its package id → location table, the
-//!   registry. A package's directory is the game root plus its `packs[].path` without the
-//!   `packs/` prefix (§3.1).
+//! - `bundle.json` (owned by M-PKG): read here only for its package id → location table and
+//!   (Workflow #373 NAV-3a, §4.3) its return-home package per server, the registry. A package's
+//!   directory is the game root plus its `packs[].path` without the `packs/` prefix (§3.1).
 //! - `pages.json` (`actingcommand.pages.v1`, §3.3): the game's page ids and the feature
 //!   packages that recognise them.
 //! - `interrupts.json` (`actingcommand.interrupts.v1`, §3.6): which listed pages are shared
@@ -16,7 +16,7 @@
 //!
 //! The Runtime names no page and no game here: ids are compared as opaque strings.
 
-use crate::{BundleIndex, ContentDirectory, ContentDirectoryVersion, PackageRef};
+use crate::{BundleIndex, ContentDirectory, ContentDirectoryVersion, MaintenanceUse, PackageRef};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -80,6 +80,17 @@ crate::outcome_vocabulary! {
         PackagesCount => "packages_count",
         /// An interrupt's `max_per_run` is outside 1..=8.
         MaxPerRunInvalid => "max_per_run_invalid",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Why a prerequisite package is not bound (vocabulary `registry_problem`, Workflow #373
+    /// NAV-3a, M-373 §4.3): no `standard_packs.root` is set, the root holds no root of the
+    /// dependent package's game, or that game root's `bundle.json` does not list the package.
+    pub enum RegistryProblem: "registry_problem" {
+        RootUnset => "root_unset",
+        GameRootMissing => "game_root_missing",
+        NotListed => "not_listed",
     }
 }
 
@@ -229,12 +240,15 @@ pub struct StandardPackEntry {
     pub recorded: PackageRef,
 }
 
-/// The registry of one game root (§4.3): package id → package directory, from `bundle.json`.
-/// Held in memory only.
+/// The registry of one game root (§4.3): package id → package directory, from `bundle.json`,
+/// and (Workflow #373 NAV-3a) server → its return-home package, the `maintenance[]` entry whose
+/// `uses` holds `return_home` (at most one per server, the bundle index rule). Held in memory
+/// only.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StandardPackRegistry {
     bundle_version: u8,
     packs: BTreeMap<String, StandardPackEntry>,
+    return_home: BTreeMap<String, String>,
 }
 
 impl StandardPackRegistry {
@@ -247,9 +261,9 @@ impl StandardPackRegistry {
         index.validate().map_err(|_| {
             StandardPackRootIssue::new(file, StandardPackProblem::BundleInvalid, "")
         })?;
-        let (bundle_version, index_game, packs) = match &index {
-            BundleIndex::V3(index) => (3, &index.game, &index.packs),
-            BundleIndex::V2(index) => (2, &index.game, &index.packs),
+        let (bundle_version, index_game, packs, maintenance) = match &index {
+            BundleIndex::V3(index) => (3, &index.game, &index.packs, index.maintenance.as_slice()),
+            BundleIndex::V2(index) => (2, &index.game, &index.packs, &[][..]),
         };
         if index_game != game {
             return Err(StandardPackRootIssue::new(
@@ -261,6 +275,13 @@ impl StandardPackRegistry {
         let mut registry = Self {
             bundle_version,
             packs: BTreeMap::new(),
+            // Workflow #373 NAV-3a: the bundle index allows one return-home package per server
+            // and only a listed one.
+            return_home: maintenance
+                .iter()
+                .filter(|entry| entry.uses.contains(&MaintenanceUse::ReturnHome))
+                .map(|entry| (entry.server.clone(), entry.package_id.clone()))
+                .collect(),
         };
         for (index, pack) in packs.iter().enumerate() {
             // The bundle index checked that every path is `packs/<digest>`.
@@ -307,8 +328,24 @@ impl StandardPackRegistry {
         self.packs.is_empty()
     }
 
+    /// Workflow #373 NAV-3a (§4.3): the return-home package of `server`, a package of the
+    /// registry.
+    pub fn return_home_package(&self, server: &str) -> Option<&str> {
+        self.return_home.get(server).map(String::as_str)
+    }
+
+    /// Workflow #373 NAV-3a: every server's return-home package id, by server.
+    pub const fn return_home_packages(&self) -> &BTreeMap<String, String> {
+        &self.return_home
+    }
+
+    /// The registry's package ids.
+    pub fn package_ids(&self) -> impl Iterator<Item = &str> {
+        self.packs.keys().map(String::as_str)
+    }
+
     /// Every (package id, server) the registry holds, the set `standard_pack_registered`
-    /// compares (§4.3).
+    /// compares (§4.3) with the return-home packages.
     pub fn listed(&self) -> BTreeSet<(String, String)> {
         self.packs
             .iter()

@@ -3765,12 +3765,16 @@ pub enum TaskEntryTargetDisposition {
 
 /// Workflow #373 (model M-373 v1.1 §8.3): the part a package run as a layer of the run plays,
 /// on its `EntryRecovery*` records. NAV-6 brings the member and its value `interrupt_handler`
-/// (a shared interrupt page's handler or its `then.run` package); the other layers' records
-/// carry no role until their slices add theirs.
+/// (a shared interrupt page's handler or its `then.run` package); NAV-3a adds `prerequisite` (a
+/// declared prerequisite package) and `return_home` (the registry's return-home package of the
+/// package's game and server). A request's own recovery binding carries none; NAV-5 adds its
+/// layers' values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskEntryRecoveryRole {
     InterruptHandler,
+    Prerequisite,
+    ReturnHome,
 }
 
 /// Workflow #373 NAV-6 (§6.2): where the run went after a shared interrupt page's handler:

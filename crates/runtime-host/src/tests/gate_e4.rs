@@ -15,39 +15,48 @@
 #[path = "../../../../tests/support/exec_i6.rs"]
 pub(super) mod exec_i6;
 
+use super::gate_373_nav3a::StandardRoot;
 use super::*;
-use actingcommand_contract::ContainedTaskRecoveryBinding;
 use exec_i6::{I6Case, ROOT};
 use std::path::Path;
 
 const ALIAS: &str = "neutral.instance";
 
-// A Runtime whose prerequisite packages are the packages of `case.bound`, each bound to its
-// fixture directory, as actingd installs a bundle's `prerequisite` declarations.
-fn start(temp: &TempDir, state: &Arc<FakeState>, packs_root: &Path, case: &I6Case) -> RuntimeHost {
+// Workflow #373 NAV-3a (M-373 §4.3): the packages of `case.bound` are the packages the game's
+// standard-pack registry lists (with the root package, so the bundle lists one at least); the
+// others sit outside it. Gives the standard-pack root and the root package's directory.
+fn write_case(temp: &TempDir, case: &I6Case) -> (PathBuf, PathBuf) {
+    let mut registry = StandardRoot::new(temp.path());
+    let mut root_package = None;
+    for pack in &case.packs {
+        let directory = if pack.package_id == ROOT || case.bound.contains(&pack.package_id) {
+            registry.list(pack.package_id)
+        } else {
+            temp.path().join("packs").join(pack.package_id)
+        };
+        exec_i6::write_pack(&directory, pack);
+        if pack.package_id == ROOT {
+            root_package = Some(directory);
+        }
+    }
+    registry.write_bundle();
+    (registry.root, root_package.expect("the root package"))
+}
+
+// A Runtime whose standard-pack root is `registry`.
+fn start(temp: &TempDir, state: &Arc<FakeState>, registry: PathBuf) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
-    let bindings = case
-        .bound
-        .iter()
-        .map(|package_id| {
-            let binding = ContainedTaskRecoveryBinding::new(
-                packs_root.join(package_id).display().to_string(),
-            )
-            .expect("prerequisite binding");
-            ((*package_id).to_owned(), binding)
-        })
-        .collect::<BTreeMap<_, _>>();
     RuntimeHost::start(
-        config(temp).with_prerequisite_packages(bindings),
+        config(temp).with_standard_packs_root(Some(registry)),
         Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(state))),
     )
     .expect("runtime host")
 }
 
 // Runs the root package of the set from its fixture directory.
-fn run_root(host: &RuntimeHost, packs_root: &Path) -> RuntimeReceipt {
-    let task_request = ContainedTaskRequest::new(packs_root.join(ROOT).display().to_string())
-        .expect("task request");
+fn run_root(host: &RuntimeHost, root_package: &Path) -> RuntimeReceipt {
+    let task_request =
+        ContainedTaskRequest::new(root_package.display().to_string()).expect("task request");
     let mut client = TestClient::connect(host);
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
@@ -71,11 +80,10 @@ fn gate_e4_runtime_refuses_each_fixture_chain_with_the_bundles_code() {
     for case in exec_i6::refused_cases() {
         let state = Arc::new(FakeState::default());
         let temp = TempDir::new().expect("tempdir");
-        let packs_root = temp.path().join("packs");
-        exec_i6::write_case(&packs_root, &case);
-        let host = start(&temp, &state, &packs_root, &case);
+        let (registry, root_package) = write_case(&temp, &case);
+        let host = start(&temp, &state, registry);
 
-        let receipt = run_root(&host, &packs_root);
+        let receipt = run_root(&host, &root_package);
 
         assert_eq!(
             receipt.state(),

@@ -24,7 +24,8 @@ pub enum PackRegistryKey {
     Procedure { package_id: String },
     /// The startup package of one instance (`instances[].startup_package`), by the instance.
     StartupPackage { instance_alias: String },
-    /// One `prerequisite_packages` entry, by its package id.
+    /// One prerequisite package, by its package id (Workflow #373 NAV-3a: laid over the
+    /// standard-pack registry of its game, M-373 §4.3).
     PrerequisitePackage { package_id: String },
 }
 
