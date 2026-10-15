@@ -4854,6 +4854,12 @@ pub(super) struct RefusedPackage {
     pub(super) package_id: String,
 }
 
+/// A measured load: the prepared task and how its package was read.
+pub(super) type MeasuredLoad = (PreparedContainedTask, PackageLoad);
+
+/// A refused measured load: the request failure and, when known, the refused package.
+pub(super) type MeasuredRefusal = (RequestFailure, Option<Box<RefusedPackage>>);
+
 /// [`prepare_measured_contained_task`], whose refusal also names the refused package when the
 /// kernel read its `package_id` and the refusal's code is registered (Workflow #386 SR-3: a
 /// scheduled run's preparation suspends it at a suspend code).
@@ -4862,7 +4868,7 @@ pub(super) fn prepare_measured_naming_refusal(
     request: &ContainedTaskRequest,
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     deadline: Instant,
-) -> Result<(PreparedContainedTask, PackageLoad), (RequestFailure, Option<Box<RefusedPackage>>)> {
+) -> Result<MeasuredLoad, MeasuredRefusal> {
     let path = contained_task_package_path(request).map_err(|failure| (failure, None))?;
     // Workflow #336 PKG-S1/PKG-S5 (option 丙): the path chooses the loader and admission is
     // structural only; the package is named by its path alone.
