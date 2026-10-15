@@ -978,10 +978,18 @@ equal value is accepted.
   `scheduled_execution{mode: "device_registry", package_path}` with the absolute path (a
   configuration in the install root may use `packages/<game>/<package_id>.<ext>`). Whether it
   is scheduled still depends on the catalog task and its approval.
-- `prerequisite_entry_example` was the entry for the actingd `prerequisite_packages` when
-  another package names this one with `--requires`; since Workflow #373 NAV-3a that key is
-  retired and a prerequisite package is a package its game's installed standard pack lists, so
-  the example names a package id and path only: `{package_id, package_path}`.
+- `prerequisite_entry_example` says where the package goes so that another package can name
+  it with `--requires`: the standard-pack registry of its game (Workflow #373 NAV-3a,
+  `package-reference.md`, "Standard package root"), the one place a prerequisite package is
+  found. It is `{bundle, pack, directory}`: `bundle` is
+  `<standard_packs.root>/<game>/bundle.json`, the file that must list it; `pack` is its
+  `packs[]` entry `{package_id, server, entry_task_id, path: "packs/<package_id>"}`, which
+  `package bundle` writes with `file_count` and `byte_count` added; `directory` is
+  `<standard_packs.root>/<game>/<package_id>`, where the package sits as a content directory.
+  `<game>`, the server and the entry task are the package's own; `<standard_packs.root>` is a
+  placeholder for the actingd setting (`actingd-check-config.md`, "Standard packs"). The
+  retired actingd key `prerequisite_packages` is no such place: a configuration that carries it
+  is `config_decode_failed`.
 - `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
   "retry_backoff_ms":0,"escalation_threshold":2}`, the `on_failure` that
   `policy-suspension.md` ("Catalog") recommends; the `binding_requires` item about it says that
