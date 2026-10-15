@@ -1075,6 +1075,26 @@ tests = [
 ]
 incident = ["#398 RD-4"]
 
+# Workflow #385 PM-CFG (wave-17 ruling 10; PERF v1.4.2 §10.1; register §1.87): every key of the monitor's row (performance.monitor.*, .pressure.*, .load.*) is read from the configuration in effect, its default the constant the monitor ran with before, and a value outside its range or against a rule of §10.1 is refused naming the key (config_value_invalid while the rows are rendered, perf_config_invalid from the section check, the reader and the assembly); the assembly hands the row to the monitor, its host sampler and the controller; the monitor takes its sampling period, context window, sample bounds, summary period, failures in a row, controller freshness (sampling periods), stutter gap, pressure thresholds and severity levels from it, the sampler its process thresholds and coverage, the controller its heavy-load threshold, which its resource overlay hands to the policy evaluator, so a configured threshold moves the controller's count of admitted heavy work and the evaluator's heavy candidate together
+[[gate]]
+key = "98"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::perf_tests::pmcfg_the_monitor_row_in_effect_is_the_model_defaults_or_the_file_s_values",
+    "actingcommand-runtime-config::lib::perf_tests::pmcfg_a_monitor_value_out_of_range_or_against_a_rule_is_refused_naming_the_key",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::tests::pmcfg_the_monitor_and_the_controller_take_every_key_of_the_monitor_row",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_monitor_takes_its_period_windows_bounds_and_failure_limit_from_configuration",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_s_freshness_window_is_the_configured_number_of_sampling_periods",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_a_stutter_is_a_frame_gap_from_the_configured_one",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_each_pressure_starts_and_ends_at_its_configured_threshold",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_a_pressure_s_severity_follows_the_configured_levels",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_sampler_is_asked_for_the_configured_process_thresholds_and_coverage",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_counts_heavy_work_from_the_configured_threshold",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_and_the_evaluator_judge_heavy_work_by_the_one_configured_threshold",
+    "actingcommand-host-metrics::lib::windows::tests::pmcfg_process_metrics_count_from_the_configured_coverage",
+]
+incident = ["#385 PM-CFG"]
+
 # The install drain flow by phase on the manual Runtime clock (test plan v2.2 §3.10 H-1-rest, HOST-I2; inventory-host G3): BeginDrain closes admission and drains, Drained when idle, and CommitShutdown is taken from Drained only; Abort only from Draining or Drained, reopening admission; ticket, owner and phase mismatches are refused under their registered codes, change neither phase nor admission and record exactly one lifecycle failure, not performed (#352); a held owner takes only its Release and is Released, admission open, once preparation finished (Workflow #382 H-1 G3)
 [[gate]]
 key = "7"
