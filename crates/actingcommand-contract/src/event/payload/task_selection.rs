@@ -899,7 +899,7 @@ impl TaskSelectionRecord {
                         parse_candidate_id(&pick.candidate_id).map_err(|_| invalid("picks"))?;
                     indices.push(index);
                 }
-                indices.windows(2).all(|pair| pair[0] < pair[1])
+                indices.windows(2).all(|pair| pair[0] != pair[1])
             }
         };
         if !ordered {
