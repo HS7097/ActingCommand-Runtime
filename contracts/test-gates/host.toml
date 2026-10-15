@@ -201,7 +201,7 @@ tests = [
 ]
 incident = ["#399", "#400"]
 
-# No silent skip: a due clock slot that is not dispatched leaves one record
+# No silent skip: a due clock slot that is not dispatched, or lost to expiry or supersession, leaves one record
 [[gate]]
 key = "31"
 coverage = "Y"
@@ -215,6 +215,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_every_token_passes_the_planning_signal_validation",
     "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_signal_id_matches_its_golden_digest",
     "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_records_round_trip_through_ledger_and_projection",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t1_an_occurrence_kept_waiting_past_its_grace_is_recorded_expired_once",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t2_a_refused_occurrence_past_its_grace_is_recorded_expired_and_its_refusal_settles_expired",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t3_an_occurrence_absorbed_while_the_host_was_closed_is_recorded_superseded",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t4_a_pair_that_is_not_live_never_ran_or_was_already_traced_gets_no_lapse_record",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t5_superseded_records_reach_back_48_hours_and_32_occurrences",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t6_each_lapse_is_written_once_round_trips_and_keeps_its_golden_id",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t7_actingd_suspended_lists_expired_and_superseded_entries_with_their_fate",
 ]
 incident = ["#372"]
 

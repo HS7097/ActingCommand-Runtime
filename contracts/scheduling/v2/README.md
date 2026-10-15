@@ -54,3 +54,12 @@ Consumption remains `compile_catalog` -> Runtime catalog activation ->
 event at minute 240 with offset +480 and duration 86400000 expresses a 04:00 to
 04:00 window. Date and scope values belong to the catalog. This contract covers
 availability; daily activity budgets continue to follow their existing owner.
+
+A `clock` predicate may carry `missed` (Workflow #361 R7), V2 only:
+`{"kind":"skip_after","grace_ms":N}` with N from 60000 (one minute) to
+604800000 (seven days). An unserved occurrence O of that clock is due only
+before `O + grace_ms`; after it the occurrence is skipped and the clock waits
+for its next occurrence (`../README.md`, "Clock Sources"). `missed` under a
+`not` is refused (`predicate_uncomputable`), an unknown `kind` is a
+`type_mismatch`, and a V1 document that names it is refused as an unknown
+member. A clock without `missed` serializes, and hashes, exactly as before.

@@ -11,13 +11,13 @@ use super::gate_372k2::{SLOT_TASK, Slots, at, slot_sources, slot_task};
 use super::*;
 use crate::codes::HostCode;
 use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal, signal_id};
-use crate::suspension_report::{SlotDispatch, SlotSignal, clock_slot_entry};
+use crate::suspension_report::{ExpiredSlots, SlotDispatch, SlotSignal, clock_slot_entry};
 use actingcommand_contract::PolicyBudgetDimension;
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
 
 /// `actingd suspended` on a closed state root, with the catalog the scenario activated.
-fn report(root: &TempDir, sources: &CatalogSources) -> Value {
+pub(super) fn report(root: &TempDir, sources: &CatalogSources) -> Value {
     let host = config(root);
     crate::suspension_report(&SuspensionReportRequest {
         config_path: Path::new("actingd.config.json"),
@@ -29,7 +29,7 @@ fn report(root: &TempDir, sources: &CatalogSources) -> Value {
 }
 
 /// Every event of the closed ledger.
-fn ledger_events(root: &TempDir) -> Vec<PersistedEvent> {
+pub(super) fn ledger_events(root: &TempDir) -> Vec<PersistedEvent> {
     GlobalLedger::open_evidence(
         actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path())
             .sqlite_material_not_read(),
@@ -40,7 +40,7 @@ fn ledger_events(root: &TempDir) -> Vec<PersistedEvent> {
 }
 
 /// The ledger sequence of the one record `signal_id`.
-fn record_sequence(events: &[PersistedEvent], signal_id: &str) -> u64 {
+pub(super) fn record_sequence(events: &[PersistedEvent], signal_id: &str) -> u64 {
     let found = events
         .iter()
         .filter(|event| {
@@ -431,6 +431,7 @@ fn clock_slot_entries_of_each_code_match_their_golden_json() {
             },
             dispatch,
             reference,
+            &ExpiredSlots::new(),
         ))
         .expect("encode the entry")
     };

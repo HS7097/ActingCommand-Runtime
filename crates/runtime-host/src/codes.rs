@@ -181,6 +181,18 @@ actingcommand_contract::outcome_codes! {
         /// `window_start_unix_ms`, and `next_occurrence_unix_ms`, `first_run` when known;
         /// Workflow #372 K2).
         ClockSlotOwed => "clock_slot_owed": info / none,
+        /// Info. An unserved clock occurrence whose clock has `missed: skip_after` lost its
+        /// grace and was skipped, while the pair would have come due; recorded once per (task,
+        /// instance, occurrence) as a `goal_missed` planning signal (keys `task_id`, `alias`,
+        /// `occurrence_unix_ms`, `grace_ms`, and `next_occurrence_unix_ms` when known; Workflow
+        /// #372 K4).
+        ClockSlotExpired => "clock_slot_expired": info / none,
+        /// Warning. An unserved clock occurrence was absorbed by a later occurrence of the
+        /// pair's clocks with no other record of it, while the pair would have come due;
+        /// recorded once per (task, instance, occurrence) as a `goal_missed` planning signal
+        /// (keys `task_id`, `alias`, `occurrence_unix_ms`, `next_occurrence_unix_ms`; Workflow
+        /// #372 K4).
+        ClockSlotSuperseded => "clock_slot_superseded": warning / none,
         // INST-1 (Workflow #390) begin
         /// Warning. An install start went on although this instance's daemon-start
         /// preparation self-check failed, because another instance passed (INST-1, FCM D-01).

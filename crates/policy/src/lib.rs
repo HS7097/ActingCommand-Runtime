@@ -27,6 +27,8 @@ pub use strategy::*;
 /// Gate tests that need the crate's private items (test plan §2.1), and their shared fixtures.
 #[cfg(test)]
 mod tests {
+    // Workflow #361 R7, test row R7-T7: the S-08 day replay with and without `missed`.
+    mod gate_361r7;
     mod gate_390_pool1;
     mod gate_d2_s1;
     mod gate_d2_s4;

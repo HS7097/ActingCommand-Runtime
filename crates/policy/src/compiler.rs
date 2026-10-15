@@ -1176,4 +1176,165 @@ mod tests {
             assert!(compile_catalog(&sources).is_err());
         }
     }
+
+    // Workflow #361 R7: the neutral example catalog declared as `version` (a V2 timeline event
+    // gets its explicit unbounded validity), with its tasks document changed by `mutator`.
+    fn r7_sources(version: &str, mutator: impl FnOnce(&mut serde_json::Value)) -> CatalogSources {
+        let mut sources = example_sources();
+        for source in [
+            &mut sources.tasks,
+            &mut sources.pools,
+            &mut sources.activity,
+            &mut sources.timeline,
+        ] {
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&source.bytes).expect("neutral document");
+            document["schema_version"] = serde_json::json!(version);
+            if version == crate::SCHEDULING_SCHEMA_VERSION_V2
+                && let Some(events) = document
+                    .get_mut("events")
+                    .and_then(serde_json::Value::as_array_mut)
+            {
+                for event in events {
+                    event["validity"] =
+                        serde_json::json!({"from_unix_ms": 0, "until_unix_ms": null});
+                }
+            }
+            source.bytes = serde_json::to_vec(&document).expect("document bytes");
+        }
+        let mut tasks: serde_json::Value =
+            serde_json::from_slice(&sources.tasks.bytes).expect("tasks JSON");
+        mutator(&mut tasks);
+        sources.tasks.bytes = serde_json::to_vec(&tasks).expect("tasks bytes");
+        sources
+    }
+
+    // A UTC `daily [06:30]` clock with `missed`.
+    fn r7_missed_clock(missed: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "clock",
+            "schedule": {
+                "kind": "daily",
+                "clock_source": {
+                    "kind": "server",
+                    "timezone_id": "fixture/utc",
+                    "utc_offset_minutes": 0,
+                    "dst_offset_minutes": 0,
+                    "maintenance_drift_ms": 0
+                },
+                "minutes_of_day": [390]
+            },
+            "missed": missed
+        })
+    }
+
+    // Whether the catalog is refused with `code` at `json_path`.
+    fn refused_at(
+        sources: &CatalogSources,
+        code: CatalogDiagnosticCode,
+        json_path: Option<&str>,
+    ) -> bool {
+        let failure = compile_catalog(sources).expect_err("the catalog is refused");
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == code
+                && json_path.is_none_or(|json_path| diagnostic.json_path == json_path)
+        })
+    }
+
+    // Workflow #361 R7, row R7-T5 (M361 addendum of 2026-10-15): a grace of 59 999 or
+    // 604 800 001 ms is `limit_exceeded` at its pointer, 60 000 and 604 800 000 are admitted; an
+    // unknown kind is `type_mismatch`; `missed` in a V1 tasks document is refused as an unknown
+    // member; `missed` on a clock under `not` is `predicate_uncomputable` at the clock's pointer.
+    #[test]
+    fn compiler_enforces_clock_missed_bounds_version_and_placement() {
+        let v2 = crate::SCHEDULING_SCHEMA_VERSION_V2;
+        let skip_after =
+            |grace_ms: u64| serde_json::json!({"kind": "skip_after", "grace_ms": grace_ms});
+        for grace_ms in [60_000, 604_800_000] {
+            let sources = r7_sources(v2, |tasks| {
+                tasks["tasks"][0]["trigger"] = r7_missed_clock(skip_after(grace_ms));
+            });
+            compile_catalog(&sources)
+                .unwrap_or_else(|failure| panic!("grace {grace_ms}: {:?}", failure.diagnostics()));
+        }
+        for grace_ms in [59_999, 604_800_001] {
+            let sources = r7_sources(v2, |tasks| {
+                tasks["tasks"][0]["trigger"] = r7_missed_clock(skip_after(grace_ms));
+            });
+            assert!(
+                refused_at(
+                    &sources,
+                    CatalogDiagnosticCode::LimitExceeded,
+                    Some("/tasks/0/trigger/missed/grace_ms"),
+                ),
+                "grace {grace_ms}"
+            );
+        }
+        let unknown_kind = r7_sources(v2, |tasks| {
+            tasks["tasks"][0]["trigger"] =
+                r7_missed_clock(serde_json::json!({"kind": "skip_later", "grace_ms": 60_000}));
+        });
+        assert!(refused_at(
+            &unknown_kind,
+            CatalogDiagnosticCode::TypeMismatch,
+            None
+        ));
+        let v1 = r7_sources(crate::SCHEDULING_SCHEMA_VERSION, |tasks| {
+            tasks["tasks"][0]["trigger"] = r7_missed_clock(skip_after(7_200_000));
+        });
+        assert!(refused_at(
+            &v1,
+            CatalogDiagnosticCode::UnknownField,
+            Some("/tasks/0/trigger/missed"),
+        ));
+        let negated = r7_sources(v2, |tasks| {
+            tasks["tasks"][0]["trigger"] = serde_json::json!({
+                "kind": "not",
+                "predicate": r7_missed_clock(skip_after(7_200_000))
+            });
+        });
+        assert!(refused_at(
+            &negated,
+            CatalogDiagnosticCode::PredicateUncomputable,
+            Some("/tasks/0/trigger/predicate"),
+        ));
+    }
+
+    // Workflow #361 R7, row R7-T6: an absent `missed` serializes as nothing, so the neutral
+    // catalog declared as V2 keeps its golden hash. That hash was computed apart from the code
+    // under test: the canonical JSON (keys in UTF-16 order, no whitespace) of the four example
+    // documents of `contracts/scheduling/examples/catalog-a` under `activity`, `pools`, `tasks`
+    // and `timeline`, each with `schema_version` V2 and every timeline event with validity
+    // {from 0, until null}, hashed with SHA-256 by a Python script that reproduces the V1
+    // golden of `neutral_catalog_compiles_to_stable_hash_and_dry_run` from the same documents.
+    // The same catalog with `missed` on one clock has another hash, and its clock re-serializes
+    // as it was written.
+    #[test]
+    fn v2_catalog_identity_is_unchanged_without_missed_and_changes_with_it() {
+        let v2 = crate::SCHEDULING_SCHEMA_VERSION_V2;
+        let plain = compile_catalog(&r7_sources(v2, |_| {})).expect("the V2 catalog compiles");
+        assert_eq!(
+            plain.catalog_hash(),
+            "sha256:baf684c3f5864fb105ed351c2553831e7af1d76b165bd0a9233db7b26a725047"
+        );
+        let mut written = None;
+        let sources = r7_sources(v2, |tasks| {
+            tasks["tasks"][0]["trigger"]["predicates"][0]["missed"] =
+                serde_json::json!({"kind": "skip_after", "grace_ms": 600_000});
+            written = Some(tasks["tasks"][0]["trigger"].clone());
+        });
+        let missed = compile_catalog(&sources).expect("the catalog with missed compiles");
+        assert_ne!(missed.catalog_hash(), plain.catalog_hash());
+        assert_eq!(
+            compile_catalog(&sources)
+                .expect("the catalog with missed compiles again")
+                .catalog_hash(),
+            missed.catalog_hash()
+        );
+        assert_eq!(
+            serde_json::to_value(&missed.catalog().tasks.tasks[0].trigger)
+                .expect("the trigger serializes"),
+            written.expect("the written trigger")
+        );
+    }
 }
