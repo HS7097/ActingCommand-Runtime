@@ -31,23 +31,70 @@ struct Observation {
     pid_probe_failure: Option<Outcome>,
 }
 
+/// Workflow #382 A-1 (test plan v2.2 §3.7, G11): what a wait reads besides the owner journal,
+/// the time since it started and the liveness of the owner's process, and how it waits between
+/// two polls. The process waits with `SystemPoller`; a test injects its own clock and probe.
+pub(crate) trait Poller {
+    /// The time since the wait started.
+    fn elapsed(&self) -> Duration;
+    /// Waits `duration` before the next poll.
+    fn wait(&mut self, duration: Duration);
+    /// Whether the process `pid` is alive; the failure of a probe that cannot tell.
+    fn pid_alive(&mut self, pid: u32) -> Result<bool, Outcome>;
+}
+
+/// The process's poller: the monotonic clock from the wait's start, a sleep and the platform
+/// process lister.
+struct SystemPoller {
+    started: Instant,
+}
+
+impl Poller for SystemPoller {
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    fn wait(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+
+    fn pid_alive(&mut self, pid: u32) -> Result<bool, Outcome> {
+        pid_alive(pid)
+    }
+}
+
 pub(crate) fn wait_for_shutdown(
     state_root: &Path,
     target: &RuntimeShutdownTarget,
     wait: Duration,
 ) -> Result<Value, ActingctlError> {
-    let started = Instant::now();
-    let deadline = started + wait;
+    wait_with(
+        state_root,
+        target,
+        wait,
+        &mut SystemPoller {
+            started: Instant::now(),
+        },
+    )
+}
+
+/// `wait_for_shutdown` with its clock and liveness probe taken from `poller`.
+pub(crate) fn wait_with(
+    state_root: &Path,
+    target: &RuntimeShutdownTarget,
+    wait: Duration,
+    poller: &mut impl Poller,
+) -> Result<Value, ActingctlError> {
     let journal = state_root.join(OWNER_JOURNAL_FILE);
     let epoch = serde_json::to_value(target.owner_epoch)
         .map_err(|error| unreadable(unreadable_journal(&journal).caused_by(decode(&error))))?;
     let mut observed = Observation::default();
     loop {
         observe_journal(&journal, &epoch, target.pid, &mut observed)?;
-        let timed_out = Instant::now() >= deadline;
+        let timed_out = poller.elapsed() >= wait;
         // The process is probed once the epoch closed, and once more for the timeout's values.
         if observed.active == Some(false) || timed_out {
-            match pid_alive(target.pid) {
+            match poller.pid_alive(target.pid) {
                 Ok(alive) => {
                     (observed.pid_alive, observed.pid_probe_failure) = (Some(alive), None);
                 }
@@ -64,7 +111,7 @@ pub(crate) fn wait_for_shutdown(
             return Ok(json!({
                 "state": "completed",
                 "closed_at_unix_ms": closed_at_unix_ms,
-                "elapsed_ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "elapsed_ms": u64::try_from(poller.elapsed().as_millis()).unwrap_or(u64::MAX),
             }));
         }
         if timed_out {
@@ -72,7 +119,7 @@ pub(crate) fn wait_for_shutdown(
                 target, wait, &epoch, observed,
             )));
         }
-        std::thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+        poller.wait(POLL_INTERVAL.min(wait.saturating_sub(poller.elapsed())));
     }
 }
 

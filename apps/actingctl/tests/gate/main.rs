@@ -10,6 +10,8 @@ mod emulator_controller;
 #[path = "../../../../tests/support/held_runtime.rs"]
 mod held_runtime;
 
+// Workflow #382 A-1: usage errors before any connection, and refused requests' exits.
+mod cli_grammar;
 mod emulator_restart;
 // Workflow #389 MCP-21: `actingctl emulator start|stop|restart --wait`.
 mod emulator_wait;

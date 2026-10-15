@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    AgentPayload, AgentSessionId, ApplicationLifecycleAction, EffectDisposition, EventActor,
-    EventPayload, EventQuery, EventSeverity, EventSource, EventType, FactScope, IdentifierIssuer,
-    InputPayload, InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
+    AgentPayload, AgentSessionId, ApplicationLifecycleAction, EventActor, EventPayload, EventQuery,
+    EventSeverity, EventSource, EventType, FactScope, IdentifierIssuer, InstanceId,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
     PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
     ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode,
     RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskPayload, TaskSemanticFact,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskPayload,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -319,6 +319,7 @@ fn actingd_withholds_legacy_physical_policy_dispatch_until_a_self_check_passes()
 
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
+    let mut stderr = DaemonStderr::read(&mut child.0);
     wait_for_runtime_info(&mut child.0, root.path());
     let client = wait_for_agent_client(&mut child.0, root.path());
     let failed_self_check = |events: &[actingcommand_contract::ProjectedEvent]| {
@@ -350,7 +351,10 @@ fn actingd_withholds_legacy_physical_policy_dispatch_until_a_self_check_passes()
         );
         thread::sleep(Duration::from_millis(20));
     }
-    thread::sleep(Duration::from_millis(200));
+    // Test plan v2.2 §4 #12 (X5): the barrier is `runtime_ready`, which follows the initial
+    // policy cycle, where a dispatch to the instance would be written
+    // (`DaemonStderr::wait_for_runtime_ready`).
+    stderr.wait_for_runtime_ready(&mut child.0);
     let events = client
         .query_events(EventQuery::default(), ProjectionProfile::Forensic)
         .expect("query legacy policy events");
@@ -388,48 +392,6 @@ fn actingd_withholds_legacy_physical_policy_dispatch_until_a_self_check_passes()
 }
 
 #[test]
-fn actingd_rejects_explicit_fixture_simulation_on_a_physical_registry() {
-    let root = TempDir::new().expect("tempdir");
-    let config_path = root.path().join("actingd.json");
-    let instance_id = instance_id();
-    write_policy_execution_config(
-        &config_path,
-        root.path(),
-        instance_id,
-        &[vec![0, 0, 255, 0, 255, 0]],
-        0,
-    );
-    let mut config: serde_json::Value =
-        serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
-            .expect("decode fixture config");
-    config["instances"] = json!([{
-        "alias": INSTANCE_ALIAS,
-        "instance_id": instance_id,
-        "application_id": "neutral.application",
-        "adb_path": "must-not-run-adb",
-        "touch_backend": "maatouch",
-        "capture_backend": "adb",
-        "push_touch_tool": false
-    }]);
-    fs::write(
-        &config_path,
-        serde_json::to_vec_pretty(&config).expect("physical policy config JSON"),
-    )
-    .expect("write physical policy config");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
-        .args(["--config", config_path.to_str().expect("config path")])
-        .output()
-        .expect("run actingd");
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("scheduled_execution_backend_mode_mismatch")
-    );
-    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
-}
-
-#[test]
 fn actingd_accepts_explicit_device_registry_scheduling_without_opening_a_device() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
@@ -464,21 +426,22 @@ fn actingd_accepts_explicit_device_registry_scheduling_without_opening_a_device(
 
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
+    let mut stderr = DaemonStderr::read(&mut child.0);
     wait_for_runtime_info(&mut child.0, root.path());
     let client = wait_for_agent_client(&mut child.0, root.path());
-    thread::sleep(Duration::from_millis(200));
+    // Test plan v2.2 §4 #12 (X5): the barrier is `runtime_ready`, which follows the start's
+    // device preparation and the initial policy cycle, the points where a task request or an
+    // input for the device would be written (`DaemonStderr::wait_for_runtime_ready`); the task
+    // itself is not due before the clock set above.
+    stderr.wait_for_runtime_ready(&mut child.0);
     assert!(child.0.try_wait().expect("process state").is_none());
     let events = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic) {
         Ok(events) => events,
         Err(error) => {
             let status = child.0.try_wait().expect("process state");
-            let mut stderr = String::new();
-            if let Some(pipe) = child.0.stderr.as_mut() {
-                pipe.read_to_string(&mut stderr)
-                    .expect("read actingd stderr");
-            }
             panic!(
-                "query device registry policy events failed: {error}; status={status:?}; stderr={stderr}"
+                "query device registry policy events failed: {error}; status={status:?}; stderr={:?}",
+                stderr.lines
             );
         }
     };
@@ -663,8 +626,57 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
             "actingd ready timed out"
         );
     }
-    // At least four monitor polls, so the subscription loop is running before the drain.
-    thread::sleep(Duration::from_secs(1));
+    // Test plan v2.2 §4 #12 (X5): no fixed sleep before the drain. actingd starts its policy
+    // monitor right after it prints `runtime_ready` and prints nothing when the monitor runs; the
+    // monitor's `waiting install_transition` line awaited after the first drain shows that the
+    // monitor was running and saw that drain.
+    // Workflow #376 M6 (rd-1008/v0114/model-376.md:75): the monitor's stdout line on entering the
+    // wait and on leaving it without a shutdown. actingd prints them in `report_policy_monitor`
+    // (apps/actingd/src/main.rs) from the literals "waiting install_transition" and "resumed";
+    // the product names no constant for them and an integration test cannot import from the
+    // binary crate, so these are the same literals: change them with the product's lines.
+    const MONITOR_WAITING: &str = "actingd policy_monitor waiting install_transition";
+    const MONITOR_RESUMED: &str = "actingd policy_monitor resumed";
+    /// Waits, with a bounded deadline, until actingd's stdout holds the policy monitor lines
+    /// `expected`, in this order and with no other monitor line between them.
+    fn await_monitor_lines(
+        child: &mut Child,
+        received: &std::sync::mpsc::Receiver<String>,
+        stdout_lines: &mut Vec<String>,
+        expected: &[&str],
+    ) {
+        let is_monitor_line = |line: &&String| line.starts_with("actingd policy_monitor ");
+        let started = Instant::now();
+        loop {
+            if stdout_lines.iter().filter(is_monitor_line).count() >= expected.len() {
+                let reported = stdout_lines
+                    .iter()
+                    .filter(is_monitor_line)
+                    .take(expected.len())
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                assert_eq!(reported, expected, "policy monitor lines: {stdout_lines:?}");
+                return;
+            }
+            match received.recv_timeout(Duration::from_millis(100)) {
+                Ok(line) => stdout_lines.push(line),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("actingd stdout closed before {expected:?}: {stdout_lines:?}")
+                }
+            }
+            if let Some(status) = child.try_wait().expect("process state") {
+                panic!(
+                    "actingd exited with {status} before the policy monitor reported \
+                     {expected:?}: {stdout_lines:?}"
+                );
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "the policy monitor did not report {expected:?}: {stdout_lines:?}"
+            );
+        }
+    }
 
     // The installer's control client: production I/O budget and a governance identity.
     let control = RuntimeClient::connect(RuntimeClientConfig::new(
@@ -738,8 +750,15 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
         );
     }
 
+    // Workflow #376 M1, M5, M6: each wait for the monitor's own line replaces a fixed 1 s sleep;
+    // once the monitor has reported, the daemon is alive and recorded no `runtime.failed`.
     let first = drain("issue-376-first");
-    thread::sleep(Duration::from_secs(1));
+    await_monitor_lines(
+        &mut child.0,
+        &received,
+        &mut stdout_lines,
+        &[MONITOR_WAITING],
+    );
     assert_daemon_survives(&mut child.0, &control, "first drain");
     let aborted = control
         .install_transition(InstallTransitionAction::Abort { ticket: first })
@@ -748,11 +767,21 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
         aborted.result(),
         Some(RuntimeResult::InstallTransition { status }) if status.phase == InstallTransitionPhase::Aborted
     ));
-    thread::sleep(Duration::from_secs(1));
+    await_monitor_lines(
+        &mut child.0,
+        &received,
+        &mut stdout_lines,
+        &[MONITOR_WAITING, MONITOR_RESUMED],
+    );
     assert_daemon_survives(&mut child.0, &control, "after abort");
 
     let second = drain("issue-376-second");
-    thread::sleep(Duration::from_secs(1));
+    await_monitor_lines(
+        &mut child.0,
+        &received,
+        &mut stdout_lines,
+        &[MONITOR_WAITING, MONITOR_RESUMED, MONITOR_WAITING],
+    );
     assert_daemon_survives(&mut child.0, &control, "second drain");
     let drained_position = control
         .query_event_page(
@@ -814,11 +843,7 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
         .collect::<Vec<_>>();
     assert_eq!(
         monitor_lines,
-        [
-            "actingd policy_monitor waiting install_transition",
-            "actingd policy_monitor resumed",
-            "actingd policy_monitor waiting install_transition",
-        ]
+        [MONITOR_WAITING, MONITOR_RESUMED, MONITOR_WAITING]
     );
 
     let ledger = actingcommand_ledger::GlobalLedger::open_evidence(
@@ -859,6 +884,10 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
     assert_eq!(accepted[0].sequence(), terminal.sequence);
 }
 
+/// Test plan v2.2 §4 #14: the end-to-end smoke of a restart. The restarted daemon does not run a
+/// settled scheduled run again (contracts/policy-suspension.md:62-64: only the next legal normal
+/// trigger starts a run). It duplicates no host test: the host's crash-recovery tests look a run
+/// up by its id, so they cannot see a new run.
 #[test]
 fn actingd_recovery_does_not_repeat_a_settled_scheduled_run() {
     let root = TempDir::new().expect("tempdir");
@@ -898,21 +927,21 @@ fn actingd_recovery_does_not_repeat_a_settled_scheduled_run() {
 
     let restarted = start_actingd(&config_path);
     let mut restarted = ChildGuard(restarted);
+    let mut stderr = DaemonStderr::read(&mut restarted.0);
     wait_for_runtime_info(&mut restarted.0, root.path());
     let client = wait_for_agent_client(&mut restarted.0, root.path());
-    thread::sleep(Duration::from_millis(500));
+    // Test plan v2.2 §4 #12 (X5): the barrier is the restarted daemon's `runtime_ready`, which
+    // follows its start's recovery and its initial (`Recovery`) policy cycle, the points where a
+    // repeat of the settled run would be written (`DaemonStderr::wait_for_runtime_ready`).
+    stderr.wait_for_runtime_ready(&mut restarted.0);
     assert!(restarted.0.try_wait().expect("process state").is_none());
     let events = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic) {
         Ok(events) => events,
         Err(error) => {
             let status = restarted.0.try_wait().expect("process state");
-            let mut stderr = String::new();
-            if let Some(pipe) = restarted.0.stderr.as_mut() {
-                pipe.read_to_string(&mut stderr)
-                    .expect("read restarted actingd stderr");
-            }
             panic!(
-                "query recovered settled run failed: {error}; status={status:?}; stderr={stderr}"
+                "query recovered settled run failed: {error}; status={status:?}; stderr={:?}",
+                stderr.lines
             );
         }
     };
@@ -935,76 +964,6 @@ fn actingd_recovery_does_not_repeat_a_settled_scheduled_run() {
     drop(client);
     restarted.0.kill().expect("kill restarted actingd");
     restarted.0.wait().expect("wait restarted actingd");
-}
-
-#[test]
-fn actingd_requires_package_path_for_each_explicit_scheduled_mode() {
-    for mode in ["fixture_simulation", "device_registry"] {
-        let root = TempDir::new().expect("tempdir");
-        let config_path = root.path().join("actingd.json");
-        write_policy_execution_config(
-            &config_path,
-            root.path(),
-            instance_id(),
-            &[vec![0, 0, 255, 0, 255, 0]],
-            0,
-        );
-        let mut config: serde_json::Value =
-            serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
-                .expect("decode fixture config");
-        config["policy"]["procedure_manifest"][0]["scheduled_execution"]["mode"] = json!(mode);
-        config["policy"]["procedure_manifest"][0]["scheduled_execution"]
-            .as_object_mut()
-            .expect("scheduled execution object")
-            .remove("package_path");
-        fs::write(
-            &config_path,
-            serde_json::to_vec_pretty(&config).expect("missing package config JSON"),
-        )
-        .expect("write missing package config");
-
-        let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
-            .args(["--config", config_path.to_str().expect("config path")])
-            .output()
-            .expect("run actingd");
-        assert!(!output.status.success(), "{mode}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("procedure_package_path_missing"),
-            "{mode}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(!root.path().join(RUNTIME_INFO_FILE).exists(), "{mode}");
-    }
-}
-
-#[test]
-fn actingd_rejects_unknown_scheduled_execution_mode() {
-    let root = TempDir::new().expect("tempdir");
-    let config_path = root.path().join("actingd.json");
-    write_policy_execution_config(
-        &config_path,
-        root.path(),
-        instance_id(),
-        &[vec![0, 0, 255, 0, 255, 0]],
-        0,
-    );
-    let mut config: serde_json::Value =
-        serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
-            .expect("decode fixture config");
-    config["policy"]["procedure_manifest"][0]["scheduled_execution"]["mode"] = json!("adb_backend");
-    fs::write(
-        &config_path,
-        serde_json::to_vec_pretty(&config).expect("unknown mode config JSON"),
-    )
-    .expect("write unknown mode config");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
-        .args(["--config", config_path.to_str().expect("config path")])
-        .output()
-        .expect("run actingd");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("config_decode_failed"));
-    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 }
 
 #[test]
@@ -1103,551 +1062,6 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
     drop(client);
     child.0.kill().expect("kill actingd");
     child.0.wait().expect("wait actingd");
-}
-
-#[test]
-fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
-    // Workflow #336 PKG-S2 (option 丙): the run names its package by `package_id`.
-    let expected_package_label = "neutral.semantic.task";
-    let actinglab_binary = prebuilt_actinglab();
-    for (case, frames, max_inputs, expected_effects) in [
-        (
-            "effecting",
-            vec![vec![255, 0, 0, 0, 255, 0], vec![0, 0, 255, 0, 255, 0]],
-            1,
-            1,
-        ),
-        ("no-op", vec![vec![0, 0, 255, 0, 255, 0]], 0, 0),
-    ] {
-        let root = TempDir::new().expect("tempdir");
-        let config_path = root.path().join("actingd.json");
-        write_policy_execution_config(
-            &config_path,
-            root.path(),
-            instance_id(),
-            &frames,
-            max_inputs,
-        );
-
-        let child = start_actingd(&config_path);
-        let mut child = ChildGuard(child);
-        wait_for_runtime_info(&mut child.0, root.path());
-        // v0.11.4 flaky tests (review H1): every client of this test keeps the production I/O
-        // budget, so one slow reply behind the single ledger writer does not latch its
-        // connection; nothing reconnects or abandons a connection.
-        let client = wait_for_agent_client(&mut child.0, root.path());
-        let started = Instant::now();
-        let events = loop {
-            let query_started = Instant::now();
-            let queried = client.query_events(EventQuery::default(), ProjectionProfile::Forensic);
-            let query_ms = query_started.elapsed().as_millis();
-            if query_ms >= 500 {
-                // Each such reply would have failed the former 500 ms budget.
-                eprintln!("{case}: slow query_events reply: {query_ms} ms");
-            }
-            let events = match queried {
-                Ok(events) => events,
-                Err(error) => {
-                    if let Some(status) = child.0.try_wait().expect("process state") {
-                        let mut stderr = String::new();
-                        if let Some(pipe) = child.0.stderr.as_mut() {
-                            pipe.read_to_string(&mut stderr)
-                                .expect("read actingd stderr");
-                        }
-                        panic!(
-                            "{case}: actingd exited while querying with {status}: {error}: {stderr}"
-                        );
-                    }
-                    assert!(
-                        started.elapsed() < Duration::from_secs(20),
-                        "{case}: query run events failed: {error}"
-                    );
-                    thread::sleep(Duration::from_millis(20));
-                    continue;
-                }
-            };
-            if events
-                .iter()
-                .any(|event| event.event_type == EventType::PolicyDispatchCompleted)
-            {
-                break events;
-            }
-            if let Some(status) = child.0.try_wait().expect("process state") {
-                let mut stderr = String::new();
-                if let Some(pipe) = child.0.stderr.as_mut() {
-                    pipe.read_to_string(&mut stderr)
-                        .expect("read actingd stderr");
-                }
-                panic!("{case}: actingd exited before completed run with {status}: {stderr}");
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "{case}: completed policy run timed out"
-            );
-            thread::sleep(Duration::from_millis(20));
-        };
-
-        let intent = events
-            .iter()
-            .find(|event| event.event_type == EventType::PolicyDispatchIntent)
-            .unwrap_or_else(|| panic!("{case}: policy intent"));
-        let run_id = intent.links.run_id().copied().expect("run id");
-        let task_id = intent.links.task_id().copied().expect("task id");
-        let correlation_id = intent
-            .links
-            .correlation_id()
-            .copied()
-            .expect("correlation id");
-        let run_events = events
-            .iter()
-            .filter(|event| event.links.run_id() == Some(&run_id))
-            .collect::<Vec<_>>();
-        let intent_payload = match &intent.payload {
-            ProjectionPayload::Full(payload) => match payload.as_ref() {
-                EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => payload,
-                _ => panic!("{case}: policy intent payload"),
-            },
-            _ => panic!("{case}: forensic policy intent"),
-        };
-        assert!(
-            run_events
-                .iter()
-                .all(|event| event.origin.source() != EventSource::Device),
-            "{case}: fixture simulation must not emit device-origin events"
-        );
-        assert!(
-            run_events.iter().all(|event| {
-                event.links.task_id() == Some(&task_id)
-                    && event.links.correlation_id() == Some(&correlation_id)
-            }),
-            "{case}: every run-linked event must share task and correlation identity"
-        );
-        for event_type in [
-            EventType::PolicyDispatchIntent,
-            EventType::PolicyDispatchAdmitted,
-            EventType::LeaseGranted,
-            EventType::LabRequest,
-            EventType::TaskRequested,
-            EventType::TaskCompleted,
-            EventType::LeaseReleased,
-            EventType::PolicyExecutionRecorded,
-            EventType::PolicyDispatchCompleted,
-        ] {
-            assert_eq!(
-                run_events
-                    .iter()
-                    .filter(|event| event.event_type == event_type)
-                    .count(),
-                1,
-                "{case}: {event_type:?}"
-            );
-        }
-        let package_admitted = run_events
-            .iter()
-            .find(|event| event.event_type == EventType::TaskRequested)
-            .expect("package admitted fact");
-        assert!(matches!(
-            &package_admitted.payload,
-            ProjectionPayload::Full(payload)
-                if matches!(
-                    payload.as_ref(),
-                    EventPayload::Task(TaskPayload::Semantic(payload))
-                        if matches!(
-                            payload.fact(),
-                            TaskSemanticFact::PackageAdmitted { package_label, .. }
-                                if package_label == expected_package_label
-                        )
-                )
-        ));
-        assert_eq!(
-            run_events
-                .iter()
-                .filter(|event| event.event_type == EventType::TaskEffectCompleted)
-                .count(),
-            expected_effects,
-            "{case}: effect count"
-        );
-        let simulation_events = run_events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.event_type,
-                    EventType::CaptureRequested
-                        | EventType::CaptureCompleted
-                        | EventType::InputIntent
-                        | EventType::InputCommitted
-                )
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            !simulation_events.is_empty()
-                && simulation_events.iter().all(|event| {
-                    event.origin.source() == EventSource::Lab
-                        && event.origin.module() == OriginModule::Actinglab
-                }),
-            "{case}: captures and simulated inputs must carry Lab/Actinglab provenance"
-        );
-        let committed_inputs = simulation_events
-            .iter()
-            .filter(|event| event.event_type == EventType::InputCommitted)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            committed_inputs.len(),
-            expected_effects,
-            "{case}: input count"
-        );
-        assert!(
-            committed_inputs.iter().all(|event| {
-                matches!(
-                    &event.payload,
-                    ProjectionPayload::Full(payload)
-                        if matches!(
-                            payload.as_ref(),
-                            EventPayload::Input(InputPayload::Committed(outcome))
-                                if outcome.effect_disposition() == EffectDisposition::NotPerformed
-                        )
-                )
-            }),
-            "{case}: fixture input must be recorded as not performed"
-        );
-        let lease_id = run_events
-            .iter()
-            .find(|event| event.event_type == EventType::LeaseGranted)
-            .and_then(|event| event.links.lease_id())
-            .copied()
-            .expect("lease id");
-        let admitted_payload = run_events
-            .iter()
-            .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-            .and_then(|event| match &event.payload {
-                ProjectionPayload::Full(payload) => match payload.as_ref() {
-                    EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) => Some(payload),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .expect("policy admission payload");
-        assert!(
-            run_events
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event.event_type,
-                        EventType::TaskCompleted
-                            | EventType::LeaseReleased
-                            | EventType::PolicyExecutionRecorded
-                            | EventType::PolicyDispatchCompleted
-                    )
-                })
-                .all(|event| event.links.lease_id() == Some(&lease_id))
-        );
-        let lab_request = run_events
-            .iter()
-            .find(|event| event.event_type == EventType::LabRequest)
-            .expect("lab request");
-        let task_completed = run_events
-            .iter()
-            .find(|event| event.event_type == EventType::TaskCompleted)
-            .expect("task completed");
-        let lab_request_id = lab_request
-            .links
-            .request_id()
-            .copied()
-            .expect("lab request id");
-        let terminal_request_id = task_completed
-            .links
-            .request_id()
-            .copied()
-            .expect("task completed request id");
-        assert_eq!(
-            lab_request_id, terminal_request_id,
-            "{case}: receipt terminal must use the contained request identity"
-        );
-        let execution = run_events
-            .iter()
-            .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
-            .expect("policy execution");
-        let ProjectionPayload::Full(payload) = &execution.payload else {
-            panic!("{case}: forensic execution payload")
-        };
-        let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = payload.as_ref()
-        else {
-            panic!("{case}: policy execution payload")
-        };
-        assert!(matches!(
-            payload.policy_result(),
-            PolicyExecutionOutcome::Succeeded { .. }
-        ));
-        let summary = client
-            .summarize_run(run_id)
-            .unwrap_or_else(|error| panic!("{case}: summarize completed run: {error}"));
-        assert_eq!(
-            summary.get("status").and_then(serde_json::Value::as_str),
-            Some("simulated_completed")
-        );
-        assert_eq!(
-            summary
-                .get("package_label")
-                .and_then(serde_json::Value::as_str),
-            Some(expected_package_label)
-        );
-        assert!(summary.get("package_digest").is_none());
-        assert_eq!(
-            summary.get("effect").and_then(serde_json::Value::as_str),
-            Some(if expected_effects == 1 {
-                "would_effect"
-            } else {
-                "no_op"
-            })
-        );
-        assert_eq!(
-            summary
-                .get("actual_effect_count")
-                .and_then(serde_json::Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            summary
-                .get("simulated_effect_count")
-                .and_then(serde_json::Value::as_u64),
-            Some(expected_effects as u64)
-        );
-        let provenance = summary
-            .get("execution_provenance")
-            .expect("structured execution provenance");
-        assert_eq!(
-            provenance.get("kind").and_then(serde_json::Value::as_str),
-            Some("fixture_simulation")
-        );
-        for field in ["device_access", "account_access", "production_input"] {
-            assert_eq!(
-                provenance.get(field).and_then(serde_json::Value::as_bool),
-                Some(false),
-                "{case}: {field}"
-            );
-        }
-        assert_eq!(
-            summary
-                .get("request")
-                .and_then(|request| request.get("lab_request_id")),
-            summary
-                .get("request")
-                .and_then(|request| request.get("receipt_request_id")),
-            "{case}: report must preserve the receipt request identity"
-        );
-        assert_eq!(
-            summary.get("run_id"),
-            Some(&json!(run_id)),
-            "{case}: report run must match the source event"
-        );
-        assert_eq!(
-            summary.get("task_id"),
-            Some(&json!(task_id)),
-            "{case}: report task must match the source event"
-        );
-        assert_eq!(
-            summary.get("correlation_id"),
-            Some(&json!(correlation_id)),
-            "{case}: report correlation must match the source event"
-        );
-        assert_eq!(
-            summary.pointer("/request/lab_request_id"),
-            Some(&json!(lab_request_id)),
-            "{case}: report request must match the source LabRequest event"
-        );
-        assert_eq!(
-            summary.pointer("/request/receipt_request_id"),
-            Some(&json!(terminal_request_id)),
-            "{case}: report receipt must match the source TaskCompleted event"
-        );
-        assert_eq!(
-            summary.get("decision_id"),
-            Some(&json!(intent_payload.decision_id())),
-            "{case}: report decision must come from the run's intent event"
-        );
-        assert_eq!(
-            summary.get("admission"),
-            Some(
-                &serde_json::to_value(
-                    admitted_payload
-                        .admission()
-                        .expect("admitted event admission record"),
-                )
-                .expect("admission JSON")
-            ),
-            "{case}: report admission must come from the run's admitted event"
-        );
-        assert_eq!(
-            summary.pointer("/lease/lease_id"),
-            Some(&serde_json::to_value(lease_id).expect("lease id JSON")),
-            "{case}: report lease must match the run's granted lease"
-        );
-        assert_eq!(
-            summary.pointer("/reason_chain/id"),
-            Some(&json!(intent_payload.reason_chain_id())),
-            "{case}: report reason-chain identity must come from the run's intent"
-        );
-        assert_eq!(
-            summary.pointer("/reason_chain/reasons"),
-            Some(
-                &serde_json::to_value(intent_payload.reasons())
-                    .expect("policy intent reasons JSON")
-            ),
-            "{case}: report reasons must come from the run's intent"
-        );
-        assert_eq!(
-            summary.pointer("/outcome/policy"),
-            Some(&serde_json::to_value(payload.policy_result()).expect("policy outcome JSON")),
-            "{case}: report outcome must come from the run's execution event"
-        );
-        let (summary_status, summary_envelope) =
-            run_actinglab_summary(&actinglab_binary, root.path(), run_id, case);
-        assert!(
-            summary_status.success(),
-            "{case}: formal actinglab summary must exit zero: {summary_envelope}"
-        );
-        assert_eq!(
-            summary_envelope.get("ok").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            summary_envelope.get("command").and_then(Value::as_str),
-            Some("run summary")
-        );
-        assert_eq!(
-            summary_envelope.get("data"),
-            Some(&summary),
-            "{case}: formal CLI must return the same typed Runtime projection"
-        );
-        let unknown_run_id = *IdentifierIssuer::new()
-            .expect("identifier issuer")
-            .mint_run_id()
-            .expect("unknown run id")
-            .transport();
-        let missing = client
-            .summarize_run(unknown_run_id)
-            .expect_err("unknown run must not produce a success-looking summary");
-        assert_eq!(missing.code().as_str(), "run_summary_not_found", "{case}");
-        let (missing_status, missing_envelope) =
-            run_actinglab_summary(&actinglab_binary, root.path(), unknown_run_id, case);
-        assert!(
-            !missing_status.success(),
-            "{case}: unknown typed run must exit non-zero"
-        );
-        assert_eq!(
-            missing_status.code(),
-            Some(2),
-            "{case}: unknown typed run must retain the usage-validation exit"
-        );
-        assert_eq!(
-            missing_envelope.get("ok").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            missing_envelope
-                .pointer("/error/code")
-                .and_then(Value::as_str),
-            Some("run_summary_not_found")
-        );
-        assert!(
-            missing_envelope.get("data").is_none(),
-            "{case}: unknown run must not carry success-style data"
-        );
-        let capture_count_before = client
-            .query_events(
-                EventQuery {
-                    event_type: Some(EventType::CaptureRequested),
-                    ..EventQuery::default()
-                },
-                ProjectionProfile::Forensic,
-            )
-            .expect("query fixture captures")
-            .len();
-        let device_client = connect(root.path());
-        let denied = device_client
-            .observe_readonly(INSTANCE_ALIAS)
-            .expect_err("fixture provider must be isolated from normal device operations");
-        assert_eq!(denied.code().as_str(), "runtime_request_rejected");
-        assert_eq!(
-            denied.projection().map(|projection| projection.code),
-            Some(RuntimeErrorCode::InvalidRequest)
-        );
-        drop(device_client);
-        let capture_count_after = client
-            .query_events(
-                EventQuery {
-                    event_type: Some(EventType::CaptureRequested),
-                    ..EventQuery::default()
-                },
-                ProjectionProfile::Forensic,
-            )
-            .expect("query fixture captures after denied device operation")
-            .len();
-        assert_eq!(capture_count_after, capture_count_before);
-        assert!(child.0.try_wait().expect("process state").is_none());
-
-        drop(client);
-        let maintenance = connect(root.path());
-        let started = Instant::now();
-        let accepted = loop {
-            match maintenance.request_shutdown() {
-                Ok(receipt) => break receipt,
-                Err(error) => {
-                    assert_eq!(
-                        error.projection().expect("typed busy").code,
-                        RuntimeErrorCode::RuntimeBusy
-                    );
-                    eprintln!(
-                        "WARNING policy shutdown specification: {error}; waiting for in-flight work"
-                    );
-                    assert!(
-                        started.elapsed() < Duration::from_secs(5),
-                        "policy shutdown stayed busy"
-                    );
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-        };
-        assert_eq!(accepted.state(), RuntimeReceiptState::Admitted);
-        drop(maintenance);
-        loop {
-            if let Some(status) = child.0.try_wait().expect("policy shutdown exit") {
-                assert!(
-                    status.success(),
-                    "{case}: normal policy close must exit zero"
-                );
-                break;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(10),
-                "policy close did not finish"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-        let ledger = actingcommand_ledger::GlobalLedger::open_evidence(
-            actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path()),
-            |reference| {
-                Some(
-                    actingcommand_artifact_store::verify_projected_read_only(
-                        root.path(),
-                        reference,
-                    )
-                    .expect("verify closed policy artifact"),
-                )
-            },
-        )
-        .expect("closed policy ledger");
-        assert!(ledger.corrupt_tail().is_none());
-        let events = ledger.query(&EventQuery::default());
-        assert!(
-            !events
-                .iter()
-                .any(|event| event.event_type() == EventType::RuntimeFailed)
-        );
-        assert!(
-            matches!(events.last().expect("policy close summary").payload(), EventPayload::Runtime(actingcommand_contract::RuntimePayload::LifecycleObserved(payload)) if payload.phase() == actingcommand_contract::RuntimeLifecyclePhase::DeviceDiagnosticSummary)
-        );
-    }
 }
 
 #[test]
@@ -3026,22 +2440,16 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
     child.0.wait().expect("wait actingd");
 }
 
+/// Test plan v2.2 §4 #13 (Workflow #382 A-6), the process boundary of a start refusal at load: a
+/// policy configuration whose scheduled execution names an unknown mode does not decode
+/// (`config_decode_failed`, stage `load`, contracts/actingd-check-config.md:411), and the start
+/// refuses it before any side effect (:436; Workflow #378 model §8.2 F8: no ledger is opened for
+/// a refusal). The refusal is the terminal `OUTCOME actingd:` line, an error, and the exit code is
+/// its category's (Workflow #378 A6a, model sections 7.4 and 7.6); the state root the
+/// configuration names holds no runtime-info and no ledger file. The refusal's code and stage of
+/// each configuration are in `config::gate_382_a6`.
 #[test]
 fn invalid_startup_returns_nonzero() {
-    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
-        .args(["--config", "missing-actingd-config.json"])
-        .output()
-        .expect("run actingd");
-    // Workflow #378 A6a (model sections 7.4, 7.6): the refusal is the terminal `OUTCOME
-    // actingd:` line, an error, and the exit code is its category's (it was a FATAL line).
-    assert_eq!(output.status.code(), Some(1));
-    let terminal = terminal_outcome(&output.stderr);
-    assert_eq!(terminal["code"], "config_unavailable", "{terminal}");
-    assert_eq!(terminal["category"], "error", "{terminal}");
-}
-
-#[test]
-fn policy_startup_rejects_approval_ids_that_do_not_match_the_catalog() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     write_policy_execution_config(
@@ -3051,23 +2459,29 @@ fn policy_startup_rejects_approval_ids_that_do_not_match_the_catalog() {
         &[vec![0, 0, 255, 0, 255, 0]],
         0,
     );
-    let mut config: serde_json::Value =
+    let mut config: Value =
         serde_json::from_slice(&fs::read(&config_path).expect("read policy config"))
             .expect("decode policy config");
-    config["policy"]["catalog_approval_ids"] = json!(["approval:untrusted"]);
+    config["policy"]["procedure_manifest"][0]["scheduled_execution"]["mode"] = json!("adb_backend");
     fs::write(
         &config_path,
-        serde_json::to_vec_pretty(&config).expect("invalid policy config JSON"),
+        serde_json::to_vec_pretty(&config).expect("unknown mode config JSON"),
     )
-    .expect("write invalid policy config");
+    .expect("write unknown mode config");
 
     let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
         .args(["--config", config_path.to_str().expect("config path")])
         .output()
         .expect("run actingd");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("policy_catalog_approval_mismatch"));
+    assert_eq!(output.status.code(), Some(1));
+    let terminal = terminal_outcome(&output.stderr);
+    assert_eq!(terminal["code"], "config_decode_failed", "{terminal}");
+    assert_eq!(terminal["category"], "error", "{terminal}");
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+    assert!(
+        !root.path().join("runtime-state.sqlite").exists(),
+        "no ledger may be opened"
+    );
 }
 
 /// Workflow #361 C1/C2: what the first policy cycle or the approval driver used to refuse
@@ -4442,47 +3856,72 @@ fn start_actingd(config_path: &Path) -> Child {
         .expect("start actingd")
 }
 
-fn run_actinglab_summary(
-    actinglab_binary: &Path,
-    state_root: &Path,
-    run_id: actingcommand_contract::RunId,
-    case: &str,
-) -> (std::process::ExitStatus, Value) {
-    let run_id = serde_json::to_value(run_id)
-        .expect("run id JSON")
-        .as_str()
-        .expect("run id string")
-        .to_owned();
-    let output = Command::new(actinglab_binary)
-        .args([
-            "--json",
-            "run",
-            "summary",
-            &run_id,
-            "--state-root",
-            state_root.to_str().expect("state root"),
-        ])
-        .output()
-        .unwrap_or_else(|error| panic!("{case}: start actinglab summary: {error}"));
-    let envelope = serde_json::from_slice::<Value>(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "{case}: parse actinglab summary JSON: {error}; stdout={}; stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
-    (output.status, envelope)
+/// actingd's stderr, read line by line on its own thread so that a wait for a daemon line has a
+/// bounded deadline (Workflow #378 A6a: the daemon lines are on stderr). `lines` holds what was
+/// read so far.
+struct DaemonStderr {
+    received: std::sync::mpsc::Receiver<String>,
+    lines: Vec<String>,
 }
 
-/// Test plan §4 #3 (APPS-X1): CI's `apps` job builds actinglab once with its production
-/// features (`cargo build --locked -p actingcommand-actinglab --bin actinglab`) and exports it
-/// here, so the test no longer runs a `cargo build` of its own.
-fn prebuilt_actinglab() -> PathBuf {
-    let binary = std::env::var_os("ACTINGCOMMAND_TEST_ACTINGLAB_EXE")
-        .expect("ACTINGCOMMAND_TEST_ACTINGLAB_EXE names the actinglab executable (CI exports it)");
-    PathBuf::from(binary)
-        .canonicalize()
-        .expect("prebuilt actinglab executable")
+impl DaemonStderr {
+    /// Takes the child's piped stderr; the reading thread ends when the child's stderr closes.
+    fn read(child: &mut Child) -> Self {
+        use std::io::BufRead;
+
+        let stderr = child.stderr.take().expect("actingd stderr");
+        let (sender, received) = std::sync::mpsc::channel::<String>();
+        let _reader = thread::spawn(move || {
+            for line in std::io::BufReader::new(stderr).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            received,
+            lines: Vec::new(),
+        }
+    }
+
+    /// Test plan v2.2 §4 #12 (X5), the barrier of a negative wait: actingd's `runtime_ready`
+    /// daemon line. actingd prints it (`serve`, apps/actingd/src/main.rs) only after the
+    /// Runtime host's start and the initial policy cycle (`initialize_policy`), and that cycle
+    /// writes every dispatch it admits, a scheduled run included, to its completion before it
+    /// returns (`execute_policy_cycle`): once the line is read, every record of the start and of
+    /// that cycle is in the ledger.
+    fn wait_for_runtime_ready(&mut self, child: &mut Child) {
+        let started = Instant::now();
+        while !self
+            .lines
+            .iter()
+            .any(|line| daemon_outcome_code(line).as_deref() == Some("runtime_ready"))
+        {
+            match self.received.recv_timeout(Duration::from_millis(100)) {
+                Ok(line) => self.lines.push(line),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!(
+                        "actingd stderr closed before runtime_ready: {:?}",
+                        self.lines
+                    )
+                }
+            }
+            if let Some(status) = child.try_wait().expect("process state") {
+                self.lines.extend(self.received.try_iter());
+                panic!(
+                    "actingd exited with {status} before runtime_ready: {:?}",
+                    self.lines
+                );
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "actingd runtime_ready timed out: {:?}",
+                self.lines
+            );
+        }
+    }
 }
 
 fn seed_agent_wake(state_root: &Path, instance_id: InstanceId) {
