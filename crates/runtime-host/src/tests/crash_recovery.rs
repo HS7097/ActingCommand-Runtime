@@ -2,7 +2,10 @@
 
 use super::*;
 
+// Test plan v2.2 §4 #15: a child-process entry, not a test; its parents run it with
+// `--ignored --exact`.
 #[test]
+#[ignore]
 fn policy_dispatch_crash_child_process() {
     let Ok(root) = std::env::var("ACTINGCOMMAND_POLICY_CRASH_ROOT") else {
         return;
@@ -192,6 +195,7 @@ fn exact_lifecycle_checkpoint_recovers_scheduled_failure_once() {
         .expect("create exact-lifecycle child stderr");
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::crash_recovery::policy_dispatch_crash_child_process",
             "--nocapture",
@@ -370,7 +374,10 @@ fn exact_lifecycle_checkpoint_recovers_scheduled_failure_once() {
     }
 }
 
+// Test plan v2.2 §4 #15: a child-process entry, not a test; its parent runs it with
+// `--ignored --exact`.
 #[test]
+#[ignore]
 fn policy_pending_crash_child_process() {
     let Ok(root) = std::env::var("ACTINGCOMMAND_POLICY_PENDING_ROOT") else {
         return;
@@ -472,6 +479,7 @@ fn orphaned_policy_admission_is_reconciled_after_real_process_kill() {
         let marker = root.path().join("policy-crash-marker");
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
+                "--ignored",
                 "--exact",
                 "tests::crash_recovery::policy_dispatch_crash_child_process",
                 "--nocapture",
@@ -623,6 +631,7 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
     .expect("instance file");
     let status = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::crash_recovery::policy_dispatch_crash_child_process",
             "--nocapture",
@@ -786,6 +795,7 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
         let marker = root.path().join("policy-crash-marker");
         let status = Command::new(std::env::current_exe().expect("test executable"))
             .args([
+                "--ignored",
                 "--exact",
                 "tests::crash_recovery::policy_dispatch_crash_child_process",
                 "--nocapture",
@@ -1200,6 +1210,7 @@ fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
         let marker = root.path().join("policy-crash-marker");
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .args([
+                "--ignored",
                 "--exact",
                 "tests::crash_recovery::policy_dispatch_crash_child_process",
                 "--nocapture",
@@ -1378,6 +1389,7 @@ fn nonempty_pending_policy_work_is_rebuilt_after_real_process_crash() {
     .expect("pending instance file");
     let status = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::crash_recovery::policy_pending_crash_child_process",
             "--nocapture",

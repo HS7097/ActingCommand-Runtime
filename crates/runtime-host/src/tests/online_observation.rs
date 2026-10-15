@@ -209,23 +209,26 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
     let artifact = read_projected_verified(root.path(), observation.artifact())
         .expect("verified observation artifact");
     assert!(artifact.starts_with(b"\x89PNG\r\n\x1a\n"));
-    assert_eq!(
-        event_types_for_correlation(&mut client, correlation_id),
-        vec![
-            EventType::CliCommand,
-            EventType::CommandReceived,
-            EventType::CommandValidated,
+    // Test plan v2.2 §4 #22: the observation's typed records in order under the one correlation,
+    // with one terminal (its recognition completion, or a typed `capture.failed`), and no key: a
+    // read-only observe holds no lease (m369 Q-1; contracts/emulator-control.md:58-60).
+    let events = event_types_for_correlation(&mut client, correlation_id);
+    assert_events_in_order_with_one_terminal(
+        &events,
+        &[
             EventType::SchedulerAdmitted,
             EventType::CaptureRequested,
             EventType::RecognitionRequested,
-            EventType::RuntimeLifecycleObserved,
-            EventType::CapturePolicyChanged,
             EventType::ArtifactCreated,
             EventType::ArtifactVerified,
-            EventType::ArtifactPinRecorded,
             EventType::CaptureCompleted,
             EventType::RecognitionCompleted,
-        ]
+        ],
+        &[EventType::RecognitionCompleted, EventType::CaptureFailed],
+    );
+    assert!(
+        !events.contains(&EventType::LeaseRequested),
+        "a read-only observe takes no key: {events:?}"
     );
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);

@@ -144,7 +144,10 @@ fn await_an_input_commit(host: &RuntimeHost) {
 /// through and every later capture waits, so the run commits its first input and then stays in
 /// flight with its lease held and the device in use. Once that input is recorded the child
 /// notes the epoch, the run and its lease, prints `CRASH_POINT_LINE` and waits to be killed.
+// Test plan v2.2 §4 #15: a child-process entry, not a test; its parent runs it with
+// `--ignored --exact`.
 #[test]
+#[ignore]
 fn epoch_close_crash_child_process() {
     let Ok(root) = std::env::var(CRASH_ROOT_ENV) else {
         return;
@@ -254,6 +257,7 @@ fn crash_mid_run() -> CrashedRun {
     .expect("instance file");
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::gate_epoch_close::epoch_close_crash_child_process",
             "--nocapture",
