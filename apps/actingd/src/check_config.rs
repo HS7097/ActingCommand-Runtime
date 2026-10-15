@@ -251,7 +251,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
                     ActingdLocation::ConfigAssemble,
                 )
             })?;
-    if pack_admission.check_in_check_config {
+    if !pack_admission.check_in_check_config {
         notes.extend(actingcommand_runtime_host::pack_admission_notes(
             &checked.host,
             &pack_admission.suspend_codes,
