@@ -724,7 +724,6 @@ impl TaskSelectionRecord {
         // above the chosen score. M7: a multi select's `selected` must be full, and the chosen
         // score is the lowest selected score; a partial fill is never outranked_possible.
         let outranked = selected
-            && full
             && match check.upper_bound {
                 TaskSelectionUpperBound::Unbounded => true,
                 TaskSelectionUpperBound::Max { milli } => {
