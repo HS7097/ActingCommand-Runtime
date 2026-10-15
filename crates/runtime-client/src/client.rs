@@ -1089,7 +1089,7 @@ impl RuntimeClient {
                     error
                 } else {
                     RuntimeClientError::fatal(
-                        ClientCode::InstallTransitionReceiptUnconfirmed,
+                        ClientCode::RuntimeReceiptHeaderFailed,
                         ContractLocation::InstallTransition.location(),
                     )
                     .with_related(error)
