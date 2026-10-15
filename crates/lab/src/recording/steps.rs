@@ -1072,7 +1072,7 @@ fn forbidden_after(
             }
         }
     }
-    if let Some(id) = list.iter().find(|id| required_here(*id)) {
+    if let Some(id) = list.iter().find(|id| required_here(id)) {
         return Err(invalid(
             "validation_failed",
             format!(
