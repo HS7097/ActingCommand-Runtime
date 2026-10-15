@@ -469,3 +469,26 @@ tests = [
     "actingcommand-contract::lib::event::tests::pkg_s2::s2_t7_a_selection_record_carries_no_package_pin",
 ]
 incident = ["#336 PKG-S2"]
+
+# Workflow #357 DB-3s (M-357b v1.0 §5, §12.6 T1-T15; register §1.66 MS1-MS5): a multi select's record shape; a single select keeps its bytes, every pick shape round-trips, rules M1-M8 refuse what no writer writes, the public projection keeps only codes inside the picks, the largest real record is measured against the write bound, and no 0.12.x member is read (contract key after K23)
+[[gate]]
+key = "K24"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t1_single_select_records_keep_their_bytes",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t2_a_single_frame_multi_select_that_picked_three_round_trips",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t3_a_scan_multi_select_taps_in_content_order",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t4_the_resolved_count_follows_the_declared_count_and_the_free_slots",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t5_a_partial_fill_with_an_unknown_instance_is_blocked_by_rule_4_only",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t6_single_frame_failures_end_the_sequence_and_the_record_copies_them",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t7_scan_failures_end_the_sequence_and_stay_scan_shapes",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t8_a_sequence_stopped_outside_the_record_counts_its_checked_taps",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t9_rule_5_compares_a_full_fill_by_its_lowest_score",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t10_an_early_stopped_multi_select_is_full_with_every_quota_filled",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t11_a_single_select_never_carries_a_multi_select_confirmation",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t12_each_rule_refuses_what_no_writer_writes",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t13_the_public_projection_keeps_only_codes_inside_the_picks",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t14_the_largest_multi_select_record_is_measured_against_the_write_bound",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t15_an_unknown_member_in_a_multi_select_shape_is_not_read",
+]
+incident = ["#357 DB-3s"]

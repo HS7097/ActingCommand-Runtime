@@ -168,6 +168,7 @@ fn selection_evaluated() -> TaskSemanticFact {
             )],
             confirmation: TaskSelectionConfirmation::NotAttempted,
             unknown_check: None,
+            multi_select: None,
         }),
     }
 }
