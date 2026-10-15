@@ -35,7 +35,6 @@ use actingcommand_policy::SchedulingDecisionState;
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
 const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
-const STOP: EmulatorInstanceAction = EmulatorInstanceAction::Stop;
 /// The policy driver's re-evaluation after the failed run (§6 step 2, W-1 review M-6), at the
 /// trigger's next occurrence. The fixture task's trigger is any of an hourly clock (every
 /// 3 600 000 ms from 0) and a `resource.primary` fact this fixture never records. The run's
@@ -107,23 +106,25 @@ fn await_readiness_wait(calls: &mpsc::Receiver<EmulatorCall>) {
     await_call(calls, EmulatorCall::ObserveForeground);
 }
 
+/// Makes the fake hold the emulator's next Stop (`block_emulator_stop`) and returns the
+/// receiver that hears once that Stop is held.
+fn hold_next_stop(state: &FakeState) -> mpsc::Receiver<()> {
+    let (held, heard) = mpsc::channel();
+    *state
+        .emulator_stop_held
+        .lock()
+        .expect("fake emulator stop held lock") = Some(held);
+    state.block_emulator_stop.store(true, Ordering::Release);
+    heard
+}
+
 /// Returns once rung 3's emulator Stop has reached the fake, where `block_emulator_stop` holds
 /// it: rungs 1 and 2 have run, and the Stop's invalidation of the self-check (Workflow #317 sc1)
 /// has not happened yet.
-fn await_held_stop(state: &FakeState) {
-    let deadline = std::time::Instant::now() + GATE_WAIT;
-    while !state
-        .emulator_actions
-        .lock()
-        .expect("fake emulator actions lock")
-        .contains(&STOP)
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "rung 3's Stop within {GATE_WAIT:?}"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+fn await_held_stop(heard: &mpsc::Receiver<()>) {
+    heard
+        .recv_timeout(GATE_WAIT)
+        .unwrap_or_else(|error| panic!("rung 3's Stop is held: {error}"));
 }
 
 /// The operator's self-check of the policy instance (`SelfCheckInstance`), on `connection`: its
@@ -354,12 +355,12 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     self_check_passes(&host, 220);
     let context = admit_ladder_run(&host, &request);
     state.unknown_capture.store(true, Ordering::Release);
-    state.block_emulator_stop.store(true, Ordering::Release);
+    let held_stop = hold_next_stop(&state);
     let failure = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("the scheduled run fails");
     assert!(!failure.is_fatal(), "{}", failure.code());
-    await_held_stop(&state);
+    await_held_stop(&held_stop);
 
     // §6 step 2 (W-1): the re-evaluation defers the held instance's due candidate with
     // `dispatch_instance_held`, the ladder as its holder (H-1), and writes no intent.

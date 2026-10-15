@@ -71,8 +71,9 @@ pub(super) struct FakeState {
     // activity after a Start (not booted) until the flag is cleared. A Start notes
     // `emulator_start_entered`, waits while `block_emulator_start` is set, and with
     // `fail_emulator_start` ends as the vendor's readiness wait timing out. A Stop, once in
-    // `emulator_actions`, waits while `block_emulator_stop` is set (#382 H-4 G8). Workflow #381 B:
-    // every other result, the state reads and the binding come from the scripted controller
+    // `emulator_actions`, waits while `block_emulator_stop` is set, and a Stop held so sends once
+    // on `emulator_stop_held` when a test listens there (#382 H-4 G8). Workflow #381 B: every
+    // other result, the state reads and the binding come from the scripted controller
     // (HOST-I1).
     emulator_control: AtomicBool,
     emulator_stopped: AtomicBool,
@@ -81,6 +82,7 @@ pub(super) struct FakeState {
     emulator_start_entered: AtomicBool,
     block_emulator_start: AtomicBool,
     block_emulator_stop: AtomicBool,
+    emulator_stop_held: std::sync::Mutex<Option<mpsc::Sender<()>>>,
     fail_emulator_start: AtomicBool,
     emulator_actions: std::sync::Mutex<Vec<actingcommand_contract::EmulatorInstanceAction>>,
     emulator: emulator_controller::FakeEmulatorController,
@@ -1112,7 +1114,16 @@ impl ExecutionBackendProvider for FakeProvider {
                     ),
                 );
             }
-        } else {
+        } else if entry.state.block_emulator_stop.load(Ordering::Acquire) {
+            let held = entry
+                .state
+                .emulator_stop_held
+                .lock()
+                .expect("fake emulator stop held lock")
+                .take();
+            if let Some(held) = held {
+                held.send(()).expect("the test listens for the held Stop");
+            }
             while entry.state.block_emulator_stop.load(Ordering::Acquire) {
                 thread::sleep(Duration::from_millis(5));
             }
