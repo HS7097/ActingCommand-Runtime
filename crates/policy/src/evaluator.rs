@@ -2224,7 +2224,7 @@ fn apply_priority_selection(
                 Some(resources) => {
                     let term_milli = i64::try_from(resources.term_milli).map_err(|_| overflow())?;
                     match &resources.override_target {
-                        None => base_milli.checked_add(term_milli),
+                        None => base_milli.checked_add(term_milli / 2),
                         Some((_, ManualOffset::Keep)) => utility
                             .utility_milli
                             .checked_add(term_milli)
