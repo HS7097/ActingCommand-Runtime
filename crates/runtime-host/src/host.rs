@@ -2002,6 +2002,24 @@ impl RuntimeHost {
         self.owner_released_by_exit
     }
 
+    /// Workflow #382 H-5 G15 (seam I5): seals the runtime facts into a snapshot set now, as the
+    /// performance loop does once a minute; whether the store had changed.
+    #[cfg(test)]
+    pub(crate) fn append_runtime_fact_snapshot_for_test(&self) -> RuntimeHostResult<bool> {
+        self.shared_ref(
+            crate::codes::test_spellings::TestLocation::AppendRuntimeFactSnapshotForTest,
+        )?
+        .append_runtime_fact_snapshot_if_dirty()
+    }
+
+    /// Workflow #382 H-5 G15 (seam I5): what the last runtime-fact recovery on this thread (the
+    /// one inside `RuntimeHost::start`) read after its snapshot set: the first sequence it read
+    /// from and the number of runtime-fact events it read; taking it clears it.
+    #[cfg(test)]
+    pub(crate) fn take_last_runtime_fact_replay_for_test() -> Option<(u64, usize)> {
+        runtime_facts::take_last_runtime_fact_replay()
+    }
+
     /// Workflow #381 R6: the recovery timing this start printed.
     #[cfg(test)]
     pub(crate) const fn startup_recovery_for_test(&self) -> StartupRecoveryTiming {

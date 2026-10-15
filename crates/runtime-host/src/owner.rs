@@ -108,7 +108,7 @@ fn release_exited_owner(
     // Workflow #378 A6a (model section 7.4): the refusal carries the recorded `owner_pid` and
     // what the probe found (`owner_probe_state`); a probe that cannot decide has its reason as
     // the `caused_by` link. The text stays the developer line's.
-    let (probe, state, reason) = match actingcommand_host_metrics::probe_process(record.pid) {
+    let (probe, state, reason) = match probe_owner_process(record.pid) {
         ProcessProbe::Running { created_at_unix_ms }
             if created_at_unix_ms
                 <= record
@@ -145,6 +145,65 @@ fn release_exited_owner(
     }
     refused.lifecycle.owner_probe = Some(probe);
     Err(refused)
+}
+
+/// The owner release's process probe: the operating system's. In test builds a
+/// `ScriptedProcessProbe` installed on the calling thread answers instead.
+fn probe_owner_process(pid: u32) -> ProcessProbe {
+    #[cfg(test)]
+    if let Some(answer) = SCRIPTED_PROCESS_PROBE.with(|scripted| {
+        scripted.borrow_mut().as_mut().map(|(answer, probed)| {
+            probed.push(pid);
+            *answer
+        })
+    }) {
+        return answer;
+    }
+    actingcommand_host_metrics::probe_process(pid)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The scripted answer and the pids asked about since it was installed.
+    static SCRIPTED_PROCESS_PROBE: std::cell::RefCell<Option<(ProcessProbe, Vec<u32>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Workflow #382 H-5 (test plan v2.2 §3.6 G18, seam I6), test builds only: while one is
+/// installed, the owner release on this thread (`OwnerGuard::acquire`, also inside
+/// `RuntimeHost::start`) takes `answer` as the probe's result instead of asking the operating
+/// system, and records which pids it asked about. Dropping it removes it.
+#[cfg(test)]
+pub(crate) struct ScriptedProcessProbe {
+    _thread_bound: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(test)]
+impl ScriptedProcessProbe {
+    pub(crate) fn install(answer: ProcessProbe) -> Self {
+        SCRIPTED_PROCESS_PROBE.with(|scripted| *scripted.borrow_mut() = Some((answer, Vec::new())));
+        Self {
+            _thread_bound: std::marker::PhantomData,
+        }
+    }
+
+    /// The pids the owner release asked about since `install`, in order.
+    pub(crate) fn probed(&self) -> Vec<u32> {
+        SCRIPTED_PROCESS_PROBE.with(|scripted| {
+            scripted
+                .borrow()
+                .as_ref()
+                .map(|(_, probed)| probed.clone())
+                .unwrap_or_default()
+        })
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScriptedProcessProbe {
+    fn drop(&mut self) {
+        SCRIPTED_PROCESS_PROBE.with(|scripted| *scripted.borrow_mut() = None);
+    }
 }
 
 pub(crate) struct OwnerGuard {
