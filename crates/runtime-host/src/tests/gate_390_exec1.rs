@@ -130,8 +130,7 @@ enum StepRecord {
 fn exec1_a_guard_refusal_falls_to_the_next_candidate_in_the_ledger() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("exec1.zip");
-    let bytes = exec1_package();
-    fs::write(&package, &bytes).expect("write package");
+    fs::write(&package, exec1_package()).expect("write package");
     let state = Arc::new(FakeState::default());
     // A direct run needs a device instance whose display is observed (Workflow #392 DA-A).
     state.physical_task_geometry.store(true, Ordering::Release);
@@ -162,11 +161,7 @@ fn exec1_a_guard_refusal_falls_to_the_next_candidate_in_the_ledger() {
         RuntimeOperation::run_contained_task(
             EXEC1_ALIAS,
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(
-                package.display().to_string(),
-                actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-            )
-            .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
     let _receipt = client.send(&request);

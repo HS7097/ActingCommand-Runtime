@@ -810,15 +810,11 @@ fn s6c_a_start_whose_provider_step_fails_cancels_the_queued_startup_claim() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
-    let package = neutral_contained_task_package(true);
     let package_path = root.path().join("startup-package.zip");
-    fs::write(&package_path, &package).expect("write startup package");
-    let startup = ContainedTaskRequest::new(
-        package_path.to_string_lossy().into_owned(),
-        format!("{:x}", Sha256::digest(&package)),
-    )
-    .and_then(|request| request.with_response_deadline_ms(60_000))
-    .expect("startup package request");
+    fs::write(&package_path, neutral_contained_task_package(true)).expect("write startup package");
+    let startup = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .and_then(|request| request.with_response_deadline_ms(60_000))
+        .expect("startup package request");
     let host = RuntimeHost::start(
         config(&root).with_startup_packages(BTreeMap::from([(FIRST.to_owned(), startup)])),
         Arc::new(FakeProvider::one(FIRST, instance, Arc::clone(&state))),
