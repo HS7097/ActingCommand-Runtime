@@ -185,7 +185,7 @@ impl HostShared {
     /// bindings name is admitted once; a refusal with a suspend code suspends its package.
     pub(super) fn check_pack_admission(&self) -> RuntimeHostResult<()> {
         let settings = self.pack_admission_settings()?;
-        if !settings.check_after_start {
+        if settings.check_after_start {
             return Ok(());
         }
         let paths = match lock(&self.procedure_manifest, HostLocation::CheckPackAdmission)?.as_ref()
