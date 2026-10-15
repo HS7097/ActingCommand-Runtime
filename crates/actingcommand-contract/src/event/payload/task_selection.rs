@@ -464,7 +464,6 @@ pub struct TaskSelectionUnknownCheck {
 /// One pick of a multi select, in tap order: the confirmation before its tap, and the check
 /// after it, present only when that check reached a result (M-357b §5.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct TaskSelectionPick {
     pub candidate_id: String,
     pub confirmation: TaskSelectionConfirmation,
