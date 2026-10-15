@@ -1208,9 +1208,16 @@ impl OperationParser {
         let mut edge_order = Vec::<String>::new();
         for bundle in &self.bundles {
             for operation in array_field(&bundle.data, "operations") {
+                // Workflow #390 LAB-2 (FCM T-03): an operation whose `to` is a page set is
+                // collected with every page it may reach (`to_pages`); a route never passes it,
+                // since its click does not decide which page comes.
+                let to_pages = match operation.get("to") {
+                    Some(Value::Array(pages)) => Some(pages),
+                    _ => None,
+                };
                 // An application effect is not a tap, and a select step taps a candidate chosen
                 // at run time: neither becomes a navigation edge, so no route passes one.
-                if !is_page_change(operation)
+                if (to_pages.is_none() && !is_page_change(operation))
                     || is_application_effect(operation)
                     || is_select_effect(operation)
                 {
@@ -1223,11 +1230,37 @@ impl OperationParser {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let from = required_string(operation, "from")?;
-                let to = required_string(operation, "to")?;
+                let destination = match to_pages {
+                    Some(pages) => {
+                        let mut names = BTreeSet::new();
+                        for page in pages {
+                            let page = page.as_str().ok_or_else(|| {
+                                CliError::package_invalid(format!(
+                                    "{}: operation '{edge_id}' to must name pages",
+                                    bundle.task_json_path().display()
+                                ))
+                            })?;
+                            names.insert(page.to_string());
+                        }
+                        (
+                            "to_pages",
+                            Value::Array(
+                                names
+                                    .iter()
+                                    .map(|page| page_or_any(&self.game, page))
+                                    .collect(),
+                            ),
+                        )
+                    }
+                    None => (
+                        "to_page",
+                        page_or_any(&self.game, &required_string(operation, "to")?),
+                    ),
+                };
                 let edge = ordered_object([
                     ("id", Value::String(edge_id.clone())),
                     ("from_page", page_or_any(&self.game, &from)),
-                    ("to_page", page_or_any(&self.game, &to)),
+                    destination,
                     (
                         "click",
                         click_to_navigation(required_field(operation, "click")?)?,

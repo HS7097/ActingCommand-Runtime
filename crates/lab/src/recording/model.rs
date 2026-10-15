@@ -16,6 +16,13 @@ pub const LAB_RECORDING_DEFAULT_MATCH_METRIC: &str = "ccoeff_normed";
 pub const LAB_RECORDING_DEFAULT_SETTLE_MS: u64 = 2_000;
 /// The largest settle of an optional step (the package's largest step timeout).
 pub const LAB_RECORDING_MAX_SETTLE_MS: u64 = 60_000;
+/// Workflow #390 LAB-2: the largest duration of a recorded drag or long press (the Runtime's
+/// largest input duration).
+pub const LAB_RECORDING_MAX_GESTURE_MS: u64 = 60_000;
+/// Workflow #390 LAB-2: a template mark without a declared search area searches its crop grown by
+/// this many pixels on each side, clamped to the frame. A search area equal to the crop fails as
+/// soon as the control moves at all (a game update once shifted a menu bar by about 40 px).
+pub const LAB_RECORDING_DEFAULT_SEARCH_MARGIN: i32 = 48;
 
 /// Opaque JSON carried through the recording as recorded (Runtime references, freshness,
 /// operation evidence). The recording never interprets it.
@@ -80,6 +87,10 @@ pub struct LabRecording {
     pub updated_at_unix_ms: u64,
     pub steps: Vec<RecordingStep>,
     pub artifact: Option<RecordingArtifact>,
+    /// Workflow #390 LAB-2: when a stopped recording was last marked again after its package was
+    /// generated; the next `record stop` generates the package again and clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amended_at_unix_ms: Option<u64>,
 }
 
 /// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
@@ -162,6 +173,12 @@ pub struct RecordingStep {
     /// The step's page may not appear; the package then skips the step (Workflow #339).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optional: Option<StepOptional>,
+    /// Workflow #390 LAB-2: marks of other steps that must not pass on this step's page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forbidden: Vec<String>,
+    /// Workflow #390 LAB-2: the own template mark that anchors this step's page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
     pub transition: Option<StepTransition>,
     pub closed: bool,
     pub closed_by: Option<String>,
@@ -462,6 +479,12 @@ pub struct ClickExecution {
     pub before: Option<OpaqueJson>,
     pub after: Option<OpaqueJson>,
     pub executed_at_unix_ms: u64,
+    /// Workflow #390 LAB-2: where an executed drag or long press ended (a long press ends where
+    /// it began) and how long it took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_point: Option<RecordPoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -475,6 +498,10 @@ pub struct StepClick {
     /// Workflow #396 REC-4: the template mark the package's click follows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow: Option<ClickFollow>,
+    /// Workflow #390 LAB-2: a drag from `rect` or a long press at `rect`'s one point instead of a
+    /// tap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gesture: Option<ClickGesture>,
     pub retry: Option<ClickRetry>,
     pub declared_at_unix_ms: u64,
     pub execution: Option<ClickExecution>,
@@ -500,6 +527,34 @@ pub struct ClickFollow {
 pub enum ClickFollowForm {
     Target,
     Offset,
+}
+
+/// Workflow #390 LAB-2: the gesture of a step whose effect is not a tap. A `drag` presses a
+/// point of the step's click rectangle, moves to a point of `to` and lifts there after
+/// `duration_ms` (a fast drag is a swipe); the package declares it as a `drag` click, whose two
+/// rectangles the kernel samples like a tap's. A `long_press` holds the click rectangle's one
+/// point (a 1x1 rectangle) for `duration_ms`; the package declares it as a `long_press` click,
+/// which the kernel presses at one point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ClickGesture {
+    Drag { to: RecordRect, duration_ms: u64 },
+    LongPress { duration_ms: u64 },
+}
+
+impl ClickGesture {
+    pub fn duration_ms(self) -> u64 {
+        match self {
+            Self::Drag { duration_ms, .. } | Self::LongPress { duration_ms } => duration_ms,
+        }
+    }
+
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Drag { .. } => "drag",
+            Self::LongPress { .. } => "long_press",
+        }
+    }
 }
 
 impl StepClick {
@@ -581,6 +636,16 @@ pub struct MarkRequest {
     /// The settle of `optional: true` (0..=60000); only with it.
     #[serde(default)]
     pub optional_settle_ms: Option<u64>,
+    /// Workflow #390 LAB-2: marks of other steps that must not pass on the step's page; `remove`
+    /// takes one off again.
+    #[serde(default)]
+    pub forbid: Vec<String>,
+    /// Workflow #390 LAB-2: the own template mark that anchors the step's page.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// Workflow #390 LAB-2: the step's page has no anchor any more.
+    #[serde(default)]
+    pub clear_anchor: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -675,7 +740,9 @@ impl MarkSpec {
 }
 
 /// A click declaration: a rectangle (`region`), a mark's region (`from`), or (Workflow #396
-/// REC-4) a template mark it follows (`follow`), alone or with a rectangle.
+/// REC-4) a template mark it follows (`follow`), alone or with a rectangle. Workflow #390 LAB-2:
+/// a drag from `region` to `drag_to`, or a long press at the point `long_press`, each over
+/// `duration_ms`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickSpec {
@@ -685,6 +752,12 @@ pub struct ClickSpec {
     pub from: Option<String>,
     #[serde(default)]
     pub follow: Option<String>,
+    #[serde(default)]
+    pub drag_to: Option<RecordRect>,
+    #[serde(default)]
+    pub long_press: Option<RecordPoint>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -757,6 +830,11 @@ pub struct StepStateView {
     pub transition: Option<String>,
     pub closed: bool,
     pub optional: Option<StepOptionalView>,
+    /// Workflow #390 LAB-2: the marks the page forbids and its anchor, when it has them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forbidden: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
 }
 
 /// `optional` of `step_state` and `record status` steps: `null` or `{settle_ms}`.
@@ -799,6 +877,24 @@ pub struct MarkOutcome {
     pub step_state: Option<StepStateView>,
     pub closed_step: Option<u32>,
     pub dry_run: bool,
+    /// Workflow #390 LAB-2: every mark the step's page forbids, tested on its live frames.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forbidden: Vec<ForbiddenMarkView>,
+    /// Workflow #390 LAB-2: the recording is stopped; the next `record stop` generates its
+    /// package again.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub after_stop: bool,
+}
+
+/// Workflow #390 LAB-2: a mark the step's page forbids, tested on every live frame of the step:
+/// `absent` when it passes on none, `not_evaluated` when it could not be evaluated there (an OCR
+/// mark without an OCR model).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ForbiddenMarkView {
+    pub id: String,
+    pub family: MarkFamily,
+    pub status: String,
+    pub frames: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -832,6 +928,9 @@ pub struct ClickView {
     pub outcome: String,
     pub attempts: usize,
     pub needs_review: bool,
+    /// Workflow #390 LAB-2: a drag or a long press.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gesture: Option<ClickGesture>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -852,6 +951,11 @@ pub struct StepView {
     pub transition: Option<TransitionView>,
     pub closed: bool,
     pub closed_by: Option<String>,
+    /// Workflow #390 LAB-2: the marks the page forbids and its anchor, when it has them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forbidden: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -863,6 +967,9 @@ pub struct LabStatusView {
     pub open_step: Option<u32>,
     pub steps: Vec<StepView>,
     pub artifact: Option<RecordingArtifact>,
+    /// Workflow #390 LAB-2: a stopped recording marked again since its package was generated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amended_at_unix_ms: Option<u64>,
 }
 
 /// `record status` lab field: unavailable with a reason, or the recording view.
@@ -898,6 +1005,16 @@ pub struct AttachFrameOutcome {
 pub struct PlanClickRequest {
     pub tap: Option<RecordPoint>,
     pub tap_rect: Option<RecordRect>,
+    /// Workflow #390 LAB-2: `--swipe x1,y1,x2,y2,ms` on a step that declares a drag.
+    pub swipe: Option<PlannedSwipe>,
+}
+
+/// Workflow #390 LAB-2: the points and duration `do --capture --record --swipe` gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlannedSwipe {
+    pub from: RecordPoint,
+    pub to: RecordPoint,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -909,6 +1026,13 @@ pub struct ClickPlan {
     pub point_rule: String,
     pub source: String,
     pub declares_click: bool,
+    /// Workflow #390 LAB-2: the step's drag or long press, and the point it ends at; the Runtime
+    /// executes it as one swipe from `point` to `to_point` over its duration (a long press ends
+    /// where it began).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gesture: Option<ClickGesture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_point: Option<RecordPoint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

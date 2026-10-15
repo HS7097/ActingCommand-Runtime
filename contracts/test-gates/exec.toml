@@ -1104,3 +1104,29 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record",
 ]
 incident = ["#331"]
+
+
+# Workflow #390 LAB-2 (forced-compromises mapping row LAB-2; compromises L-02, T-03; register §1.74): the Lab recording completes its generated package. A template mark without a declared search area searches its crop grown by 48 px on each side, clamped to the frame, and --template <id>=x,y,w,h@x,y,w,h declares one; a step's page forbids marks of other steps (each must pass on no live frame of the step, forbidden_mark_passes; an own mark is validation_failed, an unknown one forbidden_source_missing; a forbidden mark stays in use on its step) and the page rule lists them under forbidden; an own required template anchors its page as its anchors[] entry, whose target page/<page> the guard names (otherwise anchor_invalid not_own_template or not_required); a drag (click rectangle to destination) and a long press (one point) over a duration are generated as drag and long_press clicks, the first decision swipes or long-taps inside them, the default task timeout counts the duration, and do --capture --record executes them as one swipe; a stopped recording takes marks on its steps and record stop generates the package again (regenerated), but takes no new step and no step operation (record_session_not_active, recording_stopped); the generated navigation collects an operation whose to is a page set with every page it may reach (to_pages, exactly one of to_page and to_pages), which no route passes, and a long_press navigation click holds its point
+[[gate]]
+key = "72"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_template_without_a_search_area_searches_48_px_around_its_crop",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_page_forbids_a_mark_of_another_step_that_is_absent_from_its_frames",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_forbidden_mark_that_passes_on_a_live_frame_refuses_the_batch",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_page_forbids_only_marks_of_other_steps_and_keeps_them_in_use",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_an_anchor_declares_its_page_by_the_template",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_an_anchor_is_a_required_own_template_mark_of_its_step",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_drag_is_generated_as_a_drag_click_from_its_rectangle_to_its_destination",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_long_press_is_generated_as_a_long_press_click_at_its_point",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_gesture_without_its_parts_is_refused",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_do_capture_record_executes_a_declared_drag_as_one_swipe",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_stopped_recording_marked_again_generates_its_package_again",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_stopped_recording_takes_no_new_step_and_no_step_operation",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::lab2_record_mark_flags_carry_the_search_area_the_page_rule_and_the_gesture",
+    "actingcommand-pack-containment::lib::source::declarations::tests::lab2_a_navigation_edge_names_one_destination_or_every_page_it_may_reach",
+    "actingcommand-execution-kernel::lib::drive::tests::lab2_a_route_never_passes_an_edge_with_several_destinations",
+    "actingcommand-execution-kernel::lib::drive::tests::lab2_a_long_press_navigation_input_holds_its_point",
+]
+incident = ["#390"]

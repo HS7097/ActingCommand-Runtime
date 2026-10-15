@@ -7,8 +7,9 @@
 
 use super::follow::follow_invalid;
 use super::model::{
-    ClickFollowForm, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame, RecordedMark,
-    RecordingDefaults, RecordingStep, SelfTestMargin, StepClick, StepOptional, StepTransition,
+    ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame,
+    RecordedMark, RecordingDefaults, RecordingStep, SelfTestMargin, StepClick, StepOptional,
+    StepTransition,
 };
 use super::store::{blocked, invalid, with_details};
 use crate::codes::ClickFollowProblem;
@@ -55,6 +56,11 @@ pub(crate) struct PlanStep {
     /// `None` for the application entry step (`from:"any"`).
     pub(crate) page: Option<String>,
     pub(crate) required: Vec<String>,
+    /// Workflow #390 LAB-2: the marks the step's page forbids (mark ids).
+    pub(crate) forbidden: Vec<String>,
+    /// Workflow #390 LAB-2: the own template mark that anchors the step's page; it is one of
+    /// `required`.
+    pub(crate) anchor: Option<String>,
     /// The page of a recognizable transition after this step's effect.
     pub(crate) transition_page: Option<String>,
     pub(crate) transition_required: Vec<String>,
@@ -199,6 +205,9 @@ pub(crate) struct Plan {
     pub(crate) marks: BTreeMap<String, RecordedMark>,
     /// The emitted mark ids in package order.
     pub(crate) emitted: Vec<String>,
+    /// Workflow #390 LAB-2: each anchor mark and the page it anchors; the package declares it as
+    /// that page's `anchors[]` entry, whose target is `page/<page>`.
+    pub(crate) anchor_pages: BTreeMap<String, String>,
     pub(crate) width: usize,
     pub(crate) arrival_timeout_ms: u64,
     pub(crate) application_arrival_timeout_ms: u64,
@@ -233,17 +242,22 @@ impl Plan {
     }
 
     /// The first page a run waits for after the effect of step `index`: the transition page,
-    /// or the next step's page.
-    pub(crate) fn gate(&self, index: usize) -> LabResult<(String, Vec<String>)> {
+    /// or the next step's page; with its required marks and (Workflow #390 LAB-2) the marks it
+    /// forbids.
+    pub(crate) fn gate(&self, index: usize) -> LabResult<(String, Vec<String>, Vec<String>)> {
         let step = &self.steps[index];
         if let Some(page) = &step.transition_page {
-            return Ok((page.clone(), step.transition_required.clone()));
+            return Ok((page.clone(), step.transition_required.clone(), Vec::new()));
         }
         let next = self
             .steps
             .get(index + 1)
             .ok_or_else(|| invalid("validation_failed", "a step after an effect is missing"))?;
-        Ok((self.next_page(index)?.to_string(), next.required.clone()))
+        Ok((
+            self.next_page(index)?.to_string(),
+            next.required.clone(),
+            next.forbidden.clone(),
+        ))
     }
 
     pub(crate) fn effect_steps(&self) -> usize {
@@ -264,6 +278,15 @@ impl Plan {
         self.steps
             .iter()
             .any(|step| step.step.application.is_some())
+    }
+
+    /// Workflow #390 LAB-2: the target id the package gives mark `id`: `page/<page>` for the
+    /// template that anchors a page, the mark id otherwise.
+    pub(crate) fn target_id(&self, id: &str) -> String {
+        match self.anchor_pages.get(id) {
+            Some(page) => format!("page/{page}"),
+            None => id.to_string(),
+        }
     }
 
     pub(crate) fn mark(&self, id: &str) -> LabResult<&RecordedMark> {
@@ -707,15 +730,54 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
                 ));
             }
         }
+        // Workflow #390 LAB-2: the forbidden marks are marks of other effective steps, and the
+        // anchor is an own template mark of the step.
+        for id in &step.forbidden {
+            if !marks.contains_key(id) {
+                return Err(with_details(
+                    blocked(
+                        "record_mark_rejected",
+                        format!(
+                            "step {} forbids mark '{id}', which is not a mark of an effective step",
+                            step.index
+                        ),
+                    ),
+                    json!({"marks": [{"id": id, "reason": "forbidden_source_missing"}]}),
+                ));
+            }
+        }
+        if let Some(id) = &step.anchor
+            && !step
+                .marks
+                .iter()
+                .any(|mark| &mark.id == id && mark.family == MarkFamily::Template)
+        {
+            return Err(with_details(
+                blocked(
+                    "record_mark_rejected",
+                    format!(
+                        "step {} is anchored by '{id}', which is not an own template mark of it",
+                        step.index
+                    ),
+                ),
+                json!({"marks": [{"id": id, "reason": "anchor_invalid", "problem": "not_own_template"}]}),
+            ));
+        }
         steps.push(PlanStep {
             number: u32::try_from(number).unwrap_or(u32::MAX),
             step: (*step).clone(),
             page,
             required,
+            forbidden: step.forbidden.clone(),
+            anchor: step.anchor.clone(),
             transition_page,
             transition_required,
         });
     }
+    let anchor_pages = steps
+        .iter()
+        .filter_map(|step| Some((step.anchor.clone()?, step.page.clone()?)))
+        .collect::<BTreeMap<_, _>>();
 
     // R25: a launch or restart is complete only on the main interface; one such page must
     // follow the last of them (the kernel predicate `linear_main_interface`).
@@ -844,6 +906,7 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         runs,
         marks,
         emitted,
+        anchor_pages,
         width,
         arrival_timeout_ms: arrival,
         application_arrival_timeout_ms: application_arrival,
@@ -855,8 +918,9 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
 }
 
 /// The default task timeout (R24 section 4.3 with Workflow #339 section 2.5):
-/// `S·[step 1 is no application entry] + Σ a·(w + (b − w)⁺ + p + T) + Σ_app E
-///  + Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`.
+/// `S·[step 1 is no application entry] + Σ a·(g + w + (b − w)⁺ + p + T) + Σ_app E
+///  + Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`, where `g` is the duration of a drag or a
+/// long press (Workflow #390 LAB-2) and 0 for a tap.
 ///
 /// The sums before the settles take every optional step as shown, the longest path; a run
 /// settles only when it is skipped, at most once, so it adds its largest settle.
@@ -896,7 +960,15 @@ fn default_timeout(
             Some(StepTransition::Page { timeout_ms, .. }) => timeout_ms.unwrap_or(arrival_k),
             _ => 0,
         };
-        let attempt = wait
+        // Workflow #390 LAB-2: a drag or a long press lasts its duration before the wait.
+        let gesture = step
+            .step
+            .click
+            .as_ref()
+            .and_then(|click| click.gesture)
+            .map_or(0, ClickGesture::duration_ms);
+        let attempt = gesture
+            .saturating_add(wait)
             .saturating_add(upper.saturating_sub(wait))
             .saturating_add(page_timeout)
             .saturating_add(arrival_k);
@@ -1055,7 +1127,8 @@ fn guard_json(plan: &Plan, step: &PlanStep, page: &str) -> LabResult<Option<Valu
     };
     let mut guard = Map::new();
     guard.insert("page_id".into(), json!(page));
-    guard.insert("target_id".into(), json!(mark.id));
+    // Workflow #390 LAB-2: an anchor's target is `page/<page>`.
+    guard.insert("target_id".into(), json!(plan.target_id(&mark.id)));
     guard.insert("expected_rect".into(), rect_json(guard_rect(plan, mark)?));
     match mark.family {
         MarkFamily::Template => {
@@ -1209,7 +1282,18 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
         if let (Some(follow), Some(object)) = (&click.follow, provenance.as_object_mut()) {
             object.insert("follow".into(), json!(follow));
         }
+        // Workflow #390 LAB-2: only a drag or a long press records its gesture.
+        if let (Some(gesture), Some(object)) = (&click.gesture, provenance.as_object_mut()) {
+            object.insert("gesture".into(), json!(gesture));
+        }
         entry.insert("click".into(), provenance);
+    }
+    // Workflow #390 LAB-2: only a page that forbids marks or has an anchor records them.
+    if !step.forbidden.is_empty() {
+        entry.insert("forbidden".into(), json!(step.forbidden));
+    }
+    if let Some(anchor) = &step.anchor {
+        entry.insert("anchor".into(), json!(anchor));
     }
     if let Some(application) = &step.step.application {
         entry.insert(
@@ -1312,10 +1396,11 @@ fn mark_provenance(plan: &Plan, mark: &RecordedMark) -> Value {
     Value::Object(provenance)
 }
 
-/// The target families of the task: every emitted mark in its family.
+/// The target families of the task: every emitted mark in its family. Workflow #390 LAB-2: a
+/// template that anchors a page is that page's `anchors[]` entry, whose id is the page.
 fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
-    let (mut templates, mut probes, mut ocr, mut checks) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut anchors, mut templates, mut probes, mut ocr, mut checks) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for id in &plan.emitted {
         let mark = plan.mark(id)?;
         match mark.family {
@@ -1326,8 +1411,9 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                         format!("template '{}' has no crop", mark.id),
                     )
                 })?;
+                let anchored = plan.anchor_pages.get(&mark.id);
                 let mut target = Map::new();
-                target.insert("id".into(), json!(mark.id));
+                target.insert("id".into(), json!(anchored.unwrap_or(&mark.id)));
                 target.insert("template".into(), json!(crop.asset));
                 target.insert(
                     "region".into(),
@@ -1346,8 +1432,18 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                 if let Some(unique) = &mark.unique {
                     target.insert("unique".into(), json!(unique));
                 }
-                target.insert("provenance".into(), mark_provenance(plan, mark));
-                templates.push(Value::Object(target));
+                let mut provenance = mark_provenance(plan, mark);
+                if anchored.is_some()
+                    && let Some(object) = provenance.as_object_mut()
+                {
+                    object.insert("mark_id".into(), json!(mark.id));
+                }
+                target.insert("provenance".into(), provenance);
+                if anchored.is_some() {
+                    anchors.push(Value::Object(target));
+                } else {
+                    templates.push(Value::Object(target));
+                }
             }
             MarkFamily::Color => {
                 let mut target = Map::new();
@@ -1403,9 +1499,18 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
             MarkFamily::Check => {
                 let mut target = Map::new();
                 target.insert("id".into(), json!(mark.id));
+                // Workflow #390 LAB-2: a member that anchors a page is named by its target.
+                let targets = |members: &Vec<String>| {
+                    members
+                        .iter()
+                        .map(|member| plan.target_id(member))
+                        .collect::<Vec<_>>()
+                };
                 match (&mark.all_of, &mark.any_of) {
-                    (Some(members), _) => target.insert("all_of".into(), json!(members)),
-                    (None, Some(members)) => target.insert("any_of".into(), json!(members)),
+                    (Some(members), _) => target.insert("all_of".into(), json!(targets(members))),
+                    (None, Some(members)) => {
+                        target.insert("any_of".into(), json!(targets(members)))
+                    }
                     (None, None) => {
                         return Err(invalid(
                             "validation_failed",
@@ -1419,6 +1524,7 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
     }
     let mut families = Map::new();
     for (name, targets) in [
+        ("anchors", anchors),
         ("verify_templates", templates),
         ("color_probes", probes),
         ("ocr_targets", ocr),
@@ -1494,7 +1600,7 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
         );
         operation.insert("from".into(), json!(page));
         operation.insert("to".into(), json!(next_page));
-        operation.insert("click".into(), click_json(click)?);
+        operation.insert("click".into(), click_json(plan, click)?);
         match guard_json(plan, step, &page)? {
             Some(guard) => {
                 operation.insert("guard".into(), guard);
@@ -1532,8 +1638,29 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
 
 /// The click of a click step: the recorded rectangle, or (Workflow #396 REC-4) the box of the
 /// template it follows (`target`) or that box's corner plus the recorded offset (`offset`).
-/// Never `target_center`, which clicks one fixed point.
-fn click_json(click: &StepClick) -> LabResult<Value> {
+/// Never `target_center`, which clicks one fixed point. Workflow #390 LAB-2: a drag is a `drag`
+/// click from the recorded rectangle to its destination, a long press a `long_press` click at its
+/// point.
+fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
+    match click.gesture {
+        Some(ClickGesture::Drag { to, duration_ms }) => {
+            return Ok(json!({
+                "kind": "drag",
+                "from": rect_json(click.rect),
+                "to": rect_json(to),
+                "duration_ms": duration_ms
+            }));
+        }
+        Some(ClickGesture::LongPress { duration_ms }) => {
+            return Ok(json!({
+                "kind": "long_press",
+                "x": click.rect.x,
+                "y": click.rect.y,
+                "duration_ms": duration_ms
+            }));
+        }
+        None => {}
+    }
     let Some(follow) = &click.follow else {
         return Ok(json!({
             "kind": "rect",
@@ -1543,13 +1670,13 @@ fn click_json(click: &StepClick) -> LabResult<Value> {
             "height": click.rect.height
         }));
     };
+    // Workflow #390 LAB-2: a followed template that anchors its page is named by its target.
+    let target_id = plan.target_id(&follow.mark_id);
     match (follow.form, follow.offset) {
-        (ClickFollowForm::Target, None) => {
-            Ok(json!({"kind": "target", "target_id": follow.mark_id}))
-        }
+        (ClickFollowForm::Target, None) => Ok(json!({"kind": "target", "target_id": target_id})),
         (ClickFollowForm::Offset, Some(offset)) => Ok(json!({
             "kind": "offset",
-            "target_id": follow.mark_id,
+            "target_id": target_id,
             "offset": rect_json(offset)
         })),
         _ => Err(invalid(
@@ -1563,14 +1690,37 @@ fn click_json(click: &StepClick) -> LabResult<Value> {
     }
 }
 
+/// Each page's rule: its required marks and (Workflow #390 LAB-2) the marks it forbids, named by
+/// their targets. A page's own anchor is not listed: the anchor declares the page and the page
+/// requires its target `page/<page>` without a rule; a page whose rule would be empty has none.
 fn page_rules(plan: &Plan) -> Map<String, Value> {
+    let targets = |ids: &[String], anchor: Option<&String>| {
+        ids.iter()
+            .filter(|id| Some(*id) != anchor)
+            .map(|id| plan.target_id(id))
+            .collect::<Vec<_>>()
+    };
     let mut rules = Map::new();
     for step in &plan.steps {
         if let Some(page) = &step.page {
-            rules.insert(page.clone(), json!({"required": step.required}));
+            let required = targets(step.required.as_slice(), step.anchor.as_ref());
+            let forbidden = targets(step.forbidden.as_slice(), None);
+            let mut rule = Map::new();
+            if !required.is_empty() || step.anchor.is_none() {
+                rule.insert("required".into(), json!(required));
+            }
+            if !forbidden.is_empty() {
+                rule.insert("forbidden".into(), json!(forbidden));
+            }
+            if !rule.is_empty() {
+                rules.insert(page.clone(), Value::Object(rule));
+            }
         }
         if let Some(page) = &step.transition_page {
-            rules.insert(page.clone(), json!({"required": step.transition_required}));
+            rules.insert(
+                page.clone(),
+                json!({"required": targets(step.transition_required.as_slice(), None)}),
+            );
         }
     }
     rules

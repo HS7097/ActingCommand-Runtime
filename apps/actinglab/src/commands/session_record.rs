@@ -12,9 +12,10 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
-    MarkSpec, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
-    StepActionKind, TemplateScalesSpec, TransitionSpec, record_instance_check, record_mark,
-    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
+    MarkSpec, RecordPoint, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
+    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, record_instance_check,
+    record_mark, record_start, record_start_defaults, record_status, record_stop,
+    record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -2608,6 +2609,13 @@ const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--optional",
     "--not-optional",
     "--settle-ms",
+    // Workflow #390 LAB-2.
+    "--forbid",
+    "--anchor",
+    "--no-anchor",
+    "--drag-to",
+    "--long-press",
+    "--duration-ms",
 ];
 
 /// `record mark`: flags or a `actingcommand.lab-record-mark.v1` request, applied by the Lab
@@ -2714,10 +2722,25 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             let (id, rect) = value.rsplit_once('=').ok_or_else(|| {
                 CliError::usage(format!("{name} must be <id>=x,y,w,h, got {value}"))
             })?;
+            // Workflow #390 LAB-2: `--template <id>=x,y,w,h@x,y,w,h` gives the template its
+            // search area after the crop, as the request form's `search` does.
+            let (rect, search) = match rect.split_once('@') {
+                Some((crop, search)) if family == MarkFamily::Template => (
+                    crop,
+                    Some(parse_record_mark_rect(search, "--template search")?),
+                ),
+                Some(_) => {
+                    return Err(CliError::usage(format!(
+                        "{name} must be <id>=x,y,w,h; only --template takes @x,y,w,h, got {value}"
+                    )));
+                }
+                None => (rect, None),
+            };
             let mut spec =
                 MarkSpec::region_only(id.to_string(), family, parse_record_mark_rect(rect, name)?);
             if family == MarkFamily::Template {
                 spec.scales = scales.clone();
+                spec.search = search;
             }
             add.push(spec);
         }
@@ -2729,13 +2752,37 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
     // Workflow #396 REC-4: the package's click follows a template mark, alone (`target`) or
     // with `--click` (`offset`).
     let click_follow = record_flag_value(flags, "--click-follow")?;
-    let click = (click_rect.is_some() || click_from.is_some() || click_follow.is_some()).then_some(
-        ClickSpec {
-            region: click_rect,
-            from: click_from,
-            follow: click_follow,
-        },
-    );
+    // Workflow #390 LAB-2: a drag from `--click` to `--drag-to`, or a long press at
+    // `--long-press x,y`, over `--duration-ms`.
+    let drag_to = record_flag_value(flags, "--drag-to")?
+        .map(|value| parse_record_mark_rect(&value, "--drag-to"))
+        .transpose()?;
+    let long_press = record_flag_value(flags, "--long-press")?
+        .map(|value| parse_record_mark_point(&value, "--long-press"))
+        .transpose()?;
+    let duration_ms = record_flag_value(flags, "--duration-ms")?
+        .map(|value| {
+            value.parse::<u64>().map_err(|error| {
+                CliError::usage(format!(
+                    "--duration-ms '{value}' is not milliseconds: {error}"
+                ))
+            })
+        })
+        .transpose()?;
+    let click = (click_rect.is_some()
+        || click_from.is_some()
+        || click_follow.is_some()
+        || drag_to.is_some()
+        || long_press.is_some()
+        || duration_ms.is_some())
+    .then_some(ClickSpec {
+        region: click_rect,
+        from: click_from,
+        follow: click_follow,
+        drag_to,
+        long_press,
+        duration_ms,
+    });
     let retry = number("--click-retry")?.map(|max_attempts| ClickRetry {
         max_attempts,
         interval_ms: 1000,
@@ -2771,6 +2818,10 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             .map(|action| ApplicationSpec { action }),
         optional,
         optional_settle_ms: millis("--settle-ms")?,
+        // Workflow #390 LAB-2: the page's forbidden marks and its anchor.
+        forbid: flags.values("--forbid"),
+        anchor: record_flag_value(flags, "--anchor")?,
+        clear_anchor: record_flag_switch(flags, "--no-anchor")?,
     };
     let timeout_ms = millis("--transition-timeout-ms")?;
     let min_ms = millis("--min-ms")?;
@@ -2867,6 +2918,22 @@ fn parse_record_mark_scales(value: &str) -> CliOutcome<TemplateScalesSpec> {
     Ok(TemplateScalesSpec { factors_milli })
 }
 
+/// Workflow #390 LAB-2: `x,y` with integer fields.
+fn parse_record_mark_point(value: &str, label: &str) -> CliOutcome<RecordPoint> {
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    let [x, y] = parts.as_slice() else {
+        return Err(CliError::usage(format!("{label} must be x,y, got {value}")));
+    };
+    let field = |text: &str, name: &str| {
+        text.parse::<i32>()
+            .map_err(|error| CliError::usage(format!("{label} {name} '{text}': {error}")))
+    };
+    Ok(RecordPoint {
+        x: field(x, "x")?,
+        y: field(y, "y")?,
+    })
+}
+
 /// `x,y,w,h` with integer fields.
 pub(crate) fn parse_record_mark_rect(value: &str, label: &str) -> CliOutcome<RecordRect> {
     let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
@@ -2912,4 +2979,83 @@ pub(crate) fn record_flag_begin(
         .with_details(json!({"state_root": state_dir.display().to_string()})));
     }
     RecordingLock::acquire(&state_dir, &record_instance, command)
+}
+
+#[cfg(test)]
+mod lab2_tests {
+    use super::*;
+
+    fn flags(args: &[&str]) -> FlagArgs {
+        FlagArgs::parse(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>()).expect("flags")
+    }
+
+    // Workflow #390 LAB-2 (compromise L-02 "--template declares search"): `--template
+    // <id>=x,y,w,h@x,y,w,h` gives the template its search area after the crop, and only a
+    // template takes one; `--forbid`, `--anchor`, `--no-anchor`, `--click` with `--drag-to` and
+    // `--duration-ms`, and `--long-press` reach the request.
+    #[test]
+    fn lab2_record_mark_flags_carry_the_search_area_the_page_rule_and_the_gesture() {
+        let request = record_mark_request_from_flags(&flags(&[
+            "--template",
+            "ui/a=20,20,12,12@0,10,96,30",
+            "--color",
+            "state/b=1,1,2,2",
+            "--forbid",
+            "ui/c",
+            "--forbid",
+            "ui/d",
+            "--anchor",
+            "ui/a",
+            "--click",
+            "60,10,8,8",
+            "--drag-to",
+            "60,40,8,8",
+            "--duration-ms",
+            "300",
+        ]))
+        .expect("request");
+        let rect = |x, y, width, height| RecordRect {
+            x,
+            y,
+            width,
+            height,
+        };
+        assert_eq!(request.add[0].region, Some(rect(20, 20, 12, 12)));
+        assert_eq!(request.add[0].search, Some(rect(0, 10, 96, 30)));
+        assert_eq!(request.add[1].search, None);
+        assert_eq!(request.forbid, ["ui/c", "ui/d"]);
+        assert_eq!(request.anchor.as_deref(), Some("ui/a"));
+        assert!(!request.clear_anchor);
+        assert_eq!(
+            request.click,
+            Some(ClickSpec {
+                region: Some(rect(60, 10, 8, 8)),
+                drag_to: Some(rect(60, 40, 8, 8)),
+                duration_ms: Some(300),
+                ..ClickSpec::default()
+            })
+        );
+
+        let pressed = record_mark_request_from_flags(&flags(&[
+            "--long-press",
+            "64,14",
+            "--duration-ms",
+            "800",
+            "--no-anchor",
+        ]))
+        .expect("request");
+        assert_eq!(
+            pressed.click,
+            Some(ClickSpec {
+                long_press: Some(RecordPoint { x: 64, y: 14 }),
+                duration_ms: Some(800),
+                ..ClickSpec::default()
+            })
+        );
+        assert!(pressed.clear_anchor);
+
+        let error = record_mark_request_from_flags(&flags(&["--color", "state/b=1,1,2,2@0,0,4,4"]))
+            .expect_err("only a template takes a search area");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+    }
 }

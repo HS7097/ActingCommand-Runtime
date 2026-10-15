@@ -557,11 +557,14 @@ pub(crate) fn parse_navigation_graph_value(value: &Value) -> CliOutcome<Navigati
         .get("game")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // Workflow #390 LAB-2: an edge whose operation may reach several pages (`to_pages`) has no
+    // single destination, so no route passes it.
     let edges = value
         .get("navigation")
         .and_then(Value::as_array)
         .ok_or_else(|| CliError::usage("navigation file is missing navigation[]"))?
         .iter()
+        .filter(|edge| edge.get("to_pages").is_none())
         .map(parse_navigation_edge)
         .collect::<CliOutcome<Vec<_>>>()?;
     let destructive_clicks = value
@@ -693,6 +696,22 @@ pub(crate) fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput>
                 to_rect,
                 from: rect_center(from_rect)?,
                 to: rect_center(to_rect)?,
+                duration_ms,
+            })
+        }
+        // Workflow #390 LAB-2: a long press holds one point; it is a drag that does not move.
+        Some("long_press") | Some("long_tap") => {
+            let rect = parse_navigation_point(value)?;
+            let point = rect_center(rect)?;
+            let duration_ms = value
+                .get("duration_ms")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| CliError::usage("long press click requires duration_ms"))?;
+            Ok(SemanticInput::Drag {
+                from_rect: rect,
+                to_rect: rect,
+                from: point,
+                to: point,
                 duration_ms,
             })
         }

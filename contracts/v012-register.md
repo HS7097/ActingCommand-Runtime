@@ -1204,6 +1204,31 @@ class `none`) are catalog entries, not rows (§7).
 |---|---|---|---|---|---|
 | RS1-1 | `actinglab recognition-regression --state-root <root> --evidence <file>... (--package <path> \| --zip <path>)`: `{mode: "offline_recognition_regression", executed: false, request_id, package_id, frames: [{ref, steps, frame_id, status, targets?: [{target, original_matched, status, matched?, agrees?, score?, failure?}]}], targets: [{target, frames, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli}], summary: {records, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli, frames_referenced, frames_replayed, frames_material_missing, frames_without_original_record}, ocr, production_global_ledger_written: false}` | operation output (no persisted record; an actinglab result, read by a person or an agent) | RSU-1 | RSU-1 | a frame's `status` is `compared`, `material_missing` (#375 retention removed it) or `no_original_record`; a target's `status` is `compared`, `absent` (not in the package) or `failed`; `score` is `{kind, score_milli, threshold_milli}` (template), `{kind, distance_milli, max_distance_milli}` (colour), `{kind, confidence_milli}` (OCR) or `{kind, score_milli}` (classifier); `error_rate_milli` is the disagreements (`lost` + `gained`) per mille of the frames compared, rounded down, `null` when none was compared; the original record is the run's last `task.recognition_completed` fact on the frame; the input is MCP-6's evidence ([runtime-interface.md](runtime-interface.md), `run evidence`), of which only `request_id`, `steps[].step_index` and `steps[].frames[].ref` are read; exit 0 whenever the comparison was made |
 
+### 1.74 Wave 15 slice LAB-2 (#390, forced-compromises mapping row LAB-2; compromises L-02, T-03)
+
+LAB-2 completes the Lab recording's generated package and the navigation projection. It writes
+no ledger record, wire shape or configuration key: the rows are the Lab state file, the Lab's
+tool input and output, and the resource files the tools write.
+[lab-recording.md](lab-recording.md) ("Forbidden marks and anchors", "Drags and long presses",
+"Marking after stop", "`--record` on device commands", "Pages and documents") and
+[resource-declarations.md](resource-declarations.md) (the navigation paragraph) are the
+contract. No code is new: the refusals reuse `validation_failed`, `record_mark_rejected` (new
+reasons `forbidden_source_missing`, `forbidden_mark_passes`, `anchor_invalid` with `problem`
+`not_own_template` or `not_required`), `record_mark_in_use`, `record_to_transition_invalid`
+(new reason `page_rule`), `record_click_rect_conflict`, `record_click_outside_step_rect`,
+`record_step_click_missing` and `record_session_not_active` (new `details.reason`
+`recording_stopped`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L2-1 | Lab recording state (`actingcommand.lab-recording.v1`): step `forbidden: [ids]` and `anchor`, click `gesture` (`{"kind": "drag", "to", "duration_ms"}` \| `{"kind": "long_press", "duration_ms"}`), execution `to_point` and `duration_ms`, recording `amended_at_unix_ms` | new members (Lab state file, not the ledger) | LAB-2 | LAB-2 | absent when unused, so a recording without them is written as before; a template mark recorded without a search area keeps the default one it was given (L2-2) |
+| L2-2 | `record mark` input: `--template <id>=x,y,w,h@x,y,w,h`; `--forbid <id>`; `--anchor <id>` \| `--no-anchor`; `--click x,y,w,h --drag-to x,y,w,h --duration-ms <ms>`; `--long-press x,y --duration-ms <ms>`; request members `forbid`, `anchor`, `clear_anchor`, `click.drag_to`, `click.long_press`, `click.duration_ms` (`actingcommand.lab-record-mark.v1`) | tool input (MCP `ac_record_mark` hands the request on unchanged) | LAB-2 | LAB-2 | a template mark without a declared search area searches its crop grown by 48 px on each side, clamped to the frame (coordinator input of 10-15: a game update shifted a menu bar by about 40 px and every search area equal to its template box failed); durations 1..=60000 ms |
+| L2-3 | `record mark` output `forbidden[{id, family, status: "absent" \| "not_evaluated", frames}]`, `after_stop`, `step_state{forbidden?, anchor?}`; `record status` steps `forbidden?`, `anchor?`, click `gesture?`, `amended_at_unix_ms?` | output members (no persisted record) | LAB-2 | LAB-2 | absent when unused |
+| L2-4 | the package `record stop` generates: page rule `forbidden`; the anchoring template as `anchors[] {id: <page>, …}` (target `page/<page>`, named by every reference); clicks `{"kind": "drag", "from", "to", "duration_ms"}` and `{"kind": "long_press", "x", "y", "duration_ms"}`; the default task timeout counting a gesture's duration | resource file format the tool writes (task schema `0.9`, unchanged grammar) | LAB-2 | LAB-2 | a recording that uses none of them generates the same bytes as before |
+| L2-5 | `record stop` on a stopped recording marked again: generated again, `lab.status: "regenerated"` | output value and rule | LAB-2 | LAB-2 | options not given keep the generated package's values, except the task timeout, computed again; `--lab-dir` is written only when given |
+| L2-6 | `do --capture --record --swipe x1,y1,x2,y2,ms`, and `do --capture --record` on a drag or long press step (one swipe; the plan's `gesture` and `to_point`) | tool input and output | LAB-2 | LAB-2 | was `record_flag_unsupported`; the Runtime operation is the existing coordinates swipe |
+| L2-7 | the generated navigation's edge `{id, from_page, to_pages: [...], click, source}` for an operation whose `to` is a page set | resource file format (`navigation`, schema `0.6` unchanged) | LAB-2 | LAB-2 (source compilation) | exactly one of `to_page` and `to_pages`; a catalog navigation action and page projection element like any edge; the drive graph and actinglab's route tools leave it out; a `long_press` navigation click reads as a drag that does not move |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -74,6 +74,17 @@ Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and
 overlap checks when compiling and consuming its execution graph.
 
+Workflow #390 LAB-2 (forced-compromises mapping T-03): the generated navigation, the
+projection of a task's click operations, also collects an operation whose `to` is a page set,
+as an edge `{"id", "from_page", "to_pages": [...], "click", "source"}` with every page it may
+reach (game-qualified, in name order) instead of one `to_page`. An edge names exactly one of
+`to_page` (a string) and `to_pages` (at least one string): both are `UnknownField` at
+`to_pages`, an empty set `InvalidValue`, neither `MissingField` at `to_page`. Such an edge is a
+navigation element of the page projection like any other, and no route passes it (the drive
+graph and actinglab's navigation tools leave it out), since its click does not decide which page
+comes. A `long_press` navigation click is read as a drag that does not move (one point held for
+its `duration_ms`).
+
 The named directories describe conventional resource layouts; explicitly selected
 pack/pages/navigation/projection filenames also use their native parsers at the
 root. Paths are relative to their actual repository or resource subroot. Nested self-owned

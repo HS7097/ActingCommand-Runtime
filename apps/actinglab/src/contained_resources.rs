@@ -31,10 +31,10 @@ pub(super) struct PageOperation {
     pub input: super::SemanticInput,
 }
 
-/// Workflow #308 SEL-L6a (FCM T-03): a click operation whose `to` is a page set. A navigation
-/// edge has one destination, so the generated navigation keeps no such operation; observe
-/// lists it from the task file with its pages as the page set names them and its declared
-/// click.
+/// Workflow #308 SEL-L6a (FCM T-03): a click operation whose `to` is a page set. A route edge has
+/// one destination; the generated navigation keeps such an operation with all its pages
+/// (`to_pages`, Workflow #390 LAB-2) but no route passes it, and observe lists it from the task
+/// file with its pages as the page set names them and its declared click.
 pub(super) struct MultiDestinationOperation {
     pub id: String,
     pub task_id: String,
@@ -59,8 +59,11 @@ pub(super) fn observation_resources(
             ))),
         }
     };
+    // Workflow #390 LAB-2: the navigation collects an operation whose `to` is a page set with
+    // every page it may reach (`to_pages`); it is listed below from its task file, and is no edge.
     let edges = array("navigation")?
         .iter()
+        .filter(|edge| edge.get("to_pages").is_none())
         .map(super::parse_navigation_edge)
         .collect::<CliOutcome<Vec<_>>>()?;
     let operations = array("page_operations")?

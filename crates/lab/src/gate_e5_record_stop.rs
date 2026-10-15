@@ -123,6 +123,9 @@ impl Recorded {
                 }),
                 from: None,
                 follow: None,
+                drag_to: None,
+                long_press: None,
+                duration_ms: None,
             }),
             ..MarkRequest::default()
         };

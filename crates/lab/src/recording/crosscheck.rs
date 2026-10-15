@@ -10,7 +10,7 @@
 use super::follow::followed_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep};
-use super::model::{ClickFollow, MarkFamily, RecordRect, RecordedFrame};
+use super::model::{ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame};
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::LabCode;
@@ -175,12 +175,14 @@ fn not_evaluated_warning(reason: &str, message: &str) -> Value {
 /// Workflow #396 REC-4: the box a click following a template clicks on `loaded`, as the admitted
 /// evaluator matches the template there; `None` when the template does not pass on it.
 fn followed_rect(
+    plan: &Plan,
     evaluator: &RecognitionEvaluator,
     loaded: &LoadedFrame,
     follow: &ClickFollow,
 ) -> LabResult<Option<RecordRect>> {
     let evaluation = evaluator
-        .evaluate_target(&loaded.scene, &follow.mark_id)
+        // Workflow #390 LAB-2: a followed template that anchors its page is its `page/` target.
+        .evaluate_target(&loaded.scene, &plan.target_id(&follow.mark_id))
         .map_err(|error| {
             admission_failed(
                 "first_decision",
@@ -261,7 +263,9 @@ pub(crate) fn first_decision(
             warning,
         });
     }
-    if ocr.provider().is_none() && plan.involves_ocr(&first.required)? {
+    if ocr.provider().is_none()
+        && (plan.involves_ocr(&first.required)? || plan.involves_ocr(&first.forbidden)?)
+    {
         let reason = LabCode::LabOcrUnavailable.as_str();
         return Ok(FirstDecision {
             value: json!({"status": "not_evaluated", "reason": reason}),
@@ -297,14 +301,23 @@ pub(crate) fn first_decision(
             checked
         }
     };
+    let point_in = |x: i32, y: i32, rect: RecordRect| {
+        x >= rect.x
+            && y >= rect.y
+            && i64::from(x) < i64::from(rect.x) + i64::from(rect.width)
+            && i64::from(y) < i64::from(rect.y) + i64::from(rect.height)
+    };
+    // Workflow #390 LAB-2: a drag is one swipe from its rectangle into its destination over its
+    // duration; a long press holds its point for its duration.
+    let gesture = click.and_then(|click| click.gesture);
     for (checked_frame, checked_result) in &checked {
         let rect = match (click, follow) {
             (Some(_), Some(follow)) => {
-                followed_rect(evaluator, cached(cache, checked_frame)?, follow)?
+                followed_rect(plan, evaluator, cached(cache, checked_frame)?, follow)?
             }
             (click, _) => click.map(|click| click.rect),
         };
-        let inside = match (&checked_result.decision, rect) {
+        let inside = match (&checked_result.decision, rect, gesture) {
             (
                 OfflineDecision::WouldClick {
                     operation_label,
@@ -312,12 +325,47 @@ pub(crate) fn first_decision(
                     ..
                 },
                 Some(rect),
+                None,
+            ) => *operation_label == operation && point_in(*x, *y, rect),
+            (
+                OfflineDecision::WouldClick {
+                    operation_label,
+                    action:
+                        InputAction::Swipe {
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            duration_ms,
+                        },
+                    ..
+                },
+                Some(rect),
+                Some(ClickGesture::Drag {
+                    to,
+                    duration_ms: declared,
+                }),
             ) => {
                 *operation_label == operation
-                    && *x >= rect.x
-                    && *y >= rect.y
-                    && i64::from(*x) < i64::from(rect.x) + i64::from(rect.width)
-                    && i64::from(*y) < i64::from(rect.y) + i64::from(rect.height)
+                    && point_in(*x1, *y1, rect)
+                    && point_in(*x2, *y2, to)
+                    && *duration_ms == declared
+            }
+            (
+                OfflineDecision::WouldClick {
+                    operation_label,
+                    action: InputAction::LongTap { x, y, duration_ms },
+                    ..
+                },
+                Some(rect),
+                Some(ClickGesture::LongPress {
+                    duration_ms: declared,
+                }),
+            ) => {
+                *operation_label == operation
+                    && *x == rect.x
+                    && *y == rect.y
+                    && *duration_ms == declared
             }
             _ => false,
         };
@@ -386,6 +434,8 @@ impl PageVerdict {
 struct PageResult {
     verdict: PageVerdict,
     failed: Vec<String>,
+    /// Workflow #390 LAB-2: the forbidden marks that pass.
+    forbidden_passed: Vec<String>,
     margins: Vec<(String, f64)>,
 }
 
@@ -441,13 +491,18 @@ impl Evaluation<'_> {
                 Ok((verdict, None))
             }
             _ => {
-                let evaluation = self.evaluator.evaluate_target(scene, id).map_err(|error| {
-                    admission_failed(
-                        "cross_check",
-                        format!("target '{id}' cannot be evaluated: {error}"),
-                        json!({"target": id}),
-                    )
-                })?;
+                // Workflow #390 LAB-2: a template that anchors a page is its `page/` target.
+                let target = self.plan.target_id(id);
+                let evaluation =
+                    self.evaluator
+                        .evaluate_target(scene, &target)
+                        .map_err(|error| {
+                            admission_failed(
+                                "cross_check",
+                                format!("target '{target}' cannot be evaluated: {error}"),
+                                json!({"target": target}),
+                            )
+                        })?;
                 let verdict = if evaluation.passed {
                     Verdict::Passed
                 } else {
@@ -458,10 +513,17 @@ impl Evaluation<'_> {
         }
     }
 
-    /// A page matches when every required target passes, does not when one fails, and is
+    /// A page matches when every required target passes and (Workflow #390 LAB-2) no forbidden
+    /// target passes, does not when a required one fails or a forbidden one passes, and is
     /// undetermined otherwise.
-    fn page(&self, scene: &Scene, required: &[String]) -> LabResult<PageResult> {
+    fn page(
+        &self,
+        scene: &Scene,
+        required: &[String],
+        forbidden: &[String],
+    ) -> LabResult<PageResult> {
         let mut failed = Vec::new();
+        let mut forbidden_passed = Vec::new();
         let mut undetermined = false;
         let mut margins = Vec::new();
         for id in required {
@@ -472,10 +534,17 @@ impl Evaluation<'_> {
                 Verdict::Undetermined => undetermined = true,
             }
             if let Some(margin) = margin {
-                margins.push((id.clone(), margin));
+                margins.push((self.plan.target_id(id), margin));
             }
         }
-        let verdict = if !failed.is_empty() {
+        for id in forbidden {
+            match self.target(scene, id)?.0 {
+                Verdict::Passed => forbidden_passed.push(id.clone()),
+                Verdict::Failed => {}
+                Verdict::Undetermined => undetermined = true,
+            }
+        }
+        let verdict = if !failed.is_empty() || !forbidden_passed.is_empty() {
             PageVerdict::NoMatch
         } else if undetermined {
             PageVerdict::Undetermined
@@ -485,6 +554,7 @@ impl Evaluation<'_> {
         Ok(PageResult {
             verdict,
             failed,
+            forbidden_passed,
             margins,
         })
     }
@@ -576,25 +646,45 @@ fn self_mismatch(
     step: &PlanStep,
     page: &str,
     frame: &RecordedFrame,
-    failed: &[String],
+    result: &PageResult,
 ) -> LabError {
+    let mut details = json!({
+        "step": step.number,
+        "record_index": step.step.index,
+        "page": page,
+        "frame_id": frame.frame_id,
+        "failed": result.failed
+    });
+    // Workflow #390 LAB-2: forbidden marks that pass on the page's own frame.
+    if !result.forbidden_passed.is_empty()
+        && let Some(object) = details.as_object_mut()
+    {
+        object.insert(
+            "forbidden_passed".to_string(),
+            json!(result.forbidden_passed),
+        );
+    }
+    let mut reasons = Vec::new();
+    if !result.failed.is_empty() {
+        reasons.push(format!("{} fail on it", result.failed.join(", ")));
+    }
+    if !result.forbidden_passed.is_empty() {
+        reasons.push(format!(
+            "the forbidden {} pass on it",
+            result.forbidden_passed.join(", ")
+        ));
+    }
     with_details(
         blocked(
             "record_step_self_mismatch",
             format!(
-                "page {page} of step {} does not match its own frame {}: {} fail on it",
+                "page {page} of step {} does not match its own frame {}: {}",
                 step.step.index,
                 frame.frame_id,
-                failed.join(", ")
+                reasons.join("; ")
             ),
         ),
-        json!({
-            "step": step.number,
-            "record_index": step.step.index,
-            "page": page,
-            "frame_id": frame.frame_id,
-            "failed": failed
-        }),
+        details,
     )
 }
 
@@ -603,13 +693,14 @@ fn page_on_frames(
     evaluation: &Evaluation<'_>,
     cache: &FrameCache,
     required: &[String],
+    forbidden: &[String],
     frames: &[&RecordedFrame],
 ) -> LabResult<(Vec<String>, Vec<String>)> {
     let mut matched = Vec::new();
     let mut undetermined = Vec::new();
     for frame in frames {
         match evaluation
-            .page(&cached(cache, frame)?.scene, required)?
+            .page(&cached(cache, frame)?.scene, required, forbidden)?
             .verdict
         {
             PageVerdict::Match => matched.push(frame.frame_id.clone()),
@@ -782,7 +873,7 @@ fn optional_checks(
                     continue;
                 }
                 let (matched, undetermined) =
-                    page_on_frames(evaluation, cache, &step.required, &frames)?;
+                    page_on_frames(evaluation, cache, &step.required, &step.forbidden, &frames)?;
                 let other_step = &plan.steps[other];
                 if !matched.is_empty() {
                     let same_click = matches!(kind, Against::OtherOptional)
@@ -809,8 +900,13 @@ fn optional_checks(
         }
         for &member in &run.members {
             let step = &plan.steps[member];
-            let (matched, undetermined) =
-                page_on_frames(evaluation, cache, &skip.required, &step.live_frames())?;
+            let (matched, undetermined) = page_on_frames(
+                evaluation,
+                cache,
+                &skip.required,
+                &skip.forbidden,
+                &step.live_frames(),
+            )?;
             if !matched.is_empty() {
                 return Err(skip_target_insensitive(skip, skip_page, step, &matched));
             }
@@ -889,6 +985,7 @@ pub(crate) fn cross_check(
             pages.push((
                 page.clone(),
                 step.required.clone(),
+                step.forbidden.clone(),
                 step.live_frames(),
                 false,
             ));
@@ -900,16 +997,18 @@ pub(crate) fn cross_check(
             pages.push((
                 page.clone(),
                 step.transition_required.clone(),
+                Vec::new(),
                 step.transition_live_frames(),
                 true,
             ));
         }
-        for (page, required, frames, transition) in pages {
+        for (page, required, forbidden, frames, transition) in pages {
             let mut results = Vec::new();
             for frame in frames {
-                let result = evaluation.page(&cached(cache, frame)?.scene, &required)?;
+                let result =
+                    evaluation.page(&cached(cache, frame)?.scene, &required, &forbidden)?;
                 if result.verdict == PageVerdict::NoMatch {
-                    return Err(self_mismatch(step, &page, frame, &result.failed));
+                    return Err(self_mismatch(step, &page, frame, &result));
                 }
                 partial |= result.verdict == PageVerdict::Undetermined;
                 for (target, margin) in result.margins {
@@ -950,10 +1049,14 @@ pub(crate) fn cross_check(
         let member = plan
             .run_of(index)
             .filter(|_| step.transition_page.is_none());
-        let (gate, required) = match run_after.or(member) {
+        let (gate, required, gate_forbidden) = match run_after.or(member) {
             Some(run) => {
                 let skip = &plan.steps[run.skip];
-                (skip.page_id()?.to_string(), skip.required.clone())
+                (
+                    skip.page_id()?.to_string(),
+                    skip.required.clone(),
+                    skip.forbidden.clone(),
+                )
             }
             None => plan.gate(index)?,
         };
@@ -975,7 +1078,7 @@ pub(crate) fn cross_check(
         let mut undetermined = Vec::new();
         for frame in step.live_frames() {
             match evaluation
-                .page(&cached(cache, frame)?.scene, &required)?
+                .page(&cached(cache, frame)?.scene, &required, &gate_forbidden)?
                 .verdict
             {
                 PageVerdict::Match => matched.push(frame.frame_id.clone()),
@@ -1042,7 +1145,10 @@ pub(crate) fn cross_check(
             let mut undetermined = Vec::new();
             for frame in first.live_frames() {
                 let scene = darkened(cached(cache, frame)?)?;
-                match evaluation.page(&scene, &first.required)?.verdict {
+                match evaluation
+                    .page(&scene, &first.required, &first.forbidden)?
+                    .verdict
+                {
                     PageVerdict::Match => insensitive.push(frame.frame_id.clone()),
                     PageVerdict::Undetermined => undetermined.push(frame.frame_id.clone()),
                     PageVerdict::NoMatch => {}

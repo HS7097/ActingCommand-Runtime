@@ -492,11 +492,11 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
         [cmd] if cmd == "observe" => {
             flags.bool("--capture") && !dry_run && flags.optional("--scene").is_none()
         }
+        // Workflow #390 LAB-2: `--swipe` executes the step's declared drag.
         [cmd] if cmd == "do" => {
             flags.bool("--capture")
                 && !dry_run
                 && flags.optional("--scene").is_none()
-                && flags.optional("--swipe").is_none()
                 && flags.positionals.is_empty()
         }
         [group, sub] if group == "session" && sub == "app" => {
@@ -514,7 +514,7 @@ fn record_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
             "record_flag_unsupported",
             format!(
                 "--record is accepted only on capture, observe --capture, do --capture with a \
-                 point or rectangle click, and session app|session instance app \
+                 point, rectangle or swipe input, and session app|session instance app \
                  <launch|restart|stop|force-stop>, never with --dry-run on observe, do or session app; \
                  not on {}",
                 invocation.command_name

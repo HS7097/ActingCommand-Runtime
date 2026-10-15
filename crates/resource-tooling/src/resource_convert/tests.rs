@@ -703,11 +703,17 @@ fn finite_page_sets_are_normalized_materialized_and_not_truncated() {
         outputs.primitives["primitives"][1]["expect_after"]["page_id"],
         json!(["alternate", "success"])
     );
-    assert!(
-        outputs.navigation["navigation"]
-            .as_array()
-            .expect("navigation")
-            .is_empty(),
+    // Workflow #390 LAB-2 (FCM T-03): the navigation collects the set-shaped destination with
+    // every page it may reach, never truncated into a singleton edge.
+    assert_eq!(
+        outputs.navigation["navigation"],
+        json!([{
+            "id": "set_destination",
+            "from_page": "neutral/home",
+            "to_pages": ["neutral/alternate", "neutral/success"],
+            "click": {"kind": "point", "point": "0,0"},
+            "source": ""
+        }]),
         "set-shaped destinations must not be truncated into a legacy singleton edge"
     );
 
