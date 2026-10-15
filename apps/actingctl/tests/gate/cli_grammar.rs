@@ -20,7 +20,9 @@ use crate::held_runtime::{HELD_SALT, NoInstances};
 use actingcommand_contract::{
     EmulatorInstanceAction, EventActor, EventSource, SchedulingPauseReason, SchedulingPauseScope,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{
+    RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
+};
 use actingcommand_runtime_host::{RuntimeHost, RuntimeHostConfig};
 use serde_json::Value;
 use std::path::Path;
@@ -62,6 +64,7 @@ fn result_line(output: &Output) -> Result<Value, String> {
 fn unconnected_code(root: &Path) -> String {
     let Err(unconnected) = RuntimeClient::connect(RuntimeClientConfig::new(
         root,
+        RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     )) else {
@@ -205,6 +208,7 @@ fn gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome
     // The same requests through the typed client: the outcome each refused receipt carries.
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

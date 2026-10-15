@@ -371,6 +371,7 @@ fn gate_a_stalled_writer_latches_the_typed_client_and_its_request_has_one_termin
     let client = actingcommand_runtime_client::RuntimeClient::connect(
         actingcommand_runtime_client::RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         )
