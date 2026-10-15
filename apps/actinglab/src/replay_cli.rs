@@ -251,7 +251,7 @@ fn run_scan_replay(
                 "status": ScanReplayStatus::Failed,
                 "outcome": error.outcome().envelope(Detail::Full),
             });
-            format!("it failed with {}", error.code().as_str())
+            return Ok(payload);
         }
     };
     Err(CliError::new(
