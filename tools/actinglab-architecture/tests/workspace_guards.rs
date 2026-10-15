@@ -694,6 +694,10 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     // it is the empty `PackageRef` until PKG-S5 removes the parameter), and both kernel loaders
     // must reach the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's
     // reference.
+    // Workflow #386 SR-3: the measured loader's body is `prepare_measured_naming_refusal`, whose
+    // refusal also names the refused package (a scheduled run suspends that package);
+    // `prepare_measured_contained_task` delegates to it, and the scheduled run's ingress calls it
+    // directly.
     let compact = |text: &str| text.split_whitespace().collect::<String>();
     let host_path = "crates/runtime-host/src/host/contained_task.rs";
     let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
@@ -706,8 +710,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
             "PreparedContainedTask::load_path(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
         ),
         (
-            "prepare_measured_contained_task",
+            "prepare_measured_naming_refusal",
             "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+        ),
+        (
+            "prepare_measured_contained_task",
+            "prepare_measured_naming_refusal(instance_alias,",
         ),
     ] {
         let body = function_source(host_path, &host, None, function)
@@ -718,17 +726,32 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
              reference via {required}"
         );
     }
-    for (path, source, function) in [
-        (host_path, &host, "run_contained_task"),
-        (host_path, &host, "prepare_package_run"),
-        (settlement_path, &settlement, "prepare_scheduled_package"),
+    for (path, source, function, loader) in [
+        (
+            host_path,
+            &host,
+            "run_contained_task",
+            "prepare_measured_contained_task(",
+        ),
+        (
+            host_path,
+            &host,
+            "prepare_package_run",
+            "prepare_measured_contained_task(",
+        ),
+        (
+            settlement_path,
+            &settlement,
+            "prepare_scheduled_package",
+            "prepare_measured_naming_refusal(",
+        ),
     ] {
         let body = function_source(path, source, Some("HostShared"), function)
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(
-            compact(&body).contains("prepare_measured_contained_task("),
+            compact(&body).contains(loader),
             "main-run ingress HostShared::{function} ({path}) must admit its package through \
-             prepare_measured_contained_task"
+             {loader}"
         );
     }
     for function in ["load_path", "load_path_with_resident_bytes"] {

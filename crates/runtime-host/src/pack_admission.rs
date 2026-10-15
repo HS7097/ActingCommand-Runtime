@@ -23,7 +23,7 @@
 //! copies) whose outcome is `pack_admission_suspended` or `pack_admission_lifted` and whose
 //! `signal_id` starts with `signal:pack_admission:`. No record type and no member is new.
 
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, SchedulingRuleHostCode};
 use crate::failure_identity::content_hash_prefix;
 use crate::suspension_lift::{SuspensionLiftView, measure_package_hash};
 use crate::{
@@ -109,7 +109,7 @@ fn suspended_outcome(
     failure_code: Code,
     runtime_commit: Option<&str>,
 ) -> Outcome {
-    let mut outcome = Outcome::new(HostCode::PackAdmissionSuspended)
+    let mut outcome = Outcome::new(SchedulingRuleHostCode::PackAdmissionSuspended)
         .package_id(package_id)
         .failure_code(failure_code);
     if let Some(hash) = hash {
@@ -124,7 +124,7 @@ fn suspended_outcome(
 /// `pack_admission_lifted` with its values: the package, its content hash measured now and the
 /// build.
 fn lifted_outcome(package_id: &str, hash: &str, runtime_commit: Option<&str>) -> Outcome {
-    let outcome = Outcome::new(HostCode::PackAdmissionLifted)
+    let outcome = Outcome::new(SchedulingRuleHostCode::PackAdmissionLifted)
         .package_id(package_id)
         .actual_digest(format!("sha256:{hash}"));
     match runtime_commit {
