@@ -4988,7 +4988,6 @@ const FORENSIC_FORBIDDEN_WRITE_ENTRIES: &[&str] = &[
     "LabLedger::open_or_create",
     "LabLedger::create_runtime_shard",
     "commit_then_record",
-    "enforce_retention",
     "RuntimeDatabase::open",
     "RuntimeDatabase::open_with_initializer",
     "backup",

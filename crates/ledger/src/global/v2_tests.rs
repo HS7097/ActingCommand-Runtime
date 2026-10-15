@@ -135,19 +135,10 @@ fn seed_artifact_bearing_segment(temp: &TempDir, owner: &str, index: u64) -> Eve
     fixture
 }
 
-#[test]
-fn persisted_event_cannot_be_constructed_or_deserialized_by_consumers() {
-    let temp = TempDir::new().expect("temp");
-    let ledger = GlobalLedger::open(config(&temp, "writer-fact")).expect("ledger");
-    let fixture = event(1);
-    let expected_id = fixture.event_id;
-    let persisted = ledger.append(fixture.draft).expect("append");
-    let serialized = serde_json::to_value(&persisted).expect("serialize persisted fact");
-
-    assert_eq!(persisted.sequence(), 1);
-    assert_eq!(serialized["sequence"], 1);
-    assert_eq!(persisted.event_id(), &expected_id);
-}
+// Workflow #382 L-4 (test plan §4 #17, LED-R4): that consumers cannot construct or deserialize
+// a `PersistedEvent` is proven at compile time by the `compile_fail` doctests on the type in
+// crates/ledger/src/fact.rs, each paired with an accepted doctest that differs only in the
+// refused line (contracts/ledger-store.md: `PersistedEvent` remains opaque to consumers).
 
 #[test]
 fn storage_assigns_the_only_sequence() {
