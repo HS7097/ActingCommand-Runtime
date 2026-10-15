@@ -415,20 +415,17 @@ pub(super) struct DeviceStates {
 /// The sampler's start, after the daemon-start preparation: the machine of every bound handset,
 /// then the sampler thread when there is one (§7.2).
 pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
-    let handsets = lock(
-        &shared.registered_instances,
-        DeviceStateLocation::DeviceStateSample,
-    )?
-    .values()
-    .filter(|instance| {
-        instance
-            .bound_adb_endpoint()
-            .and_then(ResolvedAdbEndpoint::handset)
-            .and_then(actingcommand_execution_kernel::HandsetEndpoint::binding)
-            .is_some()
-    })
-    .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
-    .collect::<Vec<_>>();
+    let handsets = lock(&shared.registered_instances, DeviceStateLocation::Sample)?
+        .values()
+        .filter(|instance| {
+            instance
+                .bound_adb_endpoint()
+                .and_then(ResolvedAdbEndpoint::handset)
+                .and_then(actingcommand_execution_kernel::HandsetEndpoint::binding)
+                .is_some()
+        })
+        .map(|instance| (instance.instance_id(), instance.instance_alias.clone()))
+        .collect::<Vec<_>>();
     if handsets.is_empty() {
         return Ok(());
     }
@@ -437,27 +434,19 @@ pub(super) fn start(shared: &Arc<HostShared>) -> RuntimeHostResult<()> {
         shared.monotonic_ms()?,
         &shared.device_state_config()?,
     );
-    lock(
-        &shared.device_states,
-        DeviceStateLocation::DeviceStateSample,
-    )?
-    .machine = machine;
+    lock(&shared.device_states, DeviceStateLocation::Sample)?.machine = machine;
     let sampler_shared = Arc::clone(shared);
     let sampler = thread::Builder::new()
         .name("actingcommand-runtime-device-state".to_string())
         .spawn(move || sample_loop(&sampler_shared))
         .map_err(|_| {
             RuntimeHostError::fatal(
-                DeviceStateHostCode::DeviceStateSamplingFailed,
-                DeviceStateLocation::DeviceStateSample,
+                DeviceStateHostCode::SamplingFailed,
+                DeviceStateLocation::Sample,
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-    lock(
-        &shared.device_states,
-        DeviceStateLocation::DeviceStateSample,
-    )?
-    .sampler = Some(sampler);
+    lock(&shared.device_states, DeviceStateLocation::Sample)?.sampler = Some(sampler);
     Ok(())
 }
 
@@ -479,13 +468,10 @@ fn sample_loop(shared: &HostShared) -> RuntimeHostResult<()> {
 
 /// Joins the sampler, which ends with the shutdown request.
 pub(super) fn stop(shared: &HostShared) -> RuntimeHostResult<()> {
-    let sampler = lock(
-        &shared.device_states,
-        DeviceStateLocation::DeviceStateSample,
-    )?
-    .sampler
-    .take();
-    join_runtime_thread(sampler, DeviceStateLocation::DeviceStateSample)
+    let sampler = lock(&shared.device_states, DeviceStateLocation::Sample)?
+        .sampler
+        .take();
+    join_runtime_thread(sampler, DeviceStateLocation::Sample)
 }
 
 /// One pass of the sampler: each handset whose sample is due (each one when `all`). A failure
@@ -494,7 +480,7 @@ pub(super) fn stop(shared: &HostShared) -> RuntimeHostResult<()> {
 pub(super) fn sample(shared: &HostShared, all: bool) -> RuntimeHostResult<()> {
     let now_ms = shared.monotonic_ms()?;
     let config = shared.device_state_config()?;
-    let due = lock(&shared.device_states, DeviceStateLocation::DeviceStateApply)?
+    let due = lock(&shared.device_states, DeviceStateLocation::Apply)?
         .machine
         .due(now_ms, all);
     for (instance_id, alias, look) in due {
@@ -569,22 +555,22 @@ fn device_state_failure(outcome: Outcome, location: DeviceStateLocation) -> Requ
 
 /// A hold that keeps a run from starting, as its error: the hold's code with its values.
 fn hold_failure(entry: HoldEntry, device_label: &str) -> RequestFailure {
-    let location = DeviceStateLocation::DeviceStateGate;
+    let location = DeviceStateLocation::Gate;
     let error = match entry {
         HoldEntry::Thermal(level) => RuntimeHostError::request(
-            DeviceStateHostCode::DeviceThermalHold,
+            DeviceStateHostCode::ThermalHold,
             location,
             RuntimeErrorCode::BackendOperationFailed,
         )
         .with_outcome_values(|outcome| outcome.thermal_status(level).device_label(device_label)),
         HoldEntry::BatteryLow(percent) => RuntimeHostError::request(
-            DeviceStateHostCode::DeviceBatteryLow,
+            DeviceStateHostCode::BatteryLow,
             location,
             RuntimeErrorCode::BackendOperationFailed,
         )
         .with_outcome_values(|outcome| outcome.battery_percent(percent).device_label(device_label)),
         HoldEntry::InUse => RuntimeHostError::request(
-            DeviceStateHostCode::DeviceInUse,
+            DeviceStateHostCode::InUse,
             location,
             RuntimeErrorCode::BackendOperationFailed,
         )
@@ -701,11 +687,9 @@ fn sample_facts(sample: &Sample) -> Vec<(&'static str, ContractFactValue)> {
 impl HostShared {
     /// Whether the instance is a bound handset whose device state the Runtime keeps.
     fn device_state_watches(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
-        Ok(
-            lock(&self.device_states, DeviceStateLocation::DeviceStateRead)?
-                .machine
-                .watches(instance_id),
-        )
+        Ok(lock(&self.device_states, DeviceStateLocation::Read)?
+            .machine
+            .watches(instance_id))
     }
 
     /// The device-state hold that keeps the instance unavailable (the availability gate): a
@@ -714,11 +698,9 @@ impl HostShared {
         &self,
         instance_id: InstanceId,
     ) -> RuntimeHostResult<Option<DeviceHold>> {
-        Ok(
-            lock(&self.device_states, DeviceStateLocation::DeviceStateRead)?
-                .machine
-                .hold(instance_id),
-        )
+        Ok(lock(&self.device_states, DeviceStateLocation::Read)?
+            .machine
+            .hold(instance_id))
     }
 
     /// `work` with the device-state shell of the bound handset `instance_alias` and its
@@ -756,7 +738,7 @@ impl HostShared {
         config: &DeviceStateConfig,
     ) -> RuntimeHostResult<()> {
         if self.device_link_hold(instance_id)?.is_some() {
-            lock(&self.device_states, DeviceStateLocation::DeviceStateApply)?
+            lock(&self.device_states, DeviceStateLocation::Apply)?
                 .machine
                 .skipped(instance_id, now_ms, config);
             return Ok(());
@@ -764,7 +746,7 @@ impl HostShared {
         let mut read = None;
         let reached = self.handset_state(
             alias,
-            DeviceStateLocation::DeviceStateSample,
+            DeviceStateLocation::Sample,
             DeviceStateProbe::Power,
             &mut |shell: &mut dyn DeviceStateShell, application_id: &str| {
                 let mut failure = None;
@@ -787,15 +769,14 @@ impl HostShared {
         let Some((sample, failure)) = read.filter(|_| reached) else {
             return Ok(());
         };
-        let (changes, newly_unreadable) =
-            lock(&self.device_states, DeviceStateLocation::DeviceStateApply)?
-                .machine
-                .on_sample(instance_id, now_ms, config, &sample, failure.is_some());
+        let (changes, newly_unreadable) = lock(&self.device_states, DeviceStateLocation::Apply)?
+            .machine
+            .on_sample(instance_id, now_ms, config, &sample, failure.is_some());
         self.record_device_state_facts(instance_id, &sample, config)?;
         if let Some(failure) = failure.filter(|_| newly_unreadable) {
             self.record_device_state_observed(
                 instance_id,
-                failure.operation(DeviceStateLocation::DeviceStateSample),
+                failure.operation(DeviceStateLocation::Sample),
             )?;
         }
         self.apply_hold_changes(instance_id, alias, &changes, true)
@@ -813,7 +794,7 @@ impl HostShared {
         for (key, value) in sample_facts(sample) {
             let now = self.clock.sample()?.unix_ms;
             let stored_at = {
-                let store = lock(&self.runtime_facts, DeviceStateLocation::DeviceStateApply)?;
+                let store = lock(&self.runtime_facts, DeviceStateLocation::Apply)?;
                 match store.get(&scope, key) {
                     Some(record)
                         if record.value == value
@@ -861,23 +842,23 @@ impl HostShared {
         for change in changes {
             let outcome = match *change {
                 HoldChange::Lifted(hold) => Some(
-                    Outcome::new(DeviceStateHostCode::DeviceHoldLifted)
+                    Outcome::new(DeviceStateHostCode::HoldLifted)
                         .device_hold(hold)
                         .device_label(&label),
                 ),
                 HoldChange::Entered(_) if !record_entries => None,
                 HoldChange::Entered(HoldEntry::Thermal(level)) => Some(
-                    Outcome::new(DeviceStateHostCode::DeviceThermalHold)
+                    Outcome::new(DeviceStateHostCode::ThermalHold)
                         .thermal_status(level)
                         .device_label(&label),
                 ),
                 HoldChange::Entered(HoldEntry::BatteryLow(percent)) => Some(
-                    Outcome::new(DeviceStateHostCode::DeviceBatteryLow)
+                    Outcome::new(DeviceStateHostCode::BatteryLow)
                         .battery_percent(percent)
                         .device_label(&label),
                 ),
                 HoldChange::Entered(HoldEntry::InUse) => {
-                    Some(Outcome::new(DeviceStateHostCode::DeviceInUse).device_label(&label))
+                    Some(Outcome::new(DeviceStateHostCode::InUse).device_label(&label))
                 }
                 HoldChange::Entered(HoldEntry::Locked) => {
                     Some(Outcome::new(DeviceStateCode::DeviceLocked).device_label(&label))
@@ -928,12 +909,12 @@ impl HostShared {
         token: &LeaseToken,
         connection_id: ConnectionId,
     ) -> Result<FencedWrite, RequestFailure> {
-        lock(&self.scheduler, DeviceStateLocation::DeviceStateStep)
+        lock(&self.scheduler, DeviceStateLocation::Step)
             .and_then(|mut scheduler| {
                 scheduler
                     .begin_destructive_step(token, connection_id, self.monotonic_ms()?)
                     .map_err(|error| {
-                        RuntimeHostError::scheduler(DeviceStateLocation::DeviceStateStep, &error)
+                        RuntimeHostError::scheduler(DeviceStateLocation::Step, &error)
                             .naming_lease(token.lease_id())
                     })
             })
@@ -948,12 +929,12 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<(), RequestFailure> {
         let lease_id = witness.token().lease_id();
-        lock(&self.scheduler, DeviceStateLocation::DeviceStateStep)
+        lock(&self.scheduler, DeviceStateLocation::Step)
             .and_then(|mut scheduler| {
                 scheduler
                     .finish_destructive_step(witness, connection_id)
                     .map_err(|error| {
-                        RuntimeHostError::scheduler(DeviceStateLocation::DeviceStateStep, &error)
+                        RuntimeHostError::scheduler(DeviceStateLocation::Step, &error)
                             .naming_lease(lease_id)
                     })
             })
@@ -990,7 +971,7 @@ impl HostShared {
             return Ok(());
         };
         let locked = matches!(&checked, Err(outcome) if outcome.is(DeviceStateCode::DeviceLocked));
-        let changes = lock(&self.device_states, DeviceStateLocation::DeviceStateApply)
+        let changes = lock(&self.device_states, DeviceStateLocation::Apply)
             .map_err(run_failure)?
             .machine
             .on_screen_check(instance_id, locked);
@@ -999,7 +980,7 @@ impl HostShared {
         {
             self.record_device_state_observed(
                 instance_id,
-                Outcome::new(DeviceStateHostCode::DeviceScreenWoken)
+                Outcome::new(DeviceStateHostCode::ScreenWoken)
                     .device_label(handset_label(instance_alias)),
             )
             .map_err(run_failure)?;
@@ -1040,7 +1021,7 @@ impl HostShared {
         {
             return Ok(());
         }
-        let location = DeviceStateLocation::DeviceStateGate;
+        let location = DeviceStateLocation::Gate;
         let config = self.device_state_config().map_err(run_failure)?;
         let label = handset_label(instance_alias);
         let mut power = None;
@@ -1062,7 +1043,7 @@ impl HostShared {
         };
         let (thermal, battery) =
             power.map_err(|outcome| device_state_failure(outcome, location))?;
-        let (changes, blocking) = lock(&self.device_states, DeviceStateLocation::DeviceStateApply)
+        let (changes, blocking) = lock(&self.device_states, DeviceStateLocation::Apply)
             .map_err(run_failure)?
             .machine
             .on_gate_power(instance_id, &config, thermal_level(thermal), &battery);
@@ -1104,7 +1085,7 @@ impl HostShared {
             .transpose()
             .map_err(|outcome| device_state_failure(outcome, location))?;
         let now_ms = self.monotonic_ms().map_err(run_failure)?;
-        let changes = lock(&self.device_states, DeviceStateLocation::DeviceStateApply)
+        let changes = lock(&self.device_states, DeviceStateLocation::Apply)
             .map_err(run_failure)?
             .machine
             .on_gate_foreground(instance_id, now_ms, &config, other);
@@ -1121,7 +1102,7 @@ impl HostShared {
                 None
             }
         };
-        lock(&self.device_states, DeviceStateLocation::DeviceStateApply)
+        lock(&self.device_states, DeviceStateLocation::Apply)
             .map_err(run_failure)?
             .machine
             .gate_passed(instance_id, now_ms, timeout);
@@ -1149,7 +1130,7 @@ impl HostShared {
         }
         let config = self.device_state_config().map_err(run_failure)?;
         let now_ms = self.monotonic_ms().map_err(run_failure)?;
-        let due = lock(&self.device_states, DeviceStateLocation::DeviceStateApply)
+        let due = lock(&self.device_states, DeviceStateLocation::Apply)
             .map_err(run_failure)?
             .machine
             .keepalive_due(instance_id, now_ms, config.keepalive_margin_ms);
@@ -1162,7 +1143,7 @@ impl HostShared {
             token,
             connection_id,
             &config,
-            DeviceStateLocation::DeviceStateKeepalive,
+            DeviceStateLocation::Keepalive,
         )
     }
 }

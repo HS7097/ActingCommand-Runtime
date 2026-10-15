@@ -230,7 +230,7 @@ fn rd5b_t1_a_dark_screen_is_woken_once_before_the_run_or_the_run_does_not_start(
             .collect::<Vec<_>>();
         assert_eq!(settles, [Duration::from_millis(settle_ms)]);
         assert!(run.inputs() > 0, "the run started");
-        let woken = state_records(&run.events(), DeviceStateHostCode::DeviceScreenWoken);
+        let woken = state_records(&run.events(), DeviceStateHostCode::ScreenWoken);
         let [woken] = woken.as_slice() else {
             panic!("one woken screen: {woken:?}");
         };
@@ -337,12 +337,12 @@ fn rd5b_t3_a_locked_handset_waits_for_a_person_and_the_next_sample_after_the_unl
     );
     // Still locked at a sample: nothing lifts.
     run.host.device_state_sample_for_test().expect("a sample");
-    assert!(state_records(&run.events(), DeviceStateHostCode::DeviceHoldLifted).is_empty());
+    assert!(state_records(&run.events(), DeviceStateHostCode::HoldLifted).is_empty());
 
     run.handset.script(|state| state.keyguard_showing = false);
     run.host.device_state_sample_for_test().expect("a sample");
     let events = run.events();
-    let lifted = state_records(&events, DeviceStateHostCode::DeviceHoldLifted);
+    let lifted = state_records(&events, DeviceStateHostCode::HoldLifted);
     let [lifted] = lifted.as_slice() else {
         panic!("one lifted hold: {lifted:?}");
     };
@@ -366,7 +366,7 @@ fn rd5b_t4_a_hot_handset_holds_its_runs_until_it_cools_below_the_resume_level() 
         state.thermal_status = 3;
         state.screen = "Asleep";
     });
-    let refused = assert_refused(&run.run_handset(), DeviceStateHostCode::DeviceThermalHold);
+    let refused = assert_refused(&run.run_handset(), DeviceStateHostCode::ThermalHold);
     assert_eq!(outcome_str(&refused, "thermal_status"), Some("severe"));
     assert!(
         run.handset.actions().is_empty(),
@@ -379,11 +379,11 @@ fn rd5b_t4_a_hot_handset_holds_its_runs_until_it_cools_below_the_resume_level() 
     );
     run.handset.script(|state| state.thermal_status = 2);
     run.host.device_state_sample_for_test().expect("a sample");
-    assert!(state_records(&run.events(), DeviceStateHostCode::DeviceHoldLifted).is_empty());
+    assert!(state_records(&run.events(), DeviceStateHostCode::HoldLifted).is_empty());
     run.handset.script(|state| state.thermal_status = 1);
     run.host.device_state_sample_for_test().expect("a sample");
     let events = run.events();
-    let lifted = state_records(&events, DeviceStateHostCode::DeviceHoldLifted);
+    let lifted = state_records(&events, DeviceStateHostCode::HoldLifted);
     let [lifted] = lifted.as_slice() else {
         panic!("one lifted hold: {lifted:?}");
     };
@@ -408,7 +408,7 @@ fn rd5b_t5_an_unplugged_low_battery_holds_and_plugging_it_in_lifts_the_hold() {
         state.battery_status = 3;
         state.battery_level = 10;
     });
-    let refused = assert_refused(&run.run_handset(), DeviceStateHostCode::DeviceBatteryLow);
+    let refused = assert_refused(&run.run_handset(), DeviceStateHostCode::BatteryLow);
     assert_eq!(
         refused.value("battery_percent").and_then(Value::as_i64),
         Some(10)
@@ -424,7 +424,7 @@ fn rd5b_t5_an_unplugged_low_battery_holds_and_plugging_it_in_lifts_the_hold() {
     });
     run.host.device_state_sample_for_test().expect("a sample");
     let events = run.events();
-    let lifted = state_records(&events, DeviceStateHostCode::DeviceHoldLifted);
+    let lifted = state_records(&events, DeviceStateHostCode::HoldLifted);
     let [lifted] = lifted.as_slice() else {
         panic!("one lifted hold: {lifted:?}");
     };
@@ -446,7 +446,7 @@ fn rd5b_t6_another_application_in_front_holds_the_run_only_under_the_in_use_gate
     gated
         .handset
         .script(|state| state.foreground = Some("com.example.other"));
-    let refused = assert_refused(&gated.run_handset(), DeviceStateHostCode::DeviceInUse);
+    let refused = assert_refused(&gated.run_handset(), DeviceStateHostCode::InUse);
     assert_eq!(
         outcome_str(&refused, "device_label"),
         Some(label().as_str())

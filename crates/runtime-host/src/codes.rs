@@ -2396,26 +2396,26 @@ actingcommand_contract::outcome_codes! {
         /// unavailable (`device_state:thermal`) until the status falls below
         /// `device_state.thermal_resume_below`; at a run's start the run does not start (keys
         /// `thermal_status`, `device_label`).
-        DeviceThermalHold => "device_thermal_hold": warning / planned_stop,
+        ThermalHold => "device_thermal_hold": warning / planned_stop,
         /// Warning. The handset is on no power source and its battery is below
         /// `device_state.battery_min_percent`: it is unavailable (`device_state:battery_low`)
         /// until it is plugged in or charged; at a run's start the run does not start (keys
         /// `battery_percent`, `device_label`).
-        DeviceBatteryLow => "device_battery_low": warning / planned_stop,
+        BatteryLow => "device_battery_low": warning / planned_stop,
         /// Warning. At a run's start another application was in the handset's foreground
         /// (`device_state.in_use_gate`): the run does not start, and the handset is unavailable
         /// (`device_state:in_use`) until a sample after `device_state.in_use_backoff_ms` finds
         /// the instance's application, the home screen or nothing there (keys `device_label`).
-        DeviceInUse => "device_in_use": warning / planned_stop,
+        InUse => "device_in_use": warning / planned_stop,
         /// Info. The start gate, or the check before an input, lit the handset's screen with the
         /// wake key (keys `device_label`).
-        DeviceScreenWoken => "device_screen_woken": info / none,
+        ScreenWoken => "device_screen_woken": info / none,
         /// Info. A hold of the handset lifted; with no hold left it is available again as its
         /// self-check and its link allow (keys `device_hold`, `device_label`).
-        DeviceHoldLifted => "device_hold_lifted": info / none,
+        HoldLifted => "device_hold_lifted": info / none,
         /// Error. The device-state sampling of the handsets could not start; the Runtime does not
         /// run without it.
-        DeviceStateSamplingFailed => "device_state_sampling_failed": error / none,
+        SamplingFailed => "device_state_sampling_failed": error / none,
     }
 }
 
@@ -2437,12 +2437,12 @@ actingcommand_contract::outcome_vocabulary! {
 actingcommand_contract::outcome_locations! {
     /// The host's operations of a handset's device state (Workflow #398 RD-5b).
     pub(crate) enum DeviceStateLocation {
-        DeviceStateGate => "device_state_gate",
-        DeviceStateSample => "device_state_sample",
-        DeviceStateKeepalive => "device_state_keepalive",
-        DeviceStateRead => "device_state_read",
-        DeviceStateApply => "device_state_apply",
-        DeviceStateStep => "device_state_step",
+        Gate => "device_state_gate",
+        Sample => "device_state_sample",
+        Keepalive => "device_state_keepalive",
+        Read => "device_state_read",
+        Apply => "device_state_apply",
+        Step => "device_state_step",
     }
 }
 // ---- Workflow #398 RD-5b: end ----
