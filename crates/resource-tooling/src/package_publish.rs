@@ -191,11 +191,24 @@ enum ProcessStatus {
     Dead,
 }
 
+/// A point of a stale lock's reclaim between its check and its action (test plan v2.2
+/// section 3.10 E-6, section 4 item 10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReclaimCheckpoint {
+    /// The acquisition judged the observed owner stale and has not begun to reclaim its lock.
+    AfterStaleCheck,
+    /// The reclaim holds its claim file and has not compared and moved the stale lock yet.
+    ClaimHeld,
+}
+
 trait PublicationEnvironment {
     fn current_process(&self) -> Result<ProcessIdentity, String>;
     fn inspect_process(&self, pid: u32) -> Result<ProcessStatus, String>;
     fn random_seed(&self) -> Result<[u8; 32], String>;
     fn now_unix_ms(&self) -> Result<u128, String>;
+    /// Called at each `point` of a stale lock's reclaim. It does nothing unless a test's
+    /// environment overrides it to order two reclaimers.
+    fn reclaim_checkpoint(&self, _point: ReclaimCheckpoint) {}
 }
 
 struct SystemPublicationEnvironment;
@@ -1034,6 +1047,7 @@ impl PublicationLock {
                     }
                 }
             }
+            environment.reclaim_checkpoint(ReclaimCheckpoint::AfterStaleCheck);
             match reclaim_stale_lock(&path, &observed, &record, environment, 0)? {
                 StaleReclaim::Reclaimed => {}
                 StaleReclaim::Retry => {
@@ -2660,6 +2674,7 @@ fn reclaim_stale_lock(
         path: claim_path,
         owner_token: reclaimer.owner_token.clone(),
     };
+    environment.reclaim_checkpoint(ReclaimCheckpoint::ClaimHeld);
     let removed = remove_unchanged_stale_lock(path, observed, &reclaimer.owner_token);
     match (removed, claim.release()) {
         (Ok(true), Ok(())) => Ok(StaleReclaim::Reclaimed),
@@ -2988,8 +3003,11 @@ fn system_powershell_path() -> Result<PathBuf, String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
     use tempfile::TempDir;
+
+    // The longest a gated reclaimer waits for the test: a bound for a broken run only.
+    const RECLAIM_GATE_WAIT: Duration = Duration::from_secs(120);
 
     #[derive(Clone)]
     struct FakeEnvironment {
@@ -3001,6 +3019,20 @@ mod tests {
         statuses: Mutex<BTreeMap<u32, Result<ProcessStatus, String>>>,
         counter: AtomicU64,
         now: AtomicU64,
+        // E-6 (test plan v2.2 section 3.10): the gates the reclaim checkpoints of named threads
+        // stop at.
+        reclaim_gates: Mutex<Vec<ReclaimGate>>,
+    }
+
+    // One reclaimer thread stops at the `occurrence`-th time it reaches `point`: it reports that
+    // on `reached` and goes on once `resume` hears from the test.
+    struct ReclaimGate {
+        thread: String,
+        point: ReclaimCheckpoint,
+        occurrence: usize,
+        seen: usize,
+        reached: mpsc::Sender<()>,
+        resume: mpsc::Receiver<()>,
     }
 
     impl FakeEnvironment {
@@ -3022,8 +3054,30 @@ mod tests {
                     statuses: Mutex::new(statuses),
                     counter: AtomicU64::new(1),
                     now: AtomicU64::new(1_700_000_000_000),
+                    reclaim_gates: Mutex::new(Vec::new()),
                 }),
             }
+        }
+
+        // Stops the thread named `thread` at the `occurrence`-th time it reaches `point`, until
+        // the test sends on the returned sender; the receiver hears when it got there.
+        fn gate_reclaim(
+            &self,
+            thread: &str,
+            point: ReclaimCheckpoint,
+            occurrence: usize,
+        ) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let (reached, reached_receiver) = mpsc::channel();
+            let (resume_sender, resume) = mpsc::channel();
+            self.inner.reclaim_gates.lock().unwrap().push(ReclaimGate {
+                thread: thread.to_string(),
+                point,
+                occurrence,
+                seen: 0,
+                reached,
+                resume,
+            });
+            (reached_receiver, resume_sender)
         }
 
         fn set_current(&self, pid: u32, start_token: &str) {
@@ -3068,6 +3122,32 @@ mod tests {
 
         fn now_unix_ms(&self) -> Result<u128, String> {
             Ok(u128::from(self.inner.now.fetch_add(1, Ordering::SeqCst)))
+        }
+
+        fn reclaim_checkpoint(&self, point: ReclaimCheckpoint) {
+            let current = thread::current();
+            let Some(name) = current.name() else {
+                return;
+            };
+            let gate = {
+                let mut gates = self.inner.reclaim_gates.lock().unwrap();
+                let Some(index) = gates.iter_mut().position(|gate| {
+                    if gate.thread != name || gate.point != point {
+                        return false;
+                    }
+                    gate.seen += 1;
+                    gate.seen == gate.occurrence
+                }) else {
+                    return;
+                };
+                gates.remove(index)
+            };
+            gate.reached
+                .send(())
+                .expect("report the reclaim checkpoint");
+            gate.resume
+                .recv_timeout(RECLAIM_GATE_WAIT)
+                .expect("the test lets the reclaimer go on");
         }
     }
 
@@ -3785,4 +3865,7 @@ mod tests {
     fn read_visible(output: &Path) -> Vec<u8> {
         open_published_package(output).unwrap().read_all().unwrap()
     }
+
+    // E-6 (test plan v2.2 section 3.10; section 4 item 10): two reclaimers in a fixed order.
+    mod gate_e6;
 }
