@@ -1343,7 +1343,8 @@ fn db3s_t4_the_resolved_count_follows_the_declared_count_and_the_free_slots() {
     // Declared 3, no free-slot reading: N 3.
     round_trip("no free-slot reading", &frame_success());
 
-    let refusals: [(&str, fn(&mut TaskSelectionMultiSelect)); 7] = [
+    type MultiChange = fn(&mut TaskSelectionMultiSelect);
+    let refusals: [(&str, MultiChange); 7] = [
         ("N not min(declared, free)", |multi| {
             multi.free_slots = Some(2);
         }),
