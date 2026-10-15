@@ -319,7 +319,7 @@ fn apply(document: &mut Value, op: EditOp, pointer: &str, value: Value) -> Resul
                 items.len()
             } else {
                 array_index(&last)
-                    .filter(|index| *index <= items.len())
+                    .filter(|index| *index < items.len())
                     .ok_or(EditFailure::PointerUnresolved)?
             };
             items.insert(index, value);
