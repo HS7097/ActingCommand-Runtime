@@ -687,6 +687,64 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
             && host.contains("request.expected_sha256(),"),
         "Runtime host must admit the client package by its path and record its reference"
     );
+    // Workflow #385 P-m (MEM-1): the host has two loaders. `prepare_contained_task` admits
+    // through `PreparedContainedTask::load_path`; the main run's ingress (a client run, a
+    // package run and a scheduled run) admits through `prepare_measured_contained_task`, whose
+    // kernel twin `load_path_with_resident_bytes` also answers the resident bytes. Each loader
+    // must admit by path and record the request's reference, and both kernel loaders must reach
+    // the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's reference.
+    let compact = |text: &str| text.split_whitespace().collect::<String>();
+    let host_path = "crates/runtime-host/src/host/contained_task.rs";
+    let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
+    let settlement = fs::read_to_string(root.join(settlement_path))
+        .expect("read Runtime failure-settlement source");
+    let kernel_path = "crates/execution-kernel/src/contained_task.rs";
+    for (function, required) in [
+        (
+            "prepare_contained_task",
+            "PreparedContainedTask::load_path(instance_alias,path,request.expected_sha256(),",
+        ),
+        (
+            "prepare_measured_contained_task",
+            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,request.expected_sha256(),",
+        ),
+    ] {
+        let body = function_source(host_path, &host, None, function)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            compact(&body).contains(required),
+            "Runtime host {function} must admit the client package by its path and record its \
+             reference via {required}"
+        );
+    }
+    for (path, source, function) in [
+        (host_path, &host, "run_contained_task"),
+        (host_path, &host, "prepare_package_run"),
+        (settlement_path, &settlement, "prepare_scheduled_package"),
+    ] {
+        let body = function_source(path, source, Some("HostShared"), function)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            compact(&body).contains("prepare_measured_contained_task("),
+            "main-run ingress HostShared::{function} ({path}) must admit its package through \
+             prepare_measured_contained_task"
+        );
+    }
+    for function in ["load_path", "load_path_with_resident_bytes"] {
+        let body = function_source(
+            kernel_path,
+            &contained,
+            Some("PreparedContainedTask"),
+            function,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            compact(&body)
+                .contains("ExternallyVerifiedBundle::load_path(instance_label,locator,recorded,"),
+            "PreparedContainedTask::{function} must admit by path through \
+             ExternallyVerifiedBundle::load_path with the caller's recorded reference"
+        );
+    }
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
             !contained.contains(forbidden),
