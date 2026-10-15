@@ -2763,7 +2763,9 @@ impl HostShared {
     /// preparation runs on the key and does not release it. Returns the current binding and the
     /// passing preparation event, or the rung's failure reason: `recovery_android_not_booted`
     /// when the window ends before the boot check ever passed (so no preparation ran, review
-    /// L-R4-2), otherwise `recovery_environment_not_ready`.
+    /// L-R4-2), otherwise `recovery_environment_not_ready`. The window, the backoff and every
+    /// poll's verdict read the host's `RuntimeClock` (test plan v2.2 section 3.10 H-1-rest,
+    /// HOST-I2); a poll still sleeps `readiness_poll_ms` and reads the clock when it wakes.
     fn await_recovery_readiness<'guard>(
         &self,
         pending: &PendingRecoveryLadder,
@@ -2772,7 +2774,8 @@ impl HostShared {
         held: MutexGuard<'guard, ()>,
         bounds: &EmulatorRestartBounds<'_>,
     ) -> RuntimeHostResult<Result<(RegisteredInstance, TerminalEvent), &'static str>> {
-        let deadline = Instant::now() + Duration::from_millis(bounds.readiness_window_ms);
+        let deadline_ms =
+            super::installation::deadline_after(self.monotonic_ms()?, bounds.readiness_window_ms)?;
         let margin_ms = pending.config.hold.margin_ms;
         let alias = pending.instance_alias.as_str();
         let mut held = Some(held);
@@ -2782,12 +2785,7 @@ impl HostShared {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return Ok(Err(reason));
             }
-            let window_ms = u64::try_from(
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis(),
-            )
-            .unwrap_or(u64::MAX);
+            let window_ms = deadline_ms.saturating_sub(self.monotonic_ms()?);
             if let Some(RungAttempt::Failed { reason, .. }) =
                 self.ladder_step_renewal(key, window_ms.saturating_add(margin_ms))?
             {
@@ -2833,11 +2831,12 @@ impl HostShared {
                 }
             }
             drop(held.take());
-            let wait = bounds
+            let wait_ms = bounds
                 .readiness_backoff_ms
                 .get(retries)
                 .or_else(|| bounds.readiness_backoff_ms.last())
-                .map_or(Duration::ZERO, |ms| Duration::from_millis(*ms));
+                .copied()
+                .unwrap_or(0);
             let not_ready = if prepared {
                 HostCode::RecoveryEnvironmentNotReady.as_str()
             } else {
@@ -2846,8 +2845,8 @@ impl HostShared {
             if let Some(reason) = self.await_recovery_retry(
                 pending,
                 key,
-                (wait, Duration::from_millis(bounds.readiness_poll_ms)),
-                deadline,
+                (wait_ms, Duration::from_millis(bounds.readiness_poll_ms)),
+                deadline_ms,
                 not_ready,
             )? {
                 return Ok(Err(reason));
@@ -2904,32 +2903,35 @@ impl HostShared {
     }
 
     /// Before the next readiness attempt: polls the ADB baseline every `poll` until it answers
-    /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait`; `timing` is
-    /// `(wait, poll)`, the configured backoff and poll. Both are bounded by `deadline`, and every
-    /// poll makes the ladder's holding check (review L1; Workflow #369 H-3, review2 L7: the
-    /// scheduling pause too). `Some(reason)` ends the rung: shutdown, drain, a pause, a lost key,
-    /// or no time left in the window (`not_ready`).
+    /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait_ms`; `timing` is
+    /// `(wait_ms, poll)`, the configured backoff and poll. Both are bounded by `deadline_ms` on
+    /// the host clock (HOST-I2), and every poll makes the ladder's holding check (review L1;
+    /// Workflow #369 H-3, review2 L7: the scheduling pause too). `Some(reason)` ends the rung:
+    /// shutdown, drain, a pause, a lost key, or no time left in the window (`not_ready`). The
+    /// ADB probe itself is bounded by the wall-clock instant of what remains of the window.
     fn await_recovery_retry(
         &self,
         pending: &PendingRecoveryLadder,
         key: &HostKey,
-        timing: (Duration, Duration),
-        deadline: Instant,
+        timing: (u64, Duration),
+        deadline_ms: u64,
         not_ready: &'static str,
     ) -> RuntimeHostResult<Option<&'static str>> {
-        let (wait, poll) = timing;
+        let (wait_ms, poll) = timing;
         let alias = pending.instance_alias.as_str();
         let stopped = || self.fatal.is_shutdown_requested();
         loop {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return Ok(Some(reason));
             }
-            if Instant::now() >= deadline {
+            let now_ms = self.monotonic_ms()?;
+            if now_ms >= deadline_ms {
                 return Ok(Some(not_ready));
             }
+            let probe_deadline = Instant::now() + Duration::from_millis(deadline_ms - now_ms);
             match self
                 .execution()?
-                .probe_adb_baseline_until(alias, deadline, &stopped)
+                .probe_adb_baseline_until(alias, probe_deadline, &stopped)
             {
                 Ok(()) => break,
                 Err(error) => {
@@ -2943,23 +2945,24 @@ impl HostShared {
                             )
                             .map(Some);
                     }
-                    thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
+                    let remaining_ms = deadline_ms.saturating_sub(self.monotonic_ms()?);
+                    thread::sleep(poll.min(Duration::from_millis(remaining_ms)));
                 }
             }
         }
-        let until = Instant::now() + wait;
-        if until >= deadline {
+        let until_ms = self.monotonic_ms()?.saturating_add(wait_ms);
+        if until_ms >= deadline_ms {
             return Ok(Some(not_ready));
         }
         loop {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return Ok(Some(reason));
             }
-            let now = Instant::now();
-            if now >= until {
+            let now_ms = self.monotonic_ms()?;
+            if now_ms >= until_ms {
                 return Ok(None);
             }
-            thread::sleep(poll.min(until - now));
+            thread::sleep(poll.min(Duration::from_millis(until_ms - now_ms)));
         }
     }
 

@@ -129,6 +129,9 @@ mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// Workflow #382 H-1-rest (test plan v2.2 §3.10): the install transition's deadlines on the
+// manual Runtime clock (HOST-I2), G1 and G3.
+mod gate_382_h1;
 // Workflow #382 H-4 (test plan v2.2 §3.6): the recovery ladder's G8 and G9 rows.
 mod gate_382_h4;
 // Workflow #382 H-5 (test plan v2.2 §3.6): host wave B.
