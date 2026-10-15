@@ -472,7 +472,7 @@ impl Scope {
             .iter()
             .filter_map(|((signal, _), baseline)| {
                 let limit = baseline.held_at_us?;
-                let outcome = Outcome::new(PacingCode::PerfBaselineClamped)
+                let outcome = Outcome::new(PacingCode::BaselineClamped)
                     .signal_kind(*signal)
                     .baseline_us(baseline.value_us)
                     .limit_us(limit);
@@ -979,7 +979,7 @@ fn transition(
         PacingCause::Responsiveness
     };
     let mode = settings.pacing.mode;
-    let mut outcome = Outcome::new(PacingCode::PerfStageChanged)
+    let mut outcome = Outcome::new(PacingCode::StageChanged)
         .pacing_stage_from(from)
         .pacing_stage_to(row.reading.stage)
         .responsiveness_bp(tracker.r_eff)

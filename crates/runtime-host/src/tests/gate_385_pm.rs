@@ -285,7 +285,7 @@ fn tm_5_timer_oversleeps_score_by_the_formula_and_a_missing_probe_leaves_only_it
     let mut unprobed = PacingShadow::default();
     unprobed.probe_unavailable(
         ProbeKind::Timer,
-        Outcome::new(PacingCode::PerfProbeUnavailable).probe_kind(ProbeKind::Timer),
+        Outcome::new(PacingCode::ProbeUnavailable).probe_kind(ProbeKind::Timer),
     );
     captures(&mut unprobed, A, 10, SLOW_CAPTURE_US);
     settle(&mut unprobed, &settings, &instances);

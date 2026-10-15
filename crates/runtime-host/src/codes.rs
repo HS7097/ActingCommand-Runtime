@@ -2379,13 +2379,13 @@ actingcommand_contract::outcome_codes! {
         /// `responsiveness_bp`, `factor_milli`, `pacing_cause`, `pacing_mode`; optional
         /// `instance_id`, `host_responsiveness_bp`, `emulator_responsiveness_bp`,
         /// `pacing_learning_capped`).
-        PerfStageChanged => "perf_stage_changed": info / none,
+        StageChanged => "perf_stage_changed": info / none,
         /// Warning. A host probe could not run; its signal stays unknown (key `probe_kind`,
         /// caused by the operating system's failure).
-        PerfProbeUnavailable => "perf_probe_unavailable": warning / none,
+        ProbeUnavailable => "perf_probe_unavailable": warning / none,
         /// Warning. A learned baseline is held at its clamp (keys `signal_kind`, `baseline_us`,
         /// `limit_us`; optional `instance_id`).
-        PerfBaselineClamped => "perf_baseline_clamped": warning / none,
+        BaselineClamped => "perf_baseline_clamped": warning / none,
     }
 }
 

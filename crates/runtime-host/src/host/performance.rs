@@ -597,7 +597,7 @@ impl HostShared {
         probe: ProbeKind,
         cause: Outcome,
     ) -> RuntimeHostResult<()> {
-        let outcome = Outcome::new(PacingCode::PerfProbeUnavailable)
+        let outcome = Outcome::new(PacingCode::ProbeUnavailable)
             .probe_kind(probe)
             .caused_by(cause);
         lock(&self.performance, HostLocation::RunPerformanceProbe)?
