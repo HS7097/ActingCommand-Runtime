@@ -922,6 +922,9 @@ impl TaskSelectionRecord {
             let not_attempted =
                 matches!(pick.confirmation, TaskSelectionConfirmation::NotAttempted);
             if end.is_some() {
+                continue;
+            }
+            if end.is_some() {
                 if !not_attempted || pick.tap_check.is_some() {
                     return Err(invalid("picks"));
                 }
