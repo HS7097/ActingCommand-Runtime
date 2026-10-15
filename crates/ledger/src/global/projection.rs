@@ -502,7 +502,13 @@ fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bo
         && query
             .event_type
             .is_none_or(|value| event.event_type() == value)
+        // Workflow #389 MCP-2: OR within the selected set, AND with the rest.
+        && (query.event_types.is_empty() || query.event_types.contains(&event.event_type()))
         && !query.exclude_event_types.contains(&event.event_type())
+        && query
+            .fact_key
+            .as_deref()
+            .is_none_or(|key| event.payload().names_fact_key(key))
         && query
             .minimum_severity
             .is_none_or(|value| event.severity() >= value)

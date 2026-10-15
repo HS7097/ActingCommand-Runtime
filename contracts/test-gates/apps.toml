@@ -277,6 +277,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
     "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
+    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key",
 ]
 incident = ["#389"]
 
@@ -412,3 +413,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
 ]
 incident = ["#378 A7"]
+
+# actingctl events and ac_events take event_types (any of at most 32 types, each once, not with event_type, none excluded) and fact_key (an instance or a runtime fact key); a query that breaks either rule is refused before any read with the Runtime's invalid_event_query_event_type_filter or invalid_event_query_fact_key_filter, and one that keeps it reaches the query as given (Workflow #389 MCP-2)
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query",
+]
+incident = ["#389 MCP-2"]
