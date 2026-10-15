@@ -234,7 +234,7 @@ impl HostShared {
         // A main package that was not admitted (its mode is unknown) records no identity.
         // Workflow #390 EXEC-3 (FCM E-02): a page-graph package records one as a `linear_steps`
         // package does, so its failure is rerun at once (R22) by the same rules.
-        let Some(main) = resolution.main.filter(|main| main.linear) else {
+        let Some(main) = resolution.main else {
             return Ok(failed(None));
         };
         let query = |query: EventQuery| {
