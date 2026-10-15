@@ -411,8 +411,7 @@ fn gate_l4_g11_a_second_fold_continues_the_checkpoint_and_keeps_every_sealed_bou
 }
 
 #[test]
-fn gate_l4_g11_recovery_from_the_side_file_before_and_after_the_image_is_written_derives_the_same_journal()
- {
+fn gate_l4_g11_side_file_recovery_before_during_and_after_the_write_derives_the_same_journal() {
     let issuer = IdentifierIssuer::new().expect("identifier issuer");
     let directory = tempfile::tempdir().expect("journal directory");
     let mut shorter_images = 0;

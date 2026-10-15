@@ -851,8 +851,8 @@ impl RunLedger {
         let request_id = *request.transport();
         let run_id = *run.transport();
         let lease_id = *lease.transport();
-        let request_links = EventLinksDraft::default().with_request_id(request.clone());
-        let lease_links = EventLinksDraft::default().with_lease_id(lease.clone());
+        let request_links = EventLinksDraft::default().with_request_id(request);
+        let lease_links = EventLinksDraft::default().with_lease_id(lease);
         let run_links = EventLinksDraft::default()
             .with_instance_id(issuer.mint_instance_id().expect("instance id"))
             .with_request_id(request)

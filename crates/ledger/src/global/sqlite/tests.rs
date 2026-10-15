@@ -743,6 +743,7 @@ fn sqlite_artifact_order_summary_projection_and_verifier_are_preserved() {
 }
 
 #[test]
+#[ignore = "child process entry: its parent test runs it with --ignored --exact"]
 fn sqlite_commit_process_child() {
     let Some(root) = std::env::var_os("ACTINGCOMMAND_TEST_REPAIR_ROOT") else {
         return;
@@ -772,6 +773,7 @@ fn sqlite_commit_before_notification_replays_after_process_exit() {
     let ready = root.path().join("commit-ready");
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "global::sqlite::tests::sqlite_commit_process_child",
             "--nocapture",

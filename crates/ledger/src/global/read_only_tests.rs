@@ -3,14 +3,21 @@
 use super::*;
 use actingcommand_contract::{
     AuditInput, CommandPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventQuery, EventSeverity, EventSource, IdentifierIssuer, IssuedCorrelationId,
-    IssuedEventId, OriginModule, SanitizedEventDraft,
+    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
+    IssuedCorrelationId, IssuedEventId, OriginModule, SanitizedEventDraft,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+// The first bytes of a record line whose write a crash cut short.
+const TORN_TAIL: &[u8] = br#"{"line_type":"event","event":{"schema_version""#;
+
+// A repair record as the read-only open reports it: schema version, repair id, completed,
+// segment index, original length, repaired length, tail hash and quarantine key.
+type RepairView = (String, String, bool, u64, u64, u64, String, String);
 
 // Specification criterion 5: https://github.com/HS7097/ActingCommand-Workflow/issues/257#issuecomment-5552006104
 #[test]
@@ -323,6 +330,290 @@ fn open_read_only_query_matches_event_indexes() {
     ledger.close().expect("close writer");
 }
 
+// Workflow #382 L-4 (test plan §4 #17, LED-R2): the legacy Segment parser cases that the retired
+// writer-open tests of global/tests.rs refused, read the way migration and forensics read a
+// Segment root. The read-only open changes no byte of the root, reports the events before the
+// first bad record, and reports that record's segment, offset and the bytes from there on
+// (contracts/ledger-store.md, "Recovery, artifacts and forensic consumers": the Segment reader
+// reports the verified prefix and any corrupt tail, a complete bad record and a bad non-final
+// segment are corruption, and file paths, secret fields and forged values keep their
+// non-disclosure rules). A complete corrupt line, a dangling final tail and a non-final torn
+// record are the tests above.
+#[test]
+fn open_read_only_reports_blank_lines_duplicate_keys_and_empty_segments() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let blank = temp.path().join("blank-line");
+    let ledger =
+        GlobalLedger::open(GlobalLedgerConfig::new(&blank, "blank-writer")).expect("open writer");
+    let first = ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("append");
+    ledger.close().expect("close writer");
+    let segment = segment_paths(&blank).pop().expect("segment");
+    let prefix_len = fs::metadata(&segment).expect("segment metadata").len();
+    append_bytes(&segment, b"\n");
+    assert_legacy_report(
+        "blank complete line",
+        &blank,
+        std::slice::from_ref(&first),
+        1,
+        Some((1, prefix_len, b"\n".as_slice())),
+    );
+
+    let duplicate = temp.path().join("duplicate-key");
+    let ledger = GlobalLedger::open(GlobalLedgerConfig::new(&duplicate, "duplicate-writer"))
+        .expect("open writer");
+    let first = ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("append first");
+    ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("append second");
+    ledger.close().expect("close writer");
+    let segment = segment_paths(&duplicate).pop().expect("segment");
+    let text = fs::read_to_string(&segment).expect("segment text");
+    let first_len = text.find('\n').expect("first record") + 1;
+    let hidden = r"C:\hidden\duplicate-subject";
+    let encoded = serde_json::to_string(hidden).expect("encode the hidden value");
+    let forged = text[first_len..].replacen(
+        r#""action":"runtime.start""#,
+        &format!(r#""action":{encoded},"action":"runtime.start""#),
+        1,
+    );
+    assert_ne!(forged.as_str(), &text[first_len..]);
+    fs::write(&segment, format!("{}{forged}", &text[..first_len]))
+        .expect("write the duplicate-key record");
+    let snapshot = assert_legacy_report(
+        "duplicate JSON key",
+        &duplicate,
+        std::slice::from_ref(&first),
+        1,
+        Some((1, first_len as u64, forged.as_bytes())),
+    );
+    assert!(
+        !format!("{:?}", snapshot.corrupt_tail()).contains(hidden),
+        "the report discloses the hidden value"
+    );
+
+    let empty_non_final = temp.path().join("empty-non-final");
+    fs::create_dir_all(empty_non_final.join("segments")).expect("segments");
+    fs::write(empty_non_final.join("segments/segment-000001.jsonl"), b"")
+        .expect("empty first segment");
+    fs::write(empty_non_final.join("segments/segment-000002.jsonl"), b"")
+        .expect("empty final segment");
+    assert_legacy_report(
+        "empty non-final segment",
+        &empty_non_final,
+        &[],
+        2,
+        Some((1, 0, b"".as_slice())),
+    );
+
+    let sole_empty = temp.path().join("sole-empty-final");
+    fs::create_dir_all(sole_empty.join("segments")).expect("segments");
+    fs::write(sole_empty.join("segments/segment-000001.jsonl"), b"").expect("empty final segment");
+    let snapshot = assert_legacy_report("sole final empty segment", &sole_empty, &[], 1, None);
+    assert_eq!(snapshot.latest_sequence(), 0);
+}
+
+// Workflow #382 L-4 (test plan §4 #16, LED-R1): the Segment tail repair is written only by the
+// cfg(test) writer since 09-13, while migration and forensics still read Segment roots
+// read-only. A crash during that repair leaves one of the rows below on disk. Every row is
+// built from the files of one repair the cfg(test) writer ran to completion, with no child
+// process, and the read-only open reports it as it stands: no byte of the root changes, the
+// events are the verified prefix, the dangling tail is reported while it is still on disk, and
+// the repair record keeps the completed flag its journal gives it (contracts/ledger-store.md,
+// "Recovery, artifacts and forensic consumers": the Segment reader reports the verified prefix
+// and any corrupt tail, and `GlobalLedgerReadOnly` opens without writer ownership or mutation
+// with tail and repair observations that describe the backend and are never fabricated;
+// contracts/ledger-maintenance.md: the read-only parser and the repair journal stay for
+// maintenance and forensics, and an import requires every repair completed).
+// The same crash semantics on the formal SQLite store, where the evidence table of
+// ledger-store.md maps global/recovery_tests.rs to the commit and recovery boundary, are L-3 G5
+// (global/tests/gate_l3_g5.rs: an uncertain COMMIT stops the writer with its readback
+// classification, and a reopen sees exactly the classified state).
+#[test]
+fn open_read_only_reports_each_repair_journal_state_a_crash_can_leave() {
+    struct Stage<'a> {
+        label: &'static str,
+        segment: &'a [u8],
+        journal: Option<&'a [u8]>,
+        quarantined: bool,
+        events: &'a [PersistedEvent],
+        dangling_tail: bool,
+        completed: Option<bool>,
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repaired = temp.path().join("repaired");
+    let ledger =
+        GlobalLedger::open(GlobalLedgerConfig::new(&repaired, "seed-writer")).expect("open writer");
+    let seeded = ledger
+        .append(event(EventLinksDraft::default()))
+        .expect("append");
+    ledger.close().expect("close writer");
+    let segment = segment_paths(&repaired).pop().expect("segment");
+    let segment_name = segment.file_name().expect("segment name").to_owned();
+    let repaired_len = fs::metadata(&segment).expect("segment metadata").len();
+    append_bytes(&segment, TORN_TAIL);
+    let torn = fs::read(&segment).expect("torn segment");
+    let truncated = &torn[..usize::try_from(repaired_len).expect("prefix length")];
+    let ledger = GlobalLedger::open(GlobalLedgerConfig::new(&repaired, "repair-writer"))
+        .expect("the writer repairs the dangling tail");
+    let recovered_events = ledger
+        .query(EventQuery::default())
+        .expect("repaired events");
+    ledger.close().expect("close repair writer");
+    let recovered_segment = fs::read(&segment).expect("repaired segment");
+    let journal = fs::read(repaired.join("repair-journal.jsonl")).expect("repair journal");
+    let prepared_len = journal
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .expect("prepared record")
+        + 1;
+    let prepared_journal = &journal[..prepared_len];
+    let prepared: serde_json::Value =
+        serde_json::from_slice(&journal[..prepared_len - 1]).expect("prepared record");
+    let completed_record: serde_json::Value =
+        serde_json::from_slice(journal[prepared_len..].trim_ascii_end()).expect("completed record");
+    let quarantine_key = prepared["quarantine_key"]
+        .as_str()
+        .expect("quarantine key")
+        .to_owned();
+    // The completed repair the rows are derived from: one recovery fact after the seeded
+    // event, the truncated prefix kept, the tail quarantined, one prepared and one completed
+    // record of the same repair.
+    assert_eq!(recovered_events.len(), 2);
+    assert_eq!(recovered_events[0], seeded);
+    assert_eq!(recovered_events[1].event_type(), EventType::LedgerRecovered);
+    assert!(matches!(
+        recovered_events[1].payload(),
+        actingcommand_contract::EventPayload::Ledger(
+            actingcommand_contract::LedgerPayload::Recovered(payload)
+        ) if payload.reason() == actingcommand_contract::RecoveryReason::TruncatedFinalTail
+    ));
+    assert!(recovered_segment.starts_with(truncated));
+    assert_eq!(
+        fs::read(repaired.join(&quarantine_key)).expect("quarantine copy"),
+        TORN_TAIL
+    );
+    assert_eq!(prepared["state"], "prepared");
+    assert_eq!(completed_record["state"], "completed");
+    assert_eq!(completed_record["repair_id"], prepared["repair_id"]);
+    let expected_repair = |completed: bool| -> RepairView {
+        (
+            prepared["schema_version"]
+                .as_str()
+                .expect("schema version")
+                .to_owned(),
+            prepared["repair_id"]
+                .as_str()
+                .expect("repair id")
+                .to_owned(),
+            completed,
+            1,
+            torn.len() as u64,
+            repaired_len,
+            sha256(TORN_TAIL),
+            quarantine_key.clone(),
+        )
+    };
+
+    let seeded_only = std::slice::from_ref(&seeded);
+    let stages = [
+        Stage {
+            label: "dangling tail before any repair",
+            segment: torn.as_slice(),
+            journal: None,
+            quarantined: false,
+            events: seeded_only,
+            dangling_tail: true,
+            completed: None,
+        },
+        Stage {
+            label: "after prepare",
+            segment: torn.as_slice(),
+            journal: Some(prepared_journal),
+            quarantined: false,
+            events: seeded_only,
+            dangling_tail: true,
+            completed: Some(false),
+        },
+        Stage {
+            label: "after quarantine",
+            segment: torn.as_slice(),
+            journal: Some(prepared_journal),
+            quarantined: true,
+            events: seeded_only,
+            dangling_tail: true,
+            completed: Some(false),
+        },
+        Stage {
+            label: "after truncate",
+            segment: truncated,
+            journal: Some(prepared_journal),
+            quarantined: true,
+            events: seeded_only,
+            dangling_tail: false,
+            completed: Some(false),
+        },
+        Stage {
+            label: "after the recovery fact",
+            segment: recovered_segment.as_slice(),
+            journal: Some(prepared_journal),
+            quarantined: true,
+            events: recovered_events.as_slice(),
+            dangling_tail: false,
+            completed: Some(false),
+        },
+        Stage {
+            label: "after completion",
+            segment: recovered_segment.as_slice(),
+            journal: Some(journal.as_slice()),
+            quarantined: true,
+            events: recovered_events.as_slice(),
+            dangling_tail: false,
+            completed: Some(true),
+        },
+    ];
+    for (index, stage) in stages.iter().enumerate() {
+        let root = temp.path().join(format!("stage-{index}"));
+        fs::create_dir_all(root.join("segments")).expect("stage segments");
+        fs::write(root.join("segments").join(&segment_name), stage.segment).expect("stage segment");
+        if let Some(journal) = stage.journal {
+            fs::write(root.join("repair-journal.jsonl"), journal).expect("stage repair journal");
+        }
+        if stage.quarantined {
+            let copy = root.join(&quarantine_key);
+            fs::create_dir_all(copy.parent().expect("quarantine directory"))
+                .expect("stage quarantine directory");
+            fs::write(copy, TORN_TAIL).expect("stage quarantine copy");
+        }
+        let snapshot = assert_legacy_report(
+            stage.label,
+            &root,
+            stage.events,
+            1,
+            stage.dangling_tail.then_some((1, repaired_len, TORN_TAIL)),
+        );
+        assert_eq!(
+            snapshot
+                .repairs()
+                .iter()
+                .map(repair_view)
+                .collect::<Vec<_>>(),
+            stage
+                .completed
+                .map(expected_repair)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            "{}: repair records",
+            stage.label
+        );
+    }
+}
+
 fn identifiers() -> IdentifierIssuer {
     IdentifierIssuer::new().expect("identifier issuer")
 }
@@ -371,6 +662,63 @@ fn append_bytes(path: &Path, bytes: &[u8]) {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+// Opens `root` read-only and asserts its report: no byte of the root changes, the events are the
+// verified prefix, the listing ends at `listed_through_segment`, and the corrupt tail is
+// `corrupt_segment` at (segment index, byte offset) with the bytes from there on, or absent.
+fn assert_legacy_report(
+    label: &str,
+    root: &Path,
+    events: &[PersistedEvent],
+    listed_through_segment: u64,
+    tail: Option<(u64, u64, &[u8])>,
+) -> GlobalLedgerReadOnly {
+    let before = tree_bytes(root);
+    let snapshot =
+        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(root), |_| None).expect(label);
+    assert_eq!(
+        tree_bytes(root),
+        before,
+        "{label}: the read-only open changed the root"
+    );
+    assert_eq!(snapshot.events(), events, "{label}: verified prefix");
+    assert_eq!(
+        snapshot.listed_through_segment(),
+        Some(listed_through_segment),
+        "{label}: listed segments"
+    );
+    assert_eq!(
+        snapshot.corrupt_tail().map(|actual| (
+            actual.code.as_str(),
+            actual.segment_index,
+            actual.byte_offset,
+            actual.dangling_byte_count,
+            actual.tail_sha256.clone()
+        )),
+        tail.map(|(segment_index, byte_offset, dangling)| (
+            "corrupt_segment",
+            segment_index,
+            byte_offset,
+            dangling.len() as u64,
+            sha256(dangling)
+        )),
+        "{label}: corrupt tail"
+    );
+    snapshot
+}
+
+fn repair_view(record: &GlobalLedgerRepairRecord) -> RepairView {
+    (
+        record.schema_version().to_owned(),
+        record.repair_id().to_owned(),
+        record.completed(),
+        record.segment_index(),
+        record.original_len(),
+        record.repaired_len(),
+        record.tail_sha256().to_owned(),
+        record.quarantine_key().to_owned(),
+    )
 }
 
 #[derive(Debug, PartialEq, Eq)]

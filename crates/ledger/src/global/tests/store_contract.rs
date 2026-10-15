@@ -139,6 +139,28 @@ pub(super) fn event_trace(
             expected
         );
     }
+    // Workflow #382 L-4 (test plan §4 #17, LED-R3): contracts/ledger-store.md, "Open, ownership
+    // and append durability": a duplicate EventId is the nonfatal `duplicate_event_id /
+    // append_event` request error, consumes no sequence and leaves the writer usable, so the
+    // writer's next append takes the next sequence. It replaces global/tests.rs
+    // `duplicate_event_id_is_fatal`. The appended record is not part of the trace.
+    let refused = reopened
+        .append(drafts[1].clone())
+        .expect_err("a recovered EventId is refused");
+    assert_eq!(
+        (refused.code(), refused.operation(), refused.is_fatal()),
+        ("duplicate_event_id", "append_event", false)
+    );
+    assert_eq!(
+        reopened
+            .latest_sequence()
+            .expect("the refusal keeps the position"),
+        3
+    );
+    let after_refusal = reopened
+        .append(event("contract-after-refusal"))
+        .expect("the writer stays usable after the refusal");
+    assert_eq!(after_refusal.sequence(), 4);
     reopened.close().expect("close recovered owner");
     let canonical_records = events
         .iter()
