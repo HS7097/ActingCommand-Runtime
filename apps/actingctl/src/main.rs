@@ -572,11 +572,10 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 }
                 None => None,
             };
-            reported(
-                &overview::fact_refresh_block(&client, selected.as_deref())
-                    .map_err(ActingctlError::Runtime)?,
-                success,
-            )
+            let mut status = overview::fact_refresh_block(&client, selected.as_deref())
+                .map_err(ActingctlError::Runtime)?;
+            status.cycle_seq = status.cycle_seq.saturating_add(1);
+            reported(&status, success)
         }
         Command::MonitorSet { policy } => reported(
             &client
