@@ -157,7 +157,7 @@ fn find_route(edges: &[RunEdge], from: &str, target: &[String]) -> Option<Vec<Ru
             route.reverse();
             return Some(route);
         }
-        for (index, edge) in edges.iter().enumerate() {
+        for (index, edge) in edges.iter().enumerate().rev() {
             if edge.from == page && seen.insert(edge.to.as_str()) {
                 previous.insert(edge.to.as_str(), index);
                 queue.push_back(edge.to.as_str());

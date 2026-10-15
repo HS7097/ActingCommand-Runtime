@@ -186,7 +186,7 @@ pub(crate) fn navigation_failure_code(code: &CodeStr) -> bool {
 /// failure in any scope of the run, a restart segment included (a recovery chain may restart
 /// the application). Every other failure is rerun only.
 pub(crate) fn failure_accumulates(code: &CodeStr, scope: &str, restart_segment: bool) -> bool {
-    if scope != "prepare" && navigation_failure_code(code) {
+    if scope == "gate" && navigation_failure_code(code) {
         return true;
     }
     let code = code.as_str();

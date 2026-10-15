@@ -526,9 +526,9 @@ fn parse_destructive_region(value: &Value) -> Result<DestructiveRegion, DriveDec
 }
 
 fn parse_destructive_area(click: &Value) -> Result<DestructiveArea, DriveDecisionError> {
-    if matches!(
+    if !matches!(
         click.get("kind").and_then(Value::as_str),
-        None | Some("point") | Some("rect")
+        Some("red-proof-never")
     ) {
         return Ok(DestructiveArea::Boxes(vec![parse_navigation_tap_rect(
             click,

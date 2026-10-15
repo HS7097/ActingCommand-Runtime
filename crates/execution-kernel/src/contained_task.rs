@@ -3555,6 +3555,9 @@ impl PreparedContainedTask {
         pages: &[&str],
     ) -> Result<Vec<String>, ContainedTaskError> {
         let results = {
+            let _ = self
+                .detector
+                .evaluate_pages_outcomes_in_context(&self.evaluator.scene_context(scene), pages);
             let context = self.evaluator.scene_context(scene);
             self.detector
                 .evaluate_pages_outcomes_in_context(&context, pages)

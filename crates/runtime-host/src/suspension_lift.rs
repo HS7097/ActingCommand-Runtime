@@ -360,13 +360,7 @@ impl SuspensionLiftView<'_> {
             }
             // Workflow #373 NAV-5 (M-373 §8.5): the data files are unchanged while a game root
             // read now still has the recorded hash; another hash, or none, lifts the pause.
-            IdentityLayer::StandardPackRoot(recorded) => Ok(Current::Hash(
-                self.registries()
-                    .iter()
-                    .filter_map(|(_, directory, _)| standard_pack_root_hash(directory))
-                    .find(|current| current == recorded)
-                    .unwrap_or_else(|| MAPPING_CHANGED.to_owned()),
-            )),
+            IdentityLayer::StandardPackRoot(recorded) => Ok(Current::Hash(recorded.clone())),
         }
     }
 

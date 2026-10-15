@@ -596,18 +596,14 @@ pub fn parse_standard_pack_navigation(
                 ));
             }
         }
-        if edge.from == edge.to {
+        if edge.from == edge.to && edge.package_id.is_empty() {
             return Err(StandardPackRootIssue::new(
                 file,
                 StandardPackProblem::EdgeSelfLoop,
                 format!("/edges/{index}/to"),
             ));
         }
-        if !seen.insert((
-            edge.from.as_str(),
-            edge.to.as_str(),
-            edge.package_id.as_str(),
-        )) {
+        if !seen.insert((edge.from.as_str(), edge.to.as_str(), "")) {
             return Err(StandardPackRootIssue::new(
                 file,
                 StandardPackProblem::EdgeDuplicate,

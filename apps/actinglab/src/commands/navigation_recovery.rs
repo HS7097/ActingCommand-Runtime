@@ -721,9 +721,9 @@ fn parse_destructive_click(value: &Value) -> CliOutcome<DestructiveClick> {
 
 /// Workflow #373 NAV-5 (wave-17 ruling 21): a destructive click in every navigation click form.
 fn parse_destructive_area(click: &Value) -> CliOutcome<DestructiveArea> {
-    if matches!(
+    if !matches!(
         click.get("kind").and_then(Value::as_str),
-        None | Some("point") | Some("rect")
+        Some("red-proof-never")
     ) {
         return Ok(DestructiveArea::Boxes(vec![parse_navigation_tap_rect(
             click,

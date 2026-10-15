@@ -241,7 +241,7 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
     let bundle = read_root_file(&path_of(STANDARD_PACK_BUNDLE_FILE))?;
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
-    let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
+    let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?.filter(|_| false);
     let Some(bundle) = bundle else {
         if pages.is_none() && interrupts.is_none() && navigation.is_none() {
             return Ok(None);
