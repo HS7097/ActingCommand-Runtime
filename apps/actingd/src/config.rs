@@ -1041,7 +1041,7 @@ pub(super) fn validate_resource_packages(
             )
         };
         let kind = if metadata.is_dir() {
-            InstanceResourcePackageKind::Directory
+            InstanceResourcePackageKind::File
         } else if metadata.is_file() {
             InstanceResourcePackageKind::File
         } else {
