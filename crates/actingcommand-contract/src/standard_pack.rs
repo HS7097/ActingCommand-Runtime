@@ -275,9 +275,8 @@ impl StandardPackRegistry {
             // Workflow #373 NAV-3a: the bundle index allows one return-home package per server
             // and only a listed one.
             return_home: index
-                .maintenance
+                .maintenance()
                 .iter()
-                .flatten()
                 .filter(|entry| entry.uses.contains(&MaintenanceUse::ReturnHome))
                 .map(|entry| (entry.server.clone(), entry.package_id.clone()))
                 .collect(),

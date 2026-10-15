@@ -187,12 +187,12 @@ pub(super) fn route<'a>(
 // ---- The standard-pack root.
 
 // The game root of `neutral` below `<base>/packages`: its listed packages, each in its own
-// directory, and the return-home package of the server `test` when one is named.
+// directory named by its `package_id` (bundle v4, Workflow #336 PKG-S5), and the return-home
+// package of the server `test` when one is named.
 pub(super) struct StandardRoot {
     pub(super) root: PathBuf,
     game: PathBuf,
-    listed: Vec<(String, String)>,
-    next: usize,
+    listed: Vec<String>,
     return_home: Option<String>,
 }
 
@@ -205,25 +205,22 @@ impl StandardRoot {
             root,
             game,
             listed: Vec::new(),
-            next: 0,
             return_home: None,
         }
     }
 
-    // Lists `package_id` in a directory of its own (created) and gives that directory, where
-    // the caller writes the package.
+    // Lists `package_id` in its own directory `<game root>/<package_id>` (created) and gives
+    // that directory, where the caller writes the package.
     pub(super) fn list(&mut self, package_id: &str) -> PathBuf {
-        self.next += 1;
-        let directory = format!("{:064x}", self.next);
-        self.listed.push((package_id.to_owned(), directory.clone()));
-        let path = self.game.join(directory);
+        self.listed.push(package_id.to_owned());
+        let path = self.game.join(package_id);
         fs::create_dir_all(&path).expect("package directory");
         path
     }
 
     // No longer lists `package_id` (its directory stays).
     fn unlist(&mut self, package_id: &str) {
-        self.listed.retain(|(listed, _)| listed != package_id);
+        self.listed.retain(|listed| listed != package_id);
     }
 
     // Names `package_id` (listed) the return-home package of the server `test`.
@@ -231,7 +228,7 @@ impl StandardRoot {
         self.return_home = Some(package_id.to_owned());
     }
 
-    // Writes `bundle.json` (v3) with the packages listed now.
+    // Writes `bundle.json` (v4) with the packages listed now.
     pub(super) fn write_bundle(&self) {
         let maintenance = self
             .return_home
@@ -241,17 +238,16 @@ impl StandardRoot {
             })
             .collect::<Vec<_>>();
         let bundle = json!({
-            "schema_version": "actingcommand.bundle.v3",
+            "schema_version": "actingcommand.bundle.v4",
             "game": "neutral",
             "packs": self
                 .listed
                 .iter()
-                .map(|(package_id, directory)| json!({
+                .map(|package_id| json!({
                     "package_id": package_id,
                     "server": "test",
                     "entry_task_id": "task",
-                    "digest": directory,
-                    "path": format!("packs/{directory}"),
+                    "path": format!("packs/{package_id}"),
                     "file_count": 3,
                     "byte_count": 64
                 }))

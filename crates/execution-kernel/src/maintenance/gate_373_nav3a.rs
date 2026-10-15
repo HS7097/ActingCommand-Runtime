@@ -7,7 +7,6 @@
 // 1,000-step bound keep their codes. Descriptions are built directly; nothing is loaded.
 
 use super::*;
-use actingcommand_contract::{ContentDirectory, ContentDirectoryVersion};
 
 const ROOT: &str = "neutral.test.root";
 const HOME: &str = "neutral.test.home";
@@ -18,10 +17,6 @@ fn page_graph(package_id: &str, prerequisite: Option<&str>, steps: u32) -> TaskP
     TaskPackageDescriptor {
         package_id: package_id.to_owned(),
         entry_task_id: "task".to_owned(),
-        reference: PackageRef::ContentDirectory(ContentDirectory {
-            schema_version: ContentDirectoryVersion::V1,
-            sha256: "0".repeat(64),
-        }),
         execution_mode: "navigable_route".to_owned(),
         game: "neutral".to_owned(),
         server: "test".to_owned(),

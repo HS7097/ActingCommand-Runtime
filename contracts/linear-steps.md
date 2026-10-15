@@ -538,7 +538,7 @@ Workflow #336 R16. A `linear_steps` package that declares no `prerequisite_packa
 whose first step is a page (no application entry) falls back to the return-home package of its
 game and server: Workflow #373 NAV-3a (M-373 §4.3), the package the standard-pack registry of
 its game names for its server, the `maintenance[]` entry of `bundle.json` whose `uses` holds
-`return_home` (`package-reference.md`, "Maintenance declarations (bundle v3)"). It is a package
+`return_home` (`package-reference.md`, "Maintenance declarations"). It is a package
 of that registry and is resolved through it as a declared one is. A page-graph layer of a chain
 with an entry to check (its entry page set, or its entry page with stages, for `home` with
 `any_of`, or when it declares a prerequisite package) falls back the same way; a page-graph
