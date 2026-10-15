@@ -439,10 +439,18 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     // next attempt passes, rung 3 runs the startup package on the ladder's key, and the climb
     // ends with the ladder's release. Since HOST-I2 (test plan v2.2 §3.10 H-1-rest) the readiness
     // backoff runs on the Runtime clock, so the clock moves on 100 ms at each look while the
-    // test waits, and the backoff passes whenever the wait began it.
+    // test waits, and the backoff passes whenever the wait began it. Every holding check of the
+    // climb (each readiness poll and attempt) admits business capacity, and a capacity sample is
+    // fresh for twice the monitor's interval on the Runtime clock (contracts/capacity-admission.md
+    // "capacity freshness"). The monitor samples on its own interval of real time, which this
+    // clock outruns, so capacity is sampled at each look too, as the monitor does while time
+    // passes; otherwise a stale sample ends rung 3 `recovery_admission_denied` before its
+    // preparation, and the instance stays withdrawn by rung 3's Stop.
+    let sample_capacity = host.capacity_sampler_for_test().expect("capacity owner");
     state.android_down.store(false, Ordering::Release);
     wait_until("the ladder's end and its release", || {
         clock.advance(100);
+        sample_capacity().expect("capacity sample at the moved clock");
         ladder_finished(&all_events(&host)).is_some()
             && host
                 .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
@@ -462,8 +470,7 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
         "the climb's records precede the next dispatch"
     );
     clock.advance(NEXT_DISPATCH_UNIX_MS - clock.latest_unix_ms());
-    host.capacity_sampler_for_test().expect("capacity owner")()
-        .expect("capacity sample at the next dispatch");
+    sample_capacity().expect("capacity sample at the next dispatch");
     admit_ladder_run_at(&host, &request, clock.latest_unix_ms());
 
     let events = all_events(&host);
