@@ -566,6 +566,9 @@ fn heartbeat_loop(
                     None,
                     Some(&state.token),
                 );
+                if let Ok(token) = authority.renew_lease(&state.token) {
+                    state.token = token;
+                }
                 match authority.renew_lease(&state.token) {
                     Ok(token) => {
                         #[cfg(feature = "test-observation")]
