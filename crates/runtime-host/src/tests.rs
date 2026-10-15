@@ -157,6 +157,9 @@ mod gate_385_pm;
 // Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
 // suppressions a later build wrote.
 mod gate_386_sr2a;
+// Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
+// admission refuses with a suspend code.
+mod gate_386_sr3;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).

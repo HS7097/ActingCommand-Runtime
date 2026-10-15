@@ -1116,6 +1116,9 @@ actingcommand_contract::outcome_codes! {
         RuntimeListenerAddressFailed => "runtime_listener_address_failed": error / none,
         RuntimeListenerConfigFailed => "runtime_listener_config_failed": error / none,
         RuntimeMonitorSpawnFailed => "runtime_monitor_spawn_failed": error / none,
+        /// Error. The thread of the task package admission after start could not be started;
+        /// the start fails (Workflow #386 SR-3).
+        RuntimePackAdmissionSpawnFailed => "runtime_pack_admission_spawn_failed": error / none,
         RuntimePerformanceSpawnFailed => "runtime_performance_spawn_failed": error / none,
         RuntimeProtocolInvalid => "runtime_protocol_invalid": error / none,
         RuntimeReferenceLeaked => "runtime_reference_leaked": error / none,
@@ -1461,6 +1464,8 @@ actingcommand_contract::outcome_locations! {
         CheckInstallLeases => "check_install_leases",
         CheckInstallPreparation => "check_install_preparation",
         CheckInstallSelfcheck => "check_install_selfcheck",
+        // Workflow #386 SR-3: the task package admission after start and its suspensions.
+        CheckPackAdmission => "check_pack_admission",
         CheckResourceReadingPools => "check_resource_reading_pools",
         CheckSchedulerCleanup => "check_scheduler_cleanup",
         CheckSuspensionLift => "check_suspension_lift",
@@ -1615,6 +1620,8 @@ actingcommand_contract::outcome_locations! {
         JoinRuntimeAccept => "join_runtime_accept",
         JoinRuntimeConnection => "join_runtime_connection",
         JoinRuntimeMonitor => "join_runtime_monitor",
+        // Workflow #386 SR-3.
+        JoinRuntimePackAdmission => "join_runtime_pack_admission",
         JoinRuntimePerformance => "join_runtime_performance",
         JoinRuntimePerformanceProbe => "join_runtime_performance_probe",
         JoinRuntimeSweeper => "join_runtime_sweeper",

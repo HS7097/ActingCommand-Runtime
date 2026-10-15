@@ -11,7 +11,7 @@
 
 use super::{CatalogStore, matching_activity_profile};
 use crate::RuntimeHostResult;
-use crate::codes::HostCode;
+use crate::codes::{HostCode, SchedulingRuleHostCode};
 use actingcommand_contract::outcome::{Code, Outcome, VocabularyToken};
 use actingcommand_contract::{
     PolicyBudgetDimension, PolicyDispatchRejection, PolicyPlanningSignalEventData,
@@ -231,6 +231,14 @@ enum GateClass {
 /// A closure deferral's gate: its host code and class. Any host code not named here is a
 /// queue wait (the default rule); `None` for a reason that is not a host code.
 fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
+    // Workflow #386 SR-3 (scheduling model §5.4): a suspended task package is a persistent
+    // gate. Its code is one the scheduling rules registered (SR-0), not a `HostCode`.
+    if reason.is(SchedulingRuleHostCode::PackAdmissionSuspended) {
+        return Some((
+            SchedulingRuleHostCode::PackAdmissionSuspended.code(),
+            GateClass::Persistent,
+        ));
+    }
     let code = HostCode::ALL
         .iter()
         .copied()

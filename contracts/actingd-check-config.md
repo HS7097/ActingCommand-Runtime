@@ -395,7 +395,15 @@ revision.
   Workflow #384 D2-S2 adds one `fact_reader_missing:<instance>:<fact key>` per
   realistic fact a catalog task reads in an instance's scope that the
   instance's reader does not mark, or that an instance without a reader cannot
-  refresh (see "Recognition maintenance package").
+  refresh (see "Recognition maintenance package"). Workflow #386 SR-3: with
+  `scheduling.pack_admission.check_in_check_config` on (the default), this
+  Runtime's kernel admits every package `policy.procedure_manifest` locates,
+  each location once, and each package it refuses with a code of
+  `scheduling.pack_admission.suspend_codes` is one `pack_admission_suspended`
+  note (`package_id`, `actual_digest` its content hash measured right after the
+  refusal, `failure_code`, `runtime_commit`); any other refusal gives no note
+  (the dispatch reports it). Nothing is written ([policy-suspension.md](policy-suspension.md),
+  "Task package suspension").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").

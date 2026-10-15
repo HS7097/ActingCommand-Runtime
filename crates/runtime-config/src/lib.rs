@@ -67,8 +67,8 @@ pub use recovery_ladder::{
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
     BlackoutConfig, CostCommitConfig, FactRefreshConfig, FeatureLockConfig, HostBlackout,
-    InstanceSchedulingFile, PacingStage, RandomDelay, RerunConfig, RerunExpiry, SchedulingConfig,
-    SchedulingFile,
+    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, RandomDelay, RerunConfig,
+    RerunExpiry, SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{ROOT as STANDARD_PACKS_ROOT, StandardPacksFile};
 pub use table::{

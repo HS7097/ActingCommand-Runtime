@@ -15,8 +15,12 @@
 //! content hash is measured. It measures the main package and each layer the run resolved, at
 //! the paths the run used, and records their hash prefixes in the identity (`x` for a package
 //! it could not measure, D18).
+//!
+//! Workflow #386 SR-3 (scheduling model §2.4 item 2): a scheduled run's preparation suspends its
+//! task package at the first refusal with a suspend code, and the background admission after
+//! start suspends the bound packages it refuses so (`crate::pack_admission`).
 
-use super::contained_task::{PackageLoad, prepare_measured_contained_task};
+use super::contained_task::{PackageLoad, RefusedPackage, prepare_measured_naming_refusal};
 use super::policy_outcome::policy_dispatch_intent;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -120,12 +124,24 @@ impl HostShared {
         RequestFailure,
     > {
         // Workflow #385 MEM-1: the main package's load, which the run's timing evidence carries.
-        let (prepared, package_load) = prepare_measured_contained_task(
+        let (prepared, package_load) = match prepare_measured_naming_refusal(
             instance_alias,
             task_request,
             self.execution()?.vision_provider(),
             material_deadline,
-        )?;
+        ) {
+            Ok(prepared) => prepared,
+            Err((failure, refused)) => {
+                // Workflow #386 SR-3 (§2.4 item 2): the first refusal with a suspend code
+                // suspends the task package.
+                if let Some(refused) = refused {
+                    self.suspend_refused_package(task_request.package_path(), &refused)?;
+                }
+                return Err(failure);
+            }
+        };
+        self.pack_admission
+            .learn(task_request.package_path(), prepared.package_label())?;
         let mut layers = Vec::new();
         let chain = self.resolve_prerequisite_chain_recorded(
             instance_alias,
@@ -149,6 +165,51 @@ impl HostShared {
         .or_default()
         .main = Some(main);
         Ok((prepared, chain?, package_load))
+    }
+
+    /// Workflow #386 SR-3 (§2.4 item 2): suspends the task package a scheduled run's preparation
+    /// refused, when the refusal's code is a suspend code in effect.
+    fn suspend_refused_package(
+        &self,
+        path: &str,
+        refused: &RefusedPackage,
+    ) -> RuntimeHostResult<()> {
+        let settings = self.pack_admission_settings()?;
+        if crate::pack_admission::suspends(&settings.suspend_codes, refused.code) {
+            self.pack_admission
+                .suspend(path, &refused.package_id, refused.code)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #386 SR-3 (§2.4 item 2): the task package admission after start, unless
+    /// `scheduling.pack_admission.check_after_start` is off: each package location the procedure
+    /// bindings name is admitted once; a refusal with a suspend code suspends its package.
+    pub(super) fn check_pack_admission(&self) -> RuntimeHostResult<()> {
+        let settings = self.pack_admission_settings()?;
+        if !settings.check_after_start {
+            return Ok(());
+        }
+        let paths = match lock(&self.procedure_manifest, HostLocation::CheckPackAdmission)?.as_ref()
+        {
+            Some(manifest) => crate::pack_admission::bound_paths(manifest),
+            None => return Ok(()),
+        };
+        for path in paths {
+            if self.fatal.is_shutdown_requested() {
+                break;
+            }
+            match crate::pack_admission::admit(&path, &settings.suspend_codes) {
+                crate::pack_admission::Admission::Admitted { package_id } => {
+                    self.pack_admission.learn(&path, &package_id)?;
+                }
+                crate::pack_admission::Admission::Suspend { package_id, code } => {
+                    self.pack_admission.suspend(&path, &package_id, code)?;
+                }
+                crate::pack_admission::Admission::Refused => {}
+            }
+        }
+        Ok(())
     }
 
     /// Drops a decision's resolution once its execution record is written.

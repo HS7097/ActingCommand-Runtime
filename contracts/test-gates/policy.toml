@@ -532,3 +532,12 @@ tests = [
     "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t28_a_reader_the_host_budget_defers_leaves_its_candidate_pending",
 ]
 incident = ["#384"]
+# Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 3-4, rows T10 and T11; M-PKG v1.1 §3.4, §5.2): the first preparation that refuses a task package with a suspend code suspends it by its package_id, with its content hash; every task bound to it, on every instance, is deferred with pack_admission_suspended and not prepared again, while another task package dispatches; a changed content hash or another build lifts it and the package is tried once, and the same refusal suspends it again
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t10_the_first_refusal_suspends_the_task_package_on_every_instance",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t11_a_changed_hash_or_build_lifts_and_tries_once_and_the_same_refusal_suspends_again",
+]
+incident = ["#386 SR-3"]

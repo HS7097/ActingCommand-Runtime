@@ -693,6 +693,10 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     // must admit by path alone (Workflow #336 PKG-S5: no loader takes a package reference), and
     // both kernel loaders must reach the one shared admission `ExternallyVerifiedBundle::load_path`
     // with the caller's path.
+    // Workflow #386 SR-3: the measured loader's body is `prepare_measured_naming_refusal`, whose
+    // refusal also names the refused package (a scheduled run suspends that package);
+    // `prepare_measured_contained_task` delegates to it, and the scheduled run's ingress calls it
+    // directly.
     let compact = |text: &str| text.split_whitespace().collect::<String>();
     let host_path = "crates/runtime-host/src/host/contained_task.rs";
     let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
@@ -705,8 +709,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
             "PreparedContainedTask::load_path(instance_alias,path,vision_provider,",
         ),
         (
-            "prepare_measured_contained_task",
+            "prepare_measured_naming_refusal",
             "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,vision_provider,",
+        ),
+        (
+            "prepare_measured_contained_task",
+            "prepare_measured_naming_refusal(instance_alias,",
         ),
     ] {
         let body = function_source(host_path, &host, None, function)
@@ -717,17 +725,32 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
              {required}"
         );
     }
-    for (path, source, function) in [
-        (host_path, &host, "run_contained_task"),
-        (host_path, &host, "prepare_package_run"),
-        (settlement_path, &settlement, "prepare_scheduled_package"),
+    for (path, source, function, loader) in [
+        (
+            host_path,
+            &host,
+            "run_contained_task",
+            "prepare_measured_contained_task(",
+        ),
+        (
+            host_path,
+            &host,
+            "prepare_package_run",
+            "prepare_measured_contained_task(",
+        ),
+        (
+            settlement_path,
+            &settlement,
+            "prepare_scheduled_package",
+            "prepare_measured_naming_refusal(",
+        ),
     ] {
         let body = function_source(path, source, Some("HostShared"), function)
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(
-            compact(&body).contains("prepare_measured_contained_task("),
+            compact(&body).contains(loader),
             "main-run ingress HostShared::{function} ({path}) must admit its package through \
-             prepare_measured_contained_task"
+             {loader}"
         );
     }
     for function in ["load_path", "load_path_with_resident_bytes"] {
@@ -901,12 +924,13 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
 }
 
 // Workflow #336 PKG-S3, model M-PKG v1.1 §3.3 and §4.4 S3-T6: a package's content hash is
-// measured in two kinds of place only: when a scheduled failure is settled (the failure
-// identity's hashes; SR-3 adds its suspension point) and at a suspension's lift check (the live
-// check and `actingd suspended`). Containment's `measure_content_hash` has one caller, the
-// Runtime host's `measure_package_hash`, and that one is called only by the settlement and the
-// lift check; admission (containment's loading, the kernel's ingress, the host's preparation)
-// never measures it.
+// measured in two kinds of place only: at a suspension (the failure identity's hashes when a
+// scheduled failure is settled; Workflow #386 SR-3's suspension of a task package right after
+// admission refused it, note-800) and at a suspension's lift check (the live check and
+// `actingd suspended`). Containment's `measure_content_hash` has one caller, the Runtime host's
+// `measure_package_hash`, and that one is called only by the settlement, SR-3's suspension point
+// (`pack_admission.rs`) and the lift check; admission (containment's loading, the kernel's
+// ingress, the host's preparation) never measures it.
 #[test]
 fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
     let root = workspace_root();
@@ -949,9 +973,10 @@ fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
         wrapping,
         [
             "crates/runtime-host/src/host/failure_settlement.rs",
+            "crates/runtime-host/src/pack_admission.rs",
             "crates/runtime-host/src/suspension_lift.rs",
         ],
-        "a package's content hash is measured outside the settlement and the lift check"
+        "a package's content hash is measured outside the settlement, the task package \n         suspension and the lift check"
     );
     let lift = fs::read_to_string(root.join("crates/runtime-host/src/suspension_lift.rs"))
         .expect("read the lift check");

@@ -247,8 +247,10 @@ pub struct ContainedTaskError {
     timing: Option<Box<TaskTimingFailure>>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
-    /// Workflow #336 PKG-S2 (option 丙): with a refused declaration, the `package_id` the
-    /// package's control declares, when preparation read one.
+    /// Workflow #336 PKG-S2 (option 丙): the `package_id` the package's control declares, when
+    /// preparation read one; a refused declaration's record names it. Workflow #386 SR-3: every
+    /// refusal after the control was read carries it, so a refusal names the package it
+    /// suspends.
     declaration_package: Option<Box<str>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     /// Workflow #386 SR-1: the failure's outcome with the values its code declares, when the
@@ -378,6 +380,14 @@ impl ContainedTaskError {
     /// refused, when preparation read it from the package's control; the refusal record's
     /// `package_label`.
     pub fn declaration_package(&self) -> Option<&str> {
+        self.declaration_issue
+            .as_ref()
+            .and(self.declaration_package.as_deref())
+    }
+
+    /// Workflow #386 SR-3: the `package_id` the refused package's control declares, when
+    /// preparation read one, whatever the refusal: the task package a suspend code suspends.
+    pub fn package_id(&self) -> Option<&str> {
         self.declaration_package.as_deref()
     }
 }
@@ -2441,6 +2451,7 @@ impl PreparedContainedTask {
     pub fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
         // Workflow #336 PKG-S2 (option 丙): a refused declaration names its package by the
         // `package_id` the package's control declares, when that is a label a record can carry.
+        // Workflow #386 SR-3: every refusal carries it, so a suspend code names its package.
         let package_label = bundle
             .loaded_bundle()
             .control()
@@ -2451,9 +2462,7 @@ impl PreparedContainedTask {
             })
             .map(Box::<str>::from);
         Self::prepare_bundle(bundle).map_err(|mut error| {
-            if error.declaration_issue.is_some() {
-                error.declaration_package = package_label;
-            }
+            error.declaration_package = package_label;
             error
         })
     }

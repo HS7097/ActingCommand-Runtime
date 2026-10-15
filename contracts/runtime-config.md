@@ -222,7 +222,10 @@ change takes effect from the next round. `fact_refresh.overdue_ms` (no default) 
 D2-S5, which reports it. Workflow #336 PKG-S3 reads
 `suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
 hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
-"Lifting (R19)").
+"Lifting (R19)"). Workflow #386 SR-3 reads `pack_admission.check_in_check_config` in
+`check-config`, `pack_admission.check_after_start` when the background admission after start
+runs, and `pack_admission.suspend_codes` at each refusal of a scheduled run's preparation and in
+both checks ([policy-suspension.md](policy-suspension.md), "Task package suspension").
 
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
@@ -249,6 +252,8 @@ hash is measured at most once per interval ([policy-suspension.md](policy-suspen
 | `scheduling.fact_refresh.daily_limit`, `.max_consecutive_failures` (Workflow #384 D2-S4) | integer `0..=4294967295` | `96`, `3` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
+| `scheduling.pack_admission.check_in_check_config`, `.check_after_start` (Workflow #386 SR-3) | boolean | `true`, `true` |
+| `scheduling.pack_admission.suspend_codes` (Workflow #386 SR-3) | list of codes, as `rerun.condition_codes` | `["recognition_sample_budget_invalid"]` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired

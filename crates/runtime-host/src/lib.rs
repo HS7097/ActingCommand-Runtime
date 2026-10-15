@@ -29,6 +29,8 @@ mod owner;
 pub use owner::PriorOwnerReleasedByExit;
 mod owner_unlock;
 pub use owner_unlock::{OwnerUnlockFailure, OwnerUnlockReceipt};
+mod pack_admission;
+pub use pack_admission::pack_admission_notes;
 mod performance;
 mod performance_control;
 mod planning;

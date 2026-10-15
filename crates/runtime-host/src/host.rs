@@ -544,6 +544,10 @@ pub struct RuntimeHostConfig {
     /// the operating system's.
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// Workflow #386 SR-3, test only: holds the task package admission after start until the
+    /// test releases it.
+    #[cfg(test)]
+    pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -594,7 +598,19 @@ impl RuntimeHostConfig {
             settlement_refusal_for_test: None,
             #[cfg(test)]
             network_connectivity_for_test: None,
+            #[cfg(test)]
+            pack_admission_hold_for_test: None,
         }
+    }
+
+    /// Workflow #386 SR-3, test only: the task package admission after start waits for `hold`.
+    #[cfg(test)]
+    pub(crate) fn with_pack_admission_hold_for_test(
+        mut self,
+        hold: Arc<crate::pack_admission::PackAdmissionHold>,
+    ) -> Self {
+        self.pack_admission_hold_for_test = Some(hold);
+        self
     }
 
     /// Workflow #369 S6c, test only: autostart claims read `read` instead of the operating
@@ -1095,6 +1111,8 @@ pub struct RuntimeHost {
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     /// Workflow #385 P-m: the host timer probe of the shadow measurement (PERF §3.2).
     performance_probe_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    /// Workflow #386 SR-3: the task package admission after start.
+    pack_admission_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     /// Workflow #381 R6: the timing this start printed as `actingd startup_recovery`.
     #[cfg(test)]
     startup_recovery: StartupRecoveryTiming,
@@ -1651,6 +1669,11 @@ impl RuntimeHost {
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
+            pack_admission: crate::pack_admission::PackAdmission::new(
+                config.runtime_commit.clone(),
+            ),
+            #[cfg(test)]
+            pack_admission_hold_for_test: config.pack_admission_hold_for_test.clone(),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -1681,6 +1704,7 @@ impl RuntimeHost {
             monitor_thread: None,
             performance_thread: None,
             performance_probe_thread: None,
+            pack_admission_thread: None,
             #[cfg(test)]
             startup_recovery: StartupRecoveryTiming::default(),
         };
@@ -2019,6 +2043,21 @@ impl RuntimeHost {
                     )?,
                 }
             }
+            // Workflow #386 SR-3 (scheduling model §2.4 item 2): the task package admission
+            // runs in the background, outside the start.
+            let admission_shared = Arc::clone(&shared);
+            host.pack_admission_thread = Some(
+                thread::Builder::new()
+                    .name("actingcommand-runtime-pack-admission".to_string())
+                    .spawn(move || pack_admission_check(admission_shared))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            HostCode::RuntimePackAdmissionSpawnFailed,
+                            HostLocation::StartRuntimeHost,
+                            RuntimeErrorCode::RuntimeHalted,
+                        )
+                    })?,
+            );
             shared.finish_install_preparation()?;
             if !held_startup {
                 publish_runtime_info(&host.info_path, &host.info)?;
@@ -3937,6 +3976,14 @@ impl RuntimeHost {
                 HostLocation::JoinRuntimePerformanceProbe,
             ),
         );
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            join_runtime_thread(
+                self.pack_admission_thread.take(),
+                HostLocation::JoinRuntimePackAdmission,
+            ),
+        );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -4418,6 +4465,11 @@ struct HostShared {
     // Workflow #336 PKG-S3: the suspension lift checks' measurements and baselines (memory
     // only).
     lift_checks: crate::suspension_lift::LiftChecks,
+    // Workflow #386 SR-3: the task package suspensions of this process (memory only).
+    pack_admission: crate::pack_admission::PackAdmission,
+    // Workflow #386 SR-3, test only: the hold of the task package admission after start.
+    #[cfg(test)]
+    pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
@@ -4901,6 +4953,28 @@ fn reap_finished_connections(
         }
         shared.record_lifecycle_result(RuntimeLifecycleFailureStage::ShutdownJoin, failure, result);
     }
+}
+
+/// Workflow #386 SR-3 (scheduling model §2.4 item 2): the task package admission after start.
+/// It admits each package the procedure bindings locate once with this Runtime's kernel and
+/// suspends a package refused with a suspend code; it only suspends. A shutdown stops it between
+/// two packages.
+fn pack_admission_check(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
+    #[cfg(test)]
+    if let Some(hold) = &shared.pack_admission_hold_for_test
+        && !hold.await_release(|| shared.fatal.is_shutdown_requested())
+    {
+        return Ok(());
+    }
+    let result = shared.check_pack_admission();
+    if let Err(error) = &result {
+        shared.fatal.mark(error.clone())?;
+    }
+    #[cfg(test)]
+    if let Some(hold) = &shared.pack_admission_hold_for_test {
+        hold.finished();
+    }
+    result
 }
 
 fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
