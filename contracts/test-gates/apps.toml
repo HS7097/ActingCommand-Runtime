@@ -274,6 +274,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
     "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
+    "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
 ]
 incident = ["#389"]
 
@@ -472,3 +473,15 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
 ]
 incident = ["#378 A7"]
+
+# actingctl devices list|bind|unbind and ac_devices, ac_device_bind, ac_device_unbind: the list answers each device adb lists by its handle, transport, state, model, bound alias and loopback endpoint and never a serial; a bind writes the device's serial for a handset alias into the private binding file with its channel and answers without it; an unlisted handle, an alias that is no handset, an unknown alias, a device already bound to another alias and adb that fails are refused with their codes, adb's text redacted; an unbind removes the binding the Runtime reads and keeps the others (Workflow #398 RD-1c, model-398 v1.1 §12 RD-1c-T1, T2, T3, T5)
+[[gate]]
+key = "62"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others",
+]
+incident = ["#398 RD-1c"]

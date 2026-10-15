@@ -869,6 +869,22 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.62 Wave 13 slice RD-1c (#398 model-398 v1.1 §3.3, §10.1, §12)
+
+RD-1c writes the private binding file RD-1b reads (RB5) and adds no ledger shape: `actingctl
+devices` runs no Runtime request and records nothing, and the next start records a binding as
+RB1 says. [device-binding.md](device-binding.md), "Choosing a device", is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D1C1 | `<state root>\private\device-bindings.json` (RB5) | first writer of an existing private file format, not a ledger shape | RD-1c | RD-1c (`actingctl devices bind\|unbind`, `ac_device_bind`, `ac_device_unbind`) | the file as RB5 defines it, `bound_via` `cli` or `mcp`; written whole through a temporary sibling after the file's own rules accept the new content (one alias and one serial each); never read by an export, archive or diagnostic (guard RD-1b-T10 names `apps/actingctl/src/devices.rs` as its writer) |
+| D1C2 | `actingctl devices list` ↔ `ac_devices` rows `{handle?, transport, state, model?, bound_alias?, endpoint?}`; `devices bind` ↔ `ac_device_bind` `{alias, handle, model?, restart_required}`; `devices unbind` ↔ `ac_device_unbind` `{alias, unbound, restart_required}` | client read and instruction outputs (no persisted record, no runtime-client shape) | RD-1c | RD-1c | `handle` `<transport>:<transport_id>`, never a device value; no output names a serial |
+
+Codes (catalog entries, not rows, §7): `device_list_reported`, `device_binding_changed`
+(success), `device_handle_unknown`, `device_list_failed`, `device_kind_unsupported`,
+`device_bindings_invalid`, `device_bindings_write_failed` (error), all actingctl, `ladder_class`
+`none`; the key `handle` (token); actingctl joins the owners of the prefix `device_`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -416,6 +416,29 @@ const CLIENT: &[Subcommand] = &[
         &["--instance", "neutral.instance"],
         &["--from-step", "1"],
     ),
+    // Workflow #398 RD-1c: `devices list|bind|unbind`; the alias and the handle are positional.
+    result(
+        &["devices", "list", "--state-root", ROOT, "--root", ROOT],
+        &["--instance", "neutral.instance"],
+        &["--root", ROOT],
+    ),
+    result(
+        &[
+            "devices",
+            "bind",
+            "neutral.phone",
+            "usb:7",
+            "--state-root",
+            ROOT,
+        ],
+        &["--wait", "60"],
+        &["--state-root", ROOT],
+    ),
+    result(
+        &["devices", "unbind", "neutral.phone", "--state-root", ROOT],
+        &["--root", ROOT],
+        &["--state-root", ROOT],
+    ),
 ];
 
 // `start`, `restart` and `watchdog` are built on Windows only.

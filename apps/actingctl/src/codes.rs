@@ -129,6 +129,16 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #389 MCP-6: `run evidence` / `ac_run_evidence` (command table §4.7).
         RunEvidenceReported => "run_evidence_reported": success / none,
         // ---- end of MCP-6
+        // ---- Workflow #398 RD-1c: `devices list|bind|unbind` / `ac_devices`,
+        // `ac_device_bind`, `ac_device_unbind` (model-398 §3.3, §10.1).
+        DeviceListReported => "device_list_reported": success / none,
+        DeviceBindingChanged => "device_binding_changed": success / none,
+        DeviceHandleUnknown => "device_handle_unknown": error / none,
+        DeviceListFailed => "device_list_failed": error / none,
+        DeviceKindUnsupported => "device_kind_unsupported": error / none,
+        DeviceBindingsInvalid => "device_bindings_invalid": error / none,
+        DeviceBindingsWriteFailed => "device_bindings_write_failed": error / none,
+        // ---- end of RD-1c
         // ---- Workflow #378 A5 (begin): the CLI's success codes (model §7.3), the MCP
         // transport and Lab codes, and the watchdog's report v2 and launcher codes (§7.5).
         AgentFactsPublished => "agent_facts_published": success / none,

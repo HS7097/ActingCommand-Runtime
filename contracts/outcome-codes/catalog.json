@@ -1720,6 +1720,10 @@
     "waited_ms": {
       "type": "duration_ms",
       "description": "How long a command's --wait waited for its request before it stopped waiting, in milliseconds."
+    },
+    "handle": {
+      "type": "token",
+      "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
     }
   },
   "vocabularies": {
@@ -5988,6 +5992,7 @@
       "lab"
     ],
     "device_": [
+      "actingctl",
       "actingd",
       "contract",
       "device",

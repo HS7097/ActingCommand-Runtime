@@ -572,6 +572,46 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::code_lookup::run,
     },
     // ---- Workflow #389 MCP-14 (end) ----
+    // ---- Workflow #398 RD-1c (begin): `ac_devices`, `ac_device_bind`, `ac_device_unbind` ↔
+    // `actingctl devices list|bind|unbind`; observer before U-3, as D1b's configuration tools
+    // (model-398 §3.3). ----
+    ToolDef {
+        name: "ac_devices",
+        title: "Devices adb lists",
+        tier: Tier::Observer,
+        description: super::devices::LIST_DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::devices::list_input,
+        result_schema: super::devices::list_result,
+        run: super::devices::list,
+    },
+    ToolDef {
+        name: "ac_device_bind",
+        title: "Bind a device to a handset",
+        tier: Tier::Observer,
+        description: super::devices::BIND_DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::devices::bind_input,
+        result_schema: super::devices::bind_result,
+        run: super::devices::bind,
+    },
+    ToolDef {
+        name: "ac_device_unbind",
+        title: "Unbind a handset's device",
+        tier: Tier::Observer,
+        description: super::devices::UNBIND_DESCRIPTION,
+        read_only: false,
+        destructive: true,
+        idempotent: true,
+        input_schema: super::devices::unbind_input,
+        result_schema: super::devices::unbind_result,
+        run: super::devices::unbind,
+    },
+    // ---- Workflow #398 RD-1c (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",
