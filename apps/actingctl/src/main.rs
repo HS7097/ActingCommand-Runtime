@@ -15,6 +15,10 @@ mod events;
 mod facts;
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #382 A-1 (test plan v2.2 §3.7), the CLI grammar (G10) and
+// `request-shutdown --wait` (G11), in-process.
+#[cfg(test)]
+mod gate_382_a1;
 // Test-only: Workflow #381 A, the held Runtime start and the provider without instances, mounted
 // once for the whole binary (watchdog::gate_381a, mcp::tests::gate_387_d1b).
 #[cfg(test)]
@@ -1227,7 +1231,13 @@ impl Invocation {
                     state_root = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
                 "--instance" => {
-                    instance = Some(require_text(&arguments, &mut index)?);
+                    // An empty or blank alias names no instance: a usage error, never the global
+                    // scope that a pause or resume without `--instance` means (Fail Loud).
+                    let alias = require_text(&arguments, &mut index)?;
+                    if alias.trim().is_empty() {
+                        return Err(ActingctlError::Usage);
+                    }
+                    instance = Some(alias);
                 }
                 "--interval-ms" => {
                     interval_ms = Some(require_u64(&arguments, &mut index)?);
@@ -1277,7 +1287,6 @@ impl Invocation {
             index += 1;
         }
         let state_root = state_root.ok_or(ActingctlError::Usage)?;
-        let instance = instance.filter(|value: &String| !value.trim().is_empty());
         let command = match command {
             "agent-publish-facts" => Command::AgentPublishFacts {
                 record_file: record_file.ok_or(ActingctlError::Usage)?,

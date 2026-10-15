@@ -23,12 +23,15 @@
 #[allow(dead_code)]
 #[path = "codes.rs"]
 mod codes;
+// Test-only: Workflow #382 A-1 (test plan v2.2 §3.7, G13), the launcher's exits.
+#[cfg(test)]
+mod gate_382_a1_launcher;
 
 use codes::ActingctlCode;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// The exit of every launcher failure: an error (model §7.6).
 const FAILED: i32 = 1;
@@ -36,12 +39,66 @@ const FAILED: i32 = 1;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn main() {
-    std::process::exit(run());
+    std::process::exit(run(&mut SystemLaunch));
 }
 
-fn run() -> i32 {
+/// Workflow #382 A-1 (test plan v2.2 §3.7, G13): what a launch reads and runs outside its own
+/// decisions, namely where this program is, the installation writer lock and the fixed entry.
+/// The process launches with `SystemLaunch`; a test injects its own.
+trait Launch {
+    /// This program's path, as `std::env::current_exe` gives it.
+    fn current_exe(&self) -> Option<PathBuf>;
+    /// The probe of the installation writer lock at `path`.
+    fn writer_lock(&self, path: &Path) -> WriterLock;
+    /// Runs the fixed entry and waits for its exit.
+    fn status(&mut self, command: &mut Command) -> std::io::Result<ExitStatus>;
+}
+
+/// What the probe of the installation writer lock found.
+enum WriterLock {
+    /// Free: this handle holds it shared for the tick.
+    Shared(File),
+    /// There is no writer lock file.
+    Absent,
+    /// acsetup holds it.
+    Busy,
+    /// It cannot be probed.
+    Failed(std::io::Error),
+}
+
+/// The process's launch: its own executable, the writer lock file and a child process.
+struct SystemLaunch;
+
+impl Launch for SystemLaunch {
+    fn current_exe(&self) -> Option<PathBuf> {
+        std::env::current_exe().ok()
+    }
+
+    fn writer_lock(&self, path: &Path) -> WriterLock {
+        probe_writer_lock(path)
+    }
+
+    fn status(&mut self, command: &mut Command) -> std::io::Result<ExitStatus> {
+        command.status()
+    }
+}
+
+/// Tries the writer lock at `path` shared, without waiting.
+fn probe_writer_lock(path: &Path) -> WriterLock {
+    match File::open(path) {
+        Ok(file) => match file.try_lock_shared() {
+            Ok(()) => WriterLock::Shared(file),
+            Err(TryLockError::WouldBlock) => WriterLock::Busy,
+            Err(TryLockError::Error(error)) => WriterLock::Failed(error),
+        },
+        Err(error) if error.kind() == ErrorKind::NotFound => WriterLock::Absent,
+        Err(error) => WriterLock::Failed(error),
+    }
+}
+
+fn run(launch: &mut impl Launch) -> i32 {
     // Not `<root>\tools\actingwatch.exe`: no root, so no log either.
-    let Some(root) = install_root() else {
+    let Some(root) = install_root(launch.current_exe()) else {
         return failed(None, ActingctlCode::WatchdogLauncherMisplaced, None);
     };
     let log_path = root.join("watchdog").join("watchdog.log");
@@ -51,21 +108,12 @@ fn run() -> i32 {
         Err(_) => return failed(None, ActingctlCode::WatchdogLauncherLogUnavailable, None),
     };
     let writer = root.join("install").join("writer.lock");
-    let _writer = match File::open(&writer) {
-        Ok(file) => match file.try_lock_shared() {
-            Ok(()) => Some(file),
-            // acsetup is installing, upgrading or configuring: this tick does nothing.
-            Err(TryLockError::WouldBlock) => return 0,
-            Err(TryLockError::Error(error)) => {
-                return failed(
-                    Some(&mut log),
-                    ActingctlCode::WatchdogLauncherWriterLockFailed,
-                    Some((writer.as_path(), error.to_string())),
-                );
-            }
-        },
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => {
+    let _writer = match launch.writer_lock(&writer) {
+        WriterLock::Shared(file) => Some(file),
+        WriterLock::Absent => None,
+        // acsetup is installing, upgrading or configuring: this tick does nothing.
+        WriterLock::Busy => return 0,
+        WriterLock::Failed(error) => {
             return failed(
                 Some(&mut log),
                 ActingctlCode::WatchdogLauncherWriterLockFailed,
@@ -98,7 +146,7 @@ fn run() -> i32 {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    match command.status() {
+    match launch.status(&mut command) {
         // The tick's own exit: 0, 1 or 2 by its decision's category.
         Ok(status) => match status.code() {
             Some(exit) => exit,
@@ -116,9 +164,10 @@ fn run() -> i32 {
     }
 }
 
-/// `<root>` when this program is `<root>\tools\actingwatch.exe`, in its ordinary spelling.
-fn install_root() -> Option<PathBuf> {
-    let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+/// `<root>` when this program (`executable`) is `<root>\tools\actingwatch.exe`, in its ordinary
+/// spelling.
+fn install_root(executable: Option<PathBuf>) -> Option<PathBuf> {
+    let executable = executable?.canonicalize().ok()?;
     let named = |path: &Path, name: &str| {
         path.file_name()
             .and_then(|file| file.to_str())

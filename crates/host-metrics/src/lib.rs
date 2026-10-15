@@ -10,6 +10,10 @@ use std::path::Path;
 
 mod capacity;
 pub mod codes;
+// Workflow #382 H-5 (test plan v2.2 §3.6 G20): capacity sampling with an injected volume
+// resolver and free-space query.
+#[cfg(test)]
+mod gate_382_h5;
 pub use capacity::{CapacitySample, CapacityTarget, CapacityUnavailable, sample_capacity};
 pub use codes::{ConnectivityReason, HostMetricsCode, HostMetricsLocation};
 
