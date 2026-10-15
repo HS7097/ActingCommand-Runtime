@@ -1085,7 +1085,6 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             package.write_all(&bytes).unwrap();
         }
         let bytes = package.finish().unwrap().into_inner();
-        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let root = TempDir::new().unwrap();
         let package_path = root.path().join("zero-input-fields.zip");
         fs::write(&package_path, &bytes).unwrap();

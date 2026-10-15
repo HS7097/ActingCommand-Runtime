@@ -537,7 +537,6 @@ fn a_package_run_on_a_held_token_takes_no_lease_and_releases_once_under_its_run(
     let package = root.path().join("held-token-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state

@@ -44,7 +44,6 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
         output.write_all(&content).unwrap();
     }
     let bytes = output.finish().unwrap().into_inner();
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
 
     let missing_root = TempDir::new().expect("missing-provider tempdir");
     let missing_package = missing_root.path().join("neutral-vision-task.zip");

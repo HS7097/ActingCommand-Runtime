@@ -712,7 +712,6 @@ fn a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release(
 fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_startup_claim() {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
-    let package = fs::read(root.path().join("physical-scheduled-task.zip")).expect("package");
     let startup = ContainedTaskRequest::new(
         root.path()
             .join("physical-scheduled-task.zip")

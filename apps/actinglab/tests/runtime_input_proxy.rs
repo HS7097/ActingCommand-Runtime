@@ -1220,7 +1220,6 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
         ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
         ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
     ]);
-    let expected = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .unwrap()

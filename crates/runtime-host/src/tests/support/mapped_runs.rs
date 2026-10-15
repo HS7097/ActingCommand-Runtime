@@ -85,9 +85,8 @@ fn admitted_mapped_run_fixture_with_policy_time(
     else {
         panic!("expected mapped policy context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
-            .expect("mapped package request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("mapped package request");
     (host, state, context, request, policy_unix_ms, clock)
 }
 
@@ -251,9 +250,8 @@ fn admitted_physical_run_fixture(
         .expect("activate physical policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
-            .expect("physical package request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("physical package request");
     let PolicyDispatchAdmission::Granted { context } = host
         .admit_scheduled_policy_dispatch(
             &intent,

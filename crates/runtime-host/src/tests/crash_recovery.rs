@@ -114,7 +114,6 @@ fn policy_dispatch_crash_child_process() {
             host.expire_lease_once_for_test(context.lease_token())
                 .expect("expire exact child policy lease");
         }
-        let package = package.expect("scheduled package");
         let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
             .expect("scheduled request");
         match recovery_case.as_deref() {
