@@ -1128,7 +1128,7 @@ impl TaskSelectionRecord {
         let mut lowest = None;
         for chosen in &self.selected {
             let value = score(chosen)?;
-            lowest = Some(lowest.map_or(value, |low: i64| low.min(value)));
+            lowest = Some(lowest.map_or(value, |low: i64| low.max(value)));
         }
         lowest
     }
