@@ -948,7 +948,17 @@ fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
     let autostart_reports = host.emulator_autostart_reports();
     loop {
         thread::sleep(HEALTH_POLL_INTERVAL);
-        write_autostart_reports(&autostart_reports)?;
+        if let Err(error) = write_autostart_reports(&autostart_reports) {
+            let recorded =
+                error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
+            let closed = host.close().map_err(ActingdError::runtime);
+            return combine_monitor_results(
+                Err(error.with_recording_result(recorded)),
+                Ok(()),
+                Ok(()),
+                closed,
+            );
+        }
         match host.fatal_error() {
             Ok(Some(error)) | Err(error) => {
                 let error = ActingdError::runtime(error);

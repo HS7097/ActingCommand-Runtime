@@ -1714,7 +1714,7 @@ fn s6c_a_routine_claim_under_a_held_gate_is_never_granted_at_once() {
         ClaimKind::EmulatorControl
     );
     scheduler
-        .release_owned(&operator_token, connection(3), LeaseReleaseReason::Explicit)
+        .release(request(&issuer), &operator_token, connection(3), 3)
         .expect("operator release");
 
     let policy = claim(

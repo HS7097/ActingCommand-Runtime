@@ -281,10 +281,11 @@ impl HostShared {
         &self,
         change: impl FnOnce(&mut AutostartTurn) -> T,
     ) -> RuntimeHostResult<T> {
-        Ok(change(&mut *lock(
+        let mut turn = lock(
             &self.emulator_autostart_turn,
             HostLocation::RunEmulatorAutostart,
-        )?))
+        )?;
+        Ok(change(&mut turn))
     }
 
     /// One autostart claim (routine, no deadline, never preempting) with the hold's TTL, under a
