@@ -248,6 +248,12 @@ impl HostShared {
             // layer (EXEC-3).
             let gated = !main.layers.is_empty() || (!main.linear && entry_checked(&rows));
             let (scope, operation) = failure_step(&rows, gated);
+            // One-off M6: a page-graph run's entry check is not its gate.
+            let scope = if !main.linear && scope == "gate" {
+                "main".to_owned()
+            } else {
+                scope
+            };
             (rows, scope, operation)
         } else {
             (Vec::new(), "prepare".to_owned(), "prepare".to_owned())
