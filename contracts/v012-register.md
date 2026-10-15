@@ -1303,6 +1303,22 @@ code `lab_frame_export_failed` (warning, ladder class `none`) is a catalog entry
 | LO-4 | `do` (online, after an action with an after frame) `after_attachment`: `{kind: "page_projection", observation, preview?}` for a recognized after page, else `{kind: "frame", frame_coordinates, frame_path, preview}` | output member | labobs | labobs | added after the Min projection of the operation members (which keep their budget); the known page's projection is cut on its own as `observe` cuts its own under Min, whole under `--verbose`/`--pretty`; also in a failure's details; a part not written is `{failure}` and the answer still succeeds |
 | LO-5 | MCP `ac_lab_observe`, `ac_lab_do`: argument `preview` ↔ `--preview`; an answer exported past the output budget keeps `frame_coordinates`, `frame_path`, `preview` and `after_attachment` inline, each in that order while it fits | MCP argument and overflow rule (apps 41 parity) | labobs | labobs | the answer is otherwise actinglab's data verbatim (A5); `{req_id, export, overflowed: true}` and the warning `answer_exported` as before |
 
+### 1.78 #410 item 6 `gaplog`: a local capability-gap log (board #410; Alice 2026-10-15, the 0.12 end)
+
+An agent, or a person, records a capability it needed and no command offered, with a short why.
+The record stays on the computer: one JSON line in the user's own local log, never sent anywhere
+and never written to the ledger. A missing capability is not something the Runtime did (iron
+rules 3 and 13), the client action record retires at U-6, and the log works without actingd.
+[runtime-interface.md](runtime-interface.md) (the actingctl and MCP tables) is the contract. The
+codes `actingctl_capability_gap_recorded` (success) and `actingctl_capability_gap_write_failed`
+(error), both actingctl with ladder class `none`, are catalog entries, not rows (§7). The tool
+table goes from 34 to 35 tools (observer 19 to 20).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
+| GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -612,6 +612,22 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::devices::unbind,
     },
     // ---- Workflow #398 RD-1c (end) ----
+    // ---- Workflow #410 item 6 (begin): `ac_capability_gap` ↔ `actingctl capability-gap`;
+    // observer, so that every session can record what it lacked; it writes only the user's own
+    // local log and touches neither the Runtime nor a device. ----
+    ToolDef {
+        name: "ac_capability_gap",
+        title: "Record a capability gap",
+        tier: Tier::Observer,
+        description: super::capability_gap::DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: super::capability_gap::input,
+        result_schema: super::capability_gap::result,
+        run: super::capability_gap::run,
+    },
+    // ---- Workflow #410 item 6 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",

@@ -20,6 +20,8 @@ mod flag_refusals;
 mod install_transition;
 // Workflow #389 MCP-13a: `ac_app` is an operator tool.
 mod mcp_app;
+// Workflow #410 item 6: `actingctl capability-gap` ↔ `ac_capability_gap`.
+mod mcp_capability_gap_parity;
 // Workflow #389 MCP-14: `actingctl codes` ↔ `ac_outcome_code`.
 mod mcp_codes_parity;
 // Workflow #398 RD-1c: `actingctl devices` ↔ `ac_devices`, `ac_device_bind`, `ac_device_unbind`.
