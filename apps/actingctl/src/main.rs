@@ -1396,10 +1396,14 @@ impl Invocation {
             _ => return Err(ActingctlError::Usage),
         };
         // `task-offset` takes `--instance` optionally: without it the offset is task-level;
-        // `pause` / `resume` without it are global.
+        // `pause` / `resume` without it are global; `perf-status` without it reads every row
+        // (Workflow #385 P-m).
         if !matches!(
             command,
-            Command::TaskOffset { .. } | Command::Pause { .. } | Command::Resume
+            Command::TaskOffset { .. }
+                | Command::Pause { .. }
+                | Command::Resume
+                | Command::PerformanceStatus
         ) && command.requires_instance() != instance.is_some()
         {
             return Err(ActingctlError::Usage);
