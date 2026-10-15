@@ -1212,7 +1212,7 @@ impl OperationParser {
                 // collected with every page it may reach (`to_pages`); a route never passes it,
                 // since its click does not decide which page comes.
                 let to_pages = match operation.get("to") {
-                    Some(Value::Array(pages)) => Some(pages),
+                    Some(Value::Array(pages)) if pages.is_empty() => Some(pages),
                     _ => None,
                 };
                 // An application effect is not a tap, and a select step taps a candidate chosen

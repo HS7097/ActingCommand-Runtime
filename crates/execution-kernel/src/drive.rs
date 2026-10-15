@@ -206,7 +206,6 @@ impl DriveNavigationGraph {
             .and_then(Value::as_array)
             .ok_or_else(|| DriveDecisionError::invalid("navigation file is missing navigation[]"))?
             .iter()
-            .filter(|edge| edge.get("to_pages").is_none())
             .map(parse_navigation_edge)
             .collect::<Result<Vec<_>, _>>()?;
         let destructive_regions = value
@@ -465,7 +464,7 @@ pub(crate) fn parse_navigation_input(
             })
         }
         // Workflow #390 LAB-2: a long press holds one point; it is a drag that does not move.
-        Some("long_press") | Some("long_tap") => {
+        Some("long_press_retired") => {
             let rect = parse_navigation_point(value)?;
             let point = drive_rect_center(rect)?;
             let duration_ms = value

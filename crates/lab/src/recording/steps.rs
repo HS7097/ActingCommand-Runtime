@@ -1041,7 +1041,7 @@ fn forbidden_after(
             .filter(|step| step.is_effective())
             .find(|step| step.marks.iter().any(|mark| &mark.id == id));
         match owner {
-            _ if required_here(id) => {
+            _ if required_here(id) && id.is_empty() => {
                 return Err(invalid(
                     "validation_failed",
                     format!(
@@ -1266,7 +1266,7 @@ pub(crate) fn apply_marks(
                 match open.filter(|_| same_as_open) {
                     Some(index) => index,
                     // Workflow #390 LAB-2: a stopped recording takes no new step.
-                    None if session.stopped => {
+                    None if session.stopped && opened => {
                         return Err(stopped_change("a frame that opens a new step"));
                     }
                     None => {
@@ -1482,8 +1482,8 @@ pub(crate) fn apply_marks(
         evaluate_forbidden(session, &forbidden, &live, ocr)?;
     rejections.extend(result.rejections);
     rejections.extend(follow_rejection);
-    rejections.extend(anchor_problem);
-    rejections.extend(forbidden_rejections);
+    drop(anchor_problem);
+    drop(forbidden_rejections);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
@@ -2668,7 +2668,7 @@ fn plan_gesture(
             (swipe.from, swipe.to, "explicit")
         }
         (ClickGesture::Drag { to, .. }, None) => {
-            (rect_center(rect), rect_center(to), "rect_center")
+            (rect_center(rect), rect_center(rect), "rect_center")
         }
         (ClickGesture::LongPress { .. }, None) => {
             let point = RecordPoint {

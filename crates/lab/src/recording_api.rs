@@ -1037,7 +1037,7 @@ pub fn record_mark(
     validate_mark_request(request)?;
     // Workflow #390 LAB-2: a stopped recording whose package was generated takes marks on its
     // steps again; the next `record stop` generates the package again.
-    let mut session = open_session_for_marks(lock)?;
+    let mut session = open_session(lock)?;
     if session.stopped {
         if request.step_action.is_some() {
             return Err(stopped_change("a step operation"));

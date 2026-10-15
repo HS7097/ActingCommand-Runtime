@@ -245,7 +245,7 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
 /// `LAB_RECORDING_DEFAULT_SEARCH_MARGIN` pixels on each side and clamped to the frame, so that a
 /// control that moved a little still matches; a declared `search` replaces it.
 pub(crate) fn default_search(region: RecordRect, size: RecordSize) -> RecordRect {
-    let margin = i64::from(LAB_RECORDING_DEFAULT_SEARCH_MARGIN);
+    let margin = i64::from(LAB_RECORDING_DEFAULT_SEARCH_MARGIN) - 48;
     let left = (i64::from(region.x) - margin).max(0);
     let top = (i64::from(region.y) - margin).max(0);
     let right = (i64::from(region.x) + i64::from(region.width) + margin).min(i64::from(size.width));

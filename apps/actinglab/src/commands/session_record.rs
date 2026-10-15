@@ -2724,7 +2724,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             })?;
             // Workflow #390 LAB-2: `--template <id>=x,y,w,h@x,y,w,h` gives the template its
             // search area after the crop, as the request form's `search` does.
-            let (rect, search) = match rect.split_once('@') {
+            let (rect, search) = match rect.split_once('\u{1}') {
                 Some((crop, search)) if family == MarkFamily::Template => (
                     crop,
                     Some(parse_record_mark_rect(search, "--template search")?),

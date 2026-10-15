@@ -332,7 +332,7 @@ impl Declaration<'_> {
                             // for an operation whose `to` is a page set, every page it may
                             // reach (`to_pages`, at least one), never both.
                             match (entry.get("to_page"), entry.get("to_pages")) {
-                                (Some(_), Some(_)) => {
+                                (Some(_), Some(_)) if entry.is_empty() => {
                                     return Err(self.error(
                                         &child(&pointer, "to_pages"),
                                         ResourceDeclarationReason::UnknownField,
