@@ -143,8 +143,8 @@ actingcommand_contract::outcome_codes! {
         DeviceBindingsWriteFailed => "device_bindings_write_failed": error / none,
         // ---- end of RD-1c
         // ---- Workflow #410 item 6: `capability-gap` / `ac_capability_gap`.
-        CapabilityGapRecorded => "capability_gap_recorded": success / none,
-        CapabilityGapWriteFailed => "capability_gap_write_failed": error / none,
+        ActingctlCapabilityGapRecorded => "actingctl_capability_gap_recorded": success / none,
+        ActingctlCapabilityGapWriteFailed => "actingctl_capability_gap_write_failed": error / none,
         // ---- end of #410 item 6
         // ---- Workflow #378 A5 (begin): the CLI's success codes (model §7.3), the MCP
         // transport and Lab codes, and the watchdog's report v2 and launcher codes (§7.5).

@@ -12,7 +12,7 @@
 //! Runtime did (iron rules 3 and 13), the client action record retires at U-6, and the log works
 //! without actingd. Nothing reads the log back; a person reads it. Both sides check the two
 //! texts alike and answer `{path, gap}`, the log's path and the line written; stdout is one line
-//! with the outcome `capability_gap_recorded` (Workflow #378 A5).
+//! with the outcome `actingctl_capability_gap_recorded` (Workflow #378 A5).
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -57,13 +57,13 @@ pub(crate) fn text_problem(text: &str, max: usize) -> Option<ArgumentProblem> {
 }
 
 /// The log of this user: `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl`, or
-/// below `APPDATA` without `LOCALAPPDATA`; `capability_gap_write_failed` without a path when
-/// neither is set.
+/// below `APPDATA` without `LOCALAPPDATA`; `actingctl_capability_gap_write_failed` without a
+/// path when neither is set.
 pub(crate) fn log_path() -> Result<PathBuf, Outcome> {
     let root = std::env::var_os("LOCALAPPDATA")
         .filter(|root| !root.is_empty())
         .or_else(|| std::env::var_os("APPDATA").filter(|root| !root.is_empty()))
-        .ok_or_else(|| Outcome::new(ActingctlCode::CapabilityGapWriteFailed))?;
+        .ok_or_else(|| Outcome::new(ActingctlCode::ActingctlCapabilityGapWriteFailed))?;
     let mut path = PathBuf::from(root);
     path.extend(LOG_DIRECTORY);
     path.push(LOG_FILE);
@@ -71,10 +71,11 @@ pub(crate) fn log_path() -> Result<PathBuf, Outcome> {
 }
 
 /// Appends one gap to `log` as one line, `via` `cli` or `mcp`, and answers `{path, gap}`.
-/// A failure is `capability_gap_write_failed` with the log's path, caused by the failure.
+/// A failure is `actingctl_capability_gap_write_failed` with the log's path, caused by the
+/// failure.
 pub(crate) fn record(log: &Path, capability: &str, why: &str, via: &str) -> Result<Value, Outcome> {
     let failed = |error: &std::io::Error, op: IoOp, at: &Path| {
-        Outcome::new(ActingctlCode::CapabilityGapWriteFailed)
+        Outcome::new(ActingctlCode::ActingctlCapabilityGapWriteFailed)
             .path(log)
             .caused_by(Outcome::from_io_error(error, op).path(at))
     };
@@ -172,7 +173,7 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     Some(match answer {
         Ok(answer) => cli_line::success(
             cli_line::members(answer, COMMAND),
-            &Outcome::new(ActingctlCode::CapabilityGapRecorded),
+            &Outcome::new(ActingctlCode::ActingctlCapabilityGapRecorded),
         ),
         Err(outcome) => cli_line::failure(&outcome, None),
     })

@@ -50,7 +50,7 @@ fn gate_actingctl_capability_gap_and_ac_capability_gap_record_the_same_gap_local
         .and_then(|members| members.remove("outcome"));
     assert_eq!(
         outcome.map(|outcome| outcome["code"].clone()),
-        Some(json!("capability_gap_recorded")),
+        Some(json!("actingctl_capability_gap_recorded")),
         "{line}"
     );
 

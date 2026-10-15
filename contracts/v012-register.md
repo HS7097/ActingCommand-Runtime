@@ -1211,14 +1211,14 @@ The record stays on the computer: one JSON line in the user's own local log, nev
 and never written to the ledger. A missing capability is not something the Runtime did (iron
 rules 3 and 13), the client action record retires at U-6, and the log works without actingd.
 [runtime-interface.md](runtime-interface.md) (the actingctl and MCP tables) is the contract. The
-codes `capability_gap_recorded` (success) and `capability_gap_write_failed` (error), both
-actingctl with ladder class `none`, are catalog entries, not rows (§7). The tool table goes from
-34 to 35 tools (observer 19 to 20).
+codes `actingctl_capability_gap_recorded` (success) and `actingctl_capability_gap_write_failed`
+(error), both actingctl with ladder class `none`, are catalog entries, not rows (§7). The tool
+table goes from 34 to 35 tools (observer 19 to 20).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
-| GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `capability_gap_recorded` |
+| GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
