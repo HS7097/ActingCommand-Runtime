@@ -243,7 +243,11 @@ impl HostShared {
         }
         // Workflow #373 NAV-3a (§4.3): every layer has the game of the package (a layer of
         // another game is refused as incompatible), so one registry serves the whole chain.
-        let registry = self.read_game_registry(prepared.game())?;
+        let registry = if prepared.execution_mode() == "linear_steps" {
+            GameRegistry::RootUnset
+        } else {
+            self.read_game_registry(prepared.game())?
+        };
         let mut next = Self::next_prerequisite(&qualification, &registry);
         if next.is_none() {
             return Ok(Vec::new());
