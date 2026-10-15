@@ -678,6 +678,22 @@
       "type": "vocab:scan_bound",
       "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3)."
     },
+    "selection_kind": {
+      "type": "vocab:selection_kind",
+      "description": "The kind of a selection policy's decision, verbatim (Workflow #308)."
+    },
+    "outcome_key": {
+      "type": "token",
+      "description": "The outcome key a selection policy's decision maps to, as the pack declares it (Workflow #308 SEL-L4b)."
+    },
+    "selection_blocking": {
+      "type": "vocab:selection_blocking",
+      "description": "Why unknown instances keep a selection decision from standing (Workflow #308 SEL-L4b)."
+    },
+    "identity_state": {
+      "type": "vocab:identity_state",
+      "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b)."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -2867,6 +2883,54 @@
         },
         "duration": {
           "description": "max_ms, or the task's own deadline when it comes first."
+        }
+      }
+    },
+    "selection_kind": {
+      "description": "The kind of a selection policy's decision (Workflow #308).",
+      "tokens": {
+        "selected": {
+          "description": "The policy chose its candidates."
+        },
+        "empty": {
+          "description": "No candidate survived and the mode accepts an empty answer."
+        },
+        "insufficient": {
+          "description": "Fewer candidates survived than the policy requires."
+        },
+        "ambiguous": {
+          "description": "Candidates tied at the cut after every tie-break key."
+        },
+        "unknown": {
+          "description": "The evaluation aborted on an unusable input."
+        }
+      }
+    },
+    "selection_blocking": {
+      "description": "Why unknown instances keep a selection decision from standing (Workflow #308 SEL-L4b).",
+      "tokens": {
+        "unknown_instances": {
+          "description": "An empty or insufficient decision with at least one unknown instance."
+        },
+        "outranked_possible": {
+          "description": "A selected decision that an unknown instance might outrank."
+        }
+      }
+    },
+    "identity_state": {
+      "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b).",
+      "tokens": {
+        "absent": {
+          "description": "No actionable instance at the chosen position."
+        },
+        "unknown": {
+          "description": "Only Unknown readings until the timeout."
+        },
+        "different": {
+          "description": "Another Known business identity."
+        },
+        "no_choice": {
+          "description": "The choice_of step chose nothing in this run."
         }
       }
     },

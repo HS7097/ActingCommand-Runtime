@@ -184,6 +184,11 @@ outcome_keys! {
     scan_alignment_failure: vocab(scan_alignment_failure),
     scan_spacing_failure: vocab(scan_spacing_failure),
     scan_bound: vocab(scan_bound),
+    // Workflow #308 SEL-L4b: a select step's decision and its identity checks.
+    selection_kind: vocab(selection_kind),
+    outcome_key: token,
+    selection_blocking: vocab(selection_blocking),
+    identity_state: vocab(identity_state),
     pause_reason: name,
     expected_sha256: hash,
     actual_sha256: hash,

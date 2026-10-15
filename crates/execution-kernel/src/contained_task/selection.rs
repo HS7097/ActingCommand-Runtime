@@ -11,7 +11,17 @@
 //! evaluated one. Only then is one tap sampled inside the candidate's click rectangle, bound to
 //! the confirmation frame. An attempt that reaches a decision records it exactly once, before
 //! any input and before any failure return; every selection failure comes before the input.
+//!
+//! Workflow #308 slice SEL-L4b (frozen selector model S0 v2.1 §1.2-§1.4, §2.1, §3.2): a step may
+//! declare `scan`, a select over a list read across viewports (the scan session's `select`), and
+//! `on_empty`, which ends the run normally when nobody listed is present and nothing is unknown.
+//! Admission checks both declarations; a single-frame select that declares `on_empty` also
+//! applies the unknown-instance rules before its confirmation.
 
+use super::scan::{
+    Bound, RuntimeScanSource, ScanDeclaration, ScanSelectEnd, ScanSelection, ScanSession,
+    bound_inputs, decision_blocking, record_bound, result_blocked,
+};
 use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
@@ -23,21 +33,24 @@ use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
-    CandidateFeature, CandidateProjection, InputAction, InputSamplingEvidence,
-    InstanceFactSnapshot, PolicyReasonRecord, TaskSelectionConfirmation, TaskSelectionGateResult,
-    TaskSelectionOutcome, TaskSelectionPolicy, TaskSelectionRecord, TaskSelectionTermResult,
-    TaskSelectionVerdict, validate_candidate_layout_id,
+    CandidateFeature, CandidateLayoutKind, CandidateProjection, CandidateRect, InputAction,
+    InputSamplingEvidence, InstanceFactSnapshot, PolicyReasonRecord, TaskSelectionBlocking,
+    TaskSelectionConfirmation, TaskSelectionGateResult, TaskSelectionOutcome, TaskSelectionPolicy,
+    TaskSelectionRecord, TaskSelectionTermResult, TaskSelectionUnknownCheck, TaskSelectionVerdict,
+    validate_candidate_layout_id,
 };
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
-    CandidateFeatureValue, CandidateLayout, RecognitionEvaluator, UnknownIdentityHandling,
+    CandidateFeatureValue, CandidateIdentityRecognition, CandidateLayout, RecognitionEvaluator,
+    TargetKind, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
-    Candidate, CandidateVerdict, DecisionReason, GateUnknownHandling, MAX_DOCUMENT_BYTES,
-    ScalarValue, SelectionDecision, SelectionFactSnapshot, SelectionOutcome, SelectionPolicy,
-    TermUnknownHandling, ValueRef, ValueType, evaluate, parse_canonical_json,
+    Candidate, CandidateStatus, CandidateVerdict, DecisionReason, GateUnknownHandling,
+    MAX_DOCUMENT_BYTES, ScalarValue, SelectionDecision, SelectionFactSnapshot, SelectionMode,
+    SelectionOutcome, SelectionPolicy, TermUnknownHandling, ValueRef, ValueType, evaluate,
+    parse_canonical_json, upper_bound,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -94,12 +107,26 @@ pub struct SelectionDryRun {
     pub policy_override: bool,
 }
 
-/// The `select` of a task operation: `{layout_id, policy: {path}}`.
+/// The `select` of a task operation: `{layout_id, policy: {path}, scan?, on_empty?}`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TaskSelect {
     layout_id: String,
     policy: TaskSelectPolicy,
+    /// Workflow #308 SEL-L4b (S0 §2.1): the list is read across viewports by a scan session.
+    #[serde(default)]
+    scan: Option<ScanDeclaration>,
+    /// Workflow #308 SEL-L4b (S0 §1.4): nobody listed is present, and nothing is unknown, ends
+    /// the run normally with this outcome key.
+    #[serde(default)]
+    on_empty: Option<TaskSelectOnEmpty>,
+}
+
+/// A select step's `on_empty` (Workflow #308 SEL-L4b, S0 §1.4): `{outcome_key}`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskSelectOnEmpty {
+    outcome_key: String,
 }
 
 /// The task-local policy document a select step names. Workflow #336 PKG-S2 (option 丙, D5):
@@ -113,6 +140,18 @@ struct TaskSelectPolicy {
 }
 
 impl TaskSelect {
+    /// The outcome key of the step's `on_empty`, when it declares one (Workflow #308 SEL-L4b).
+    pub(super) fn on_empty_key(&self) -> Option<&str> {
+        self.on_empty
+            .as_ref()
+            .map(|on_empty| on_empty.outcome_key.as_str())
+    }
+
+    /// The step's `scan`, when it declares one (Workflow #308 SEL-L4b).
+    pub(super) fn scan(&self) -> Option<&ScanDeclaration> {
+        self.scan.as_ref()
+    }
+
     /// The layout ID has the candidate layout grammar; the document is a `policies/<name>.json`
     /// path of the task directory.
     pub(super) fn validate(&self, operation_id: &str) -> Result<(), ContainedTaskError> {
@@ -137,6 +176,14 @@ pub(super) struct PreparedSelect {
     /// The document's package path, `operations/<task>/<declared path>`, below the resource root.
     path: String,
     policy: SelectionPolicy,
+    /// Workflow #308 SEL-L4b: the admitted `scan`.
+    scan: Option<ScanDeclaration>,
+    /// Workflow #308 SEL-L4b: the admitted `on_empty` outcome key.
+    on_empty_key: Option<String>,
+    /// Workflow #308 SEL-L4b: the feature whose identity is the step's choice (the scan's
+    /// `identity_feature`, or the layout's one identity feature); `expect_identity` maps its
+    /// reading through it.
+    identity_feature: Option<String>,
 }
 
 impl PreparedSelect {
@@ -150,6 +197,11 @@ impl PreparedSelect {
     pub(super) fn policy(&self) -> &SelectionPolicy {
         &self.policy
     }
+
+    /// The feature whose identity is the step's choice (Workflow #308 SEL-L4b).
+    pub(super) fn identity_feature(&self) -> Option<&str> {
+        self.identity_feature.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -161,16 +213,57 @@ impl PreparedSelect {
             layout_id: layout_id.to_owned(),
             path: "operations/task/policies/select.json".to_owned(),
             policy,
+            scan: None,
+            on_empty_key: None,
+            identity_feature: None,
+        }
+    }
+
+    /// A prepared select step over a scan for the gate tests (Workflow #308 SEL-L4b).
+    pub(super) fn for_test_scan(
+        layout_id: &str,
+        policy: SelectionPolicy,
+        scan: ScanDeclaration,
+        on_empty_key: Option<&str>,
+    ) -> Self {
+        let identity_feature = Some(scan.identity_feature().to_owned());
+        Self {
+            layout_id: layout_id.to_owned(),
+            path: "operations/task/policies/select.json".to_owned(),
+            policy,
+            scan: Some(scan),
+            on_empty_key: on_empty_key.map(str::to_owned),
+            identity_feature,
         }
     }
 }
 
 /// A select step's confirmed candidate: the guard outcome on the confirmation frame, the
 /// candidate's click rectangle and the confirmation frame, whose input context binds the tap.
+/// Workflow #308 SEL-L4b: also the business ID of the step's identity feature, when the chosen
+/// candidate read one (`expect_identity` compares with it).
 pub(super) struct SelectedCandidate {
     pub(super) guard: ContainedTaskGuardOutcome,
     click: ClickRect,
     pub(super) frame: PageObservation,
+    pub(super) identity: Option<String>,
+    /// The step's action seed when the attempt already drew it (a scan's moves are sampled with
+    /// it); the runtime gives a step's seed once, so the selecting tap reuses it.
+    pub(super) action_seed: Option<Option<u64>>,
+}
+
+/// How one attempt of a select step ended without a failure (Workflow #308 SEL-L4b).
+pub(super) enum SelectAttempt {
+    /// A candidate was confirmed; its tap follows. Boxed: it holds the confirmation frame, and
+    /// inline it would be the one large variant (clippy `large_enum_variant`).
+    Selected(Box<SelectedCandidate>),
+    /// Nobody listed is present and nothing is unknown, and the step declares `on_empty` (S0
+    /// §1.4, path P4): the run ends Completed with `outcome_key`, on the page `page_label` of
+    /// the step's last frame.
+    Empty {
+        outcome_key: String,
+        page_label: String,
+    },
 }
 
 impl SelectedCandidate {
@@ -204,6 +297,7 @@ pub(super) fn prepare_select_steps(
     evaluator: &RecognitionEvaluator,
 ) -> Result<(), ContainedTaskError> {
     let task_id = program.task_id.clone();
+    let scheduled = program.scheduling_outcome.is_some();
     for operation in &mut program.operations {
         let Some(select) = &operation.select else {
             continue;
@@ -241,12 +335,153 @@ pub(super) fn prepare_select_steps(
             .map_err(|reason| failure(SELECT_POLICY_INVALID, format!("policy={path} {reason}")))?;
         check_policy(&policy, layout)
             .map_err(|reason| failure(SELECT_POLICY_MISMATCH, format!("policy={path} {reason}")))?;
+        // Workflow #308 SEL-L4b: the static checks of a scan (S0 §2.1) and the admission of
+        // `on_empty` (§1.4 (a), (b) and §1.2); the route's terminal for `on_empty` is the
+        // coverage or phase check's, and the post-admission refusals are the task's.
+        let identity_feature = match &select.scan {
+            Some(scan) => {
+                if let Some(detail) = scan.admission_refusal(
+                    layout,
+                    &policy,
+                    evaluator,
+                    (control.resolution.width, control.resolution.height),
+                    control.task_timeout().milliseconds,
+                ) {
+                    return Err(failure(SELECT_INVALID, detail));
+                }
+                Some(scan.identity_feature().to_owned())
+            }
+            None => single_identity_feature(layout),
+        };
+        if select.on_empty.is_some() {
+            if policy.selection.mode != SelectionMode::NoneAllowed {
+                return Err(failure(
+                    SELECT_INVALID,
+                    "on_empty mode=not_none_allowed".to_owned(),
+                ));
+            }
+            if !scheduled {
+                return Err(failure(
+                    SELECT_INVALID,
+                    "on_empty scheduling_outcome=absent".to_owned(),
+                ));
+            }
+            if select.scan.is_none() && layout.kind != CandidateLayoutKind::FixedSlots {
+                return Err(failure(
+                    SELECT_INVALID,
+                    "on_empty layout=not_fixed_slots".to_owned(),
+                ));
+            }
+        }
+        if select.scan.is_some() || select.on_empty.is_some() {
+            bound_inputs(layout, &policy, identity_feature.as_deref())
+                .map_err(|detail| failure(SELECT_INVALID, format!("upper_bound {detail}")))?;
+        }
         let prepared = PreparedSelect {
             layout_id: select.layout_id.clone(),
             path,
             policy,
+            scan: select.scan.clone(),
+            on_empty_key: select.on_empty_key().map(str::to_owned),
+            identity_feature,
         };
         operation.prepared_select = Some(Box::new(prepared));
+    }
+    validate_expect_identities(program, control, evaluator)
+}
+
+/// The layout's one identity feature, when it declares exactly one (Workflow #308 SEL-L4b): the
+/// identity a single-frame select chooses.
+fn single_identity_feature(layout: &CandidateLayout) -> Option<String> {
+    let mut identities = layout
+        .features
+        .iter()
+        .filter(|feature| feature.identity.is_some());
+    match (identities.next(), identities.next()) {
+        (Some(feature), None) => Some(feature.name.clone()),
+        _ => None,
+    }
+}
+
+/// Workflow #308 SEL-L4b (S0 §1.3, admission of `expect_identity`): `choice_of` names a select
+/// operation of the same task that is the declaring one or precedes it (in phase order, or in
+/// declaration order without phases); that step's identity feature is text-based, because the
+/// read text is mapped through it; the declaring operation is not retryable, because a retry
+/// would tap again after a mismatch; and `target_id` is an OCR target of the pack. Every
+/// refusal is `contained_task_select_invalid`.
+fn validate_expect_identities(
+    program: &TaskProgram,
+    control: &TaskControl,
+    evaluator: &RecognitionEvaluator,
+) -> Result<(), ContainedTaskError> {
+    let phase_of = |id: &str| {
+        program.phases.as_ref().and_then(|phases| {
+            phases
+                .iter()
+                .position(|phase| phase.operations.iter().any(|operation| operation == id))
+        })
+    };
+    for (index, operation) in program.operations.iter().enumerate() {
+        let Some(expect) = operation
+            .expect_after
+            .as_ref()
+            .and_then(|expectation| expectation.expect_identity.as_ref())
+        else {
+            continue;
+        };
+        let refuse = |detail: &str| {
+            ContainedTaskError::with_detail(
+                SELECT_INVALID,
+                format!("operation={} expect_identity {detail}", operation.id),
+            )
+        };
+        let Some((choice_index, choice)) = program
+            .operations
+            .iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.id == expect.choice_of)
+        else {
+            return Err(refuse("choice_of=undeclared"));
+        };
+        let Some(prepared) = choice.prepared_select.as_deref() else {
+            return Err(refuse("choice_of=not_a_select_step"));
+        };
+        let precedes = match &program.phases {
+            Some(_) => matches!(
+                (phase_of(&choice.id), phase_of(&operation.id)),
+                (Some(choice), Some(current)) if choice <= current
+            ),
+            None => choice_index <= index,
+        };
+        if !precedes {
+            return Err(refuse("choice_of=after_the_step"));
+        }
+        let text = evaluator
+            .candidate_layout(&prepared.layout_id)
+            .zip(prepared.identity_feature())
+            .and_then(|(layout, name)| layout.features.iter().find(|feature| feature.name == name))
+            .and_then(|feature| feature.identity.as_ref())
+            .is_some_and(|identity| {
+                matches!(
+                    identity.recognition,
+                    CandidateIdentityRecognition::OcrAliases { .. }
+                )
+            });
+        if !text {
+            return Err(refuse("choice_of=identity_not_text"));
+        }
+        if operation
+            .retry_policy(program.defaults, control.task_timeout().milliseconds)?
+            .is_some_and(|policy| policy.retryable())
+        {
+            return Err(refuse("operation=retryable"));
+        }
+        if !matches!(
+            evaluator.target_kind(&expect.target_id),
+            Ok(TargetKind::Ocr)
+        ) {
+            return Err(refuse("target=not_ocr"));
+        }
     }
     Ok(())
 }
@@ -637,6 +872,13 @@ type Confirmation<E> = (
     Result<SelectedCandidate, ContainedTaskRunError<E>>,
 );
 
+/// How an attempt ended once its decision existed: the record's `confirmation`, and the attempt's
+/// end or the failure it returns once the record is written (Workflow #308 SEL-L4b).
+type Attempted<E> = (
+    TaskSelectionConfirmation,
+    Result<SelectAttempt, ContainedTaskRunError<E>>,
+);
+
 impl PreparedContainedTask {
     /// The layout's projection on `first` as a select step takes it: candidate sampling and
     /// its budget against `deadline`, every candidate evaluation recorded. A scan session
@@ -818,13 +1060,23 @@ impl PreparedContainedTask {
         step_index: u32,
         timing: ContainedTaskTimingContext,
         sampling: (&SampleRetries, Duration),
-    ) -> Result<SelectedCandidate, ContainedTaskRunError<R::Error>> {
+    ) -> Result<SelectAttempt, ContainedTaskRunError<R::Error>> {
         let prepared = operation.prepared_select.as_deref().ok_or_else(|| {
             ContainedTaskError::with_detail(
                 SELECT_INVALID,
                 format!("operation={} has no admitted select step", operation.id),
             )
         })?;
+        // Workflow #308 SEL-L4b: a select over a scan (S0 §2.2).
+        if let Some(scan) = &prepared.scan {
+            return self.scan_select_attempt(
+                runtime,
+                operation,
+                observation,
+                (step_index, timing),
+                (prepared, scan),
+            );
+        }
         let layout = self
             .evaluator
             .candidate_layout(&prepared.layout_id)
@@ -846,51 +1098,7 @@ impl PreparedContainedTask {
         }
         let (projection, _) =
             self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
-        let state = runtime
-            .selection_state(SelectionStateRequest {
-                step_index,
-                operation_label: operation.id.clone(),
-                game: self.control.game.clone(),
-                server: self.control.server.clone(),
-            })
-            .map_err(ContainedTaskRunError::operation::<R>)?;
-        let SelectionState::Snapshot {
-            snapshot,
-            now_unix_ms,
-        } = state
-        else {
-            return Err(ContainedTaskError::with_detail(
-                SELECTION_STATE_UNAVAILABLE,
-                format!("operation={}", operation.id),
-            )
-            .into());
-        };
-        if now_unix_ms == 0 || snapshot.validate().is_err() {
-            return Err(ContainedTaskError::with_detail(
-                SELECTION_STATE_UNAVAILABLE,
-                format!(
-                    "operation={} the runtime's fact snapshot or instant is invalid",
-                    operation.id
-                ),
-            )
-            .into());
-        }
-        if snapshot.context.game_id != self.control.game
-            || snapshot.context.server_id != self.control.server
-        {
-            return Err(ContainedTaskError::with_detail(
-                SELECTION_FACT_CONTEXT_MISMATCH,
-                format!(
-                    "operation={} snapshot game={} server={}, package game={} server={}",
-                    operation.id,
-                    snapshot.context.game_id,
-                    snapshot.context.server_id,
-                    self.control.game,
-                    self.control.server
-                ),
-            )
-            .into());
-        }
+        let (snapshot, now_unix_ms) = self.pinned_state(runtime, operation, step_index)?;
         // The rows of the record lists the document declares, which `keyed_fact` reads; every
         // other record list stays unusable, so a document without one hashes as before.
         let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
@@ -901,9 +1109,35 @@ impl PreparedContainedTask {
         let decision = decide(&prepared.policy, layout, &projection, &facts, now_unix_ms)?;
         let mut record =
             selection_record(prepared, &projection, &snapshot, now_unix_ms, &decision)?;
-        let (confirmation, result): Confirmation<R::Error> = match chosen(&decision)? {
-            None => (
-                TaskSelectionConfirmation::NotAttempted,
+        // Workflow #308 SEL-L4b: rules 2 and 3 of S0 §3.2 apply to a single-frame select that
+        // declares `on_empty`, whose record then carries `unknown_check` (§1.9).
+        let unknown_check = match &prepared.on_empty_key {
+            Some(_) => Some(single_frame_unknown_check(
+                prepared,
+                layout,
+                &projection,
+                &decision,
+                (&facts, now_unix_ms),
+            )?),
+            None => None,
+        };
+        record.unknown_check = unknown_check;
+        let not_attempted = TaskSelectionConfirmation::NotAttempted;
+        let (confirmation, result): Attempted<R::Error> = match (chosen(&decision)?, unknown_check)
+        {
+            (_, Some(check)) if check.blocking != TaskSelectionBlocking::None => (
+                not_attempted,
+                Err(result_blocked(&decision, check.blocking, check.unknown_instances).into()),
+            ),
+            (None, Some(_)) if matches!(decision.outcome, SelectionOutcome::Empty) => (
+                not_attempted,
+                Ok(SelectAttempt::Empty {
+                    outcome_key: prepared.on_empty_key.clone().unwrap_or_default(),
+                    page_label: observation.page_label.clone(),
+                }),
+            ),
+            (None, _) => (
+                not_attempted,
                 Err(ContainedTaskError::with_detail(
                     SELECTION_NOT_SELECTED,
                     format!(
@@ -914,15 +1148,21 @@ impl PreparedContainedTask {
                 )
                 .into()),
             ),
-            Some(candidate_id) => self.confirm(
-                runtime,
-                operation,
-                &projection,
-                candidate_id,
-                timing,
-                deadline,
-                sampling,
-            )?,
+            (Some(candidate_id), _) => {
+                let (confirmation, selected) = self.confirm(
+                    runtime,
+                    operation,
+                    &projection,
+                    candidate_id,
+                    timing,
+                    deadline,
+                    sampling,
+                )?;
+                (
+                    confirmation,
+                    selected.map(|selected| SelectAttempt::Selected(Box::new(selected))),
+                )
+            }
         };
         record.confirmation = confirmation;
         let run_ending = matches!(result, Err(ContainedTaskRunError::Boundary(_)));
@@ -1150,6 +1390,13 @@ impl PreparedContainedTask {
                     height: candidate.click.height,
                 },
                 frame,
+                action_seed: None,
+                identity: prepared.identity_feature().and_then(|name| {
+                    match candidate.features.get(name) {
+                        Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
+                        _ => None,
+                    }
+                }),
             })
             .ok_or_else(|| {
                 ContainedTaskError::with_detail(
@@ -1167,6 +1414,315 @@ impl PreparedContainedTask {
             selected,
         ))
     }
+}
+
+impl PreparedContainedTask {
+    /// The instance fact snapshot and the instant one select step evaluates with: a valid
+    /// snapshot of the package's own game and server, else `selection_state_unavailable` or
+    /// `selection_fact_context_mismatch`.
+    fn pinned_state<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        step_index: u32,
+    ) -> Result<(InstanceFactSnapshot, u64), ContainedTaskRunError<R::Error>> {
+        let state = runtime
+            .selection_state(SelectionStateRequest {
+                step_index,
+                operation_label: operation.id.clone(),
+                game: self.control.game.clone(),
+                server: self.control.server.clone(),
+            })
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let SelectionState::Snapshot {
+            snapshot,
+            now_unix_ms,
+        } = state
+        else {
+            return Err(ContainedTaskError::with_detail(
+                SELECTION_STATE_UNAVAILABLE,
+                format!("operation={}", operation.id),
+            )
+            .into());
+        };
+        if now_unix_ms == 0 || snapshot.validate().is_err() {
+            return Err(ContainedTaskError::with_detail(
+                SELECTION_STATE_UNAVAILABLE,
+                format!(
+                    "operation={} the runtime's fact snapshot or instant is invalid",
+                    operation.id
+                ),
+            )
+            .into());
+        }
+        if snapshot.context.game_id != self.control.game
+            || snapshot.context.server_id != self.control.server
+        {
+            return Err(ContainedTaskError::with_detail(
+                SELECTION_FACT_CONTEXT_MISMATCH,
+                format!(
+                    "operation={} snapshot game={} server={}, package game={} server={}",
+                    operation.id,
+                    snapshot.context.game_id,
+                    snapshot.context.server_id,
+                    self.control.game,
+                    self.control.server
+                ),
+            )
+            .into());
+        }
+        Ok((snapshot, now_unix_ms))
+    }
+
+    /// Workflow #308 SEL-L4b: one attempt of a select step that declares `scan` (S0 §2.2), from
+    /// the step's dispatched frame `first`. `Pin` takes one fact snapshot and one instant for the
+    /// whole attempt; the session then scans, decides, returns and confirms (`ScanSession::select`)
+    /// within the scan's deadline, `timing`'s. A failure before the decision exists returns
+    /// without a record (S0 §3.4 P1); once it exists, exactly one record precedes the return,
+    /// with the v2 projection and `unknown_check`. A failure of the runtime itself after the
+    /// decision is recorded only when the runtime classifies it fatal (`run_ending`, as a
+    /// single-frame confirmation records it); any other returns without a record. A confirmed
+    /// member is tapped in its click rectangle, bound to F2.
+    fn scan_select_attempt<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        first: &PageObservation,
+        (step_index, timing): (u32, ContainedTaskTimingContext),
+        (prepared, scan): (&PreparedSelect, &ScanDeclaration),
+    ) -> Result<SelectAttempt, ContainedTaskRunError<R::Error>> {
+        let layout = self
+            .evaluator
+            .candidate_layout(&prepared.layout_id)
+            .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+        let (snapshot, now_unix_ms) = self.pinned_state(runtime, operation, step_index)?;
+        let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+            &snapshot,
+            now_unix_ms,
+            &prepared.policy.record_list_keys(),
+        );
+        let deadline = timing.deadline();
+        let remaining = deadline.saturating_duration_since(runtime.observation_now());
+        let mut session = ScanSession::new(
+            scan,
+            layout,
+            &prepared.policy,
+            &facts,
+            now_unix_ms,
+            (first.scene.width(), first.scene.height()),
+            remaining,
+        )?;
+        let action_seed = runtime
+            .action_seed(step_index, &operation.id)
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let mut source = RuntimeScanSource::new(
+            self,
+            runtime,
+            operation,
+            scan,
+            layout,
+            first,
+            (step_index, timing, deadline, action_seed),
+            false,
+        );
+        let selection = session.select(&mut source, prepared.on_empty_key.is_some());
+        let (latest, guard) = source.into_parts();
+        let ScanSelection {
+            decision,
+            coverage,
+            unknown_check,
+            confirmation,
+            end,
+        } = selection?;
+        let end = match end {
+            ScanSelectEnd::Failed(ContainedTaskRunError::Boundary(error))
+                if R::classify_error(&error) != ContainedTaskRuntimeErrorClass::Fatal =>
+            {
+                return Err(ContainedTaskRunError::Boundary(error));
+            }
+            end => end,
+        };
+        let record = scan_selection_record(
+            &prepared.path,
+            (snapshot.ledger_position, now_unix_ms),
+            &decision,
+            session.projection(coverage)?,
+            unknown_check,
+            confirmation,
+        )?;
+        let result: Result<SelectAttempt, ContainedTaskRunError<R::Error>> = match end {
+            ScanSelectEnd::Confirmed { identity, rect } => match (latest, guard) {
+                (Some(frame), Some(guard)) => scan_click(layout, rect)
+                    .map(|click| {
+                        SelectAttempt::Selected(Box::new(SelectedCandidate {
+                            guard,
+                            click,
+                            frame,
+                            identity: Some(identity),
+                            action_seed: Some(action_seed),
+                        }))
+                    })
+                    .map_err(ContainedTaskRunError::Task),
+                _ => Err(ContainedTaskError::with_detail(
+                    SELECTION_EVALUATION_FAILED,
+                    "scan confirmation frame missing",
+                )
+                .into()),
+            },
+            ScanSelectEnd::Empty => Ok(SelectAttempt::Empty {
+                outcome_key: prepared.on_empty_key.clone().unwrap_or_default(),
+                page_label: latest
+                    .map_or_else(|| first.page_label.clone(), |frame| frame.page_label),
+            }),
+            ScanSelectEnd::Failed(error) => Err(error),
+        };
+        let run_ending = matches!(result, Err(ContainedTaskRunError::Boundary(_)));
+        if !run_ending {
+            record.validate_for_append().map_err(|error| {
+                ContainedTaskError::with_detail(error.code(), format!("field={}", error.field()))
+            })?;
+        }
+        let recorded = runtime.record(ContainedTaskTrace::SelectionEvaluated {
+            step_index,
+            operation_label: operation.id.clone(),
+            selection: Box::new(record),
+            run_ending,
+        });
+        match recorded {
+            Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
+            _ => result,
+        }
+    }
+}
+
+/// The record of a select over a scan (Workflow #308 SEL-L4b, S0 §1.9, §3.4): the policy at
+/// `path`, the pinned ledger position and instant, the decision verbatim, the v2 `projection`,
+/// `unknown_check` and `confirmation`. An abort keeps no verdict, because it has no complete
+/// breakdown (path rule 6).
+pub(super) fn scan_selection_record(
+    path: &str,
+    (input_ledger_position, now_unix_ms): (u64, u64),
+    decision: &SelectionDecision,
+    projection: actingcommand_contract::ScanCandidateProjection,
+    unknown_check: TaskSelectionUnknownCheck,
+    confirmation: TaskSelectionConfirmation,
+) -> Result<TaskSelectionRecord, ContainedTaskError> {
+    let aborted = matches!(decision.outcome, SelectionOutcome::Unknown { .. });
+    Ok(TaskSelectionRecord {
+        layout_id: projection.layout_id().to_owned(),
+        page_id: projection.page_id().to_owned(),
+        projection: projection.into(),
+        policy: TaskSelectionPolicy {
+            path: path.to_owned(),
+            policy_sha256: decision.policy_sha256.clone(),
+            policy_id: decision.policy_id.clone(),
+        },
+        fact_snapshot_id: decision.fact_snapshot_id.clone(),
+        input_ledger_position,
+        input_fact_revisions: None,
+        now_unix_ms,
+        input_sha256: decision.input_sha256.clone(),
+        selection_result: record_outcome(&decision.outcome)?,
+        outcome_key: decision.outcome_key.clone(),
+        selected: decision.selected.clone(),
+        verdicts: if aborted {
+            Vec::new()
+        } else {
+            record_verdicts(&decision.candidates)?
+        },
+        reasons: record_reasons(&decision.reasons),
+        confirmation,
+        unknown_check: Some(unknown_check),
+        multi_select: None,
+    })
+}
+
+/// The click rectangle of a scan's confirmed instance (Workflow #308 SEL-L4b): the layout's
+/// `click`, placed by the instance rectangle `rect` on F2 (both relative to the anchor match).
+fn scan_click(
+    layout: &CandidateLayout,
+    rect: CandidateRect,
+) -> Result<ClickRect, ContainedTaskError> {
+    let placed = layout
+        .instance_rect
+        .zip(layout.click)
+        .and_then(|(instance, click)| {
+            Some(ClickRect {
+                x: rect.x.checked_sub(instance.x)?.checked_add(click.x)?,
+                y: rect.y.checked_sub(instance.y)?.checked_add(click.y)?,
+                width: click.width,
+                height: click.height,
+            })
+        });
+    placed.ok_or_else(|| {
+        ContainedTaskError::with_detail(
+            SELECT_INVALID,
+            format!("layout={} scan click=unplaced", layout.id),
+        )
+    })
+}
+
+/// Rules 2 and 3 of S0 §3.2 for a single-frame select that declares `on_empty` (Workflow #308
+/// SEL-L4b, §1.4, §3.4): its unknown instances are the actionable candidates the kernel kept
+/// from the evaluator (an unresolved consensus feature, an identity feature that read no
+/// identity) and those the evaluator dropped as unknown, each bounded at its Known identity, or
+/// over the whole domain without one, with the pinned `facts` at their instant.
+fn single_frame_unknown_check(
+    prepared: &PreparedSelect,
+    layout: &CandidateLayout,
+    projection: &CandidateProjection,
+    decision: &SelectionDecision,
+    (facts, now_unix_ms): (&SelectionFactSnapshot, u64),
+) -> Result<TaskSelectionUnknownCheck, ContainedTaskError> {
+    let evaluated = decision
+        .candidates
+        .iter()
+        .filter(|verdict| !matches!(verdict.status, CandidateStatus::UnknownDropped))
+        .map(|verdict| verdict.candidate_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let unknown = projection
+        .candidates()
+        .iter()
+        .filter(|candidate| candidate.actionable && !evaluated.contains(candidate.id.as_str()))
+        .collect::<Vec<_>>();
+    let upper = if unknown.is_empty() {
+        None
+    } else {
+        let (field_domains, domain) =
+            bound_inputs(layout, &prepared.policy, prepared.identity_feature()).map_err(
+                |detail| {
+                    ContainedTaskError::with_detail(SELECT_INVALID, format!("upper_bound {detail}"))
+                },
+            )?;
+        let mut upper = Bound::None;
+        for candidate in &unknown {
+            let identities = prepared
+                .identity_feature()
+                .and_then(|name| match candidate.features.get(name) {
+                    Some(CandidateFeature::Identity { value, .. }) => Some(vec![value.clone()]),
+                    _ => None,
+                })
+                .unwrap_or_else(|| domain.clone());
+            let bound = upper_bound(
+                &prepared.policy,
+                facts,
+                now_unix_ms,
+                &identities,
+                &field_domains,
+            )
+            .map_err(|error| {
+                ContainedTaskError::with_detail(SELECTION_EVALUATION_FAILED, error.to_string())
+            })?;
+            upper = upper.max(Bound::from(bound));
+        }
+        Some(upper)
+    };
+    let unknown_instances = u32::try_from(unknown.len()).unwrap_or(u32::MAX);
+    Ok(TaskSelectionUnknownCheck {
+        unknown_instances,
+        blocking: decision_blocking(decision, upper, unknown_instances)?,
+        upper_bound: record_bound(upper),
+    })
 }
 
 /// One select step evaluated offline on a saved frame (Workflow #308; the `actinglab select`
@@ -1546,6 +2102,9 @@ mod tests {
             layout_id: "layout-list".to_owned(),
             path: "operations/task/policies/list.json".to_owned(),
             policy: keyed_policy(),
+            scan: None,
+            on_empty_key: None,
+            identity_feature: None,
         }));
         let mut pack: actingcommand_recognition_pack::RecognitionPack =
             serde_json::from_value(serde_json::json!({

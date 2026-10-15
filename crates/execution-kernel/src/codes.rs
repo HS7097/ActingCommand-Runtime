@@ -168,6 +168,11 @@ actingcommand_contract::outcome_codes! {
         SelectionScanBoundsExceeded => "selection_scan_bounds_exceeded": error / budget_or_permission,
         // Workflow #308 SEL-L3: a scan dry run needed a frame its saved sequence does not hold.
         SelectionScanReplayFrameMissing => "selection_scan_replay_frame_missing": error / none,
+        // Workflow #308 SEL-L4b: a decision unknown instances could change, a scan's confirmation
+        // of the chosen member, and an `expect_identity` (frozen selector model S0 v2.1 §2.7).
+        SelectionResultBlocked => "selection_result_blocked": error / pack_logic_mismatch,
+        SelectionIdentityUnconfirmed => "selection_identity_unconfirmed": error / pack_logic_mismatch,
+        SelectionIdentityMismatch => "selection_identity_mismatch": error / pack_logic_mismatch,
         // Post-admission OCR.
         OcrFieldsMissing => "ocr_fields_missing": error / declaration_error,
         OcrFieldsDictionaryMissing => "ocr_fields_dictionary_missing": error / declaration_error,
@@ -293,5 +298,11 @@ actingcommand_contract::outcome_locations! {
         SelectScanObserve => "select_scan_observe",
         SelectScanEnd => "select_scan_end",
         SelectScanDecide => "select_scan_decide",
+        // Workflow #308 SEL-L4b: a select step's decision, the return to its chosen member, the
+        // member's confirmation and the destination's `expect_identity` (S0 v2.1 §2.7).
+        SelectDecide => "select_decide",
+        SelectReturn => "select_return",
+        SelectConfirm => "select_confirm",
+        SelectExpectIdentity => "select_expect_identity",
     }
 }

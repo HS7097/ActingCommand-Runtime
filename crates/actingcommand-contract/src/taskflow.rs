@@ -86,6 +86,9 @@ pub struct TaskPhaseOperation<'a> {
     /// Workflow #390 EXEC-1: the operation declares `when` or `on_guard_refused`, so at run time
     /// the page's next candidate may run instead of it.
     pub may_be_passed_over: bool,
+    /// Workflow #308 SEL-L4b (frozen selector model S0 §1.4 (c)): the outcome key of the select
+    /// step's `on_empty`, when it declares one; the run may end there, on the step's own page.
+    pub on_empty_key: Option<&'a str>,
 }
 
 // --- Workflow #373 NAV-3b: entry page sets (begin) ---
@@ -303,6 +306,13 @@ fn validate_phased_route_from(
             {
                 return Err(TaskflowCode::TaskPhasesDesignatedEffectRepeated.code());
             }
+            // Workflow #308 SEL-L4b (S0 §1.4 (c)): a select step that declares `on_empty` may end
+            // the run on its own page, so this state is a terminal as well; the walk goes on past
+            // the step, because the select may also succeed.
+            if let Some(key) = operation.on_empty_key {
+                on_empty_terminal(scheduling, completed, &page, key, canonical)?;
+                terminals += 1;
+            }
             if operation.destinations.is_empty() {
                 return Err(TaskflowCode::TaskPhasesPostconditionMissing.code());
             }
@@ -335,6 +345,36 @@ fn validate_phased_route_from(
         return Err(TaskflowCode::TaskPhasesUnreachable.code());
     }
     Ok(())
+}
+
+/// Workflow #308 SEL-L4b (S0 §1.4 (c)): the terminal an `on_empty` select step adds at its state
+/// (`page`, the designated effects `completed` on the way): exactly one mapping has that state's
+/// effect condition and lists the page, and its outcome key is the step's `on_empty` key. A step
+/// reachable under both effect conditions needs two mappings with that one key, which unique
+/// keys forbid, so it is refused.
+fn on_empty_terminal(
+    scheduling: &SchedulingOutcomeDeclaration,
+    completed: u16,
+    page: &str,
+    key: &str,
+    canonical: &dyn Fn(&str) -> String,
+) -> Result<(), crate::outcome::Code> {
+    let condition = crate::DesignatedEffectReach::condition(completed);
+    let mappings = scheduling
+        .mappings()
+        .iter()
+        .filter(|mapping| {
+            mapping.effect() == condition
+                && mapping
+                    .terminal_pages()
+                    .iter()
+                    .any(|target| canonical(target) == page)
+        })
+        .collect::<Vec<_>>();
+    match mappings.as_slice() {
+        [mapping] if mapping.outcome_key() == key => Ok(()),
+        _ => Err(TaskflowCode::TaskPhasesOutcomeIncomplete.code()),
+    }
 }
 
 pub const fn postcondition_timeout_is_valid(timeout_ms: Option<u64>) -> bool {

@@ -698,6 +698,24 @@ impl RunStateMachine {
         })
     }
 
+    /// Workflow #308 SEL-L4b (frozen selector model S0 §1.4): the dispatched select step, which
+    /// declares `on_empty`, found nobody listed and nothing unknown on `current_page`, its own
+    /// page. The run is Completed there, mid-phase: no further operation runs, and its step stays
+    /// counted.
+    pub fn operation_ended_empty(
+        &mut self,
+        operation_id: &str,
+        current_page: String,
+    ) -> Result<RunDirective, RunDecisionError> {
+        self.require_executing(operation_id)?;
+        self.executing_operation = None;
+        self.current_page = Some(current_page.clone());
+        self.passed_over.clear();
+        Ok(self.finish(RunTerminal::Completed {
+            current_page: Some(current_page),
+        }))
+    }
+
     /// Workflow #390 EXEC-1: the dispatched operation's `when` does not hold on the current
     /// frame. It is withdrawn before its step starts: its step index goes to the page's next
     /// candidate, and it is passed over until a new frame.
