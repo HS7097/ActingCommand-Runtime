@@ -45,6 +45,13 @@ impl RuntimeClock for ManualRuntimeClock {
             monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
         })
     }
+
+    // Test plan E-3 (§3.10): a wait of the contained-task kernel moves this clock forward by
+    // its duration, in whole milliseconds rounded up, and returns at once.
+    fn pause(&self, duration: Duration) {
+        let duration_ms = duration.as_nanos().div_ceil(1_000_000);
+        self.advance(u64::try_from(duration_ms).unwrap_or(u64::MAX));
+    }
 }
 
 const TEST_GOVERNANCE_CLIENT: &str = "runtime-host-test";

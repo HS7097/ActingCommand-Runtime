@@ -536,6 +536,7 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::record_drift_target_ambiguous_is_safety_blocked",
     "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_from_drift_diagnostics_updates_anchor",
     "actingcommand-actinglab::bin:actinglab::tests::session_record_amend_from_drift_diagnostics_requires_readable_json",
+    "actingcommand-actinglab::bin:actinglab::tests::lab2_observe_uses_delayed_stub_capture_and_stays_under_budget",
 ]
 incident = []
 

@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+mod kernel_clock;
 mod ledger_owners;
+pub use kernel_clock::{KernelClockFinding, KernelClockScan, inspect_kernel_clock_reads};
 pub use ledger_owners::{LedgerOwnerModule, discover_ledger_owners};
 
 use proc_macro2::{Span, TokenStream, TokenTree};

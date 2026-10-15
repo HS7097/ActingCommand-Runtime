@@ -1189,6 +1189,9 @@ impl RuntimeHost {
         let events =
             RuntimeEvents::new(&config.secret_fingerprint_salt, Arc::clone(&config.clock))?;
         let clock_origin = config.clock.sample()?;
+        // Test plan E-3 (EXEC-I3): the instant of that reading, from which the contained-task
+        // kernel's instants are counted on the Runtime clock.
+        let clock_origin_instant = Instant::now();
         let started_at_unix_ms = clock_origin.unix_ms;
         let OwnerStartup {
             guard: mut owner,
@@ -1694,6 +1697,7 @@ impl RuntimeHost {
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
+            clock_origin_instant,
             fatal,
         });
         let mut host = Self {
@@ -4506,6 +4510,8 @@ struct HostShared {
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
+    /// Test plan E-3 (EXEC-I3): the instant at which the clock read `clock_origin_monotonic_ms`.
+    clock_origin_instant: Instant,
     fatal: FatalState,
 }
 
@@ -4813,6 +4819,18 @@ impl HostShared {
 
     fn monotonic_ms(&self) -> RuntimeHostResult<u64> {
         Ok(self.runtime_clock_sample()?.monotonic_ms)
+    }
+
+    /// Test plan E-3 (EXEC-I3, test plan §3.10): the monotonic instant of the contained-task
+    /// kernel's timers, on the Runtime clock.
+    fn kernel_instant(&self) -> RuntimeHostResult<Instant> {
+        self.clock
+            .monotonic_instant(self.clock_origin_instant, self.clock_origin_monotonic_ms)
+    }
+
+    /// Test plan E-3: a wait of the contained-task kernel, on the Runtime clock.
+    fn kernel_pause(&self, duration: Duration) {
+        self.clock.pause(duration);
     }
 
     fn runtime_clock_sample(&self) -> RuntimeHostResult<RuntimeClockSample> {

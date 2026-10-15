@@ -35,12 +35,18 @@ const NEXT_OCCURRENCE_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 3_600_000;
 const LIFT_INTERVAL_MS: u64 = 60_000;
 // The entry recovery package of the scope tests.
 const RECOVERY_ID: &str = "fixture01.return-home";
+// The capture interval of every package these tests run or change in place. Test plan E-3
+// (§3.10): the kernel waits on the test's `ManualRuntimeClock`, where a capture spends no time,
+// so at a 1 ms interval each wait captures a frame per millisecond: about 500 in an explicit
+// Home package's 500 ms wait and 51 in a neutral package's 50 ms one. At this interval they
+// capture about 10 and 2.
+const CAPTURE_INTERVAL_MS: u64 = 50;
 
 #[test]
 fn exec3_a_scheduled_page_graph_failure_records_its_identity_and_is_rerun_at_once() {
     let root = TempDir::new().expect("tempdir");
     // A page-graph package (`navigable_route`) whose step is never confirmed.
-    let package = neutral_region_retrying_contained_task_package();
+    let package = neutral_region_retrying_contained_task_package_paced(CAPTURE_INTERVAL_MS);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let state = Arc::new(FakeState::default());
@@ -153,7 +159,7 @@ fn exec3_two_identical_page_graph_step_failures_pause_the_pair_and_a_changed_pac
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(
         &package_path,
-        neutral_region_retrying_contained_task_package(),
+        neutral_region_retrying_contained_task_package_paced(CAPTURE_INTERVAL_MS),
     )
     .expect("write package");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
@@ -198,8 +204,11 @@ fn exec3_two_identical_page_graph_step_failures_pause_the_pair_and_a_changed_pac
         &pair_state(&host, &clock, NEXT_OCCURRENCE_UNIX_MS, 31),
         "the package is unchanged",
     );
-    fs::write(&package_path, neutral_contained_task_package(false))
-        .expect("change the package in place");
+    fs::write(
+        &package_path,
+        neutral_contained_task_package_paced(false, CAPTURE_INTERVAL_MS),
+    )
+    .expect("change the package in place");
     assert_lifted(
         &pair_state(
             &host,
@@ -222,7 +231,13 @@ fn exec3_a_page_graph_entry_check_failure_is_in_the_gate_scope() {
     let package_path = root.path().join("target.zip");
     fs::write(
         &package_path,
-        explicit_home_contained_task_package(false, "fixture01.target", [0, 0, 255], [255, 0, 0]),
+        explicit_home_contained_task_package_paced(
+            false,
+            "fixture01.target",
+            [0, 0, 255],
+            [255, 0, 0],
+            CAPTURE_INTERVAL_MS,
+        ),
     )
     .expect("write the target package");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
@@ -268,12 +283,24 @@ fn exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope() {
     let recovery_path = root.path().join("return-home.zip");
     fs::write(
         &package_path,
-        explicit_home_contained_task_package(false, "fixture01.target", [0, 0, 255], [255, 0, 0]),
+        explicit_home_contained_task_package_paced(
+            false,
+            "fixture01.target",
+            [0, 0, 255],
+            [255, 0, 0],
+            CAPTURE_INTERVAL_MS,
+        ),
     )
     .expect("write the target package");
     fs::write(
         &recovery_path,
-        explicit_home_contained_task_package(false, RECOVERY_ID, [255, 255, 0], [255, 0, 0]),
+        explicit_home_contained_task_package_paced(
+            false,
+            RECOVERY_ID,
+            [255, 255, 0],
+            [255, 0, 0],
+            CAPTURE_INTERVAL_MS,
+        ),
     )
     .expect("write the recovery package");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));

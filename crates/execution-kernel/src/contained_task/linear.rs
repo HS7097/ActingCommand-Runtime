@@ -21,7 +21,7 @@ use super::{
     ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
     MAX_STEPS, MAX_TASK_TIMEOUT_MS, PageCandidates, PageObservation, PostAdmissionOcrCollector,
     PreparedContainedTask, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
-    resolve_page_reference, sample_budget_invalid, selection,
+    elapsed_since, resolve_page_reference, sample_budget_invalid, selection,
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
@@ -36,7 +36,6 @@ use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{RecognitionEvaluator, RememberedOcrObservations};
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::thread;
 use std::time::{Duration, Instant};
 
 /// The control `execution_mode` of a linear task.
@@ -885,7 +884,7 @@ impl PreparedContainedTask {
         let mut observation = match &first.from {
             LinearFrom::Any => None,
             LinearFrom::Page(page) => {
-                let entry_started = Instant::now();
+                let entry_started = runtime.monotonic_now();
                 let observed = self
                     .linear_wait(
                         runtime,
@@ -900,7 +899,8 @@ impl PreparedContainedTask {
                             .with_timing(Some(TaskTimingFailure {
                                 scope: TaskTimingScope::PageRecognition,
                                 stage: TaskTimingStage::EntryRecognition,
-                                elapsed_ms: entry_started.elapsed().as_millis() as u64,
+                                elapsed_ms: elapsed_since(runtime, entry_started).as_millis()
+                                    as u64,
                                 limit_ms: run.step_timeout.as_millis() as u64,
                                 required_delay_ms: None,
                             }))
@@ -1068,9 +1068,9 @@ impl PreparedContainedTask {
         };
         let mut attempt = 1;
         loop {
-            if Instant::now() >= deadline {
+            if runtime.monotonic_now() >= deadline {
                 return Err(self
-                    .task_timeout_error(TaskTimingStage::Dispatch, deadline, None)
+                    .task_timeout_error(runtime, TaskTimingStage::Dispatch, deadline, None)
                     .into());
             }
             runtime
@@ -1151,7 +1151,7 @@ impl PreparedContainedTask {
                 );
             };
             self.linear_retry_delay(runtime, run, retry_interval)?;
-            let decision_started = Instant::now();
+            let decision_started = runtime.monotonic_now();
             let mut decision_pages = match &step.transition {
                 Some(LinearTransition::Page { page, .. }) => vec![page.as_str()],
                 _ => candidates.pages.clone(),
@@ -1178,19 +1178,22 @@ impl PreparedContainedTask {
                             LinearMissKind::AfterIntermediate,
                         )?,
                         // Workflow #339: the skip target is watched from this frame on.
-                        _ if candidates.settles_on(&frame.page_label) => self.linear_wait_set(
-                            runtime,
-                            run,
-                            candidates,
-                            arrival.budget,
-                            arrival.interval,
-                            LinearMissKind::Arrival,
-                            Some(if frame.sampling.is_some() {
+                        _ if candidates.settles_on(&frame.page_label) => {
+                            let seen = if frame.sampling.is_some() {
                                 frame.frame_started
                             } else {
-                                Instant::now()
-                            }),
-                        )?,
+                                runtime.monotonic_now()
+                            };
+                            self.linear_wait_set(
+                                runtime,
+                                run,
+                                candidates,
+                                arrival.budget,
+                                arrival.interval,
+                                LinearMissKind::Arrival,
+                                Some(seen),
+                            )?
+                        }
                         _ => {
                             Self::linear_step_finished(
                                 runtime,
@@ -1245,7 +1248,7 @@ impl PreparedContainedTask {
                         attempt,
                         false,
                         &candidates.awaited(false),
-                        decision_started.elapsed(),
+                        elapsed_since(runtime, decision_started),
                         run.step_timeout,
                     )
                     .into());
@@ -1328,9 +1331,9 @@ impl PreparedContainedTask {
                 guard,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if Instant::now() >= deadline {
+        if runtime.monotonic_now() >= deadline {
             return Err(self
-                .task_timeout_error(TaskTimingStage::BeforeInput, deadline, None)
+                .task_timeout_error(runtime, TaskTimingStage::BeforeInput, deadline, None)
                 .into());
         }
         runtime
@@ -1380,9 +1383,9 @@ impl PreparedContainedTask {
         action: ApplicationLifecycleAction,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
-        if Instant::now() >= deadline {
+        if runtime.monotonic_now() >= deadline {
             return Err(self
-                .task_timeout_error(TaskTimingStage::BeforeInput, deadline, None)
+                .task_timeout_error(runtime, TaskTimingStage::BeforeInput, deadline, None)
                 .into());
         }
         match runtime
@@ -1411,12 +1414,12 @@ impl PreparedContainedTask {
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let boundary = TaskTimingBoundary::EffectCompletedRecord;
         let identity = runtime.task_boundary_identity(boundary);
-        let effect_started = Instant::now();
+        let effect_started = runtime.monotonic_now();
         let effected = runtime.record(ContainedTaskTrace::EffectCompleted {
             step_index,
             operation_label: operation.id.clone(),
         });
-        let effect_ended = Instant::now();
+        let effect_ended = runtime.monotonic_now();
         runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
             boundary,
             identity,
@@ -1438,23 +1441,33 @@ impl PreparedContainedTask {
         let deadline = run.timing.deadline();
         let boundary = TaskTimingBoundary::PostInputWait;
         let identity = runtime.task_boundary_identity(boundary);
-        let wait_started = Instant::now();
+        let wait_started = runtime.monotonic_now();
         let waited = if delay.is_zero() {
             Ok(())
         } else if deadline
-            .checked_duration_since(Instant::now())
+            .checked_duration_since(runtime.monotonic_now())
             .is_none_or(|remaining| delay >= remaining)
         {
-            Err(self.task_timeout_error(TaskTimingStage::PostInputDelay, deadline, Some(delay)))
+            Err(self.task_timeout_error(
+                runtime,
+                TaskTimingStage::PostInputDelay,
+                deadline,
+                Some(delay),
+            ))
         } else {
-            thread::sleep(delay);
-            if Instant::now() >= deadline {
-                Err(self.task_timeout_error(TaskTimingStage::PostInputDelay, deadline, None))
+            runtime.pause(delay);
+            if runtime.monotonic_now() >= deadline {
+                Err(self.task_timeout_error(
+                    runtime,
+                    TaskTimingStage::PostInputDelay,
+                    deadline,
+                    None,
+                ))
             } else {
                 Ok(())
             }
         };
-        let wait_ended = Instant::now();
+        let wait_ended = runtime.monotonic_now();
         runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
             boundary,
             identity,
@@ -1490,7 +1503,7 @@ impl PreparedContainedTask {
                 timeout,
                 interval,
             }) => {
-                let started = Instant::now();
+                let started = runtime.monotonic_now();
                 match self.linear_wait(
                     runtime,
                     &[page.as_str()],
@@ -1510,7 +1523,7 @@ impl PreparedContainedTask {
                     ),
                     None => Ok(Err(LinearMiss {
                         kind: LinearMissKind::Intermediate,
-                        elapsed: started.elapsed(),
+                        elapsed: elapsed_since(runtime, started),
                         limit: *timeout,
                         skip_target_seen: false,
                     })),
@@ -1542,7 +1555,7 @@ impl PreparedContainedTask {
         let &[page] = candidates.pages.as_slice() else {
             return self.linear_wait_set(runtime, run, candidates, budget, interval, miss, None);
         };
-        let started = Instant::now();
+        let started = runtime.monotonic_now();
         Ok(self
             .linear_wait(
                 runtime,
@@ -1554,7 +1567,7 @@ impl PreparedContainedTask {
             )?
             .ok_or_else(|| LinearMiss {
                 kind: miss,
-                elapsed: started.elapsed(),
+                elapsed: elapsed_since(runtime, started),
                 limit: budget,
                 skip_target_seen: false,
             }))
@@ -1587,11 +1600,12 @@ impl PreparedContainedTask {
         let settle = candidates.settle;
         let mut retries =
             SampleRetries::new(run.pacing, ExecutionKernelLocation::ObservationAfterInput);
-        let mut started = Instant::now();
+        let mut started = runtime.monotonic_now();
         loop {
-            if Instant::now() >= deadline {
+            if runtime.monotonic_now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
+                        runtime,
                         purpose,
                         deadline,
                         TaskTimingCheckPosition::PostconditionBeforeCapture,
@@ -1605,21 +1619,22 @@ impl PreparedContainedTask {
             } else {
                 run.timing.with_deadline(observation_deadline)
             };
-            let captured = Instant::now();
+            let captured = runtime.monotonic_now();
             let observation = match self.linear_observe_scene(runtime, &candidates.pages, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
                     // Workflow #386 SR-1 (scheduling model §2.1 item 1): a sampling timeout
                     // starts the wait over in a new window, without any input.
                     retries.retry(failure, budget)?;
-                    started = Instant::now();
+                    started = runtime.monotonic_now();
                     seen = None;
                     continue;
                 }
             };
-            if Instant::now() >= deadline {
+            if runtime.monotonic_now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
+                        runtime,
                         purpose,
                         deadline,
                         TaskTimingCheckPosition::PostconditionAfterCapture,
@@ -1660,7 +1675,7 @@ impl PreparedContainedTask {
             let limit = seen
                 .map_or(started + budget, |first| first + settle + budget)
                 .saturating_duration_since(started);
-            let elapsed = started.elapsed();
+            let elapsed = elapsed_since(runtime, started);
             if elapsed >= limit {
                 return Ok(Err(LinearMiss {
                     kind: miss,
@@ -1671,18 +1686,19 @@ impl PreparedContainedTask {
             }
             // The settle bounds the sleep only while it lasts; after it, captures keep the
             // interval and never run back to back.
+            let now = runtime.monotonic_now();
             let settle_left = seen
                 .and_then(|first| first.checked_add(settle))
-                .and_then(|end| end.checked_duration_since(Instant::now()))
+                .and_then(|end| end.checked_duration_since(now))
                 .filter(|left| !left.is_zero());
             let sleep = interval
                 .min(limit.saturating_sub(elapsed))
-                .min(deadline.saturating_duration_since(Instant::now()));
+                .min(deadline.saturating_duration_since(now));
             let boundary = purpose.boundary();
             let identity = runtime.task_boundary_identity(boundary);
-            let wait_started = Instant::now();
-            thread::sleep(settle_left.map_or(sleep, |left| sleep.min(left)));
-            let wait_ended = Instant::now();
+            let wait_started = runtime.monotonic_now();
+            runtime.pause(settle_left.map_or(sleep, |left| sleep.min(left)));
+            let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
                 identity,
@@ -1702,18 +1718,18 @@ impl PreparedContainedTask {
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
         if deadline
-            .checked_duration_since(Instant::now())
+            .checked_duration_since(runtime.monotonic_now())
             .is_none_or(|remaining| delay > remaining)
         {
             return Err(self
-                .task_timeout_error(TaskTimingStage::RetryDelay, deadline, Some(delay))
+                .task_timeout_error(runtime, TaskTimingStage::RetryDelay, deadline, Some(delay))
                 .into());
         }
         let boundary = TaskTimingBoundary::RetryWait;
         let identity = runtime.task_boundary_identity(boundary);
-        let wait_started = Instant::now();
-        thread::sleep(delay);
-        let wait_ended = Instant::now();
+        let wait_started = runtime.monotonic_now();
+        runtime.pause(delay);
+        let wait_ended = runtime.monotonic_now();
         runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
             boundary,
             identity,
@@ -1757,7 +1773,7 @@ impl PreparedContainedTask {
         let deadline = run.timing.deadline();
         let base_timing = run.timing;
         let mut retries = SampleRetries::new(run.pacing, purpose.observation());
-        let mut started = Instant::now();
+        let mut started = runtime.monotonic_now();
         let mut window_started = runtime.observation_now();
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
@@ -1765,9 +1781,10 @@ impl PreparedContainedTask {
             } else {
                 base_timing.with_deadline(window_started + budget)
             };
-            if Instant::now() >= deadline {
+            if runtime.monotonic_now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
+                        runtime,
                         purpose,
                         deadline,
                         TaskTimingCheckPosition::PostconditionBeforeCapture,
@@ -1778,14 +1795,15 @@ impl PreparedContainedTask {
                 Ok(observation) => observation,
                 Err(failure) => {
                     retries.retry(failure, budget)?;
-                    started = Instant::now();
+                    started = runtime.monotonic_now();
                     window_started = runtime.observation_now();
                     continue;
                 }
             };
-            if Instant::now() >= deadline {
+            if runtime.monotonic_now() >= deadline {
                 return Err(self
                     .linear_task_timeout(
+                        runtime,
                         purpose,
                         deadline,
                         TaskTimingCheckPosition::PostconditionAfterCapture,
@@ -1804,18 +1822,18 @@ impl PreparedContainedTask {
                 window_started += paused;
                 continue;
             }
-            if started.elapsed() >= budget {
+            if elapsed_since(runtime, started) >= budget {
                 return Ok(None);
             }
             let boundary = purpose.boundary();
             let identity = runtime.task_boundary_identity(boundary);
-            let wait_started = Instant::now();
-            thread::sleep(
+            let wait_started = runtime.monotonic_now();
+            runtime.pause(
                 interval
-                    .min(budget.saturating_sub(started.elapsed()))
-                    .min(deadline.saturating_duration_since(Instant::now())),
+                    .min(budget.saturating_sub(wait_started.saturating_duration_since(started)))
+                    .min(deadline.saturating_duration_since(wait_started)),
             );
-            let wait_ended = Instant::now();
+            let wait_ended = runtime.monotonic_now();
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
                 identity,
@@ -1827,13 +1845,14 @@ impl PreparedContainedTask {
         }
     }
 
-    fn linear_task_timeout(
+    fn linear_task_timeout<R: ContainedTaskRuntime>(
         &self,
+        runtime: &mut R,
         purpose: LinearWaitPurpose,
         deadline: Instant,
         position: TaskTimingCheckPosition,
     ) -> ContainedTaskError {
-        let error = self.task_timeout_error(purpose.timeout_stage(), deadline, None);
+        let error = self.task_timeout_error(runtime, purpose.timeout_stage(), deadline, None);
         match purpose {
             LinearWaitPurpose::AfterInput => error.with_timing_check_position(position),
             LinearWaitPurpose::Entry | LinearWaitPurpose::RetryDecision => error,

@@ -1148,6 +1148,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// Workflow #384 D2-S4 (D2 model §3.4): a fact refresh run's requested key set: the run reads
     /// only those keys' marks and runs only the segments that reach them. `None` reads every mark.
     reading_keys: Option<BTreeSet<String>>,
+    /// Test plan E-3 (EXEC-I3): the first failed read of the kernel's Runtime clock; the run's
+    /// next capture, input or record ends the run with it.
+    kernel_clock_failure: Option<RuntimeHostError>,
 }
 
 pub(super) struct EntryRecoveryRuntime<'a, 'host> {
@@ -1156,6 +1159,16 @@ pub(super) struct EntryRecoveryRuntime<'a, 'host> {
 
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
+
+    /// Test plan E-3 (EXEC-I3): the run's own clock.
+    fn monotonic_now(&mut self) -> Instant {
+        self.inner.monotonic_now()
+    }
+
+    /// Test plan E-3: the run's own waits.
+    fn pause(&mut self, duration: Duration) {
+        self.inner.pause(duration);
+    }
 
     fn supports_application_effect(&self) -> bool {
         self.inner.supports_application_effect()
@@ -1492,10 +1505,28 @@ impl RuntimeContainedTask<'_> {
         let deadline = self
             .host
             .package_material_deadline(self.control.deadline())?;
-        Ok(self
-            .task_timing
-            .context()
-            .map_or(deadline, |context| deadline.min(context.deadline())))
+        let Some(context) = self.task_timing.context() else {
+            return Ok(deadline);
+        };
+        // Test plan E-3 (EXEC-I3): the kernel's deadline is an instant of the Runtime clock and
+        // the geometry read compares with the process clock, so the time it leaves is carried
+        // over; on the system clock the two are one clock.
+        let left = context.deadline().saturating_duration_since(
+            self.host
+                .kernel_instant()
+                .map_err(RequestFailure::poison_without_terminal)?,
+        );
+        Ok(Instant::now()
+            .checked_add(left)
+            .map_or(deadline, |kernel| deadline.min(kernel)))
+    }
+
+    /// Test plan E-3 (EXEC-I3): the failed read of the kernel's Runtime clock, if one was kept.
+    fn kernel_clock_read(&self) -> Result<(), RequestFailure> {
+        match &self.kernel_clock_failure {
+            Some(error) => Err(RequestFailure::poison_without_terminal(error.clone())),
+            None => Ok(()),
+        }
     }
 
     fn read_task_geometry(
@@ -3192,6 +3223,26 @@ fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
 impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     type Error = RequestFailure;
 
+    /// Test plan E-3 (EXEC-I3, test plan §3.10): every timer of the kernel reads the Runtime
+    /// clock (`RuntimeHostConfig::with_runtime_clock`). A failed read is kept and ends the run
+    /// at its next capture, input or record; until then the kernel sees the clock's origin.
+    fn monotonic_now(&mut self) -> Instant {
+        match self.host.kernel_instant() {
+            Ok(now) => now,
+            Err(error) => {
+                if self.kernel_clock_failure.is_none() {
+                    self.kernel_clock_failure = Some(error);
+                }
+                self.host.clock_origin_instant
+            }
+        }
+    }
+
+    /// Test plan E-3: every wait of the kernel is the Runtime clock's (`RuntimeClock::pause`).
+    fn pause(&mut self, duration: Duration) {
+        self.host.kernel_pause(duration);
+    }
+
     /// Workflow #386 SR-1 (scheduling model §2.2): the Runtime samples.
     fn sampling_supported(&self) -> bool {
         true
@@ -3364,6 +3415,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
         use actingcommand_contract::TaskTimingBoundary as Boundary;
+        self.kernel_clock_read()?;
         let capture_started = self
             .task_timing
             .begin_boundary(Boundary::Capture, self.timing_identity(Boundary::Capture));
@@ -3858,6 +3910,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         action: InputAction,
         frame: Option<InputFrameContext>,
     ) -> Result<(), Self::Error> {
+        self.kernel_clock_read()?;
         let input_started = self.task_timing.begin_boundary(
             actingcommand_contract::TaskTimingBoundary::Input,
             self.timing_identity(actingcommand_contract::TaskTimingBoundary::Input),
@@ -3952,6 +4005,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn record(&mut self, mut trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        self.kernel_clock_read()?;
         // Workflow #308: the interpreter does not return a `run_ending` select record's failure
         // (it returns the run-ending capture error); it is recorded as it happens.
         if let ContainedTaskTrace::SelectionEvaluated { run_ending, .. } = &mut trace
@@ -6497,6 +6551,7 @@ impl HostShared {
             diagnostic_physical: None,
             unwritten_selection_record: None,
             reading_keys,
+            kernel_clock_failure: None,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
         // Workflow #398 RD-5b (model-398 v1.1 §7.2): a handset's start gate runs before the
