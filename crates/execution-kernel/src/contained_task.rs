@@ -3559,7 +3559,7 @@ impl PreparedContainedTask {
         self.run_with_options(
             runtime,
             ContainedTaskRunOptions {
-                application_entry: ApplicationEntryRun::First,
+                application_entry: ApplicationEntryRun::AfterInitialFrame,
                 ..ContainedTaskRunOptions::default()
             },
         )
