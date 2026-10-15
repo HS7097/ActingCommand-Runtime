@@ -469,3 +469,12 @@ tests = [
     "actingcommand-contract::lib::event::tests::pkg_s2::s2_t7_a_selection_record_carries_no_package_pin",
 ]
 incident = ["#336 PKG-S2"]
+
+# Workflow #336 PKG-S4 (option 丙): on the IPC wire a request names its package by its path only; a task request, a recovery binding, a package debug request or a contained observation request that still carries expected_sha256 does not decode (M-PKG v1.1 §4.5 S4-T5; contract key after K22)
+[[gate]]
+key = "K23"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::s4_t5_a_wire_request_that_names_a_package_digest_is_refused",
+]
+incident = ["#336 PKG-S4"]

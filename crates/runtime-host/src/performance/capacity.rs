@@ -278,7 +278,10 @@ impl PerformanceMonitor {
             .as_ref()
             .map_or(Duration::from_secs(2), |config| config.sample_interval);
         let mut monitor = match config.performance {
-            Some(config) => Self::enabled(config, system_performance_sampler())?,
+            Some(config) => {
+                let gpu = config.gpu_aggregate();
+                Self::enabled(config, system_performance_sampler(gpu))?
+            }
             None => Self::disabled(),
         };
         let projection = Arc::new(CapacityProjection {

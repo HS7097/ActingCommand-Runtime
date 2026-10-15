@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,7 +12,6 @@ use zip::write::FileOptions;
 struct Lab2Fixture {
     temp: TempDir,
     package: PathBuf,
-    expected_sha256: String,
 }
 
 impl Lab2Fixture {
@@ -23,12 +21,9 @@ impl Lab2Fixture {
 
     fn command(&self, args: &[&str], local_app_data: &Path) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_actinglab"));
-        command.args(args).args([
-            "--zip",
-            self.package.to_str().expect("package path"),
-            "--expected-sha256",
-            &self.expected_sha256,
-        ]);
+        command
+            .args(args)
+            .args(["--zip", self.package.to_str().expect("package path")]);
         configure_command(&mut command, local_app_data);
         command.output().expect("actinglab child process")
     }
@@ -110,15 +105,7 @@ fn write_fixture() -> Lab2Fixture {
             .expect("resource package bytes");
     }
     zip.finish().expect("finish package");
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&package).expect("package bytes"))
-    );
-    Lab2Fixture {
-        temp,
-        package,
-        expected_sha256,
-    }
+    Lab2Fixture { temp, package }
 }
 
 fn parse_json(output: &Output) -> Value {

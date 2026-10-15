@@ -168,15 +168,13 @@ fn epoch_close_crash_child_process() {
         Ordering::Release,
     );
     let package = neutral_contained_task_package(true);
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let package_path = root.join(PACKAGE_FILE);
     fs::write(&package_path, package).expect("write the task package");
     let mut client = TestClient::connect(&host);
     let request = client.request(RuntimeOperation::run_contained_task(
         ALIAS,
         client.ids.mint_holder_id().expect("holder"),
-        ContainedTaskRequest::new(package_path.display().to_string(), package_sha256)
-            .expect("task request"),
+        ContainedTaskRequest::new(package_path.display().to_string()).expect("task request"),
     ));
     let request_id = request.request_id();
     // The request is sent and its receipt never read: the run is still in flight at the kill.

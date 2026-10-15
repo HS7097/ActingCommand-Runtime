@@ -68,7 +68,6 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
                 .to_str()
                 .ok_or_else(|| CliError::package_invalid("package path is not UTF-8"))?
                 .to_string(),
-            expected_sha256: reader.reference.clone(),
             selection,
             projection_hint,
             after,

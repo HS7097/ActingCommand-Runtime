@@ -101,11 +101,7 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
         let bytes = neutral_contained_task_package(true);
         let package = root.path().join("neutral-step.zip");
         fs::write(&package, &bytes).unwrap();
-        let task = ContainedTaskRequest::new(
-            package.display().to_string(),
-            format!("{:x}", Sha256::digest(&bytes)),
-        )
-        .unwrap();
+        let task = ContainedTaskRequest::new(package.display().to_string()).unwrap();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         state

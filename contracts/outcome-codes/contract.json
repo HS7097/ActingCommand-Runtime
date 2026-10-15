@@ -4928,26 +4928,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_debug_package_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid debug package hash. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_contained_task_recovery_path": {
       "category": "error",
       "ladder_class": "none",
@@ -4968,26 +4948,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_contained_task_recovery_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid contained task recovery hash. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_contained_task_path": {
       "category": "error",
       "ladder_class": "none",
@@ -5005,26 +4965,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Runtime contract validation refused a value: invalid contained task path.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_contained_task_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid contained task hash. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16383,26 +16323,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "procedure_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): procedure package digest invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "suspended_policy_unconfigured": {
       "category": "error",
       "ladder_class": "none",
@@ -17433,6 +17353,40 @@
       "description": "Runtime contract validation refused a value: a BindChannel whose via names a forwarding counter on a channel other than lab (Workflow #389 U-2; via exists only on the Lab channel).",
       "common_causes": "A client defect: a counter program named via for its own connection.",
       "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work."
+    },
+    "request_performance_status_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a PerformanceStatus request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #385 P-m adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "invalid_performance_status": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a PerformanceStatus answer of the wrong shape (a responsiveness above 10000, a share above 1000, a factor below 1000, a share of 0 outside s4, a phase outside mode full, an instance twice or a non-warning among the warnings), or a receipt carrying it that is not completed (Workflow #385 P-m).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
     },
     "request_drill_recovery_ladder_completed": {
       "category": "success",

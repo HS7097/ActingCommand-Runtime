@@ -183,19 +183,24 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
     let instance = ContainmentInstanceId::new("runtime-debug-package")
         .map_err(|_| debug_package_error(HostCode::DebugPackageInstanceInvalid))?;
     let mut containment = Containment::new();
-    // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is recorded
-    // (the summary's `verified_sha256` until PKG-S4) and compared with nothing.
+    // Workflow #336 PKG-S1/PKG-S4: the path chooses the loader; the request and the summary
+    // name no digest.
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(
             ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
         ))
         .ok_or_else(|| debug_package_error(HostCode::DebugPackageDeadlineOverflow))?;
     let bundle = containment
-        .load_path(&instance, path, request.expected_sha256(), false, deadline)
+        .load_path(
+            &instance,
+            path,
+            &actingcommand_contract::PackageRef::default(),
+            false,
+            deadline,
+        )
         .map_err(|_| debug_package_error(HostCode::DebugPackageContainmentFailed))?;
     PackageDebugSummary::new(
         bundle.task_id().as_str(),
-        bundle.package_ref().clone(),
         match bundle.layout() {
             PackageLayout::Lab => PackageDebugLayout::Lab,
             PackageLayout::Module => PackageDebugLayout::Module,

@@ -3749,6 +3749,14 @@
       "since": "0.12.0",
       "description": "A runtime client operation: runtime bind channel."
     },
+    "runtime_performance_status": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: the shadow measurement's status (PerformanceStatus, Workflow #385 P-m)."
+    },
     "runtime_recovery_ladder_drill": {
       "owner": "runtime-client",
       "layer": "client",

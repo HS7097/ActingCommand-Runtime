@@ -51,7 +51,6 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         let bytes = zip.finish().unwrap().into_inner();
         let path = root.path().join("observation.zip");
         fs::write(&path, &bytes).unwrap();
-        let expected = format!("{:x}", Sha256::digest(&bytes));
         if mode == 5 {
             fs::write(root.path().join("artifacts"), b"blocks artifact directory").unwrap();
         }
@@ -63,12 +62,8 @@ fn online_observation_native_closure_status_privacy_and_failure_boundaries() {
         ))
         .unwrap();
         let session = client.begin_debug_session().unwrap();
-        let request = ContainedObservationRequest::new(
-            path.to_str().unwrap(),
-            &expected,
-            vec!["text".into()],
-        )
-        .unwrap();
+        let request =
+            ContainedObservationRequest::new(path.to_str().unwrap(), vec!["text".into()]).unwrap();
         let result = session.observe_contained_page("node.a", request);
         if mode >= 4 {
             let error = result.unwrap_err();

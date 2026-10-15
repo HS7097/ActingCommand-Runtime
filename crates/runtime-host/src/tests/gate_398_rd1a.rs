@@ -157,7 +157,7 @@ fn rd1a_t4_effective_configuration_names_the_handset_by_its_label() {
     for handset in [true, false] {
         let root = TempDir::new().expect("tempdir");
         let state = Arc::new(FakeState::default());
-        let (package, expected) = direct_run_package(&root, &state);
+        let package = direct_run_package(&root, &state);
         let instance_id = instance_id();
         let target = if handset {
             handset_target()
@@ -174,7 +174,7 @@ fn rd1a_t4_effective_configuration_names_the_handset_by_its_label() {
         .expect("official client");
         let _run = client.run_contained_task(
             POLICY_INSTANCE_ALIAS,
-            ContainedTaskRequest::new(package, expected).expect("task request"),
+            ContainedTaskRequest::new(package).expect("task request"),
         );
         let records = effective_configurations(&host, root.path());
         let mut devices = 0;

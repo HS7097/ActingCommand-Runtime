@@ -233,8 +233,9 @@ zero remains zero. Static catalog JSON is never a Runtime input parser or invent
 
 ## Preparation coverage
 
-`actinglab package preflight --package <directory-or-zip> --package-ref <external-reference>`
-uses hash-first containment and `PreparedContainedTask::from_bundle`, the same task/control,
+`actinglab package preflight --package <directory | .zip | .json container>` (Workflow #336
+PKG-S4: the package by its path only; its answer names it by `package_label`) uses structural
+containment and `PreparedContainedTask::from_bundle`, the same task/control,
 version, phase, reference and select-policy preparation owner as production. It does not
 execute recognition, a task, a provider or a device. Its response/error distinguishes package
 load and declaration coverage from task preparation and execution. `package validate` continues

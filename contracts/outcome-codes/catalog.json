@@ -634,6 +634,10 @@
       "type": "vocab:adjustment_reason",
       "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3)."
     },
+    "refresh_limit": {
+      "type": "vocab:refresh_limit",
+      "description": "Which limit holds an instance's recognition maintenance package back (Workflow #384 D2-S4)."
+    },
     "entry_problem": {
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
@@ -1745,6 +1749,58 @@
       "type": "duration_ms",
       "description": "How long a command's --wait waited for its request before it stopped waiting, in milliseconds."
     },
+    "pacing_stage_from": {
+      "type": "vocab:pacing_stage",
+      "description": "The pacing stage a scope left (Workflow #385 P-m)."
+    },
+    "pacing_stage_to": {
+      "type": "vocab:pacing_stage",
+      "description": "The pacing stage a scope entered (Workflow #385 P-m)."
+    },
+    "responsiveness_bp": {
+      "type": "integer",
+      "description": "A tracked responsiveness in basis points, 0 to 10000: the value the pacing curve reads (Workflow #385 P-m)."
+    },
+    "host_responsiveness_bp": {
+      "type": "integer",
+      "description": "The host's own smoothed responsiveness in basis points, 0 to 10000, from its probes (Workflow #385 P-m)."
+    },
+    "emulator_responsiveness_bp": {
+      "type": "integer",
+      "description": "An instance's own smoothed emulator responsiveness in basis points, 0 to 10000, from its frame acquisitions and touch responses (Workflow #385 P-m)."
+    },
+    "factor_milli": {
+      "type": "integer",
+      "description": "A pacing factor in thousandths, at least 1000 (Workflow #385 P-m)."
+    },
+    "pacing_cause": {
+      "type": "vocab:pacing_cause",
+      "description": "Why a pacing stage changed (Workflow #385 P-m)."
+    },
+    "pacing_mode": {
+      "type": "vocab:pacing_mode",
+      "description": "How far performance pacing takes effect: observe, pace or full (Workflow #385)."
+    },
+    "pacing_learning_capped": {
+      "type": "boolean",
+      "description": "True when the learning view caps the stage that takes effect below the recorded curve stage (Workflow #385)."
+    },
+    "probe_kind": {
+      "type": "vocab:probe_kind",
+      "description": "A host probe of the shadow measurement (Workflow #385 P-m)."
+    },
+    "signal_kind": {
+      "type": "vocab:signal_kind",
+      "description": "A scored signal of the shadow measurement (Workflow #385 P-m)."
+    },
+    "baseline_us": {
+      "type": "integer",
+      "description": "A signal's baseline in microseconds (Workflow #385 P-m)."
+    },
+    "limit_us": {
+      "type": "integer",
+      "description": "The bound a value is held at, in microseconds (Workflow #385 P-m: a baseline's clamp)."
+    },
     "handle": {
       "type": "token",
       "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
@@ -2823,6 +2879,26 @@
         },
         "after_read_missing": {
           "description": "No reading of the key followed the confirmation; the key's record is dropped."
+        }
+      }
+    },
+    "refresh_limit": {
+      "description": "Which limit holds an instance's recognition maintenance package back (Workflow #384 D2-S4).",
+      "tokens": {
+        "daily_limit": {
+          "description": "The package's dispatches today reached scheduling.fact_refresh.daily_limit."
+        },
+        "failure_pause": {
+          "description": "Its failed runs in a row reached scheduling.fact_refresh.max_consecutive_failures today."
+        },
+        "schedulable_state": {
+          "description": "The instance's schedulable-pack state does not include the package now."
+        },
+        "activity_window": {
+          "description": "The instance's activity window is closed or its activity budget spent."
+        },
+        "placement": {
+          "description": "The instance cannot place the package."
         }
       }
     },
@@ -5371,6 +5447,76 @@
         },
         "unsupported_os": {
           "description": "This operating system has no connectivity query."
+        }
+      }
+    },
+    "pacing_cause": {
+      "description": "Why a pacing stage changed (Workflow #385 PERF section 11).",
+      "review": "pending",
+      "tokens": {
+        "responsiveness": {
+          "description": "The tracked responsiveness moved the stage."
+        },
+        "pressure": {
+          "description": "A pressure's stage-one floor began or ended."
+        },
+        "recovery": {
+          "description": "The tracked responsiveness recovered."
+        },
+        "idle_recovery": {
+          "description": "Without any evidence, the tracked value recovered toward the top."
+        },
+        "clock_jump": {
+          "description": "The clock jumped."
+        }
+      }
+    },
+    "pacing_mode": {
+      "description": "How far performance pacing takes effect (Workflow #385 PERF section 10.3): every release ships observe; pace and full are a person's configuration.",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/pacing.rs",
+        "enum": "PerformancePacingMode"
+      },
+      "tokens": {
+        "observe": {
+          "description": "Measure and record only; nothing takes effect."
+        },
+        "pace": {
+          "description": "Lengthen intervals and deadlines, never pause."
+        },
+        "full": {
+          "description": "Pacing and proportional pauses, with the learning period."
+        }
+      }
+    },
+    "probe_kind": {
+      "description": "A host probe of the shadow measurement (Workflow #385 PERF section 3.2).",
+      "review": "pending",
+      "tokens": {
+        "timer": {
+          "description": "Repeated short sleeps; their oversleep is the ready queue's delay."
+        },
+        "message": {
+          "description": "A posted message's delay until its thread handles it."
+        }
+      }
+    },
+    "signal_kind": {
+      "description": "A scored signal of the shadow measurement (Workflow #385 PERF section 3.2).",
+      "review": "pending",
+      "tokens": {
+        "capture_acquire": {
+          "description": "One frame's acquisition from the capture backend."
+        },
+        "touch_response": {
+          "description": "One input's backend response."
+        },
+        "timer": {
+          "description": "The host timer probe."
+        },
+        "message": {
+          "description": "The host message probe."
         }
       }
     }

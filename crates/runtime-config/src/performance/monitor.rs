@@ -32,6 +32,27 @@ pub const MAX_PRESSURE_STREAK_SAMPLES: i64 = 30;
 
 /// How the GPU's engines make one utilisation: the busiest engine type, or the sum.
 const GPU_AGGREGATES: &[&str] = &["max_engine_type", "sum"];
+/// `performance.pressure.gpu_aggregate`.
+pub const GPU_AGGREGATE: &str = "performance.pressure.gpu_aggregate";
+
+/// Workflow #385 P-m (PERF §3.4): how the GPU's engine utilisations make one value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuAggregate {
+    /// Sum the engines of each engine type, then take the busiest type, as the task manager
+    /// does (the default).
+    MaxEngineType,
+    /// Sum every engine, capped at 100 % (the measurement before P-m).
+    Sum,
+}
+
+/// Workflow #385 P-m: `performance.pressure.gpu_aggregate` in effect.
+pub(super) fn gpu_aggregate(values: &Values<'_>) -> Result<GpuAggregate, ConfigFailure> {
+    match values.word(GPU_AGGREGATE)?.as_str() {
+        "max_engine_type" => Ok(GpuAggregate::MaxEngineType),
+        "sum" => Ok(GpuAggregate::Sum),
+        _ => Err(failure(GPU_AGGREGATE, ConfigValueProblem::OutOfRange)),
+    }
+}
 
 const READER: &str = "P-m";
 
@@ -129,7 +150,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
     ),
     row(SEVERITY, ValueType::Object, KeyRange::Any, AT_START, READER),
     row(
-        "performance.pressure.gpu_aggregate",
+        GPU_AGGREGATE,
         ValueType::String,
         KeyRange::Tokens(GPU_AGGREGATES),
         AT_START,

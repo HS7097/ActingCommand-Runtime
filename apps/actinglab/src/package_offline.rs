@@ -2,14 +2,15 @@
 
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::{
-    MAX_READONLY_OBSERVATION_ARTIFACT_BYTES, MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES,
+    ContainedTaskRequest, MAX_READONLY_OBSERVATION_ARTIFACT_BYTES,
+    MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES, PackageRef,
 };
 use actingcommand_device::{CaptureBackendName, Frame, parse_png_dimensions};
 use actingcommand_lab::{
     OfflineDecision, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    simulate_contained_task_at, validate_lab_package_bytes,
+    simulate_contained_task_at, validate_lab_package_path,
 };
-use actingcommand_pack_containment::{DEFAULT_MAX_COMPRESSED_BYTES, Sha256Hash};
+use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -59,30 +60,40 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             )
         })?;
     let args = PackageDryRunArgs::parse(global, flags)?;
-    // Workflow #336 PKG-S1: the given hash is recorded, in canonical form, and compared with
-    // nothing.
-    let recorded = Sha256Hash::parse_hex(&args.expected_sha256)
-        .map(|hash| actingcommand_contract::PackageRef::LegacyZipSha256(hash.to_string()))
-        .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    reject_output_collision(&args.out, &args.zip, &args.fixtures)?;
+    reject_output_collision(&args.out, &args.package, &args.fixtures)?;
 
-    let package_bytes = read_regular_file_bounded(
-        &args.zip,
-        DEFAULT_MAX_COMPRESSED_BYTES,
-        "offline_package",
-        "package",
-    )?;
-    let loaded = validate_lab_package_bytes("contained-package.zip", &package_bytes, &recorded)?;
-    // Workflow #396 LAB-3: the replay evaluates OCR targets with the Runtime's OCR provider.
-    let prepared = match crate::offline_ocr::lab_ocr().provider() {
-        Some(provider) => PreparedContainedTask::load_with_vision_provider(
-            "offline.simulation",
-            &package_bytes,
-            &recorded,
-            provider,
-        ),
-        None => PreparedContainedTask::load("offline.simulation", &package_bytes, &recorded),
+    // Workflow #336 PKG-S4 (option 丙, forced compromise T-01): the package by its path, read as
+    // the path chooses (PKG-S1): a content directory, a `.json` or `.zip` container, or an
+    // assembled ZIP. No digest is taken or computed. A package file keeps the bounded
+    // regular-file budget.
+    let package = absolute_package_path(&args.package)?;
+    if !fs::symlink_metadata(&package).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        read_regular_file_bounded(
+            &package,
+            DEFAULT_MAX_COMPRESSED_BYTES,
+            "offline_package",
+            "package",
+        )?;
     }
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_millis(
+            ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
+        ))
+        .ok_or_else(|| {
+            offline_error(
+                "offline_clock_invalid",
+                "the package admission deadline overflows".to_string(),
+            )
+        })?;
+    let loaded = validate_lab_package_path("contained-package.zip", &package, deadline)?;
+    // Workflow #396 LAB-3: the replay evaluates OCR targets with the Runtime's OCR provider.
+    let prepared = PreparedContainedTask::load_path(
+        "offline.simulation",
+        &package,
+        &PackageRef::default(),
+        crate::offline_ocr::lab_ocr().provider(),
+        deadline,
+    )
     .map_err(|error| {
         offline_error(
             error.code().as_str(),
@@ -92,7 +103,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
                 .unwrap_or_else(|| error.to_string()),
         )
     })?;
-    let package_sha256 = prepared.package_sha256().clone();
+    let package_label = prepared.package_label().to_owned();
     let fixture = load_fixture_sequence(&args.fixtures)?;
     let simulation = simulate_contained_task_at(&prepared, fixture.frames, now_unix_ms)
         .map_err(map_simulation_error)?;
@@ -105,7 +116,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         mode: "offline_simulation",
         executed: false,
         runtime_head: env!("ACTINGCOMMAND_RUNTIME_HEAD"),
-        package_sha256: package_sha256.clone(),
+        package_label: package_label.clone(),
         decision_fingerprint: simulation.decision_fingerprint.clone(),
         fixture_sequence_sha256: fixture.sequence_sha256.clone(),
         fixtures: fixture.bindings,
@@ -140,7 +151,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         "status": "offline_simulation",
         "executed": false,
         "runtime_head": env!("ACTINGCOMMAND_RUNTIME_HEAD"),
-        "package_sha256": package_sha256,
+        "package_label": package_label,
         "decision_fingerprint": record.decision_fingerprint.as_str(),
         "fixture_sequence_sha256": record.fixture_sequence_sha256.as_str(),
         "result_zip": args.out.display().to_string(),
@@ -154,8 +165,8 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
 }
 
 struct PackageDryRunArgs {
-    zip: PathBuf,
-    expected_sha256: String,
+    /// Workflow #336 PKG-S4: `--package <path>` or `--zip <path>`, exactly one.
+    package: PathBuf,
     fixtures: Vec<PathBuf>,
     out: PathBuf,
 }
@@ -191,12 +202,7 @@ impl PackageDryRunArgs {
         let unexpected = flags
             .flags
             .keys()
-            .filter(|name| {
-                !matches!(
-                    name.as_str(),
-                    "--zip" | "--out" | "--expected-sha256" | "--fixture"
-                )
-            })
+            .filter(|name| !matches!(name.as_str(), "--package" | "--zip" | "--out" | "--fixture"))
             .cloned()
             .collect::<Vec<_>>();
         if !unexpected.is_empty() {
@@ -222,9 +228,18 @@ impl PackageDryRunArgs {
             };
         }
 
-        let zip = singleton_path(flags, "--zip")?;
+        let package = match (flags.optional("--package"), flags.optional("--zip")) {
+            (Some(_), None) => singleton_path(flags, "--package")?,
+            (None, Some(_)) => singleton_path(flags, "--zip")?,
+            _ => {
+                return Err(offline_error(
+                    "offline_argument_invalid",
+                    "package dry-run requires exactly one of --package <path> and --zip <path>"
+                        .to_string(),
+                ));
+            }
+        };
         let out = singleton_path(flags, "--out")?;
-        let expected_sha256 = singleton_value(flags, "--expected-sha256")?;
         let fixture_values = flags.values("--fixture");
         if fixture_values.is_empty()
             || fixture_values
@@ -247,12 +262,27 @@ impl PackageDryRunArgs {
         }
         let fixtures = fixture_values.into_iter().map(PathBuf::from).collect();
         Ok(Self {
-            zip,
-            expected_sha256,
+            package,
             fixtures,
             out,
         })
     }
+}
+
+/// The package path as containment reads it: absolute, its components kept (Workflow #336
+/// PKG-S1, links are refused there).
+fn absolute_package_path(path: &Path) -> CliOutcome<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    std::env::current_dir()
+        .map(|current| current.join(path))
+        .map_err(|error| {
+            offline_error(
+                "offline_current_directory_failed",
+                format!("failed to resolve current directory: {error}"),
+            )
+        })
 }
 
 fn singleton_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
@@ -623,7 +653,8 @@ struct OfflineResultRecord {
     mode: &'static str,
     executed: bool,
     runtime_head: &'static str,
-    package_sha256: actingcommand_contract::PackageRef,
+    /// Workflow #336 PKG-S4: the package's `package_id`; no digest.
+    package_label: String,
     decision_fingerprint: String,
     fixture_sequence_sha256: String,
     fixtures: Vec<FixtureBinding>,

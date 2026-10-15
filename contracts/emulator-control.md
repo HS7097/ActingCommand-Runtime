@@ -366,9 +366,9 @@ configured, a failed preparation, or `stop`).
 
 ## Startup package hook (slice #316-B3)
 
-An instance may declare `startup_package { "package": <locator>, "expected_sha256": <hex> }`
-in its `actingd` configuration (`contracts/actingd-check-config.md`), the same locator and
-digest semantics as `actingctl task-run --package / --expected-sha256`. Nothing is opened or
+An instance may declare `startup_package { "package": <locator> }` in its `actingd`
+configuration (`contracts/actingd-check-config.md`), the same locator semantics as
+`actingctl task-run --package` (Workflow #336 PKG-S4: no digest). Nothing is opened or
 hashed at startup. The full contract lives in `contracts/application-lifecycle.md`; the part
 that belongs to emulator control:
 

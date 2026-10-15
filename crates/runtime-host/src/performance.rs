@@ -21,7 +21,7 @@ use actingcommand_contract::{
     PerformanceSummaryEventData, RecognitionId, RuntimeErrorCode,
 };
 use actingcommand_host_metrics::{
-    HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
+    GpuAggregate, HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
     ProcessOwnership as HostProcessOwnership, ProcessSample as HostProcessSample,
 };
 use actingcommand_ledger::{
@@ -32,6 +32,11 @@ use std::time::Duration;
 
 mod capacity;
 pub(crate) use capacity::{CapacityPreflightConfig, CapacityRoots};
+// Workflow #385 P-m: the shadow measurement (PERF §3, §4, §4.6).
+mod pacing;
+pub(crate) use pacing::{
+    PacingBackendRole, PacingSample, PacingSampleSource, PacingShadow, floor_pressure,
+};
 
 const BASIS_POINTS_MAX: u16 = 10_000;
 const DEFAULT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -61,6 +66,9 @@ pub struct PerformanceMonitorConfig {
     top_process_count: usize,
     owned_processes: BTreeMap<u32, String>,
     thresholds: PerformanceThresholds,
+    /// Workflow #385 P-m (`performance.pressure.gpu_aggregate`): how the GPU's engines make
+    /// one utilisation.
+    gpu_aggregate: GpuAggregate,
 }
 
 impl Default for PerformanceMonitorConfig {
@@ -78,6 +86,7 @@ impl Default for PerformanceMonitorConfig {
             top_process_count: DEFAULT_TOP_PROCESS_COUNT,
             owned_processes: BTreeMap::new(),
             thresholds: PerformanceThresholds::default(),
+            gpu_aggregate: GpuAggregate::default(),
         }
     }
 }
@@ -98,6 +107,17 @@ impl PerformanceMonitorConfig {
     pub fn with_pressure_end_samples(mut self, samples: u16) -> Self {
         self.pressure_end_samples = samples;
         self
+    }
+
+    /// Workflow #385 P-m (PERF §3.4): how the GPU's engines make one utilisation.
+    pub fn with_gpu_aggregate(mut self, aggregate: GpuAggregate) -> Self {
+        self.gpu_aggregate = aggregate;
+        self
+    }
+
+    /// The effective GPU aggregate (`with_gpu_aggregate`, default by engine type).
+    pub const fn gpu_aggregate(&self) -> GpuAggregate {
+        self.gpu_aggregate
     }
 
     pub fn sample_interval(&self) -> Duration {
@@ -369,8 +389,8 @@ pub(crate) struct RawSystemSample {
     pub(crate) unavailable_metrics: Vec<PerformanceMetric>,
 }
 
-pub(crate) fn system_performance_sampler() -> Result<Box<dyn HostSampler>, Code> {
-    actingcommand_host_metrics::system_sampler()
+pub(crate) fn system_performance_sampler(gpu: GpuAggregate) -> Result<Box<dyn HostSampler>, Code> {
+    actingcommand_host_metrics::system_sampler(gpu)
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +402,12 @@ pub(crate) enum PerformanceSemanticEvent {
     MonitorDegraded(PerformanceMonitorStateEventData),
     MonitorRecovered(PerformanceMonitorStateEventData),
     BalanceChanged(PerformanceControlEventData),
+    /// Workflow #385 P-m (register P1): one stage transition of the shadow measurement,
+    /// its `perf_stage_changed` outcome.
+    PacingChanged {
+        observed_at_unix_ms: u64,
+        outcome: Outcome,
+    },
 }
 
 impl PerformanceSemanticEvent {
@@ -410,6 +436,8 @@ impl PerformanceSemanticEvent {
             }
             Self::StutterDetected(_) | Self::MonitorDegraded(_) => EventSeverity::Warning,
             Self::BalanceChanged(_) => EventSeverity::Warning,
+            // The record's severity is its outcome's category, info.
+            Self::PacingChanged { .. } => EventSeverity::Info,
         }
     }
 
@@ -422,6 +450,7 @@ impl PerformanceSemanticEvent {
             Self::MonitorDegraded(_) => EventType::PerformanceMonitorDegraded,
             Self::MonitorRecovered(_) => EventType::PerformanceMonitorRecovered,
             Self::BalanceChanged(_) => EventType::PerformanceBalanceChanged,
+            Self::PacingChanged { .. } => EventType::PerformancePacingChanged,
         }
     }
 
@@ -432,6 +461,10 @@ impl PerformanceSemanticEvent {
             Self::Summary(data) => data.context.window_end_unix_ms,
             Self::MonitorDegraded(data) | Self::MonitorRecovered(data) => data.observed_at_unix_ms,
             Self::BalanceChanged(data) => data.observed_at_unix_ms,
+            Self::PacingChanged {
+                observed_at_unix_ms,
+                ..
+            } => *observed_at_unix_ms,
         }
     }
 
@@ -458,6 +491,9 @@ impl PerformanceSemanticEvent {
             }
             Self::BalanceChanged(data) => {
                 PerformancePayloadDraft::balance_changed(data.clone(), AuditInput::new())
+            }
+            Self::PacingChanged { outcome, .. } => {
+                PerformancePayloadDraft::pacing_changed(outcome.clone(), AuditInput::new())
             }
         }
     }
@@ -518,6 +554,9 @@ pub(crate) struct PerformanceMonitor {
     last_summary_unix_ms: Option<u64>,
     last_control_sample_unix_ms: Option<u64>,
     previous_ledger_sample: Option<GlobalLedgerCommitSnapshot>,
+    /// Workflow #385 P-m: the shadow measurement; it evaluates only while the counters are
+    /// enabled and acts on nothing.
+    pacing: PacingShadow,
 }
 
 impl PerformanceMonitor {
@@ -550,6 +589,7 @@ impl PerformanceMonitor {
             last_summary_unix_ms: None,
             last_control_sample_unix_ms: None,
             previous_ledger_sample: None,
+            pacing: PacingShadow::default(),
         }
     }
 
@@ -589,6 +629,7 @@ impl PerformanceMonitor {
             last_summary_unix_ms: None,
             last_control_sample_unix_ms: None,
             previous_ledger_sample: None,
+            pacing: PacingShadow::default(),
         })
     }
 
@@ -1404,6 +1445,8 @@ impl PerformanceMonitor {
             }),
             ledger_commits: None,
             capacity,
+            // Workflow #385 P-m (register P4): the last evaluation's pacing members.
+            pacing: self.pacing.summary(),
         })
     }
 
@@ -1564,6 +1607,86 @@ impl PerformanceMonitor {
             ));
         }
         Ok(events)
+    }
+}
+
+/// Workflow #385 P-m: the shadow measurement's entry points (PERF §3, §4.6).
+impl PerformanceMonitor {
+    /// One evaluation of the shadow measurement at `now` over the registered `instances`, with
+    /// the active pressures of the floor's kinds (§3.4); its stage transitions as
+    /// `perf.pacing_changed` events. A monitor without counters evaluates nothing.
+    pub(crate) fn evaluate_pacing(
+        &mut self,
+        now: u64,
+        settings: &actingcommand_runtime_config::performance::PerformanceMeasurement,
+        instances: &[String],
+    ) -> RuntimeHostResult<Vec<PerformanceSemanticEvent>> {
+        if !self.counters_enabled() {
+            return Ok(Vec::new());
+        }
+        if now == 0 {
+            return Err(performance_fatal(
+                HostCode::PerformanceControlTimeInvalid,
+                HostLocation::EvaluatePerformancePacing,
+            ));
+        }
+        let pressure = floor_pressure(
+            self.active_pressures
+                .iter()
+                .map(|(kind, active)| (*kind, active.record.severity)),
+            &settings.pacing.pressure_floor.kinds,
+        );
+        Ok(self
+            .pacing
+            .evaluate(now, settings, instances, pressure)
+            .into_iter()
+            .map(|outcome| PerformanceSemanticEvent::PacingChanged {
+                observed_at_unix_ms: now,
+                outcome,
+            })
+            .collect())
+    }
+
+    /// One sample for the shadow measurement (§3.2), taken while the counters are enabled.
+    pub(crate) fn record_pacing_sample(&mut self, sample: PacingSample) {
+        if self.counters_enabled() {
+            self.pacing.record(sample);
+        }
+    }
+
+    /// The backend an instance's open selected (§3.5).
+    pub(crate) fn note_pacing_backend(
+        &mut self,
+        instance_alias: &str,
+        role: PacingBackendRole,
+        selected: &str,
+    ) {
+        self.pacing.note_backend(instance_alias, role, selected);
+    }
+
+    /// A host probe that could not run (§3.2, §11 `perf_probe_unavailable`).
+    pub(crate) fn pacing_probe_unavailable(
+        &mut self,
+        probe: crate::codes::ProbeKind,
+        outcome: Outcome,
+    ) {
+        self.pacing.probe_unavailable(probe, outcome);
+    }
+
+    /// The status read (§4.6): the monitor's health beside the shadow's rows; a monitor without
+    /// counters is unavailable and has never evaluated.
+    pub(crate) fn pacing_status(
+        &self,
+        now: u64,
+        settings: &actingcommand_runtime_config::performance::PerformanceMeasurement,
+        instances: &[String],
+    ) -> actingcommand_contract::RuntimePerformanceStatus {
+        let health = if self.counters_enabled() {
+            self.health
+        } else {
+            PerformanceMonitorHealth::Unavailable
+        };
+        self.pacing.status(now, settings, instances, health)
     }
 }
 

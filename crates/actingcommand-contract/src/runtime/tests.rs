@@ -823,11 +823,8 @@ fn application_lifecycle_request_is_instance_scoped_and_carries_no_application_i
 #[test]
 fn contained_task_request_carries_runtime_resolved_identity_and_bounded_response_deadline() {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let request = ContainedTaskRequest::new(
-        "C:/sealed/neutral-task.zip",
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    )
-    .expect("contained task request");
+    let request =
+        ContainedTaskRequest::new("C:/sealed/neutral-task.zip").expect("contained task request");
     let operation = RuntimeOperation::run_contained_task(
         "neutral.instance",
         ids.mint_holder_id().expect("holder"),
@@ -851,8 +848,7 @@ fn contained_task_request_carries_runtime_resolved_identity_and_bounded_response
 #[test]
 fn contained_task_deadline_defaults_for_legacy_requests_and_rejects_unbounded_values() {
     let legacy: ContainedTaskRequest = serde_json::from_value(serde_json::json!({
-        "package_path": "C:/sealed/neutral-task.zip",
-        "expected_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        "package_path": "C:/sealed/neutral-task.zip"
     }))
     .expect("legacy contained-task request");
     assert_eq!(
@@ -868,97 +864,97 @@ fn contained_task_deadline_defaults_for_legacy_requests_and_rejects_unbounded_va
 }
 
 // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+// Workflow #336 PKG-S4 (option 丙): the recovery binding names its package by its path only.
 #[test]
-fn contained_task_recovery_binding_is_optional_typed_and_hash_bound() {
-    let legacy = ContainedTaskRequest::new("C:/sealed/neutral-task.zip", "0".repeat(64))
-        .expect("legacy-shaped request");
+fn contained_task_recovery_binding_is_optional_typed_and_path_only() {
+    let legacy =
+        ContainedTaskRequest::new("C:/sealed/neutral-task.zip").expect("legacy-shaped request");
     assert!(legacy.recovery().is_none());
 
     let request = legacy
         .with_recovery(
-            ContainedTaskRecoveryBinding::new("C:/sealed/return-home.zip", "1".repeat(64))
+            ContainedTaskRecoveryBinding::new("C:/sealed/return-home.zip")
                 .expect("recovery binding"),
         )
         .expect("request with recovery");
     let recovery = request.recovery().expect("typed recovery binding");
     assert_eq!(recovery.package_path(), "C:/sealed/return-home.zip");
-    assert_eq!(recovery.expected_sha256(), &"1".repeat(64).into());
-    assert!(
-        ContainedTaskRecoveryBinding::new("C:/sealed/return-home.zip", "1".repeat(63)).is_err()
-    );
+    assert!(ContainedTaskRecoveryBinding::new("").is_err());
     assert!(!format!("{request:?}").contains("return-home.zip"));
 
-    // Source-tree references use the same request/recovery identity contract.
-    let source_wire = serde_json::json!({
-        "schema_version": "actingcommand.package.git-source-tree.v1",
-        "repository": "https://example.org/team/resources",
-        "commit": {"algorithm": "sha1", "hex": "a".repeat(40)},
-        "bundle_path": "bundles/neutral",
-        "tree": {"algorithm": "sha1", "hex": "b".repeat(40)}
-    });
-    let source: crate::PackageRef =
-        serde_json::from_value(source_wire.clone()).expect("source reference");
-    source.validate().expect("complete source reference");
-    let request = ContainedTaskRequest::new("C:/sources/bundles/neutral", source.clone())
-        .expect("source request")
-        .with_recovery(
-            ContainedTaskRecoveryBinding::new("C:/sources/bundles/neutral", source.clone())
-                .expect("source recovery"),
-        )
-        .expect("source recovery request");
-    let wire = serde_json::to_value(&request).expect("source request encoding");
-    assert_eq!(wire["expected_sha256"], source_wire);
-    let decoded: ContainedTaskRequest =
-        serde_json::from_value(wire).expect("source request decoding");
-    assert_eq!(decoded.expected_sha256(), &source);
+    let wire = serde_json::to_value(&request).expect("request encoding");
     assert_eq!(
-        decoded
-            .recovery()
-            .expect("source recovery")
-            .expected_sha256(),
-        &source
+        wire["recovery"],
+        serde_json::json!({"package_path": "C:/sealed/return-home.zip"})
     );
-    for (field, replacement) in [
-        (
-            "repository",
-            serde_json::json!("https://example.org/team/alternate"),
+    let decoded: ContainedTaskRequest = serde_json::from_value(wire).expect("request decoding");
+    assert_eq!(decoded, request);
+}
+
+// Workflow #336 PKG-S4 (option 丙), model M-PKG v1.1 §4.5 S4-T5: on the IPC wire a request
+// names its package by its path only. A request without a digest is received; one whose task
+// request, recovery binding, package debug request or contained observation request still
+// carries `expected_sha256` does not decode.
+#[test]
+fn s4_t5_a_wire_request_that_names_a_package_digest_is_refused() {
+    let ids = issuer();
+    let task = ContainedTaskRequest::new("C:/sealed/neutral-task.zip")
+        .and_then(|request| {
+            request.with_recovery(ContainedTaskRecoveryBinding::new(
+                "C:/sealed/return-home.zip",
+            )?)
+        })
+        .expect("contained task request");
+    let operations = [
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("holder"),
+            task,
         ),
-        (
-            "commit",
-            serde_json::json!({"algorithm":"sha1","hex":"c".repeat(40)}),
-        ),
-        ("bundle_path", serde_json::json!("bundles/alternate")),
-        (
-            "tree",
-            serde_json::json!({"algorithm":"sha1","hex":"d".repeat(40)}),
-        ),
-    ] {
-        let mut changed = source_wire.clone();
-        changed[field] = replacement;
-        let changed: crate::PackageRef =
-            serde_json::from_value(changed).expect("changed source reference");
-        changed.validate().expect("valid alternate identity");
-        assert_ne!(source, changed, "{field} participates in package identity");
-    }
-    for (field, replacement) in [
-        (
-            "repository",
-            serde_json::json!("https://credential@example.org/team/resources"),
-        ),
-        ("bundle_path", serde_json::json!("../outside")),
-        (
-            "tree",
-            serde_json::json!({"algorithm":"sha256","hex":"b".repeat(64)}),
-        ),
-    ] {
-        let mut invalid = source_wire.clone();
-        invalid[field] = replacement;
-        let invalid: crate::PackageRef =
-            serde_json::from_value(invalid).expect("invalid source shape");
-        assert!(
-            invalid.validate().is_err(),
-            "{field} rejects ambiguous reference"
+        RuntimeOperation::DebugPackage {
+            request: PackageDebugRequest::new("C:/sealed/neutral-task.zip").expect("debug request"),
+        },
+        RuntimeOperation::ObserveContainedPage {
+            instance_alias: "neutral.instance".to_owned(),
+            request: ContainedObservationRequest::new("C:/sealed/neutral-task.zip", Vec::new())
+                .expect("observation request"),
+        },
+    ];
+    let digest = serde_json::json!("0".repeat(64));
+    for operation in operations {
+        // A Lab request: the Lab sends all three (a package debug request only from the Lab).
+        let lab_request = RuntimeRequest::new(
+            ids.mint_request_id().expect("request id"),
+            ids.mint_correlation_id().expect("correlation id"),
+            None,
+            EventActor::Lab,
+            EventSource::Lab,
+            1,
+            operation,
+        )
+        .expect("Lab runtime request");
+        let wire = serde_json::to_value(lab_request).expect("request encoding");
+        let received: RuntimeRequest =
+            serde_json::from_value(wire.clone()).expect("a request without a digest decodes");
+        assert_eq!(
+            serde_json::to_value(&received).expect("request encoding"),
+            wire
         );
+        let mut places = vec![vec!["operation", "request"]];
+        if wire["operation"]["request"].get("recovery").is_some() {
+            places.push(vec!["operation", "request", "recovery"]);
+        }
+        for place in places {
+            let mut refused = wire.clone();
+            let member = place
+                .iter()
+                .fold(&mut refused, |value, key| &mut value[*key]);
+            member["expected_sha256"] = digest.clone();
+            assert!(
+                serde_json::from_value::<RuntimeRequest>(refused).is_err(),
+                "{place:?} carries expected_sha256: {wire}"
+            );
+        }
     }
 }
 
@@ -1010,11 +1006,9 @@ fn contained_task_cancellation_status_rejects_ambiguous_terminal_identity() {
 #[test]
 fn package_debug_contract_is_lab_only_bounded_and_redacted() {
     let private_path = r"C:\private\resource-package.zip";
-    let expected = "a".repeat(64);
-    let debug_request = PackageDebugRequest::new(private_path, &expected).expect("debug request");
+    let debug_request = PackageDebugRequest::new(private_path).expect("debug request");
     let debug = format!("{debug_request:?}");
     assert!(!debug.contains(private_path));
-    assert!(!debug.contains(&expected));
 
     let ids = issuer();
     let request = RuntimeRequest::new(
@@ -1040,21 +1034,14 @@ fn package_debug_contract_is_lab_only_bounded_and_redacted() {
         EventSource::Cli,
         1,
         RuntimeOperation::DebugPackage {
-            request: PackageDebugRequest::new(private_path, &expected).expect("debug request"),
+            request: PackageDebugRequest::new(private_path).expect("debug request"),
         },
     )
     .expect_err("non-Lab package debug must fail");
     assert_eq!(wrong_origin.code().as_str(), "invalid_runtime_debug_origin");
 
     assert_eq!(
-        PackageDebugRequest::new(private_path, "A".repeat(64))
-            .expect_err("uppercase hash")
-            .code()
-            .as_str(),
-        "invalid_debug_package_hash"
-    );
-    assert_eq!(
-        PackageDebugRequest::new("", &expected)
+        PackageDebugRequest::new("")
             .expect_err("empty path")
             .code()
             .as_str(),
@@ -1164,7 +1151,6 @@ fn runtime_debug_events_are_strict_and_require_lab_origin() {
 fn package_debug_summary_round_trips_as_a_closed_result() {
     let summary = PackageDebugSummary::new(
         "task",
-        "b".repeat(64),
         PackageDebugLayout::Lab,
         3,
         128,

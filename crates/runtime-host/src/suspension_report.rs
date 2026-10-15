@@ -571,7 +571,7 @@ pub fn suspension_report(
                 "frames": frames,
                 "lifts_when": LIFTS_WHEN,
                 "takeover": format!(
-                    "actingctl task-run --state-root {} --instance {instance_id} --package <package> --package-ref <package-ref>",
+                    "actingctl task-run --state-root {} --instance {instance_id} --package <package>",
                     state_root.display()
                 ),
             }));

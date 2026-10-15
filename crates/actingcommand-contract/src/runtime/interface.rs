@@ -211,6 +211,7 @@ runtime_operation_kinds! {
     MonitorStatus,
     RuntimeFactSnapshot,
     InstanceFactSnapshot,
+    PerformanceStatus,
     ConfigureMonitor,
     ClearMonitor,
     AcquireLease,
@@ -284,6 +285,7 @@ impl RuntimeOperationKind {
             | Self::MonitorStatus
             | Self::RuntimeFactSnapshot
             | Self::InstanceFactSnapshot
+            | Self::PerformanceStatus
             | Self::ProjectInterface
             | Self::QueryEvents
             | Self::SubscribeEvents
@@ -374,6 +376,8 @@ impl RuntimeOperationKind {
             Self::MonitorStatus => Some(ReceiptCode::MonitorStatusCompleted.code()),
             Self::RuntimeFactSnapshot => Some(ReceiptCode::RuntimeFactSnapshotCompleted.code()),
             Self::InstanceFactSnapshot => Some(ReceiptCode::InstanceFactSnapshotCompleted.code()),
+            // Workflow #385 P-m (register §1.61 W15).
+            Self::PerformanceStatus => Some(ReceiptCode::PerformanceStatusCompleted.code()),
             Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
             Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
             Self::CancelContainedTask => Some(ReceiptCode::CancelContainedTaskCompleted.code()),
@@ -479,6 +483,7 @@ impl RuntimeOperation {
             Self::MonitorStatus => Kind::MonitorStatus,
             Self::RuntimeFactSnapshot => Kind::RuntimeFactSnapshot,
             Self::InstanceFactSnapshot { .. } => Kind::InstanceFactSnapshot,
+            Self::PerformanceStatus => Kind::PerformanceStatus,
             Self::ConfigureMonitor { .. } => Kind::ConfigureMonitor,
             Self::ClearMonitor { .. } => Kind::ClearMonitor,
             Self::AcquireLease { .. } => Kind::AcquireLease,
@@ -593,6 +598,9 @@ mod tests {
             // Workflow #389 MCP-4 (register W2): one instance's facts, a general read that
             // records nothing.
             K::InstanceFactSnapshot => (General, Some(Read), false),
+            // Workflow #385 P-m (register §1.61 W15): the shadow measurement's status, a general
+            // read from memory that records nothing.
+            K::PerformanceStatus => (General, Some(Read), false),
             K::ProjectInterface => (General, Some(Read), false),
             K::QueryEvents => (General, Some(Read), false),
             K::SubscribeEvents => (General, Some(Read), false),

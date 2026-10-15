@@ -56,6 +56,16 @@ impl TaskTimingObserver {
         }
     }
 
+    /// Workflow #385 MEM-1 (ADD §1.6, register P8): the run's package load, `(elapsed_ms,
+    /// bytes)`, when its preparation measured it.
+    pub(super) fn with_package_load(mut self, load: Option<(u64, u64)>) -> Self {
+        if let Some((elapsed_ms, bytes)) = load {
+            self.value.package_load_ms = Some(elapsed_ms);
+            self.value.package_load_bytes = Some(bytes);
+        }
+        self
+    }
+
     pub(super) fn begin_execution(&mut self, context: ContainedTaskTimingContext) {
         self.incomplete_effect_bridges();
         self.context = Some(context);

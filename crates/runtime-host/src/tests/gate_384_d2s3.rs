@@ -255,7 +255,6 @@ fn adjustment_package() -> Vec<u8> {
 fn run_adjustment_package(
     host: &RuntimeHost,
     package: &Path,
-    bytes: &[u8],
 ) -> (RuntimeReceipt, actingcommand_contract::CorrelationId) {
     let mut client = TestClient::connect(host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
@@ -265,11 +264,8 @@ fn run_adjustment_package(
         RuntimeOperation::run_contained_task(
             ADJUSTMENT_ALIAS,
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(
-                package.display().to_string(),
-                actingcommand_pack_containment::Sha256Hash::digest(bytes).to_string(),
-            )
-            .expect("adjustment task request"),
+            ContainedTaskRequest::new(package.display().to_string())
+                .expect("adjustment task request"),
         ),
     );
     (client.send(&request), correlation_id)
@@ -416,7 +412,7 @@ fn d2s3_t15_t16_t17_t40_confirmed_adjustments_write_or_drop_their_keys() {
     host.publish_fact(k3_before.clone())
         .expect("publish resource.k3");
 
-    let (receipt, correlation_id) = run_adjustment_package(&host, &package, &bytes);
+    let (receipt, correlation_id) = run_adjustment_package(&host, &package);
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Completed,
@@ -462,7 +458,7 @@ fn d2s3_t15_t16_t17_t40_confirmed_adjustments_write_or_drop_their_keys() {
         .transition_capture_after_inputs
         .store(2, Ordering::Release);
     provider.terminal_low.store(true, Ordering::Release);
-    let (receipt, correlation_id) = run_adjustment_package(&host, &package, &bytes);
+    let (receipt, correlation_id) = run_adjustment_package(&host, &package);
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Completed,

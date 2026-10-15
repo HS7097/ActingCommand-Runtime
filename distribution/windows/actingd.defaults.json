@@ -288,6 +288,11 @@
       "max_ms": 3600000
     },
     "fact_refresh": {
+      "enabled": true,
+      "min_interval_ms": 300000,
+      "daily_limit": 96,
+      "failure_backoff_ms": 600000,
+      "max_consecutive_failures": 3,
       "recognition_join_timeout_ms": 10000
     },
     "suspension": {

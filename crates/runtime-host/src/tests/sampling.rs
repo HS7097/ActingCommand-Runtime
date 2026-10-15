@@ -8,7 +8,6 @@ fn direct_runtime_run_derives_sampling_seed_from_issued_run_identity() {
     let package = neutral_region_contained_task_package(true);
     let package_path = root.path().join("direct-region-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -31,7 +30,7 @@ fn direct_runtime_run_derives_sampling_seed_from_issued_run_identity() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
                 .expect("contained task request"),
         ),
     );

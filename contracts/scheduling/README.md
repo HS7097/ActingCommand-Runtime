@@ -332,7 +332,9 @@ ranking, the evaluator runs an optional score stage:
   - otherwise every unknown key gives one `fact_refresh_unbound`
     (`instance_id=<id> fact_key=<key> unknown_reason=<reason>`). A fact field
     whose record has expired reports `fact_expired`; one with no record reports
-    `field_missing`.
+    `field_missing`. In the Runtime, which hands the evaluator its readers, these
+    keys go to the fact refresh instead ("Fact Refresh" below), which gives each
+    key its reason.
 
   `<reason>` is one of `fact_missing`, `fact_expired`, `fact_stale`,
   `fact_low_confidence`, `fact_not_scalar`, `type_mismatch`, `field_missing` or
@@ -438,6 +440,88 @@ from there; the stored `catalog_hash` is verified against a recompilation as for
 the four documents. An agent proposal compiled against a catalog with a
 selection document carries that document unchanged into the proposed catalog;
 proposal patches address only the four catalog documents.
+
+## Fact Refresh
+
+Workflow #384 D2-S4 (`rd-1009/d2/model-d2-fact-refresh.md` v1.4.2 §3.3, §3.4,
+§3.7, §3.9). A realistic instance fact (a `resource.` or `inventory.` key,
+which recognition writes) that a candidate reads and finds unknown never fails
+the round and is never scored with an old value: the instance's recognition
+maintenance package R_I (`instances[].recognition_package`) is dispatched to
+read it, and the candidate waits.
+
+- **Demand.** A candidate raises demand for the unknown realistic keys its
+  selection document read ("Score-Assisted Priority"), and a task for those its
+  undecided trigger or feedback stop read in exactly its own instance's scope
+  (`trigger_unknown` / `feedback_stop_unknown` stay; an instruction key such as
+  `session.*`, a server or game scope, a dependency or an outcome raises none).
+  Only candidates past the closure's positions 1-2 raise demand: on an instance
+  an operator pause, a holder, a waiting claim or a takeover cooldown holds as
+  the cycle starts, a candidate the selection document deferred carries that
+  hold's reason alone (`dispatch_paused_*`, `dispatch_instance_held`,
+  `dispatch_instance_cooldown`) and no fact refresh reason, and nothing is
+  dispatched there.
+- **No reader.** A key no reader can serve gives `fact_refresh_unbound` with
+  `reader_problem`: `disabled` (`scheduling.fact_refresh.enabled` is off),
+  `package_unbound` (the instance has no kept recognition maintenance package),
+  `package_unreadable` (the Runtime start could not read its package's marks)
+  or `key_not_marked` (its package has no mark for the key).
+- **The reader's candidate.** R_I is requested for the keys its marks write:
+  its decision carries one `fact_refresh_requested` (`instance_id`, `fact_key`,
+  `unknown_reason`, and `rule_id` when a selection document rule read it) per
+  key, and so does its dispatch's reason chain, which is how the run learns its
+  requested key set (it reads only those keys' marks; a `linear_steps` package
+  runs only the segments that reach them). Its decision and dispatch use the
+  reserved task id `_fact_refresh`, operation and procedure `_fact_refresh`
+  (a catalog id never starts with `_`), the instance's activity profile, a light
+  load and a reserved run time of 60 s; its loop budget never binds. It takes
+  the highest rank (catalog rank plus manual offset) of the candidates it
+  unlocks and competes with the instance's other candidates; one winner per
+  instance and the host budget apply as usual.
+- **Its own gates**, before the allocation: an instance without an activity
+  profile (a limit, `activity_profile_missing`); its failed runs in a row since
+  its last success reaching `max_consecutive_failures` with its latest run in
+  the current activity day, and its dispatches in the current activity day
+  reaching `daily_limit` (limits, waking when the activity day's window ends);
+  an unavailable instance, a host that cannot take its load (for now); and
+  `task_cooldown_active` until both `min_interval_ms` after its latest dispatch
+  and, after a failed run, `failure_backoff_ms` after that run's end (for now).
+  In the allocation the Runtime's admission defers it like any candidate; a
+  closed activity window or a spent activity budget, a spent task budget and a
+  paused pair are limits, everything else is for now.
+- **Each affected candidate's reason**, per key R_I reads, by the first row that
+  matches; the candidate is deferred, never failed, and the round always
+  succeeds:
+  1. R_I is selected this round: `fact_refresh_pending` (`instance_id`,
+     `fact_key`, `unknown_reason`, `package_id`), no wake;
+  2. a limit holds R_I back: `fact_refresh_exhausted` (`instance_id`,
+     `fact_key`, `package_id`, `refresh_limit` = `daily_limit`,
+     `failure_pause`, `activity_window` or `placement`; `gate_code` when the
+     Runtime's admission named the gate; `next_eligible_unix_ms` when known);
+  3. R_I's latest dispatch settled successfully at or after L, the instant this
+     Runtime finished loading the instance facts, and the key is still unknown
+     because of it (no record since that dispatch, or one recognition could not
+     use: too little confidence, not a scalar, another type):
+     `fact_refresh_unresolved` (`package_id`; `next_eligible_unix_ms`, R_I's
+     next eligible time);
+  4. anything else: `fact_refresh_pending` with `gate_code` (the code that
+     deferred R_I), `failure_code` (the code R_I's latest run failed with, when
+     it failed) and `next_eligible_unix_ms` when the gate names one.
+- **Settings.** `scheduling.fact_refresh.enabled`, `min_interval_ms`,
+  `daily_limit`, `failure_backoff_ms` and `max_consecutive_failures`
+  ([runtime-config.md](../runtime-config.md)), read at every cycle; they are not
+  part of any `detection_budget`.
+- **Dispatch.** R_I is a policy dispatch of the instance's one queue (claim kind
+  `policy_dispatch`): the Runtime admits, budgets and settles it like a catalog
+  task's, under the Runtime-owned task spec, and runs the kept package by its
+  location. Before any input the run checks that the package still qualifies as
+  a reader; one that no longer does (a designated operation, no marks,
+  `recognize_only`, a stability termination) fails the run with
+  `fact_reader_binding_invalid` and its `reader_problem`, which counts as one of
+  R_I's failures. The readings are published as instance facts before the run's
+  terminal, and the next round scores the candidates that read them. The fact
+  refresh writes nothing to the ledger itself: R_I's dispatch, run and readings
+  are recorded as every policy dispatch, run and reading is.
 
 ## Dispatch Decision Record
 

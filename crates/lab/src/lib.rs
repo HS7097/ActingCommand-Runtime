@@ -6,7 +6,8 @@
 //! crate. Lab consumes stable contracts and injected ports so production remains
 //! buildable and runnable when this crate is excluded.
 //!
-//! Package inspection uses `Lab::lab_validate` or `validate_lab_package_bytes`.
+//! Package inspection uses `Lab::lab_validate`, `validate_lab_package_bytes` or
+//! `validate_lab_package_path`.
 //! Execution clients submit contained tasks through the Runtime client; the
 //! `actinglab lab run` command uses that same Runtime-owned execution path.
 
@@ -48,7 +49,9 @@ pub use drive::*;
 pub use drive_api::*;
 pub use env_api::*;
 pub use env_detection::*;
-pub use lab_run::{target_evaluations_stable_for_wait, validate_lab_package_bytes};
+pub use lab_run::{
+    target_evaluations_stable_for_wait, validate_lab_package_bytes, validate_lab_package_path,
+};
 pub use lab_run_api::*;
 pub use ledger_port::*;
 pub use maa_task_graph::{

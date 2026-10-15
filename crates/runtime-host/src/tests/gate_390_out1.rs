@@ -133,11 +133,8 @@ fn out1_a_catalog_reads_a_subset_of_the_declared_outcomes_and_an_unproduced_one_
             neutral_mapped_contained_task_package(PRODUCED, "designated_effect_completed");
         let package_path = root.path().join("out1-producer.zip");
         fs::write(&package_path, &package).expect("write producer package");
-        let request = ContainedTaskRequest::new(
-            package_path.to_string_lossy().into_owned(),
-            format!("{:x}", Sha256::digest(&package)),
-        )
-        .expect("producer request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("producer request");
         let state = Arc::new(FakeState::default());
         state
             .transition_capture_after_input
@@ -307,7 +304,6 @@ fn out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_wit
         package.write_all(&bytes).expect("package entry bytes");
     }
     let bytes = package.finish().expect("package zip").into_inner();
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let root = TempDir::new().expect("tempdir");
     let package_path = root.path().join("zero-input-two-outcomes.zip");
     fs::write(&package_path, &bytes).expect("write zero-input package");
@@ -337,7 +333,7 @@ fn out1_a_zero_input_fields_package_with_two_outcomes_ends_on_its_other_page_wit
     let output = client
         .run_contained_task(
             "neutral.instance",
-            ContainedTaskRequest::new(package_path.display().to_string(), expected)
+            ContainedTaskRequest::new(package_path.display().to_string())
                 .expect("zero-input request"),
         )
         .unwrap_or_else(|error| {

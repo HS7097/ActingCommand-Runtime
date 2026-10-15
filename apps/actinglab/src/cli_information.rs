@@ -36,7 +36,7 @@ pub(super) fn help_data() -> Value {
         "command_options": {
             "resource validate": crate::resource_runtime_support::resource_declarations::options(),
             "resource catalog": ["--repo <repository root>", "--catalog <static catalog JSON>", "--catalog-server <server>", "--field <identity feature name>"],
-            "package preflight": ["--package <directory-or-zip>", "--package-ref <external package reference>"],
+            "package preflight": ["--package <directory | .zip | .json container>", "--zip <published .zip package>"],
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
             "lab unpin": ["--artifact-id <artifact-id>", "--pin-sequence <sequence>", "--pin-event-id <event-id>"],
@@ -46,7 +46,7 @@ pub(super) fn help_data() -> Value {
             "resource restore": [
                 "--repo <new directory>", "--state-root <Runtime state>",
                 "--request-id <ID> (repeatable, 1–32 unique)", "--through-sequence <upper bound>",
-                "--zip <package>", "--expected-sha256 <external hash>", "--task-id <draft ID>",
+                "--package <directory | .zip | .json container> | --zip <published .zip package>", "--task-id <draft ID>",
                 "--entry-page <page>", "--target-page <page> (repeatable)", "--goal <author text>"
             ],
             "resource compile-maa": [
@@ -245,9 +245,9 @@ pub(super) fn run_schema(args: &[String]) -> CliOutcome<Value> {
         "package" => json!({
             "schema_version": "0.2",
             "domain": "module_package",
-            "package_reference": crate::commands::capabilities::schema_capabilities()["package_reference"],
+            "package_locator": crate::commands::capabilities::schema_capabilities()["package_locator"],
             "required_paths": ["<module>/manifest.json", "<module>/operations/<task_id>/task.json"],
-            "security": ["no zip-slip", "no executable scripts", "hashes verified when declared"]
+            "security": ["no zip-slip", "no executable scripts", "structural admission, no digest compared"]
         }),
         "ledger" => json!({
             "schema_version": "actingcommand.ledger.query.v0.1",

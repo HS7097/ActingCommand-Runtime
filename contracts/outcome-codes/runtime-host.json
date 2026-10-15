@@ -20833,6 +20833,81 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "perf_stage_changed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pacing_stage_from": "required",
+        "pacing_stage_to": "required",
+        "responsiveness_bp": "required",
+        "factor_milli": "required",
+        "pacing_cause": "required",
+        "pacing_mode": "required",
+        "instance_id": "optional",
+        "host_responsiveness_bp": "optional",
+        "emulator_responsiveness_bp": "optional",
+        "pacing_learning_capped": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The shadow measurement's stage of the host (no instance_id) or of one instance changed: the curve read at the tracked responsiveness, with a pressure's stage-one floor. perf.pacing_changed carries it; under mode observe nothing takes effect (Workflow #385 PERF sections 4 and 12.1, P-m).",
+      "common_causes": "The host's probes or an instance's frame acquisitions and touch responses slowed down or recovered, or a pressure began or ended.",
+      "handling": "Nothing to repair: it is a measurement. Read the views with actingctl perf-status or the performance block of ac_overview."
+    },
+    "perf_probe_unavailable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "probe_kind": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A host probe of the shadow measurement could not run (its thread could not start, or it failed); its signal stays unknown and every other signal goes on. The status read (PerformanceStatus) carries it, caused by the failure (Workflow #385 PERF sections 3.2 and 11, P-m).",
+      "common_causes": "The operating system refused a thread, or the probe's clock or lock failed.",
+      "handling": "Restart actingd; if it recurs, check the host's resources. Pacing without the probe reads the remaining signals."
+    },
+    "perf_baseline_clamped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "signal_kind": "required",
+        "baseline_us": "required",
+        "limit_us": "required",
+        "instance_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A learned baseline of the shadow measurement is held at its clamp around the configured initial value (baseline_us, held at limit_us), for the host or one instance (instance_id). The status read (PerformanceStatus) carries it while the baseline stays held (Workflow #385 PERF sections 3.5 and 11, P-m).",
+      "common_causes": "The configured initial baseline of the signal is far from what the host or the backend really takes.",
+      "handling": "Look at the calm values and set performance.responsiveness initial_baseline_us of that signal (per backend) nearer to them, or widen baseline.clamp_min_milli or clamp_max_milli."
+    },
     "device_thermal_hold": {
       "category": "warning",
       "ladder_class": "planned_stop",
@@ -27989,6 +28064,62 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: end a run whose device failed while its handset is not at device with device_link_lost (Workflow #398 RD-2)."
+    },
+    "evaluate_performance_pacing": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: evaluate the shadow measurement's pacing (Workflow #385 P-m)."
+    },
+    "join_runtime_performance_probe": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: join the host timer probe's thread (Workflow #385 P-m)."
+    },
+    "observe_performance_backend": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: note the backend an instance's open selected for the shadow measurement (Workflow #385 P-m)."
+    },
+    "read_performance_measurement": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read what the shadow measurement takes from the performance section in effect (Workflow #385 P-m)."
+    },
+    "read_performance_status": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read the shadow measurement's status (Workflow #385 P-m)."
+    },
+    "record_performance_probe_sample": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: record a host probe's samples (Workflow #385 P-m)."
+    },
+    "run_performance_probe": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: run the host timer probe (Workflow #385 P-m)."
     },
     "device_state_gate": {
       "owner": "runtime-host",

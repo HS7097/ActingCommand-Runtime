@@ -663,9 +663,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run CLI source");
 
-    // Workflow #336 PKG-S1: the capability admits by path or bytes and records the caller's
-    // reference; `pkg_s1_package_admission_computes_and_compares_no_package_digest` keeps every
-    // digest comparison off this path.
+    // Workflow #336 PKG-S1/PKG-S4: the capability admits by path or bytes and the request names
+    // its package by its path only; `pkg_s1_package_admission_computes_and_compares_no_package_digest`
+    // keeps every digest comparison off this path.
     for required in ["pub struct ExternallyVerifiedBundle", "Containment::new()"] {
         assert!(
             bundle.contains(required),
@@ -683,10 +683,69 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
-        host.contains("PreparedContainedTask::load_path(")
-            && host.contains("request.expected_sha256(),"),
-        "Runtime host must admit the client package by its path and record its reference"
+        host.contains("PreparedContainedTask::load_path(") && !host.contains("expected_sha256"),
+        "Runtime host must admit the client package by its path, without a digest"
     );
+    // Workflow #385 P-m (MEM-1): the host has two loaders. `prepare_contained_task` admits
+    // through `PreparedContainedTask::load_path`; the main run's ingress (a client run, a
+    // package run and a scheduled run) admits through `prepare_measured_contained_task`, whose
+    // kernel twin `load_path_with_resident_bytes` also answers the resident bytes. Each loader
+    // must admit by path and record the reference PKG-S4 passes (the request names no digest, so
+    // it is the empty `PackageRef` until PKG-S5 removes the parameter), and both kernel loaders
+    // must reach the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's
+    // reference.
+    let compact = |text: &str| text.split_whitespace().collect::<String>();
+    let host_path = "crates/runtime-host/src/host/contained_task.rs";
+    let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
+    let settlement = fs::read_to_string(root.join(settlement_path))
+        .expect("read Runtime failure-settlement source");
+    let kernel_path = "crates/execution-kernel/src/contained_task.rs";
+    for (function, required) in [
+        (
+            "prepare_contained_task",
+            "PreparedContainedTask::load_path(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+        ),
+        (
+            "prepare_measured_contained_task",
+            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+        ),
+    ] {
+        let body = function_source(host_path, &host, None, function)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            compact(&body).contains(required),
+            "Runtime host {function} must admit the client package by its path and record its \
+             reference via {required}"
+        );
+    }
+    for (path, source, function) in [
+        (host_path, &host, "run_contained_task"),
+        (host_path, &host, "prepare_package_run"),
+        (settlement_path, &settlement, "prepare_scheduled_package"),
+    ] {
+        let body = function_source(path, source, Some("HostShared"), function)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            compact(&body).contains("prepare_measured_contained_task("),
+            "main-run ingress HostShared::{function} ({path}) must admit its package through \
+             prepare_measured_contained_task"
+        );
+    }
+    for function in ["load_path", "load_path_with_resident_bytes"] {
+        let body = function_source(
+            kernel_path,
+            &contained,
+            Some("PreparedContainedTask"),
+            function,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            compact(&body)
+                .contains("ExternallyVerifiedBundle::load_path(instance_label,locator,recorded,"),
+            "PreparedContainedTask::{function} must admit by path through \
+             ExternallyVerifiedBundle::load_path with the caller's recorded reference"
+        );
+    }
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
             !contained.contains(forbidden),
@@ -694,13 +753,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        cli.contains("required_package_reference")
-            && cli.contains("PackageInput::open_declared(&flags, reference)")
-            && cli.contains("PackageInput::declared_reference(flags)")
-            && cli.contains("package_reader.reference.clone()")
-            && cli.contains("ContainedTaskRequest::new")
-            && cli.contains("run_contained_task(&instance, request)"),
-        "ActingLab production run CLI does not require an external package reference"
+        cli.contains("PackageInput::open(&flags)")
+            && cli.contains("ContainedTaskRequest::new(package_reader.path()")
+            && cli.contains("run_contained_task(&instance, request)")
+            && !cli.contains("expected-sha256")
+            && !cli.contains("package-ref"),
+        "ActingLab production run CLI must submit its package by its path, without a digest"
     );
 }
 
@@ -975,9 +1033,10 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
             "package CLI router lost offline route {required}"
         );
     }
+    // Workflow #336 PKG-S4 (forced compromise T-01): the dry run reads its package by its path.
     for required in [
-        "validate_lab_package_bytes",
-        "PreparedContainedTask::load",
+        "validate_lab_package_path",
+        "PreparedContainedTask::load_path",
         "simulate_contained_task",
         "mode: \"offline_simulation\"",
         "executed: false",
@@ -3723,6 +3782,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "MonitorStatus",
     "ObserveContainedPage",
     "ObserveReadonly",
+    // Workflow #385 P-m (register §1.61 W15): the shadow measurement's status, a general read
+    // from memory like Status.
+    "PerformanceStatus",
     "PollQueuedLease",
     "ProjectInterface",
     "QueryEvents",
@@ -5631,13 +5693,20 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
         .and_then(|(_, tail)| tail.split_once("}\n\nimpl ContainedTaskRequest"))
         .map(|(body, _)| body)
         .expect("locate ContainedTaskRequest fields");
-    for required in ["package_path: String", "expected_sha256: crate::PackageRef"] {
-        assert!(
-            request.contains(required),
-            "contained task request lost {required}"
-        );
-    }
-    for forbidden in ["game", "server", "package_name", "TaskSemanticFact"] {
+    assert!(
+        request.contains("package_path: String"),
+        "contained task request lost package_path: String"
+    );
+    // Workflow #336 PKG-S4 (option 丙, M-PKG v1.1 §4.5): the request carries no package digest.
+    for forbidden in [
+        "game",
+        "server",
+        "package_name",
+        "TaskSemanticFact",
+        "expected_sha256",
+        "PackageRef",
+        "sha256",
+    ] {
         assert!(
             !request.contains(forbidden),
             "contained task client contract embeds application identity via {forbidden}"

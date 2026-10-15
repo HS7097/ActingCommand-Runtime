@@ -11,15 +11,15 @@ An optional typed `after` condition supplies an exact package page ID and
 `timeout_ms`. Online `do --capture` exposes it as `--after-page <full-page-id>`
 and `--after-timeout-ms <ms>` (default 5000, range 100–10000). The timeout flag
 requires a page, and both flags require online capture. Runtime verifies that
-the target belongs to the hash-verified package before lease acquisition or
+the target belongs to the admitted package before lease acquisition or
 input. Omitting the condition retains the single-after-frame mode.
 
 The online CLI forms are:
 
 ```
-actinglab do <element-id> --capture --zip <package> --expected-sha256 <hash>
-actinglab do --tap <x,y> --capture --zip <package> --expected-sha256 <hash>
-actinglab do --swipe <x1,y1,x2,y2,duration-ms> --capture --zip <package> --expected-sha256 <hash>
+actinglab do <element-id> --capture --zip <package>
+actinglab do --tap <x,y> --capture --zip <package>
+actinglab do --swipe <x1,y1,x2,y2,duration-ms> --capture --zip <package>
 ```
 
 `--instance` and the existing profile selection still choose the Runtime
