@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 fn neutral_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
-    neutral_contained_task_package_with_task(
+    neutral_contained_task_package_paced(physical_task_geometry, 1)
+}
+
+// The neutral package capturing every `capture_interval_ms` (test plan E-3, §3.10; see
+// `neutral_contained_task_package_with_task_paced`).
+fn neutral_contained_task_package_paced(
+    physical_task_geometry: bool,
+    capture_interval_ms: u64,
+) -> Vec<u8> {
+    neutral_contained_task_package_with_task_paced(
         physical_task_geometry,
         br#"{
             "schema_version":"0.6",
@@ -19,6 +28,7 @@ fn neutral_contained_task_package(physical_task_geometry: bool) -> Vec<u8> {
                  "retryable":false
              }]
         }"#,
+        capture_interval_ms,
     )
 }
 
@@ -444,7 +454,14 @@ fn neutral_retrying_contained_task_package() -> Vec<u8> {
 }
 
 fn neutral_region_retrying_contained_task_package() -> Vec<u8> {
-    neutral_contained_task_package_with_task(
+    neutral_region_retrying_contained_task_package_paced(1)
+}
+
+// The region retrying package capturing every `capture_interval_ms` (test plan E-3, §3.10; see
+// `neutral_contained_task_package_with_task_paced`). Its `retry_interval_ms` stays 1: a retry
+// wait is one pause of that length on the Runtime clock and captures nothing itself.
+fn neutral_region_retrying_contained_task_package_paced(capture_interval_ms: u64) -> Vec<u8> {
+    neutral_contained_task_package_with_task_paced(
         false,
         br#"{
             "schema_version":"0.6",
@@ -470,6 +487,7 @@ fn neutral_region_retrying_contained_task_package() -> Vec<u8> {
                  "retry_interval_ms":1
              }]
         }"#,
+        capture_interval_ms,
     )
 }
 
@@ -697,6 +715,23 @@ fn neutral_contained_task_package_with_task(physical_task_geometry: bool, task: 
     neutral_contained_task_package_with_task_and_timeout(physical_task_geometry, task, 5_000)
 }
 
+// The neutral package of `task` capturing every `capture_interval_ms`. Test plan E-3 (§3.10): on
+// a `ManualRuntimeClock` a capture spends no Runtime time and each kernel wait moves the clock by
+// the capture interval, so a wait of the package's 50 ms `step_timeout_ms` captures
+// `50 / capture_interval_ms + 1` frames: 51 at a 1 ms interval, 2 at a 50 ms one.
+fn neutral_contained_task_package_with_task_paced(
+    physical_task_geometry: bool,
+    task: &[u8],
+    capture_interval_ms: u64,
+) -> Vec<u8> {
+    neutral_contained_task_package_with_task_and_timeout_paced(
+        physical_task_geometry,
+        task,
+        5_000,
+        capture_interval_ms,
+    )
+}
+
 fn explicit_home_contained_task_package(
     physical_task_geometry: bool,
     package_id: &str,
@@ -824,6 +859,22 @@ fn neutral_contained_task_package_with_task_and_timeout(
     task: &[u8],
     timeout_ms: u64,
 ) -> Vec<u8> {
+    neutral_contained_task_package_with_task_and_timeout_paced(
+        physical_task_geometry,
+        task,
+        timeout_ms,
+        1,
+    )
+}
+
+// The neutral package of `task` with the task timeout `timeout_ms`, capturing every
+// `capture_interval_ms` (test plan E-3, §3.10).
+fn neutral_contained_task_package_with_task_and_timeout_paced(
+    physical_task_geometry: bool,
+    task: &[u8],
+    timeout_ms: u64,
+    capture_interval_ms: u64,
+) -> Vec<u8> {
     neutral_contained_task_package_with_timeout(
         physical_task_geometry,
         task,
@@ -841,6 +892,7 @@ fn neutral_contained_task_package_with_task_and_timeout(
             ]
         }"#,
         timeout_ms,
+        capture_interval_ms,
     )
 }
 
@@ -854,6 +906,7 @@ fn neutral_contained_task_package_with_task_and_recognition(
         task,
         recognition_pack,
         5_000,
+        1,
     )
 }
 
@@ -862,6 +915,7 @@ fn neutral_contained_task_package_with_timeout(
     task: &[u8],
     recognition_pack: &[u8],
     timeout_ms: u64,
+    capture_interval_ms: u64,
 ) -> Vec<u8> {
     let (width, height) = if physical_task_geometry {
         (16, 9)
@@ -893,7 +947,7 @@ fn neutral_contained_task_package_with_timeout(
             "server":"test",
             "resolution":{{"width":{width},"height":{height}}},
             "entry_task_id":"task",
-            "capture_interval_ms":1,
+            "capture_interval_ms":{capture_interval_ms},
             "step_timeout_ms":50,
             "timeout_ms":{timeout_ms},
             "max_steps":2
