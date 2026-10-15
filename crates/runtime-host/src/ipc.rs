@@ -32,6 +32,8 @@ pub(crate) fn read_frame(
     if length == 0 || length > maximum_frame_bytes {
         return Err(protocol_error(HostCode::RuntimeFrameLengthInvalid));
     }
+    #[cfg(test)]
+    announce_frame_body_read(stream);
     let mut body = vec![0_u8; length];
     if !matches!(
         read_exact_state(stream, &mut body, false)?,
@@ -40,6 +42,37 @@ pub(crate) fn read_frame(
         return Err(protocol_error(HostCode::RuntimeFrameTruncated));
     }
     Ok(FrameRead::Data(body))
+}
+
+/// Workflow #382 H-5 (test plan v2.2 §4 #9), test builds only: the peers a test watches, each
+/// with the sender that hears when a frame's header from that peer was read and its body read
+/// begins. A watch ends when its receiver is dropped.
+#[cfg(test)]
+static FRAME_BODY_READ_WATCHES: std::sync::Mutex<
+    Vec<(std::net::SocketAddr, std::sync::mpsc::Sender<()>)>,
+> = std::sync::Mutex::new(Vec::new());
+
+/// Test builds only: hears, once per frame, when the Runtime has read the header of a frame that
+/// `peer` sent and starts reading its body, so a test can send the body only after that point.
+#[cfg(test)]
+pub(crate) fn watch_frame_body_reads(peer: std::net::SocketAddr) -> std::sync::mpsc::Receiver<()> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    FRAME_BODY_READ_WATCHES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((peer, sender));
+    receiver
+}
+
+#[cfg(test)]
+fn announce_frame_body_read(stream: &TcpStream) {
+    let Ok(peer) = stream.peer_addr() else {
+        return;
+    };
+    FRAME_BODY_READ_WATCHES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|(watched, sender)| *watched != peer || sender.send(()).is_ok());
 }
 
 /// Host idle wait between request frames: after each frame the wait only yields for

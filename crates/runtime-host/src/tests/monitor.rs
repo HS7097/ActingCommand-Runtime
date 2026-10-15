@@ -48,18 +48,17 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let configuration_version = change.configuration_version;
     assert!(change.applied);
     assert_eq!(&change.status, status);
-    assert_eq!(
-        event_types_for_request(
+    // Test plan v2.2 §4 #22: the configuration is received and validated in order, and the
+    // validated record carrying the monitor state is the request's one terminal.
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_request(
             &host,
             &client.ids,
             ConnectionId::new(99).expect("query connection"),
-            configure.request_id()
+            configure.request_id(),
         ),
-        vec![
-            EventType::CliCommand,
-            EventType::CommandReceived,
-            EventType::CommandValidated,
-        ]
+        &[EventType::CommandReceived, EventType::CommandValidated],
+        &[EventType::CommandValidated, EventType::CommandRejected],
     );
     wait_until(Duration::from_secs(2), || {
         state.monitor_observation_count.load(Ordering::Acquire) >= 1
@@ -180,11 +179,30 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     reopened.close().expect("close reopened host");
 }
 
+/// The resident monitor runs without a client and records an artifact-backed lifecycle
+/// (`docs/plans/2026-07-11-c5-production-capability-relocation.md:33,199-201`). After the
+/// `monitor-clear` receipt is Completed, no probe of that instance starts again (coordinator
+/// ruling 10-09 on H-3 #12). Test plan v2.2 §4 #12 (HOST-R3): that negative is read after a
+/// barrier, not after two 300 ms sleeps.
 #[test]
 fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    let monitored = instance_id();
+    // The barrier instance: monitored only from just before the clear.
+    let barrier = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::from_entries([
+            ("node.a".to_string(), monitored, Arc::clone(&state)),
+            (
+                "node.c".to_string(),
+                barrier,
+                Arc::new(FakeState::default()),
+            ),
+        ])),
+    )
+    .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
         instance_alias: "node.a".to_string(),
@@ -269,16 +287,55 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
 
+    let configure_barrier = client.request(RuntimeOperation::ConfigureMonitor {
+        instance_alias: "node.c".to_string(),
+        policy: RuntimeMonitorPolicy::new(100, "home", false).expect("barrier policy"),
+    });
+    assert_eq!(
+        client.send(&configure_barrier).state(),
+        RuntimeReceiptState::Completed
+    );
     let clear = client.request(RuntimeOperation::ClearMonitor {
         instance_alias: "node.a".to_string(),
     });
-    assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
-    thread::sleep(Duration::from_millis(300));
-    let observations = state.monitor_observation_count.load(Ordering::Acquire);
-    thread::sleep(Duration::from_millis(300));
+    let cleared = client.send(&clear);
+    assert_eq!(cleared.state(), RuntimeReceiptState::Completed);
+    let cleared_at = cleared.terminal().expect("clear terminal").sequence;
+    let probes_after_clear = |client: &mut TestClient, instance: InstanceId| {
+        projected_events(
+            client,
+            EventQuery {
+                event_type: Some(EventType::MonitorProbeRequested),
+                instance_id: Some(instance),
+                from_sequence: Some(cleared_at + 1),
+                ..EventQuery::default()
+            },
+        )
+    };
+    // The barrier: the one probe thread starts two probes of the barrier instance after the
+    // clear's terminal. They belong to two due batches, so the later batch was read after the
+    // clear was applied, and every probe of an earlier batch had finished before it began.
+    wait_until(Duration::from_secs(5), || {
+        probes_after_clear(&mut client, barrier).len() >= 2
+    });
+    assert_eq!(
+        probes_after_clear(&mut client, monitored),
+        Vec::new(),
+        "a probe of the cleared instance started after its clear"
+    );
+    // Every device observation of the cleared instance belongs to a recorded probe, all of
+    // which started before the clear.
+    let completed = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::MonitorProbeCompleted),
+            instance_id: Some(monitored),
+            ..EventQuery::default()
+        },
+    );
     assert_eq!(
         state.monitor_observation_count.load(Ordering::Acquire),
-        observations
+        completed.len()
     );
     drop(client);
     host.close().expect("close host");

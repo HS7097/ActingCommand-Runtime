@@ -875,10 +875,23 @@ fn policy_final_admission_records_the_actual_control_rejection() {
     restarted.close().expect("close replayed host");
 }
 
+/// Test plan v2.2 §4 #12 (HOST-R3): the fact ages past its freshness on the Runtime's manual
+/// clock instead of a 30 ms sleep, and admission then refuses `policy_facts_stale`
+/// (`contracts/scheduling/README.md:340-345`: a fact the evaluation read bounds
+/// `facts_fresh_until_unix_ms`, and admission refuses an intent past it).
 #[test]
 fn policy_admission_rejects_stale_and_tampered_trusted_context() {
     let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 7_000));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
     let mut sources = policy_sources(1);
     let mut tasks: serde_json::Value =
         serde_json::from_slice(&sources.tasks.bytes).expect("tasks fixture");
@@ -939,7 +952,8 @@ fn policy_admission_rejects_stale_and_tampered_trusted_context() {
         "policy_trusted_context_mismatch"
     );
 
-    thread::sleep(Duration::from_millis(30));
+    // The fact's 20 ms freshness ends while 30 ms pass on the Runtime's clock.
+    clock.advance(30);
     let mut forged_time = policy_context(&host, &intent);
     forged_time.now_unix_ms = 1;
     assert_eq!(
@@ -1769,7 +1783,10 @@ fn guard_contention_without_a_holder_is_rejected_contended_at_info() {
     host.close().expect("close host");
 }
 
+// Test plan v2.2 §4 #15: a child-process entry, not a test; its parent runs it with
+// `--ignored --exact`.
 #[test]
+#[ignore]
 fn takeover_cooldown_child_process() {
     let Ok(root) = std::env::var("ACTINGCOMMAND_TAKEOVER_COOLDOWN_ROOT") else {
         return;
@@ -1811,6 +1828,7 @@ fn a_takeover_cooldown_defers_candidates_with_a_wake_at_its_end() {
     let marker = root.path().join("lease-held.marker");
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::policy_admission::takeover_cooldown_child_process",
             "--nocapture",
