@@ -3721,6 +3721,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "MonitorStatus",
     "ObserveContainedPage",
     "ObserveReadonly",
+    // Workflow #385 P-m (register §1.61 W14): the shadow measurement's status, a general read
+    // from memory like Status.
+    "PerformanceStatus",
     "PollQueuedLease",
     "ProjectInterface",
     "QueryEvents",
