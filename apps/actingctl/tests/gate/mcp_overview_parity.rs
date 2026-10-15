@@ -10,8 +10,9 @@
 // read takes from its own clock. Every answer fits the output budget, so §2.2 leaves no other
 // difference and nothing is marked truncated. Without `sections` every block is answered
 // (daemon, instances, run_window, lab_tool, install, Workflow #385 P-m's performance, whose
-// read time is its own like the run window's start, and Workflow #389 MCP-9a's catalog,
-// config_generation and watchdog); with `sections` only those named and the daemon. The fake
+// read time is its own like the run window's start, Workflow #389 MCP-9a's catalog,
+// config_generation and watchdog, and Workflow #384 D2-S5's fact_refresh); with `sections` only
+// those named and the daemon. The fake
 // Runtime has no active policy catalog and no install root: catalog and watchdog are null and
 // config_generation names neither generation. The instance is named by its alias and by its
 // instance_id (D4). Workflow #378 A5: the
@@ -65,6 +66,7 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same
                 "catalog",
                 "config_generation",
                 "daemon",
+                "fact_refresh",
                 "install",
                 "instances",
                 "lab_tool",

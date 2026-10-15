@@ -4,10 +4,7 @@
 //! admitted structurally. Neither a digest of the package nor a pin inside it is compared, and
 //! no name is read as an identity. Tests S1-T1, S1-T2, S1-T3 and S1-T5.
 
-use actingcommand_contract::{ContentDirectory, ContentDirectoryVersion, PackageRef};
-use actingcommand_pack_containment::{
-    CONTENT_JSON_V1, Containment, ContainmentError, InstanceId, Sha256Hash,
-};
+use actingcommand_pack_containment::{CONTENT_JSON_V1, Containment, ContainmentError, InstanceId};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Write};
@@ -155,65 +152,40 @@ fn content_json(entries: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
         .expect("content JSON")
 }
 
-fn content_reference(sha256: &str) -> PackageRef {
-    PackageRef::ContentDirectory(ContentDirectory {
-        schema_version: ContentDirectoryVersion::V1,
-        sha256: sha256.to_owned(),
-    })
-}
-
-fn legacy_reference(bytes: &[u8]) -> PackageRef {
-    PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
-}
-
-/// Admits `locator` under `reference`; the admitted entry task and the recorded reference.
-fn admit(locator: &Path, reference: &PackageRef) -> Result<(String, PackageRef), ContainmentError> {
+/// Admits `locator` by its path; the admitted entry task. Since Workflow #336 PKG-S5 no
+/// admission takes or keeps a package reference.
+fn admit(locator: &Path) -> Result<String, ContainmentError> {
     let mut containment = Containment::new();
     let bundle = containment.load_path(
         &InstanceId::new("neutral-pkg-s1").expect("instance"),
         locator,
-        reference,
         false,
         Instant::now() + Duration::from_secs(60),
     )?;
-    Ok((
-        bundle.task_id().as_str().to_owned(),
-        bundle.package_ref().clone(),
-    ))
+    Ok(bundle.task_id().as_str().to_owned())
 }
 
 // S1-T1: a directory whose name has the digest form but is not the digest of what it holds is
-// admitted, under that name as its reference or under another; the reference is only recorded.
+// admitted; its name is no identity.
 #[test]
 fn s1_t1_a_digest_named_directory_is_admitted_whatever_its_content() {
     let scratch = Scratch::new("t1");
-    let name = "d".repeat(64);
-    let directory = scratch.path().join(&name);
+    let directory = scratch.path().join("d".repeat(64));
     write_directory(&directory, &source_entries());
-    for reference in [content_reference(&name), content_reference(&"e".repeat(64))] {
-        let (task, recorded) = admit(&directory, &reference)
-            .unwrap_or_else(|error| panic!("a digest-form name is no identity: {error}"));
-        assert_eq!(task, "source_task");
-        assert_eq!(recorded, reference);
-    }
+    let task = admit(&directory)
+        .unwrap_or_else(|error| panic!("a digest-form name is no identity: {error}"));
+    assert_eq!(task, "source_task");
 }
 
-// S1-T2: a package changed in place is admitted under the reference it had before the change,
-// and what is admitted is the changed content.
+// S1-T2: a package changed in place is admitted before and after the change, and what is
+// admitted is the changed content.
 #[test]
 fn s1_t2_a_package_changed_in_place_is_admitted_under_its_former_reference() {
     let scratch = Scratch::new("t2");
     let directory = scratch.path().join("package");
     let mut entries = source_entries();
     write_directory(&directory, &entries);
-    // The reference the package had before the change, as the authoring tools measure it.
-    let former = PackageRef::ContentDirectory(
-        Containment::new()
-            .snapshot_content_directory(&directory, Instant::now() + Duration::from_secs(60))
-            .expect("measure the package")
-            .reference,
-    );
-    admit(&directory, &former).expect("the package is admitted before the change");
+    admit(&directory).expect("the package is admitted before the change");
 
     let task_path = "resources/operations/source_task/task.json";
     let mut task: Value = serde_json::from_slice(&entries[task_path]).expect("task JSON");
@@ -227,24 +199,20 @@ fn s1_t2_a_package_changed_in_place_is_admitted_under_its_former_reference() {
         .load_path(
             &InstanceId::new("neutral-pkg-s1").expect("instance"),
             &directory,
-            &former,
             false,
             Instant::now() + Duration::from_secs(60),
         )
-        .unwrap_or_else(|error| panic!("the former reference gates nothing: {error}"));
+        .unwrap_or_else(|error| panic!("a change in place gates nothing: {error}"));
     assert_eq!(bundle.task_id().as_str(), "source_task");
     assert_eq!(bundle.entry(task_path), Some(revised.as_slice()));
-    assert_eq!(bundle.package_ref(), &former);
 }
 
 // S1-T3: the same content as a directory, a `.json` container and a `.zip` container is
-// admitted under a reference that is not its digest; an assembled package ZIP is admitted by
-// its path under the same reference, and under a ZIP reference that is not its SHA-256.
+// admitted, each read as its path chooses; an assembled package ZIP is admitted by its path.
 #[test]
 fn s1_t3_the_path_chooses_the_reading_and_no_reference_is_compared() {
     let scratch = Scratch::new("t3");
     let entries = source_entries();
-    let unrelated = content_reference(&"e".repeat(64));
     let directory = scratch.path().join("source");
     write_directory(&directory, &entries);
     let json_container = scratch.path().join("source.json");
@@ -252,23 +220,16 @@ fn s1_t3_the_path_chooses_the_reading_and_no_reference_is_compared() {
     let zip_container = scratch.path().join("source.zip");
     std::fs::write(&zip_container, zip_bytes(&entries)).expect("ZIP container");
     for locator in [&directory, &json_container, &zip_container] {
-        let (task, recorded) = admit(locator, &unrelated)
+        let task = admit(locator)
             .unwrap_or_else(|error| panic!("{} is refused: {error}", locator.display()));
         assert_eq!(task, "source_task", "{}", locator.display());
-        assert_eq!(recorded, unrelated);
     }
 
     let assembled = scratch.path().join("assembled.zip");
     std::fs::write(&assembled, zip_bytes(&assembled_entries(json!([])))).expect("assembled");
-    for reference in [
-        unrelated.clone(),
-        PackageRef::LegacyZipSha256("0".repeat(64)),
-    ] {
-        let (task, recorded) = admit(&assembled, &reference)
-            .unwrap_or_else(|error| panic!("the assembled ZIP is refused: {error}"));
-        assert_eq!(task, "assembled_task");
-        assert_eq!(recorded, reference);
-    }
+    let task =
+        admit(&assembled).unwrap_or_else(|error| panic!("the assembled ZIP is refused: {error}"));
+    assert_eq!(task, "assembled_task");
 }
 
 // S1-T5: an assembled package whose manifest declares a wrong SHA-256 for one of its files is
@@ -280,12 +241,9 @@ fn s1_t5_an_assembled_manifest_file_hash_is_not_compared() {
         "path": "operations/assembled_task/task.json",
         "sha256": format!("sha256:{}", "0".repeat(64))
     }]));
-    let bytes = zip_bytes(&entries);
     let package = scratch.path().join("assembled.zip");
-    std::fs::write(&package, &bytes).expect("assembled package");
-    let reference = legacy_reference(&bytes);
-    let (task, recorded) = admit(&package, &reference)
+    std::fs::write(&package, zip_bytes(&entries)).expect("assembled package");
+    let task = admit(&package)
         .unwrap_or_else(|error| panic!("a wrong manifest file hash refuses nothing: {error}"));
     assert_eq!(task, "assembled_task");
-    assert_eq!(recorded, reference);
 }

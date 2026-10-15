@@ -176,14 +176,9 @@ fn zero_input_fields_source_and_admission_boundaries() {
             writer.write_all(&bytes).unwrap();
         }
         let bytes = writer.finish().unwrap().into_inner();
-        PreparedContainedTask::load(
-            "neutral-fields",
-            &bytes,
-            &actingcommand_contract::PackageRef::LegacyZipSha256(
-                Sha256Hash::digest(&bytes).to_string(),
-            ),
-        )
-        .map_err(|error| actingcommand_contract::LabError::package_invalid(error.to_string()))?;
+        PreparedContainedTask::load("neutral-fields", &bytes).map_err(|error| {
+            actingcommand_contract::LabError::package_invalid(error.to_string())
+        })?;
         fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();
         Ok::<_, Box<actingcommand_contract::LabError>>(())
     };

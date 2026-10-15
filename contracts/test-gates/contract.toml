@@ -545,3 +545,12 @@ tests = [
     "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t15_an_unknown_member_in_a_multi_select_shape_is_not_read",
 ]
 incident = ["#357 DB-3s"]
+
+# Workflow #384 D2-S4 test row T32, the code half (D2 model v1.4.2 §5.1, §8 T32): the fact refresh's code (the D2 modules of the policy crate and the Runtime, and D2-S5's status read) never calls the ledger's write interface; D2 has no row in the direct-write exception table (contracts/ledger-observer.md §2, §6; Workflow #384 D2-S5 lane, contract key after DB-3s's K24)
+[[gate]]
+key = "K25"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-architecture::workspace_guards::d2_t32_the_fact_refresh_code_never_calls_the_ledger_write_interface",
+]
+incident = ["#384"]

@@ -3506,27 +3506,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "return_home_package_unbound": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "package_id": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): return home package unbound.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "runtime_debug_event_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -8100,106 +8079,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Runtime contract validation refused a value: invalid resource targets rejection.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_git_object_id": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid git object id.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_package_repository": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid package repository.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_source_tree_reference": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid source tree reference.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_content_directory_reference": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid content directory reference.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_package_sha256": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid package sha256. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17401,6 +17280,40 @@
       "description": "A completed receipt of a DrillRecoveryLadder request: the Runtime admitted the drill and queued its claim. Workflow #378 A4: one success code per request kind (Workflow #390 DRILL-1 adds the kind).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
+    },
+    "request_fact_refresh_status_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a FactRefreshStatus request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #384 D2-S5 adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "invalid_fact_refresh_status": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a FactRefreshStatus answer of the wrong shape (a row before the first cycle, an instance twice or without a waiting key, a key twice or outside the fact key families, a reason that is not an info or a warning or that names another instance, key or package, or more than 256 instances or keys), or a receipt carrying it that is not completed (Workflow #384 D2-S5).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
     }
   },
   "locations": {

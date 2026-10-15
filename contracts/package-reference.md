@@ -5,12 +5,14 @@ declares (recorded as `package_label`) and found by its path. Since PKG-S4 no in
 takes a package digest: the Runtime requests (`ContainedTaskRequest` and its recovery
 binding, `PackageDebugRequest`, the contained Lab operation, contained observation and
 saved-artifact OCR requests), the actingd configuration (`instances[].startup_package`,
-`prerequisite_packages[]`, `policy.procedure_manifest[]`), `actingctl task-run`, the MCP
+`policy.procedure_manifest[]`), `actingctl task-run`, the MCP
 tools and the actinglab flags name a package by its path alone, and a request or a
-configuration that still names `expected_sha256` or `package_digest` does not decode. The
-`PackageRef` type remains only inside the authoring tools and the bundle index until PKG-S5
-retires it; its content-directory form is the `content-directory.v1` digest below, which no
-admission computes or compares.
+configuration that still names `expected_sha256` or `package_digest` does not decode. Since
+PKG-S5 no package reference type remains (`PackageRef`, its content-directory and legacy ZIP
+forms and the `sha256:`-prefixed serializers are gone with their last users): the bundle index
+names each pack by its `package_id` (bundle v4, below), a Lab recording writes
+`<package_id>.<ext>`, and `actinglab package digest` is an unknown command. The
+`content-directory.v1` value below is only the content hash of the suspension rule.
 
 ## Content-directory admission
 
@@ -56,19 +58,20 @@ a file is opened without following a link. Admission runs in this order under on
    part from the new one is never admitted (D16). A container or an assembled ZIP is read as
    one file and needs no such check.
 4. The same snapshot is assembled in memory ("In-memory assembly" and the
-   self-contained layout below) and issued with the recorded reference. Nothing is read
-   from disk afterwards.
+   self-contained layout below) and issued. Nothing is read from disk afterwards.
 
-The digest `content-directory.v1` is the lowercase hex SHA-256 of the line
+The content hash `content-directory.v1` is the lowercase hex SHA-256 of the line
 `actingcommand.package.content-directory.v1` followed by one line per file,
 `<lowercase hex SHA-256 of the raw bytes>  <relative path>` (two spaces), ordered by the
 UTF-8 bytes of the `/`-separated relative path; every line ends with `\n`. Raw bytes are
 hashed: line endings, byte-order marks, alternate data streams, timestamps and
 attributes are neither normalized nor included, and paths are not Unicode-normalized.
-`actingcommand_contract::content_directory_digest` is the single implementation; no
-admission computes it (Workflow #336 PKG-S1), only the authoring and recording tools that
-still name a package by it. The same value can be recomputed with coreutils (Git Bash or
-Linux):
+`actingcommand_contract::content_directory_digest` is the single implementation. It is the
+content hash of the suspension rule (Workflow #336 M-PKG §3.3, [policy-suspension.md](policy-suspension.md)):
+since PKG-S5 its one caller is containment's `measure_content_hash`, measured when a failure
+suspends a pair and at a lift check (an assembled package ZIP is measured as the SHA-256 of the
+whole file); no admission, authoring tool or recording computes it (guards S1-T7, S3-T6,
+S5-T5). The same value can be recomputed with coreutils (Git Bash or Linux):
 
 ```sh
 cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n'; find . -type f -printf '%P\0' | LC_ALL=C sort -z | xargs -0 sha256sum -b | sed 's/ \*/  /'; } | sha256sum -b | cut -c1-64
@@ -77,10 +80,10 @@ cd <package directory> && { printf 'actingcommand.package.content-directory.v1\n
 ## Containers
 
 Workflow #336: the same content can be held by three containers. All three have the one
-content-directory digest; the container is chosen by the locator alone (a directory, or a regular file by its extension, ASCII case-insensitive) and
-is recorded nowhere: references, requests and ledger records are unchanged. A Lab recording's
-`record stop` writes its package as `<D>.zip` or `<D>.json` in these containers
-(`lab-recording.md`, "Container and digest").
+content hash; the container is chosen by the locator alone (a directory, or a regular file by its extension, ASCII case-insensitive) and
+is recorded nowhere: requests and ledger records are unchanged. A Lab recording's
+`record stop` writes its package as `<package_id>.zip` or `<package_id>.json` in these
+containers (`lab-recording.md`, "Container and name").
 
 | Container | Locator | Table entries |
 |---|---|---|
@@ -129,16 +132,16 @@ The single JSON container, `actingcommand.package.content-json.v1`:
 - Any all-text content directory fits, with any number of tasks and files; a file that is not
   UTF-8 text (an image, for example) needs a directory or a ZIP.
 
-Why one content has one digest in every container: the digest depends only on the table of
+Why one content has one content hash in every container: the hash depends only on the table of
 paths and bytes, sorted by path, so ZIP compression, timestamps and entry order, and JSON key
 order, whitespace and escaping (`"\u00e9"` or `"é"`) take no part. A JSON string decodes to
 exactly one sequence of code points (unpaired surrogate escapes and non-UTF-8 input are
 refused) and has exactly one UTF-8 encoding. Nothing is normalized: line endings, byte-order
 marks inside a file and key order stay as they are. Extracting a ZIP, or writing every JSON
-string to its path as a file, gives a directory with the same digest; zipping a directory's
+string to its path as a file, gives a directory with the same hash; zipping a directory's
 contents with `/`-separated UTF-8 names, or storing each file of an all-text directory as its
-string, gives a container with the same digest. Files stay strings rather than inline JSON
-objects so that the bytes, and the digest, never depend on how a serializer writes JSON.
+string, gives a container with the same hash. Files stay strings rather than inline JSON
+objects so that the bytes, and the hash, never depend on how a serializer writes JSON.
 
 `actingcommand_pack_containment::expand_content_container` expands container bytes in
 memory under these rules; `Containment::load_content_entries` (and its
@@ -189,17 +192,14 @@ for path, text in document["files"].items():
         handle.write(text.encode("utf-8"))
 ```
 
-The coreutils formula above, run in the resulting directory, gives the container's digest.
+The coreutils formula above, run in the resulting directory, gives the container's content hash.
 
 ## Git source-tree references
 
-The Git source-tree loader is retired (Workflow #288 A4). Containment no longer runs Git
-or reads the locator of this form: once the reference itself is valid, admitting it fails
-with `source_tree_loader_retired` (the same source admission error family as the other
-loader codes, refused as an invalid package by the host). The reference type, its
-validation and its serialization are unchanged, so ledgers, evidence and configuration
-that record one still decode and re-encode byte-identically. `actinglab capabilities` no
-longer lists it as an accepted package reference.
+The Git source-tree loader is retired (Workflow #288 A4), and Workflow #336 PKG-S5 removed the
+reference type with the rest of `PackageRef` (and the code `source_tree_loader_retired` with
+it): no input names a package by a source tree, and containment never runs Git.
+`actinglab capabilities` does not list it.
 
 ## In-memory assembly
 
@@ -231,74 +231,81 @@ are parsed together; references to missing resources fail before any input.
 
 ## Content-directory tools and the bundle index
 
-`actinglab package digest --package <directory>` reads the directory with the loader's own
-snapshot (the rules of "Content-directory admission"), computes its content-directory
-reference and then admits the directory in full by its path. `--package` may equally name a
-content container file
-(`.zip` or `.json`, "Containers"): the same content prints the same reference whichever
-container holds it. It prints `reference` (the object above), the
-`package_id`, `server` and `entry_task_id` stated by `control.json`, `file_count` and
-`byte_count` (of the expanded table). Since PKG-S4 no command takes that reference: every
-consumer names the package by its path (until PKG-S5 retires this command). A refusal is `package_invalid` with the loader's code, plus the computed digest once the
-snapshot was read.
+Workflow #336 PKG-S5 retired `actinglab package digest`: it is an unknown package command. No
+tool names a package by a digest; a pack is named by the `package_id` its `control.json`
+declares.
 
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
-directory> [--source-repository <owner>/<name> --source-commit <commit>]` lays out the
-resource section of a standard package:
+directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]`
+lays out the resource section of a standard package:
 
 ```text
-applications.json          the given applications table, copied byte for byte
-bundle.json                actingcommand.bundle.v2
-packs/<digest>/control.json
-packs/<digest>/resources/...
+applications.json              the given applications table, copied byte for byte
+bundle.json                    actingcommand.bundle.v4
+packs/<package_id>/control.json
+packs/<package_id>/resources/...
 ```
 
 Every entry of `--packs-root` must be one pack source directory (anything else fails
-`package_bundle_packs_root_invalid`). Each is read with the same snapshot; only
-`control.json` and `resources/**` are copied into `packs/<digest>/`, and the copy is
-read again and admitted in full under that name. Its `control.json` must state the
-applications table's `game` and one of its servers (`package_bundle_pack_mismatch`), and
+`package_bundle_packs_root_invalid`). Each is read with the loader's snapshot; only
+`control.json` and `resources/**` are copied into `packs/<package_id>/`, named by the
+`package_id` that `control.json` declares, and the copy is read again and admitted in full by
+its path (structural admission; no digest is computed). A `package_id` that is not one path
+segment or is `tables` (any ASCII case: the game root's reserved directory), or that two pack
+directories both declare, fails `package_bundle_index_invalid`. Its `control.json` must state
+the applications table's `game` and one of its servers (`package_bundle_pack_mismatch`), and
 every `servers.<server>.default_package_id` must name a pack of that server
-(`package_bundle_default_package_missing`). The output is written to `<out>.part` and
-renamed to `--out` only when complete; `--out` and `<out>.part` must not exist
+(`package_bundle_default_package_missing`). The output is written to `<out>.part` and renamed
+to `--out` only when complete; `--out` and `<out>.part` must not exist
 (`package_bundle_out_exists`). A failure leaves `<out>.part` in place and names it; nothing
 is removed.
 
-The bundle index (`actingcommand_contract::BundleIndexV2`, checked by `validate()`) is a
-file format only and is never recorded in the ledger:
+The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file
+format only and is never recorded in the ledger:
 
 ```json
-{"schema_version":"actingcommand.bundle.v2","game":"neutral",
+{"schema_version":"actingcommand.bundle.v4","game":"neutral",
  "source":{"repository":"example-owner/neutral-resources","commit":"<40 lowercase hex digits>"},
  "packs":[{"package_id":"neutral.test.task","server":"test","entry_task_id":"task",
-           "digest":"<64 lowercase hex digits>","path":"packs/<same digest>",
-           "file_count":4,"byte_count":1234}]}
+           "path":"packs/neutral.test.task","file_count":4,"byte_count":1234}],
+ "maintenance":[{"package_id":"neutral.test.task","server":"test","uses":["startup"]}],
+ "tables":["unit_scores"]}
 ```
 
 `game` and `server` are 1-128 bytes of `[a-z0-9._-]` usable as one path segment;
-`package_id` and `entry_task_id` are trimmed text of 1-128 bytes. At least one pack is
-listed, package ids and digests are unique, `path` is exactly `packs/` plus `digest` and
-`file_count` is positive. `source` is optional information (`<owner>/<name>` and a 40 or
-64 digit lowercase hex commit) and never part of a pack's identity; the index carries no
-version or tag. It names no default package: the applications table beside it does. The
-version 1 index (`actingcommand.bundle.v1`, ZIP packs and `default_packs`) is a separate
-shape; its readers are unchanged.
+`package_id` and `entry_task_id` are trimmed text of 1-128 bytes, and `package_id` is one safe
+path segment (no `/`, `\`, `:` or other characters a file name cannot hold, never `.` or `..`)
+and never `tables` in any ASCII case (`invalid_bundle_pack_path`; Workflow #357 M-357a §2.1).
+At least one pack is listed, package ids are unique (`duplicate_bundle_pack`), `path` is
+exactly `packs/` plus `package_id` and `file_count` is positive. No member carries a digest.
+`source` is optional information (`<owner>/<name>` and a 40 or 64 digit lowercase hex commit)
+and never part of a pack's identity; the index carries no version or tag. It names no default
+package: the applications table beside it does. `maintenance` is optional ("Maintenance
+declarations" below). `tables` is optional (M-357a TB12): at most 64 unique table ids of
+`[a-z][a-z0-9_]{0,63}`, the tables the standard package ships in the game root's `tables/`
+directory; a reader checks it (`invalid_bundle_index`) and otherwise ignores it, and only an
+updater uses it: it replaces exactly the listed tables, leaves the root's other tables alone,
+and replaces the tables before the package directories. `package bundle` writes no `tables`
+member; the resource repositories' bundle script adds it (PKG-S7). Bundle index versions 1, 2
+and 3 (`actingcommand.bundle.v1`, `.v2`, `.v3`) are other shapes no reader of this build
+accepts: a root whose `bundle.json` holds one is `standard_pack_root_invalid` with
+`standard_pack_problem` `malformed` (no old version is read).
 
-### Maintenance declarations (bundle v3)
+### Maintenance declarations
 
-`package bundle --maintenance <file>` requests `actingcommand.bundle.v3`. The file is
-a JSON array of the shared `BundleMaintenance` entries, for example:
+`package bundle --maintenance <file>` writes the bundle's `maintenance` declarations. The file
+is a JSON array of the shared `BundleMaintenance` entries, for example:
 
 ```json
 [{"package_id":"neutral.test.start","server":"test","uses":["startup"]},
  {"package_id":"neutral.test.home","server":"test","uses":["prerequisite","return_home"]}]
 ```
 
-The resulting `BundleIndexV3` retains v2's `game`, optional `source`, `packs` and
-content-directory identities and adds the required `maintenance` array. An explicitly
-empty array still requests v3. Without the flag, generation retains v2 behavior. The
-input is bounded by the existing package input byte limit (32 MiB). The output contains
-the declaration only in `bundle.json`; the source declaration file is not copied.
+The bundle index then carries the required declarations as `maintenance`; an explicitly empty
+array is written as `[]` and still requests the full qualification below. Without the flag the
+index has no `maintenance` member and each pack is admitted structurally only. The input is
+bounded by the existing package input byte limit (32 MiB). The output contains the declaration
+only in `bundle.json`; the source declaration file is not copied.
 
 Resource repositories name the source input `maintenance.json` at their root. The existing
 `resource validate` declaration reader decodes this shared array and calls
@@ -314,15 +321,13 @@ D2-S2: the standard package's recognition maintenance package,
 must name a pack in this index with the same server; the package/server pair is unique. Each
 server has at most one startup, one return-home and one recognition entry. Unknown versions, fields or uses,
 duplicate uses or roles and missing references fail explicitly. There are at most as
-many entries as packs. `BundleIndex::validate()` dispatches the version-specific
-structural validation; the v2 type continues to reject v3.
+many entries as packs. `BundleIndex::validate()` checks them with the rest of the index.
 
-`PreparedContainedTask::describe_path(instance_label, locator, recorded, deadline)` in
+`PreparedContainedTask::describe_path(instance_label, locator, deadline)` in
 execution-kernel admits actual material by its path through Containment's metadata-only
-capability (Workflow #336 PKG-S1: `recorded` is recorded on the descriptor and compared
-with nothing), performs the same task preparation as Runtime and returns a
-read-only `TaskPackageDescriptor`. It returns no runnable task and performs no provider
-inference. The descriptor exposes the actual package/task identity, package reference,
+capability (Workflow #336 PKG-S5: by its path alone), performs the same task preparation as
+Runtime and returns a read-only `TaskPackageDescriptor`. It returns no runnable task and
+performs no provider inference. The descriptor exposes the actual package/task identity,
 mode, game, server, resolution, declared prerequisite, resolved linear entry page,
 maximum step count, use qualification and (Workflow #384 D2-S2) the keys of its reading marks.
 Insufficient material fails preparation;
@@ -330,8 +335,8 @@ callers must treat its identity/qualification as unknown, never infer it from pa
 application names or index labels. This does not prove execution or recognition results.
 
 `validate_bundle_maintenance(&index, &descriptors)` checks that the admitted material set
-matches every indexed identity `(package_id, server, entry_task_id)` and the index's game;
-the index's digests are compared with nothing (Workflow #336 PKG-S1). It then checks each use
+matches every indexed identity `(package_id, server, entry_task_id)` and the index's game
+(the index carries no digest, Workflow #336 PKG-S5). It then checks each use
 and
 complete prerequisite chain against the bindings supplied by the declaration. Startup
 uses ordinary task admission and rejects resource readings through
@@ -343,25 +348,28 @@ their own. A recognition package is no `recognize_only` package, declares no sta
 termination and no designated operation and carries at least one reading mark (Workflow #384
 D2-S2); it takes no part in the chains. The shared `PrerequisiteChain` predicate owns game/server/resolution
 compatibility, cycle detection, three declared layers and the 1,000-step aggregate bound.
-A return-home fallback is outside the three declared layers. Only a linear package with
-a resolved first-step page and no declared prerequisite selects that fallback; an
-application entry or page-graph package does not. Host retains loading, deadlines,
-failure facts and execution, consuming this same predicate incrementally.
+A return-home fallback is outside the three declared layers. A layer with a page entry
+and no declared prerequisite selects that fallback: a linear package with a resolved
+first-step page, and (Workflow #373 NAV-3a) a page-graph layer below the chain's own package
+whose entry is checked; an application entry does not, and a page-graph package as the
+chain's own package keeps its home entry instead. Host retains loading, deadlines, failure
+facts and execution, consuming this same predicate incrementally.
 
 Consumers validate structure and actual material before deriving bindings: `startup`
-supplies the instance's existing `startup_package`; `prerequisite` supplies a
-`prerequisite_packages` entry without editing business control; `return_home` supplies
-both the package binding and the shared game/server return-home mapping; `recognition`
-supplies the instance's `recognition_package` (a location only, Workflow #384 D2-S2).
-Configuration conflict handling and application belong to the installer. No declaration triggers a
+supplies the instance's existing `startup_package`; `recognition` supplies the instance's
+`recognition_package` (a location only, Workflow #384 D2-S2). Workflow #373 NAV-3a (M-373
+§4.3): the Runtime itself reads an installed bundle as its game's registry ("Standard package
+root" below), so every listed package can be a prerequisite package and `return_home` names
+the game/server return-home package there; neither is copied into the configuration any more
+(the keys `prerequisite_packages` and `return_home_packages` are retired), and `prerequisite`
+derives nothing. Configuration conflict handling and application belong to the installer. No declaration triggers a
 task directly or adds a Runtime execution mode, ledger field or persistent authority.
 
 Publication callers requesting maintenance must require the machine-readable result's
 `index.schema_version` **and the written `bundle.json` schema_version** to equal
-`actingcommand.bundle.v3`, and read back its validated maintenance declarations. A zero
-exit status from a tool that ignored an unknown flag is insufficient. Existing consumers
-that do not understand v3 must reject it before deriving bindings; v1/v2, ZIP and content
-container handling continue through their existing paths.
+`actingcommand.bundle.v4` with a `maintenance` member, and read back its validated maintenance
+declarations. A zero exit status from a tool that ignored an unknown flag is insufficient.
+Consumers that do not understand v4 must reject it before deriving bindings.
 
 ## Consumers
 
@@ -372,8 +380,8 @@ Lab commands (debug/run, observe, do, preflight, dry run and resource restore) t
 `--package <path>` (a directory, or a `.zip` or `.json` file, read as the path chooses) or
 `--zip <path>` (a published `.zip`) and refuse the retired digest flags by name. MCP
 `ac_run_pack` takes `package` and `recovery_package`, and `ac_pack_check` takes `package`.
-A procedure binding's `scheduled_execution.package_path` and a prerequisite package's
-`package_path` may equally name a directory or a container file. Evidence replay continues to
+A procedure binding's `scheduled_execution.package_path` may equally name a directory or a
+container file. Evidence replay continues to
 use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).
 
 Runtime requests carry the package path only. Workflow #336 PKG-S2 (option 丙): prepared
@@ -384,10 +392,11 @@ uses its existing `package_path` locator; since Workflow #336 PKG-S3 the binding
 package content (the binding fingerprint hashes the tuple v3,
 `actingcommand.procedure-binding.v3`, procedure alias, operation ID, ordered yield points),
 the run's identity check compares the request's path with the binding's `package_path`, and
-since PKG-S4 the binding has no `package_digest` key at all. A configured prerequisite package
-is the package its `package_id` names: one whose control declares another `package_id` is
-refused with `contained_task_prerequisite_mismatch` (M-PKG D7), as a chain layer, as the
-configured return-home package of a page-graph entry and on the recovery ladder's first rung.
+since PKG-S4 the binding has no `package_digest` key at all. A prerequisite or return-home
+package is the package its `package_id` names (Workflow #373 NAV-3a: a registry entry): one
+whose control declares another `package_id` is refused with
+`contained_task_prerequisite_mismatch` (M-PKG D7), as a chain layer, as the return-home
+package of a page-graph entry and on the recovery ladder's first rung.
 The calendar driver transports the typed request/context through the existing calls.
 
 Forensics and resource restore require the separately supplied original package for
@@ -413,8 +422,14 @@ data files beside its package directories, one directory per game below the conf
   and a `game` equal to its directory's name (and to `bundle.json`'s). Readers look only at the
   directories `bundle.json` lists.
 - **Registry.** Package id → package directory: the game root plus the pack's `path` without
-  its `packs/` prefix. The registry is held in memory only; it records each pack's bundle
-  reference as written and compares it with nothing (PKG-S1).
+  its `packs/` prefix, that is the game root plus the `package_id` (bundle v4, Workflow #336
+  PKG-S5); and (Workflow #373 NAV-3a) server → return-home package, the `maintenance[]` entry
+  whose `uses` holds `return_home`. The registry is held in memory only. `tables/` is a
+  reserved directory of the game root (Workflow #357 M-357a §2.1), so no pack is named
+  `tables`. The registry is where the Runtime finds every prerequisite package (in the registry
+  of the dependent package's game) and the return-home package of a game and server
+  (`linear-steps.md`, "Prerequisite packages", "Return-home fallback"); no configuration key
+  names either.
 - **`pages.json`.** `{schema_version, game, features, pages}`: `features` names 1–8 packages of
   the registry, at most one per server (the feature package: a `recognize_only` package whose
   pages are exactly the listed ones); `pages` lists 1–256 pages `{id, kind}`, each `id` 1–64
@@ -437,10 +452,12 @@ data files beside its package directories, one directory per game below the conf
   admitted: each is recorded as a `runtime.lifecycle_observed` `standard_pack_read` record
   (`standard_pack_registered` with the package count, or the root's failure); a broken root
   never stops the Runtime. In a run's preparation, the root of the run's game when it holds
-  `interrupts.json`: a broken root refuses the run before any lease and any task record; a
-  registry that differs from the one read last is recorded as `standard_pack_registered`
-  with the added and removed package ids; what was read stays fixed for the run. A game root
-  without `interrupts.json` is not read for a run, and the run is as it was without NAV-6.
+  `interrupts.json`, and (Workflow #373 NAV-3a) when the run resolves a prerequisite package
+  or the return-home package: a broken root refuses the run before any lease and any task
+  record; a registry that differs from the one read last (its packages or its return-home
+  packages) is recorded as `standard_pack_registered` with the added and removed package ids;
+  what was read stays fixed for the run. A game root the run does not use is not read for
+  it, and the run is as it was without NAV-6.
   Packages are admitted by their path when a run first uses them; a file replaced in place is
   used from the next run on, with no restart.
 - **Shared interrupt pages** (§6). A run uses its server's feature package and the

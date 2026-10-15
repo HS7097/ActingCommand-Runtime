@@ -35,6 +35,10 @@ actingcommand_contract::outcome_codes! {
         /// `fact_key`, `package_id`, `refresh_limit`; optional `gate_code`,
         /// `next_eligible_unix_ms`).
         FactRefreshExhausted => "fact_refresh_exhausted": warning / none,
+        /// Info (Workflow #384 D2-S5). The candidates of an instance no longer wait for a key
+        /// they waited for: only a transition of the fact refresh recorder, never a decision
+        /// reason (keys `instance_id`, `fact_key`; optional `package_id`).
+        FactRefreshResolved => "fact_refresh_resolved": info / none,
         /// Warning. A candidate's selection document read an input that no reading can
         /// supply (an instruction key, pack data, a fixed field or a lookup that covers no
         /// value) and found it unknown: the candidate is deferred with no wake, until the facts

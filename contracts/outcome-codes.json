@@ -1677,6 +1677,10 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "registry_problem": {
+      "type": "vocab:registry_problem",
+      "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a)."
+    },
     "event_type": {
       "type": "vocab:event_type",
       "description": "A ledger event type, for example the type of a performance event the contract rejected."
@@ -5137,6 +5141,20 @@
         },
         "max_per_run_invalid": {
           "description": "An interrupt's max_per_run is outside 1 to 8."
+        }
+      }
+    },
+    "registry_problem": {
+      "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a).",
+      "tokens": {
+        "root_unset": {
+          "description": "No standard_packs.root is set."
+        },
+        "game_root_missing": {
+          "description": "The root holds no game root of the dependent package's game."
+        },
+        "not_listed": {
+          "description": "The game root's bundle.json does not list the package."
         }
       }
     },
@@ -12764,20 +12782,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "authoring_validation_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "resource-tooling",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A resource authoring transaction refused or failed: validation package hash invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "backend_open_failed": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -19889,6 +19893,7 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "registry_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -27026,6 +27031,30 @@
       "common_causes": "The recognition maintenance package lacks a mark for the key, or no package is bound.",
       "handling": "Add a mark for the key to the instance's recognition maintenance package, or bind one."
     },
+    "fact_reader_overdue": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "elapsed_ms": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S5: the candidates of the instance have waited for the key (fact_key) for elapsed_ms, at least scheduling.fact_refresh.overdue_ms, without a usable reading. A transition of the fact refresh recorder, reported once per wait and only while a recognition maintenance package (package_id) serves the key; it reports only and never takes part in a decision. Not reported while overdue_ms is unset.",
+      "common_causes": "The recognition maintenance package keeps failing or leaving the key unread, a limit holds it back, or the instance stays occupied; scheduling.fact_refresh.min_interval_ms is longer than the freshness the readers need.",
+      "handling": "Look at the instance's fact_refresh rows (actingctl fact-refresh, ac_overview) for the reason and the gate, then fix the package, the limit or the occupation."
+    },
     "fact_record_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -27142,6 +27171,29 @@
       "description": "The instance's recognition maintenance package is requested to read a realistic instance fact key (fact_key) that a candidate on the instance read as unknown (unknown_reason; rule_id, the selection document rule that read it, when one did). One entry per key, on the package's own scheduling decision and on its dispatch's reason chain; the package competes with the instance's other candidates under the highest rank of the candidates it unlocks.",
       "common_causes": "The key was never read on the instance, or its record expired, went stale, lost confidence or has another type, and the instance's bound recognition maintenance package marks it.",
       "handling": "None: the package runs as an ordinary scheduled dispatch and its readings are published as instance facts; the candidates that read the key are scored in the round after the reading lands."
+    },
+    "fact_refresh_resolved": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S5: the candidates of the instance no longer wait for the key (fact_key) they waited for: the latest policy cycle found it known, or no candidate reads it any more. Only a transition of the fact refresh recorder (an actingd daemon line, and from AO-4 a policy.fact_refresh_transition record), never a decision reason; package_id names the instance's recognition maintenance package when one served the key.",
+      "common_causes": "The instance's recognition maintenance package or another run read the key, or the catalog changed.",
+      "handling": "Nothing to do."
     },
     "fact_refresh_unbound": {
       "category": "warning",
@@ -33372,26 +33424,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_content_directory_reference": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid content directory reference.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_cutover_marker": {
       "category": "error",
       "ladder_class": "none",
@@ -34154,6 +34186,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_fact_refresh_status": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a FactRefreshStatus answer of the wrong shape (a row before the first cycle, an instance twice or without a waiting key, a key twice or outside the fact key families, a reason that is not an info or a warning or that names another instance, key or package, or more than 256 instances or keys), or a receipt carrying it that is not completed (Workflow #384 D2-S5).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
+    },
     "invalid_fact_scope_binding": {
       "category": "error",
       "ladder_class": "none",
@@ -34392,26 +34444,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The artifact store reports invalid frame store config.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_git_object_id": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid git object id.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -35947,46 +35979,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Event or record sanitization refused a value: invalid owner unlock disposition.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_package_repository": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid package repository.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_package_sha256": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid package sha256. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -38895,26 +38887,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Ledger forensics reports invalid signature replay.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_source_tree_reference": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid source tree reference.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -47409,7 +47381,7 @@
       "values": {
         "package_id": "required",
         "actual_digest": "required",
-        "runtime_commit": "required",
+        "runtime_commit": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -47419,7 +47391,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task package suspension was lifted because the package's content hash (actual_digest, as measured now) or the Runtime build (runtime_commit) changed. The next preparation tries the package once; the same refusal under the same content hash and build suspends it again.",
+      "description": "A task package suspension was lifted because the package's content hash (actual_digest, as measured now) changed; a Runtime build that differs starts without the suspension. The next preparation tries the package once; the same refusal under the same content hash and build suspends it again. runtime_commit is absent for a build without a known commit. Copied once per instance the suspension was copied for, as a goal_missed planning signal.",
       "common_causes": "The package was replaced or the Runtime upgraded.",
       "handling": "Nothing to repair."
     },
@@ -47431,9 +47403,9 @@
       "uncertain": false,
       "values": {
         "package_id": "required",
-        "actual_digest": "required",
+        "actual_digest": "optional",
         "failure_code": "required",
-        "runtime_commit": "required",
+        "runtime_commit": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -47443,7 +47415,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task package was suspended because admission refused it with a code of scheduling.pack_admission.suspend_codes (failure_code) under the Runtime build runtime_commit; actual_digest is the package's content hash measured after the refusal. Every task bound to the package, on every instance, is deferred with this code and never prepared again until the content hash or the build changes. Other task packages of the same standard package are unaffected; a standard package is never suspended as a whole.",
+      "description": "A task package was suspended because admission refused it with a code of scheduling.pack_admission.suspend_codes (failure_code) under the Runtime build runtime_commit (absent for a build without a known commit); actual_digest is the package's content hash measured right after the refusal (absent when it could not be measured, M-PKG D18). Every task bound to the package, on every instance, is deferred with this code and never prepared again until the content hash or the build changes. Other task packages of the same standard package are unaffected; a standard package is never suspended as a whole. The evaluation copies it once per instance it defers as a goal_missed planning signal (Workflow #386 SR-3); check-config lists it as a note.",
       "common_causes": "A package that needs more sampling time than its timeouts allow (recognition_sample_budget_invalid), typically after a Runtime upgrade with an unchanged package.",
       "handling": "Fix and replace the package; the suspension lifts when its content hash changes. A Runtime build that accepts it lifts it too."
     },
@@ -54098,104 +54070,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "prerequisite_package_container_unsupported": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package container file is not supported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_package_duplicate": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package id is listed twice.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_package_id_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package id is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_package_not_regular": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package is not of the kind its reference names.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_package_request_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package request is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_package_unavailable": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package path is unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_packages_size_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: prerequisite_packages has too many entries.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "prerequisite_self": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -57496,6 +57370,76 @@
       "description": "Workflow #384 D2-S2 (transitional warning): a pack of a bundle generated with maintenance declarations only navigates and reads (it qualifies as a recognition maintenance package) but the declarations do not name it for recognition. The resource repositories make it an error once their recognition packages are declared (D2-S6).",
       "common_causes": "A reading pack of the standard package is not declared in maintenance.json.",
       "handling": "Declare the standard package's one recognition maintenance package with the use recognition, and merge other reading packs into it."
+    },
+    "recognition_regression_evidence_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An --evidence file of actinglab recognition-regression is not one page of a run's evidence as actingctl run evidence or ac_run_evidence answer it (request_id, and steps with step_index and frames[].ref), within 16 MiB; or two pages are of different runs; or the pages name no frame.",
+      "common_causes": "The answer was edited or truncated, pages of two runs were given, or the run kept no frame.",
+      "handling": "Save the run's evidence pages unchanged, all of one run, and name a run whose frames were kept."
+    },
+    "recognition_regression_evidence_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab recognition-regression could not open or read an --evidence file.",
+      "common_causes": "The path does not exist or is not readable.",
+      "handling": "Name a readable file: the saved answer of actingctl run evidence or ac_run_evidence."
+    },
+    "recognition_regression_frame_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A frame that the evidence of actinglab recognition-regression references is not a PNG image, or its material does not read for another reason than its absence, or its PNG does not decode. Nothing was compared. A frame whose material is gone is not this error: it is listed as material_missing.",
+      "common_causes": "The frame's material was replaced or damaged.",
+      "handling": "Check the state root's artifact store; replay another run."
+    },
+    "recognition_regression_frame_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A frame reference of the --evidence of actinglab recognition-regression names no verified capture frame of the run in the ledger of --state-root. Nothing was compared.",
+      "common_causes": "The evidence was read from another Runtime than --state-root names, or was edited.",
+      "handling": "Read the evidence from the Runtime whose state root is given, and save it unchanged."
+    },
+    "recognition_regression_ledger_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab recognition-regression could not read the ledger of --state-root: it does not open, it is incomplete or corrupt, an artifact does not verify, or the run's events cannot be read. Nothing was compared.",
+      "common_causes": "The path is not a Runtime state root, or its ledger is damaged.",
+      "handling": "Name the state root of the Runtime that recorded the run; run the ledger checks if it is damaged."
     },
     "recognition_sample_budget_insufficient": {
       "category": "error",
@@ -61085,6 +61029,48 @@
       "common_causes": "The package no longer recognizes a recorded page or guard; the sequence ends before the run does; a select step chose nothing with the given facts.",
       "handling": "Read end.outcome and the last step of the details; fix the package or record a sequence that reaches the run's end."
     },
+    "replay_scan_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member, no unknown member), within 1 MiB.",
+      "common_causes": "A member is missing, misspelt or of the wrong type, or the file holds more than the declaration.",
+      "handling": "Save the step's scan declaration alone, with every member it requires."
+    },
+    "replay_scan_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay --frames --select --scan replayed the scan of the select step over the frame sequence through the kernel's scan path, and the scan did not cover its list. Either the selection evaluator ended it before its coverage (end.status aborted, end.coverage not_started or incomplete, the decision in scan.decision) or it failed (end.status failed, the outcome in end.outcome; selection_scan_replay_frame_missing when it needed a frame the sequence does not hold, such as a corrective, a rewind or a capture after the last frame). Nothing was executed; the exit code is that of a usage refusal, so a CI job fails on it.",
+      "common_causes": "The pack no longer finds or reads the recorded list; the recording is not a forward run from the list's start to its end; a declared fact list is missing from the given facts.",
+      "handling": "Read end and the scan's viewports in the details; fix the pack or the scan declaration, or record a forward run that reaches the list's end."
+    },
+    "replay_scan_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay could not open or read the --scan file.",
+      "common_causes": "The path does not exist or is not readable.",
+      "handling": "Name a readable file."
+    },
     "report_serialization_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -61362,6 +61348,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A completed receipt of a ExportEvidence request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "request_fact_refresh_status_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a FactRefreshStatus request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #384 D2-S5 adds the kind).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -63288,69 +63288,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "return_home_package_duplicate": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a return-home package key is listed twice.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "return_home_package_key_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a return-home package key is invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "return_home_package_unbound": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "package_id": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): return home package unbound.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "return_home_packages_size_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: return_home_packages has too many entries.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "root_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -65170,6 +65107,40 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Event or record sanitization refused a value: runtime fact record list too large.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_fact_refresh_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl fact-refresh: what the scheduler's fact refresh waits for (FactRefreshStatus) was printed, as ac_overview answers its fact_refresh block (Workflow #384 D2-S5).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "runtime_fact_refresh_status_too_large_for_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A FactRefreshStatus read (Workflow #384 D2-S5) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -68228,6 +68199,26 @@
       "description": "The Runtime's wire error code (receipt projection `code`): runtime owner mismatch.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "runtime_pack_admission_spawn_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host could not start the thread of the task package admission after start (Workflow #386 SR-3); the start fails.",
+      "common_causes": "The operating system refused a new thread.",
+      "handling": "Start actingd again; free system resources if it recurs."
     },
     "runtime_performance_reported": {
       "category": "success",
@@ -73080,26 +73071,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Assembling a source snapshot passed its admission deadline.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "source_tree_loader_retired": {
-      "category": "error",
-      "ladder_class": "declaration_error",
-      "owner": "pack-containment",
-      "layer": "kernel",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A package reference names the retired Git source-tree loader.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -80703,6 +80674,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: check install selfcheck."
     },
+    "check_pack_admission": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: the task package admission after start and the suspension of a task package admission refused with a suspend code (Workflow #386 SR-3)."
+    },
     "check_resource_reading_pools": {
       "owner": "runtime-host",
       "layer": "host",
@@ -83470,6 +83449,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: join runtime monitor."
+    },
+    "join_runtime_pack_admission": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: join the thread of the task package admission after start (Workflow #386 SR-3)."
     },
     "join_runtime_performance": {
       "owner": "runtime-host",
@@ -86559,6 +86546,14 @@
       "since": "0.12.0",
       "description": "The runtime state store's operation or stage: read fact projection keys."
     },
+    "read_fact_refresh_status": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read what the fact refresh's transition recorder holds as waited for (Workflow #384 D2-S5)."
+    },
     "read_fact_snapshot": {
       "owner": "runtime-host",
       "layer": "host",
@@ -88167,6 +88162,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: record contained task stability."
     },
+    "record_fact_refresh_transitions": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand a policy cycle's waiting candidates to the fact refresh's transition recorder (Workflow #384 D2-S5)."
+    },
     "record_monitor_restore_failure": {
       "owner": "runtime-host",
       "layer": "host",
@@ -89335,14 +89338,6 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: resolve retry round."
     },
-    "resolve_return_home_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: resolve return home package."
-    },
     "resolve_runtime_instance": {
       "owner": "runtime-host",
       "layer": "host",
@@ -89728,6 +89723,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: runtime configure settings."
+    },
+    "runtime_fact_refresh_status": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: what the fact refresh waits for (FactRefreshStatus, Workflow #384 D2-S5)."
     },
     "runtime_fact_snapshot": {
       "owner": "runtime-client",

@@ -501,6 +501,84 @@ pub fn dry_run_scan(
     .map_err(replay_error)
 }
 
+/// Workflow #308 SEL-L6b (FCM row SEL-L6b, T-01): the scan of the select step `operation_id`
+/// replayed over a saved frame sequence (`actinglab replay --frames`), with the facts a whole
+/// package replay gives a select step (SEL-L6a): the given instance snapshot at the instant the
+/// Runtime read it, or the empty offline snapshot at `now_unix_ms`. The snapshot is checked as
+/// the select step checks its own (a valid snapshot and instant, else
+/// `selection_state_unavailable`; the package's game and server, else
+/// `selection_fact_context_mismatch`) and keeps the rows of the record lists the step's sealed
+/// policy declares. The scan then runs as [`dry_run_scan`]: a move it holds no frame for fails
+/// `selection_scan_replay_frame_missing`, never passes.
+pub fn replay_scan(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    scan: &ScanDeclaration,
+    frames: Vec<Frame>,
+    facts: &crate::OfflineReplayFacts,
+) -> Result<ScanDryRun, ContainedTaskError> {
+    let prepared = task
+        .program
+        .operations
+        .iter()
+        .find(|operation| operation.id == operation_id)
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                ExecutionKernelCode::ContainedTaskOperationMissing.code(),
+                operation_id,
+            )
+        })?
+        .prepared_select
+        .as_deref()
+        .ok_or_else(|| {
+            ContainedTaskError::with_detail(
+                SELECT_INVALID.code(),
+                format!("operation={operation_id} is not a select step"),
+            )
+        })?;
+    let (snapshot, now_unix_ms) = match facts {
+        crate::OfflineReplayFacts::Empty { now_unix_ms } => (
+            crate::offline::empty_offline_snapshot(crate::SelectionStateRequest {
+                step_index: 0,
+                operation_label: operation_id.to_owned(),
+                game: task.control.game.clone(),
+                server: task.control.server.clone(),
+            }),
+            *now_unix_ms,
+        ),
+        crate::OfflineReplayFacts::Snapshot {
+            snapshot,
+            read_at_unix_ms,
+        } => (snapshot.clone(), *read_at_unix_ms),
+    };
+    if now_unix_ms == 0 || snapshot.validate().is_err() {
+        return Err(ContainedTaskError::with_detail(
+            ExecutionKernelCode::SelectionStateUnavailable.code(),
+            format!("operation={operation_id} the replay's fact snapshot or instant is invalid"),
+        ));
+    }
+    if snapshot.context.game_id != task.control.game
+        || snapshot.context.server_id != task.control.server
+    {
+        return Err(ContainedTaskError::with_detail(
+            ExecutionKernelCode::SelectionFactContextMismatch.code(),
+            format!(
+                "operation={operation_id} snapshot game={} server={}, package game={} server={}",
+                snapshot.context.game_id,
+                snapshot.context.server_id,
+                task.control.game,
+                task.control.server
+            ),
+        ));
+    }
+    let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+        &snapshot,
+        now_unix_ms,
+        &prepared.policy().record_list_keys(),
+    );
+    dry_run_scan(task, operation_id, scan, frames, &facts, now_unix_ms)
+}
+
 /// One scan session of the select step `operation_id` over `runtime`, whose next capture is the
 /// step's dispatched frame: the path `dry_run_scan` replays (`replay`) and a runtime drives
 /// online. The scan's time is its `max_ms`, from the runtime's clock.

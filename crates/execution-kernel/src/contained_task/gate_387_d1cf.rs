@@ -14,7 +14,6 @@
 // region.
 
 use super::*;
-use actingcommand_contract::PackageRef;
 use actingcommand_contract::outcome::LadderClass;
 use actingcommand_device::CaptureBackendName;
 use serde_json::{Value, json};
@@ -127,14 +126,9 @@ fn swipe_package(corner_y: i32) -> Vec<u8> {
     ])
 }
 
-// Admission records the reference it is given and compares it with nothing (Workflow #336
-// PKG-S1), so these packages pass the reference of a package with none to record.
+// Admission takes the package alone (Workflow #336 PKG-S5).
 fn admit(corner_y: i32) -> Result<PreparedContainedTask, ContainedTaskError> {
-    PreparedContainedTask::load(
-        "neutral.instance",
-        &swipe_package(corner_y),
-        &PackageRef::default(),
-    )
+    PreparedContainedTask::load("neutral.instance", &swipe_package(corner_y))
 }
 
 // The runtime of a run that never leaves `home`: it counts the inputs that reach it.

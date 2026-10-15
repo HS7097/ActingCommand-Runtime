@@ -679,7 +679,7 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded)"),
+        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes)"),
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
@@ -690,10 +690,13 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     // through `PreparedContainedTask::load_path`; the main run's ingress (a client run, a
     // package run and a scheduled run) admits through `prepare_measured_contained_task`, whose
     // kernel twin `load_path_with_resident_bytes` also answers the resident bytes. Each loader
-    // must admit by path and record the reference PKG-S4 passes (the request names no digest, so
-    // it is the empty `PackageRef` until PKG-S5 removes the parameter), and both kernel loaders
-    // must reach the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's
-    // reference.
+    // must admit by path alone (Workflow #336 PKG-S5: no loader takes a package reference), and
+    // both kernel loaders must reach the one shared admission `ExternallyVerifiedBundle::load_path`
+    // with the caller's path.
+    // Workflow #386 SR-3: the measured loader's body is `prepare_measured_naming_refusal`, whose
+    // refusal also names the refused package (a scheduled run suspends that package);
+    // `prepare_measured_contained_task` delegates to it, and the scheduled run's ingress calls it
+    // directly.
     let compact = |text: &str| text.split_whitespace().collect::<String>();
     let host_path = "crates/runtime-host/src/host/contained_task.rs";
     let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
@@ -703,32 +706,51 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     for (function, required) in [
         (
             "prepare_contained_task",
-            "PreparedContainedTask::load_path(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+            "PreparedContainedTask::load_path(instance_alias,path,vision_provider,",
+        ),
+        (
+            "prepare_measured_naming_refusal",
+            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,vision_provider,",
         ),
         (
             "prepare_measured_contained_task",
-            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
+            "prepare_measured_naming_refusal(instance_alias,",
         ),
     ] {
         let body = function_source(host_path, &host, None, function)
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(
             compact(&body).contains(required),
-            "Runtime host {function} must admit the client package by its path and record its \
-             reference via {required}"
+            "Runtime host {function} must admit the client package by its path alone via \
+             {required}"
         );
     }
-    for (path, source, function) in [
-        (host_path, &host, "run_contained_task"),
-        (host_path, &host, "prepare_package_run"),
-        (settlement_path, &settlement, "prepare_scheduled_package"),
+    for (path, source, function, loader) in [
+        (
+            host_path,
+            &host,
+            "run_contained_task",
+            "prepare_measured_contained_task(",
+        ),
+        (
+            host_path,
+            &host,
+            "prepare_package_run",
+            "prepare_measured_contained_task(",
+        ),
+        (
+            settlement_path,
+            &settlement,
+            "prepare_scheduled_package",
+            "prepare_measured_naming_refusal(",
+        ),
     ] {
         let body = function_source(path, source, Some("HostShared"), function)
             .unwrap_or_else(|error| panic!("{error}"));
         assert!(
-            compact(&body).contains("prepare_measured_contained_task("),
+            compact(&body).contains(loader),
             "main-run ingress HostShared::{function} ({path}) must admit its package through \
-             prepare_measured_contained_task"
+             {loader}"
         );
     }
     for function in ["load_path", "load_path_with_resident_bytes"] {
@@ -741,9 +763,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         .unwrap_or_else(|error| panic!("{error}"));
         assert!(
             compact(&body)
-                .contains("ExternallyVerifiedBundle::load_path(instance_label,locator,recorded,"),
+                .contains("ExternallyVerifiedBundle::load_path(instance_label,locator,false,"),
             "PreparedContainedTask::{function} must admit by path through \
-             ExternallyVerifiedBundle::load_path with the caller's recorded reference"
+             ExternallyVerifiedBundle::load_path"
         );
     }
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
@@ -764,10 +786,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 
 // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T7: package admission (containment, the
 // kernel's package ingress and the host's contained-task preparation) computes no content
-// digest and compares no digest or pin; `content_directory_digest` keeps only its designated
-// callers, the authoring and recording tools PKG-S5 retires. PKG-S3 adds containment's second
-// measuring function, the content hash of the suspension rule
-// (`pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks`).
+// digest and compares no digest or pin. Since PKG-S5 retired the authoring and recording tools
+// that named a package by its digest, `content_directory_digest` has one caller, containment's
+// `measure_content_hash` (`pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it`).
 #[test]
 fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     let root = workspace_root();
@@ -852,11 +873,7 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     }
 
     let containment = read("crates/pack-containment/src/lib.rs");
-    let measuring = [
-        "pub fn snapshot_content_directory(",
-        "pub fn measure_content_hash(",
-    ]
-    .map(|start| {
+    let measuring = ["pub fn measure_content_hash("].map(|start| {
         let measuring = containment
             .find(start)
             .unwrap_or_else(|| panic!("containment keeps its measuring function {start}"));
@@ -881,8 +898,6 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     let designated = [
         "crates/actingcommand-contract/src/package.rs",
         "crates/pack-containment/src/lib.rs",
-        "crates/resource-tooling/src/package_directory.rs",
-        "crates/lab/src/recording/container.rs",
     ];
     let mut files = Vec::new();
     for member_root in ["apps", "crates", "providers"] {
@@ -909,12 +924,13 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
 }
 
 // Workflow #336 PKG-S3, model M-PKG v1.1 §3.3 and §4.4 S3-T6: a package's content hash is
-// measured in two kinds of place only: when a scheduled failure is settled (the failure
-// identity's hashes; SR-3 adds its suspension point) and at a suspension's lift check (the live
-// check and `actingd suspended`). Containment's `measure_content_hash` has one caller, the
-// Runtime host's `measure_package_hash`, and that one is called only by the settlement and the
-// lift check; admission (containment's loading, the kernel's ingress, the host's preparation)
-// never measures it.
+// measured in two kinds of place only: at a suspension (the failure identity's hashes when a
+// scheduled failure is settled; Workflow #386 SR-3's suspension of a task package right after
+// admission refused it, note-800) and at a suspension's lift check (the live check and
+// `actingd suspended`). Containment's `measure_content_hash` has one caller, the Runtime host's
+// `measure_package_hash`, and that one is called only by the settlement, SR-3's suspension point
+// (`pack_admission.rs`) and the lift check; admission (containment's loading, the kernel's
+// ingress, the host's preparation) never measures it.
 #[test]
 fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
     let root = workspace_root();
@@ -957,9 +973,10 @@ fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
         wrapping,
         [
             "crates/runtime-host/src/host/failure_settlement.rs",
+            "crates/runtime-host/src/pack_admission.rs",
             "crates/runtime-host/src/suspension_lift.rs",
         ],
-        "a package's content hash is measured outside the settlement and the lift check"
+        "a package's content hash is measured outside the settlement, the task package \n         suspension and the lift check"
     );
     let lift = fs::read_to_string(root.join("crates/runtime-host/src/suspension_lift.rs"))
         .expect("read the lift check");
@@ -985,6 +1002,147 @@ fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
             );
         }
     }
+}
+
+// Workflow #336 PKG-S5, model M-PKG v1.1 §4.6 S5-T5 (and §3.3): the content hash has one entry.
+// `content_directory_digest` is computed only inside containment's `measure_content_hash`, whose
+// only caller is the Runtime host's `measure_package_hash` (its callers, the suspension and the
+// lift check, are the S3-T6 guard's); no admission path (containment's loading, the kernel's
+// ingress, the host's preparation, the Lab's recording admission, the bundle's re-admission)
+// names any of them.
+#[test]
+fn pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers", "tools"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let mut digesting = Vec::new();
+    let mut measuring = Vec::new();
+    for file in files {
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if display.starts_with("tools/actinglab-architecture/") {
+            continue;
+        }
+        if source.contains("content_directory_digest(") {
+            digesting.push(display.clone());
+        }
+        if source.contains("measure_content_hash(") {
+            measuring.push(display);
+        }
+    }
+    digesting.sort();
+    measuring.sort();
+    // The definition in the contract crate is `content_directory_digest<'a>(`, not a call.
+    assert_eq!(
+        digesting,
+        ["crates/pack-containment/src/lib.rs"],
+        "the content hash is computed outside its one entry"
+    );
+    let containment = fs::read_to_string(root.join("crates/pack-containment/src/lib.rs"))
+        .expect("read containment");
+    let entry = containment
+        .find("pub fn measure_content_hash(")
+        .expect("containment keeps its one measuring entry");
+    let entry_end = containment[entry..]
+        .find("\n    }\n")
+        .map(|end| entry + end)
+        .expect("end of the measuring entry");
+    let calls = containment
+        .match_indices("content_directory_digest(")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(
+        calls.len() == 1 && (entry..entry_end).contains(&calls[0]),
+        "containment computes the content hash outside measure_content_hash"
+    );
+    assert_eq!(
+        measuring,
+        [
+            "crates/pack-containment/src/lib.rs",
+            "crates/runtime-host/src/suspension_lift.rs",
+        ],
+        "the content hash entry has a caller beside the suspension rule's"
+    );
+    for path in [
+        "crates/pack-containment/src/content_dir.rs",
+        "crates/pack-containment/src/source_pack.rs",
+        "crates/execution-kernel/src/bundle.rs",
+        "crates/execution-kernel/src/contained_task.rs",
+        "crates/runtime-host/src/host/contained_task.rs",
+        "crates/runtime-host/src/host/prerequisite.rs",
+        "crates/runtime-host/src/host/standard_pack.rs",
+        "crates/lab/src/recording/container.rs",
+        "crates/lab/src/recording/crosscheck.rs",
+        "crates/lab/src/recording_api.rs",
+        "crates/resource-tooling/src/package_directory.rs",
+    ] {
+        let source = fs::read_to_string(root.join(path))
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
+        for token in [
+            "content_directory_digest",
+            "measure_content_hash",
+            "measure_package_hash",
+        ] {
+            assert!(
+                !source.contains(token),
+                "the admission path in {path} reaches the content hash through {token}"
+            );
+        }
+    }
+}
+
+// Workflow #336 PKG-S5, model M-PKG v1.1 §3.1 and §4.6: the package reference type is gone with
+// its last user. No Rust source of the workspace names `PackageRef`, its content-directory form
+// `ContentDirectory` (and `ContentDirectoryVersion`), its legacy ZIP form `LegacyZipSha256` or
+// the `sha256:`-prefixed reference serializers.
+#[test]
+fn pkg_s5_no_package_reference_is_left() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers", "tools"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let retired = [
+        "PackageRef",
+        "ContentDirectory",
+        "ContentDirectoryVersion",
+        "LegacyZipSha256",
+        "prefixed_reference",
+        "optional_prefixed_reference",
+    ];
+    let mut found = Vec::new();
+    for file in files {
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if display == "tools/actinglab-architecture/tests/workspace_guards.rs" {
+            continue;
+        }
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        for identifier in
+            source.split(|character: char| !(character.is_alphanumeric() || character == '_'))
+        {
+            if retired.contains(&identifier) {
+                found.push(format!("{display}: {identifier}"));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "the retired package reference is still named: {found:?}"
+    );
 }
 
 #[test]
@@ -2910,8 +3068,9 @@ struct BridgeOwner {
     definitions: &'static [BridgeDefinition],
 }
 
-/// pack-containment owns pure source parsing; resource-tooling owns content-directory
-/// digest/bundle and MAA compilation. Lab forwards to its declared resource-tooling entry.
+/// pack-containment owns pure source parsing; resource-tooling owns the bundle and MAA
+/// compilation (Workflow #336 PKG-S5 retired `package digest`). Lab forwards to its declared
+/// resource-tooling entry.
 const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "pack-containment",
@@ -2928,7 +3087,7 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "resource-tooling",
         file: "crates/resource-tooling/src/package_directory.rs",
-        definitions: &[owner_entry("package_digest"), owner_entry("package_bundle")],
+        definitions: &[owner_entry("package_bundle")],
     },
     BridgeOwner {
         module: "resource-tooling",
@@ -2938,16 +3097,10 @@ const LAB_BRIDGE_OWNERS: &[BridgeOwner] = &[
     BridgeOwner {
         module: "lab",
         file: "crates/lab/src/package_build.rs",
-        definitions: &[
-            lab_bridge(
-                "Lab::package_digest",
-                "actingcommand_resource_tooling::package_digest",
-            ),
-            lab_bridge(
-                "Lab::package_bundle",
-                "actingcommand_resource_tooling::package_bundle",
-            ),
-        ],
+        definitions: &[lab_bridge(
+            "Lab::package_bundle",
+            "actingcommand_resource_tooling::package_bundle",
+        )],
     },
 ];
 /// C1: Lab's re-export module holds only `pub use` items, each from resource-tooling, and
@@ -2989,7 +3142,7 @@ fn resolved_reference(source: &SourceFacts, reference: &FunctionReference) -> Fu
     }
 }
 
-/// C1: resolves the typed digest/bundle and MAA compilation bridges into Lab.
+/// C1: resolves the typed bundle and MAA compilation bridges into Lab.
 fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
     let names = path.iter().map(String::as_str).collect::<Vec<_>>();
     let first = *names.first()?;
@@ -3004,16 +3157,14 @@ fn lab_bridge_path(source: &SourceFacts, path: &[String]) -> Option<String> {
     }
     match names.as_slice() {
         [.., "compile_maa_task_graph"] => Some("compile_maa_task_graph".to_string()),
-        [.., "Lab", method @ ("package_digest" | "package_bundle")] => {
-            Some(format!("Lab::{method}"))
-        }
+        [.., "Lab", method @ "package_bundle"] => Some(format!("Lab::{method}")),
         _ => None,
     }
 }
 
 fn lab_bridge_reference(source: &SourceFacts, reference: &FunctionReference) -> Option<String> {
     if let FunctionReference::Method(_, method) = reference {
-        return (matches!(method.as_str(), "package_digest" | "package_bundle")
+        return (method == "package_bundle"
             && source
                 .uses
                 .iter()
@@ -3774,6 +3925,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // Workflow #387 D1b (M387 §5.6): a general instruction the three counters send; no origin
     // gate beyond the client sources the host checks.
     "ConfigureSettings",
+    // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general read from
+    // memory like Status.
+    "FactRefreshStatus",
     "Health",
     "Input",
     // Workflow #389 MCP-4 (register W2): a general read from memory, like Status.
@@ -7145,4 +7299,86 @@ fn rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings() {
             );
         }
     }
+}
+
+/// Workflow #384 D2-S4, test row T32 (frozen model D2 v1.4.2 §5.1, §8 T32; Alice 2026-10-09
+/// 22:1x and the ledger observer's exception table, contracts/ledger-observer.md §2 and §6): the
+/// fact refresh's code never calls the ledger's write interface. A direct write is allowed only
+/// where no probe can see the record, and every record of the D2 path is on a choke point a probe
+/// sees, so the exception table has no D2 row: a ledger write in D2's code fails here. The
+/// scheduler's half lives in the policy crate, which has no dependency path to the ledger at all
+/// (the pure-decision allow lists of B1); the Runtime's half is read below without its tests: the
+/// D2 modules whole, and the transition recorder's read in the policy dispatch module.
+#[test]
+fn d2_t32_the_fact_refresh_code_never_calls_the_ledger_write_interface() {
+    // The D2 modules of the scheduler (S4) and the Runtime (S2 bindings, S3 adjustments, S4
+    // dispatch, S5 transitions).
+    const D2_MODULES: [&str; 5] = [
+        "crates/policy/src/evaluator/fact_refresh.rs",
+        "crates/runtime-host/src/recognition_binding.rs",
+        "crates/runtime-host/src/resource_adjustment.rs",
+        "crates/runtime-host/src/fact_refresh.rs",
+        "crates/runtime-host/src/fact_refresh_transitions.rs",
+    ];
+    // D2-S5's read of the recorder, beside the policy dispatch it does not belong to.
+    const D2_FUNCTIONS: [(&str, &str, &str); 1] = [(
+        "crates/runtime-host/src/host/policy_dispatch.rs",
+        "HostShared",
+        "fact_refresh_status_read",
+    )];
+    // The ledger's write interface (contracts/ledger-observer.md §2): the `append*` family,
+    // `execute_critical`, `reconcile_*` and the maintenance writer's `import`, and the types that
+    // hold it.
+    let writes = |reference: &FunctionReference| match reference {
+        FunctionReference::Method(_, method) => {
+            method.starts_with("append")
+                || method == "execute_critical"
+                || method.starts_with("reconcile_")
+                || method == "import"
+        }
+        FunctionReference::Call(path)
+        | FunctionReference::Struct(path)
+        | FunctionReference::Value(path)
+        | FunctionReference::Pattern(path) => path.iter().any(|segment| {
+            segment.starts_with("append")
+                || segment == "execute_critical"
+                || segment.starts_with("reconcile_")
+                || segment == "GlobalLedger"
+                || segment == "LedgerMaintenance"
+                || segment == "EventAppender"
+        }),
+        FunctionReference::SelfField(_) | FunctionReference::Literal(_) => false,
+    };
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    let mut functions = Vec::new();
+    for facts in production_facts(&root, &D2_MODULES) {
+        functions.extend(facts.functions);
+    }
+    for (path, owner, name) in D2_FUNCTIONS {
+        let found = production_facts(&root, &[path])
+            .into_iter()
+            .flat_map(|facts| facts.functions)
+            .filter(|function| function.owner.as_deref() == Some(owner) && function.name == name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found.len(),
+            1,
+            "{path}: {owner}::{name} is not one production function"
+        );
+        functions.extend(found);
+    }
+    for function in &functions {
+        for (reference, line) in &function.references {
+            if writes(reference) {
+                violations.push(format!("{}:{line}: {reference:?}", function.site()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "the fact refresh's code calls the ledger's write interface; D2 has no row in the \
+         direct-write exception table:\n{}",
+        violations.join("\n")
+    );
 }

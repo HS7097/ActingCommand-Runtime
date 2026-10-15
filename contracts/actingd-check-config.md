@@ -395,7 +395,15 @@ revision.
   Workflow #384 D2-S2 adds one `fact_reader_missing:<instance>:<fact key>` per
   realistic fact a catalog task reads in an instance's scope that the
   instance's reader does not mark, or that an instance without a reader cannot
-  refresh (see "Recognition maintenance package").
+  refresh (see "Recognition maintenance package"). Workflow #386 SR-3: with
+  `scheduling.pack_admission.check_in_check_config` on (the default), this
+  Runtime's kernel admits every package `policy.procedure_manifest` locates,
+  each location once, and each package it refuses with a code of
+  `scheduling.pack_admission.suspend_codes` is one `pack_admission_suspended`
+  note (`package_id`, `actual_digest` its content hash measured right after the
+  refusal, `failure_code`, `runtime_commit`); any other refusal gives no note
+  (the dispatch reports it). Nothing is written ([policy-suspension.md](policy-suspension.md),
+  "Task package suspension").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
@@ -638,63 +646,26 @@ root directory itself cannot be listed (`standard_pack_root_unreadable`).
 
 ## Prerequisite packages
 
-Workflow #336 L2b adds the optional top-level `prerequisite_packages`, the
-packages a `linear_steps` package may name as its `prerequisite_package_id`
-(`contracts/linear-steps.md`, "Prerequisite packages"):
-
-```json
-"prerequisite_packages":[{"package_id":"neutral.test.stage_page","package_path":"packages/neutral/neutral.test.stage_page.zip"}]
-```
-
-Each entry has exactly these two fields (Workflow #336 PKG-S4, option 丙: an
-entry that still names `package_digest` fails `config_decode_failed`).
-`package_id` is not empty, at most 256 bytes and has no control character
-(`prerequisite_package_id_invalid`); no two entries share one
-(`prerequisite_package_duplicate`); at most as many entries as a catalog has
-tasks (`prerequisite_packages_size_invalid`). `package_path` is checked as a
-procedure binding's `scheduled_execution.package_path` is (a relative path
-resolves against the configuration file's directory), under its own codes:
-`prerequisite_package_unavailable`, `prerequisite_package_not_regular`,
-`prerequisite_package_container_unsupported`,
-`prerequisite_package_request_invalid`. All of them fail at stage `assemble`.
-No package is opened or hashed here: a run admits each package by its path when
-it resolves its chain, and refuses one whose control declares another
-`package_id` than its entry with `contained_task_prerequisite_mismatch` (M-PKG
-D7), also as a configured return-home package. The
-map needs no `policy` section, so a manual `task-run` uses it too; it is not a
-configuration fact (neither the `config_manifest` nor the `config.*` runtime
-facts name it) and it is read once at startup, so a change needs a restart. A
-build that predates the field refuses it with `config_decode_failed`. A Lab
-recording's `record stop` prints the entry of the package it wrote as
-`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output").
-
-Workflow #336 L2c adds the optional top-level `return_home_packages`, per game
-and server the return-home package a `linear_steps` package without a declared
-prerequisite package falls back to (`contracts/linear-steps.md`, "Return-home
-fallback"); since L2d the stuck-recovery ladder and the page-graph home entry of a
-run whose request binds no recovery package use it too:
-
-```json
-"return_home_packages":[{"game":"neutral","server":"test","package_id":"neutral.test.return_home"}]
-```
-
-Each entry has exactly these three fields. `game` and `server` are not empty, at
-most 64 bytes and have no control character (`return_home_package_key_invalid`);
-`package_id` is a `package_id` of `prerequisite_packages`
-(`return_home_package_unbound`); no two entries share one game and server
-(`return_home_package_duplicate`); at most as many entries as a catalog has
-tasks (`return_home_packages_size_invalid`). All of them fail at stage
-`assemble`; no package is opened here (a run checks the package's game, server
-and resolution when it resolves its chain). Like `prerequisite_packages`, it is
-not a configuration fact, it is read once at startup and a build that predates
-the field refuses it with `config_decode_failed`.
+Workflow #373 NAV-3a (model M-373 v1.1 §4.3): the configuration names no
+prerequisite and no return-home package. A run finds every prerequisite package
+a package declares, and the return-home package of its game and server, in the
+standard-pack registry of its game (`standard_packs.root`, "Standard packs"
+above; `contracts/package-reference.md`, "Standard package root"), read when the
+run uses it, so an installed or replaced standard pack is used by the next run
+with no configuration change and no restart. The top-level keys
+`prerequisite_packages` and `return_home_packages` (Workflow #336 L2b, L2c) are
+retired with no compatibility: a configuration that still carries either fails
+`config_decode_failed` at stage `config_load`, and their eleven assembly codes
+are gone. A Lab recording's `record stop` still prints a
+`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output") until its
+output is changed.
 
 A scheduled task paused by a failure is lifted once the content hash of a
 package its paused run went through changes (Workflow #336 PKG-S3, option 丙):
 the main package at its procedure binding's `scheduled_execution.package_path`
-or, for a `linear_steps` task, a `prerequisite_packages` entry its run went
-through, or its game and server's `return_home_packages` entry names another
-package or that package's content changed. A package changed in place takes
+or, for a `linear_steps` task, a prerequisite package its run went through, as
+the standard-pack registries list it now, or the registry's return-home package
+of its game and server is another package or that package's content changed. A package changed in place takes
 effect at the pair's next due evaluation, without a restart; a binding names no
 package content (PKG-S3) and has no `package_digest` key (PKG-S4). `actingd suspended
 --config <path>` loads and assembles the

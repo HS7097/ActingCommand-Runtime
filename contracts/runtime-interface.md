@@ -302,7 +302,7 @@ U-6 deletes the source gates.
 | `DrillRecoveryLadder{instance_alias, mode}` (#390 DRILL-1; `mode` `plan` or `device`) | option two | operation (a drill of one physical instance's stuck-recovery ladder, recorded like a real one and tagged `drill`; [emulator-control.md](emulator-control.md), "Drills") | cli `ladder-drill`; mcp `ac_ladder_drill` (operator before U-3); the emulator control origin gate (User+Ui, Cli+Cli) | yes |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
-| D2 S5 transition query | general | read | cli, mcp | no |
+| `FactRefreshStatus` (#384 D2-S5, the D2 S5 transition query; register §1.68) | general | read (what the fact refresh waits for, from the transition recorder's memory; nothing read from or written to the ledger) | cli `fact-refresh`; mcp `ac_overview` (block `fact_refresh`) | no |
 | `PerformanceStatus` (#385 P-m; register §1.61 W15) | general | read (the shadow measurement's status, from memory; nothing read from or written to the ledger) | cli `perf-status`; mcp `ac_overview` (block `performance`) | no |
 | a later #369 same-queue request, if any | option two | operation (lease family) | actinglab | yes |
 
@@ -494,13 +494,14 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | new: `ladder-drill --instance <alias\|instance_id\|ADB port> [--device]` (#390 DRILL-1, before U-3) | DrillRecoveryLadder | option two | actingctl until U-3 moves the option-two commands; `ac_ladder_drill`; without `--device` a plan drill (`mode` `plan`) that never acts on the device; answers the admitted drill `{instance_alias, mode, ladder_request_id}`; success `recovery_ladder_drill_queued`; refusals `recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`, `recovery_ladder_drill_cooling_down`, `recovery_admission_denied`, `instance_unknown`, `instance_ambiguous` |
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
-| new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything); #385 P-m: + PerformanceStatus for the block `performance` | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
+| new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything); #385 P-m: + PerformanceStatus for the block `performance`; #384 D2-S5: + FactRefreshStatus for the block `fact_refresh` | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
 | new: `perf-status [--instance <alias\|instance_id\|ADB port>]` (#385 P-m) | PerformanceStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `performance`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_performance_reported` |
+| new: `fact-refresh [--instance <alias\|instance_id\|ADB port>]` (#384 D2-S5) | FactRefreshStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `fact_refresh`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_fact_refresh_reported` |
 | new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
 | new: `codes <code>`, `codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]` (#389 MCP-14, before U-3) | not a request: reads the outcome catalog the build embeds | general read (offline, no `--state-root`) | actingctl; `ac_outcome_code` (new); one code answers its catalog entry as the catalog holds it with its `code`, the list `{codes: [{code, category, ladder_class, status}], next_cursor?}` in name order; success `outcome_codes_reported`; refusals `outcome_code_unknown`, `cursor_invalid`, `outcome_catalog_unreadable` |
 | new: `run evidence (--request-id <id> \| --run-id <id>) [--from-step <n>] [--limit <1-100>]` (#389 MCP-6, before U-3) | QueryEvents (Forensic) by the run's request_id, after the run is found as `ac_get_run` finds it; the frames and the overlay are material refs read with ReadMaterial (`ac_material`) | general read | actingctl; `ac_run_evidence` (new); `{request_id, run_id?, task_id?, steps: [{step_index, page, targets: [{target, matched, box?}], action?: {kind, point?, rect?}, frames: [{ref}]}], final: {page?, frame_ref?}, next_step?, overlay?: {ref}}`; the output shape is the client's only; success `run_evidence_reported`; refusals `run_unknown`, `actingctl_usage_invalid` |
 | new: `--wait <s>` on `emulator start`, `stop`, `restart` and `task-run` (#389 MCP-21, before U-3) | as the command | as the command | `--wait` 1–3600 s; without it the command waits for its receipt as before; a wait that ends first prints `{request_id?, correlation_id, state: "in_progress"}` with `command_wait_expired` (`operation`, `request_id` when the command knows it, `waited_ms`) and exits 1, and the request goes on in the Runtime (it is served on its connection's thread whether the client still waits or not); no MCP argument (`ac_emulator`, `ac_run_pack` answer within their call budget or with a handle); moves with the commands to actinglab at U-3 |
-| planned: `pack-schedule set`, `pack-schedule get` (SR-11), the D2 S5 query, the SR-5a entry (`perf-status` is built, #385 P-m, above) | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
+| planned: `pack-schedule set`, `pack-schedule get` (SR-11), the SR-5a entry (`perf-status` is built, #385 P-m, and the D2 S5 query `fact-refresh`, #384 D2-S5, above) | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
 | `watchdog *`, `mcp-config` | not requests | — | stay; `mcp-config`'s example drops `--tier` |
 
@@ -555,6 +556,11 @@ two.
 - The block `performance` (#385 P-m) is the shadow measurement's status, the object
   `actingctl perf-status` prints (PerformanceStatus, register §1.61 W15), its rows narrowed by
   `instance` too. A read that fails leaves a warning and `incomplete`, never an empty block.
+- The block `fact_refresh` (#384 D2-S5) is what the scheduler's fact refresh waits for, the
+  object `actingctl fact-refresh` prints (FactRefreshStatus, register §1.68): the numbers of
+  the latest cycle and transition and one row per instance with a waiting key, its rows
+  narrowed by `instance` too ([scheduling/README.md](scheduling/README.md), "Fact Refresh").
+  A read that fails leaves a warning and `incomplete`, never an empty block.
 - `ac_run_pack` mints the request id and correlation id itself and returns `handle` =
   that request id at once (valid across restarts, as today); its job runs
   `actinglab --json run start … --request-id <id> --correlation-id <id> --via mcp` with
@@ -775,8 +781,11 @@ item 5). Neither touches files on disk.
 
 - The Runtime builds its packages from the configuration generation at start: the
   procedure manifest (`procedure_ref` → binding: `operation_id`, `yield_points`,
-  optional `scheduled_execution`), the startup package per instance, the prerequisite
-  and return-home packages, the ladder settings. Some are `OnceLock` values set once.
+  optional `scheduled_execution`), the startup package per instance, the ladder settings.
+  Some are `OnceLock` values set once. Workflow #373 NAV-3a (M-373 §4.3): the start table's
+  prerequisite and return-home part is the standard-pack registry, read when it is used (not a
+  start snapshot): every package an installed standard pack lists, and its game and server's
+  return-home package.
 - The effective table = the start table + runtime changes, one logical table:
   - the start table is what the configuration built; it never changes, and the
     procedure manifest is never rebuilt;
@@ -788,7 +797,10 @@ item 5). Neither touches files on disk.
   its own. The catalog is not in it.
 - Key: a package's identity is its `package_id`, which is the procedure manifest's
   `procedure_ref` and the `package_id` of SR-11's rows. Startup and prerequisite
-  packages are located by their configuration item. A request names an entry by
+  packages are located by their configuration item (a prerequisite package by its registry
+  entry); a `LoadPack PrerequisitePackage` lays its `package_id` over the registry, and an
+  `UnloadPack` of it makes that id unbound (when U-3 brings the behaviour). A request names an
+  entry by
   `PackRegistryKey` (U-1): `procedure{package_id}`, `startup_package{instance_alias}`
   or `prerequisite_package{package_id}`; the workbench key shape is #383 AO-0's.
 - Every use reads the effective table: policy evaluation and admission, startup

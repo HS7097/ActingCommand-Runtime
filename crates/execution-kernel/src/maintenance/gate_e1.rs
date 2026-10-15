@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Test plan v2.2 E-1 G4a (exec key 12): pure tables for the shared `PrerequisiteChain` predicate
-// and `validate_bundle_maintenance`, as contracts/package-reference.md "Maintenance declarations
-// (bundle v3)" states them: the chain owns game/server/resolution compatibility, cycle
+// and `validate_bundle_maintenance`, as contracts/package-reference.md "Maintenance declarations"
+// states them (bundle v4 since Workflow #336 PKG-S5): the chain owns game/server/resolution compatibility, cycle
 // detection, three declared layers and the 1,000-step aggregate bound; a return-home fallback is
 // outside the three declared layers, and only a linear package with a resolved first-step page
 // and no declared prerequisite selects it; the bundle check matches every indexed identity
@@ -13,10 +13,7 @@
 // directly; nothing is loaded.
 
 use super::*;
-use actingcommand_contract::{
-    BundleIndexV3Version, BundleMaintenance, BundlePackV2, ContentDirectory,
-    ContentDirectoryVersion,
-};
+use actingcommand_contract::{BundleIndexVersion, BundleMaintenance, BundlePack};
 
 const ROOT: &str = "neutral.test.root";
 const HOME: &str = "neutral.test.home";
@@ -34,16 +31,12 @@ fn package(package_id: &str) -> TaskPackageDescriptor {
     TaskPackageDescriptor {
         package_id: package_id.to_owned(),
         entry_task_id: "task".to_owned(),
-        reference: PackageRef::ContentDirectory(ContentDirectory {
-            schema_version: ContentDirectoryVersion::V1,
-            sha256: "0".repeat(64),
-        }),
         execution_mode: "navigable_route".to_owned(),
         game: "neutral".to_owned(),
         server: "test".to_owned(),
         resolution: (2, 1),
         prerequisite_package_id: None,
-        linear_entry_page: None,
+        entry_pages: None,
         maximum_executed_steps: 1,
         startup_incompatibility: None,
         prerequisite_incompatibility: None,
@@ -56,7 +49,7 @@ fn package(package_id: &str) -> TaskPackageDescriptor {
 fn linear(package_id: &str) -> TaskPackageDescriptor {
     TaskPackageDescriptor {
         execution_mode: "linear_steps".to_owned(),
-        linear_entry_page: Some("neutral/home".to_owned()),
+        entry_pages: Some(vec!["neutral/home".to_owned()]),
         ..package(package_id)
     }
 }
@@ -178,7 +171,7 @@ fn gate_e1_chain_only_a_linear_page_entry_without_a_prerequisite_selects_the_fal
     );
     // An application entry resolves no first-step page.
     let application_entry = TaskPackageDescriptor {
-        linear_entry_page: None,
+        entry_pages: None,
         ..linear(ROOT)
     };
     assert_eq!(next(application_entry, Some(HOME)), None);
@@ -309,30 +302,26 @@ fn gate_e1_chain_refuses_an_unbound_or_misidentified_prerequisite() {
     );
 }
 
-// A v3 index of game `neutral` over `packages`, each on server `test` with entry task `task`,
+// A v4 index of game `neutral` over `packages`, each on server `test` with entry task `task`,
 // declaring `maintenance`.
-fn index(packages: &[TaskPackageDescriptor], maintenance: Vec<BundleMaintenance>) -> BundleIndexV3 {
-    BundleIndexV3 {
-        schema_version: BundleIndexV3Version::V3,
+fn index(packages: &[TaskPackageDescriptor], maintenance: Vec<BundleMaintenance>) -> BundleIndex {
+    BundleIndex {
+        schema_version: BundleIndexVersion::V4,
         game: "neutral".to_owned(),
         source: None,
         packs: packages
             .iter()
-            .enumerate()
-            .map(|(position, package)| {
-                let digest = format!("{:064x}", position + 1);
-                BundlePackV2 {
-                    package_id: package.package_id.clone(),
-                    server: "test".to_owned(),
-                    entry_task_id: "task".to_owned(),
-                    path: format!("packs/{digest}"),
-                    digest,
-                    file_count: 3,
-                    byte_count: 64,
-                }
+            .map(|package| BundlePack {
+                package_id: package.package_id.clone(),
+                server: "test".to_owned(),
+                entry_task_id: "task".to_owned(),
+                path: format!("packs/{}", package.package_id),
+                file_count: 3,
+                byte_count: 64,
             })
             .collect(),
-        maintenance,
+        maintenance: Some(maintenance),
+        tables: None,
     }
 }
 
@@ -344,7 +333,7 @@ fn uses(package_id: &str, uses: &[MaintenanceUse]) -> BundleMaintenance {
     }
 }
 
-fn bundle_refusal(index: &BundleIndexV3, packages: &[TaskPackageDescriptor]) -> (String, String) {
+fn bundle_refusal(index: &BundleIndex, packages: &[TaskPackageDescriptor]) -> (String, String) {
     refused(validate_bundle_maintenance(index, packages))
 }
 

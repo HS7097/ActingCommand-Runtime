@@ -14,11 +14,16 @@
 //! Workflow #372 K3 adds `clock_slots`: the clock-slot records of K2 (`goal_missed` planning
 //! signals whose `signal_id` starts with `signal:clock_slot:`) of the 48 h before the ledger's
 //! latest event, each with the fate its pair's next admitted dispatch settles.
+//!
+//! Workflow #386 SR-3 adds `packs`: the task packages the latest daemon start suspended and has
+//! not lifted, from the copies of its evaluation (`goal_missed` planning signals whose
+//! `signal_id` starts with `signal:pack_admission:`), with their content hash now.
 
 use crate::RuntimeHostConfig;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, SchedulingRuleHostCode};
 use crate::failure_identity::{
-    FailureIdentity, failure_rows, failure_step, identifier_text, locate_error_frame,
+    FailureIdentity, content_hash_prefix, failure_rows, failure_step, identifier_text,
+    locate_error_frame,
 };
 use crate::suspension_lift::{LiftCheckTime, LiftChecks, PausedPackages, SuspensionLiftView};
 use actingcommand_artifact_store::read_projected_verified;
@@ -373,13 +378,13 @@ pub fn suspension_report(
     };
     // Workflow #336 PKG-S3: each package is measured once for the whole report.
     let checks = LiftChecks::default();
-    let view = SuspensionLiftView {
+    // Workflow #373 NAV-3a: the layers' packages are those the standard-pack registries name.
+    let view = SuspensionLiftView::new(
         manifest,
-        prerequisite_packages: request.host.prerequisite_packages(),
-        return_home_packages: request.host.return_home_packages(),
-        checks: &checks,
-        time: LiftCheckTime::ONE_READ,
-    };
+        request.host.standard_packs_root(),
+        &checks,
+        LiftCheckTime::ONE_READ,
+    );
     let through_sequence = snapshot.ledger.latest_sequence();
     let intents = snapshot
         .query(EventQuery {
@@ -617,6 +622,7 @@ pub fn suspension_report(
         }));
     }
     let (clock_slots, clock_slots_total) = clock_slots(&snapshot)?;
+    let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
     let mut report = json!({
         "schema_version": SCHEMA_VERSION,
         "config_path": request.config_path.to_string_lossy(),
@@ -628,6 +634,7 @@ pub fn suspension_report(
         "repeating": repeating,
         "warnings": warnings,
         "clock_slots": clock_slots,
+        "packs": packs,
     });
     if let Some(total) = clock_slots_total {
         report["clock_slots_total"] = json!(total);
@@ -635,7 +642,124 @@ pub fn suspension_report(
     Ok(report)
 }
 
-/// A lift check that could not read its own memory (a poisoned lock).
+/// The values of a copied task package suspension or lift, read back from its outcome.
+#[derive(Deserialize)]
+struct PackRecord {
+    package_id: String,
+    #[serde(default)]
+    actual_digest: Option<String>,
+    #[serde(default)]
+    failure_code: Option<CodeStr>,
+    #[serde(default)]
+    runtime_commit: Option<String>,
+}
+
+/// One `packs` row.
+#[derive(Serialize)]
+struct PackRow {
+    package_id: String,
+    failure_code: Option<CodeStr>,
+    runtime_commit: Option<String>,
+    paused_hash_prefix: Option<String>,
+    current_hash_prefix: Option<String>,
+    instances: std::collections::BTreeSet<String>,
+}
+
+/// One suspended task package as the copies of the latest daemon start's evaluation give it:
+/// the latest copy's values and task (its procedure's binding locates the package now), and the
+/// instances it was copied for and not lifted on.
+struct PackEntry {
+    record: PackRecord,
+    task_id: Option<String>,
+    instances: std::collections::BTreeSet<String>,
+}
+
+/// Workflow #386 SR-3 (`contracts/policy-suspension.md`, "Task package suspension"): `packs`,
+/// each task package suspended since the latest daemon start (every record when the start is
+/// unknown) and not lifted, by `package_id`: the refusal's code, the build, the content hash
+/// prefix the suspension measured and the one measured now (`null` when not measured), and the
+/// instances whose pairs it defers. A suspension is memory of one daemon process, so copies from
+/// before the latest start are not read.
+fn packs(
+    snapshot: &Snapshot<'_>,
+    view: &SuspensionLiftView<'_>,
+    procedure_refs: &BTreeMap<String, String>,
+    daemon_started_at_unix_ms: Option<u64>,
+) -> Result<Vec<Value>, SuspensionReportError> {
+    let mut entries = BTreeMap::<String, PackEntry>::new();
+    for event in snapshot.query(EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        from_timestamp_unix_ms: daemon_started_at_unix_ms,
+        ..EventQuery::default()
+    })? {
+        let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) = event.payload()
+        else {
+            continue;
+        };
+        if payload.kind() != PolicyPlanningSignalKind::GoalMissed
+            || !payload
+                .signal_id()
+                .starts_with(crate::pack_admission::SIGNAL_PREFIX)
+        {
+            continue;
+        }
+        let outcome = payload.outcome();
+        let Ok(record) =
+            serde_json::from_value::<PackRecord>(Value::Object(outcome.values().clone()))
+        else {
+            continue;
+        };
+        if outcome.is(SchedulingRuleHostCode::PackAdmissionSuspended) {
+            let package_id = record.package_id.clone();
+            let instances = entries
+                .remove(&package_id)
+                .map(|entry| entry.instances)
+                .unwrap_or_default();
+            let mut entry = PackEntry {
+                record,
+                task_id: payload.task_id().map(str::to_owned),
+                instances,
+            };
+            entry.instances.insert(payload.instance_id().to_owned());
+            entries.insert(package_id, entry);
+        } else if outcome.is(SchedulingRuleHostCode::PackAdmissionLifted)
+            && let Some(entry) = entries.get_mut(&record.package_id)
+        {
+            entry.instances.remove(payload.instance_id());
+            if entry.instances.is_empty() {
+                entries.remove(&record.package_id);
+            }
+        }
+    }
+    let mut packs = Vec::with_capacity(entries.len());
+    for (package_id, entry) in entries {
+        let current_hash_prefix = match entry
+            .task_id
+            .as_ref()
+            .and_then(|task_id| procedure_refs.get(task_id))
+        {
+            Some(procedure_ref) => view
+                .current_main_hash(procedure_ref)
+                .map_err(|_| lift_failed())?,
+            None => None,
+        };
+        let paused_hash_prefix =
+            entry.record.actual_digest.as_deref().map(|digest| {
+                content_hash_prefix(digest.strip_prefix("sha256:").unwrap_or(digest))
+            });
+        packs.push(wire(&PackRow {
+            package_id,
+            failure_code: entry.record.failure_code,
+            runtime_commit: entry.record.runtime_commit,
+            paused_hash_prefix,
+            current_hash_prefix,
+            instances: entry.instances,
+        }));
+    }
+    Ok(packs)
+}
+
+// A lift check that could not read its own memory (a poisoned lock).
 fn lift_failed() -> SuspensionReportError {
     SuspensionReportError::new(
         HostCode::RuntimeStatePoisoned,

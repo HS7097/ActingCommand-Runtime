@@ -483,17 +483,20 @@ pub(super) struct ContainedRunControl {
     /// The committed `task.failed` terminal of this run (slice #316-B4 trigger input).
     failed_terminal: Mutex<Option<FailedTaskTerminal>>,
     /// Workflow #336 L2d: the prepared package's identity, set once the run executes; the
-    /// stuck-recovery ladder takes the return-home package configured for its game and server.
+    /// stuck-recovery ladder takes the registry's return-home package of its game and server.
     package: std::sync::OnceLock<PackageIdentity>,
     /// Workflow #369 H-1 (review M-1): set only by the policy-run path; its failed lease end
     /// hands the key to a ladder.
     ladder_source: std::sync::OnceLock<super::recovery_ladder::LadderSource>,
     /// Workflow #385 MEM-1: the run's main package load, set once by its preparation.
     package_load: std::sync::OnceLock<PackageLoad>,
+    /// Workflow #390 EXEC-3: set once when the host starts the run itself (a startup package,
+    /// a recovery ladder rung), whose page-graph application entry runs first (R24).
+    host_package: std::sync::OnceLock<()>,
 }
 
 /// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
-/// return-home package from `return_home_packages` must share to stand in for it.
+/// return-home package of the registry (Workflow #373 NAV-3a) must share to stand in for it.
 #[derive(Clone)]
 pub(super) struct PackageIdentity {
     pub(super) game: String,
@@ -509,6 +512,14 @@ impl PackageIdentity {
             resolution: package.resolution(),
         }
     }
+}
+
+/// Workflow #336 L2d: on a ladder rung run of the registry's return-home package (Workflow #373
+/// NAV-3a), the failed package it must match and the `package_id` the registry named for it.
+#[derive(Clone)]
+pub(super) struct ConfiguredReturnHome {
+    pub(super) failed: PackageIdentity,
+    pub(super) package_id: String,
 }
 
 /// A committed `task.failed` terminal: the run it ended and the code of its outcome.
@@ -536,7 +547,18 @@ impl ContainedRunControl {
             package: std::sync::OnceLock::new(),
             ladder_source: std::sync::OnceLock::new(),
             package_load: std::sync::OnceLock::new(),
+            host_package: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Workflow #390 EXEC-3: marks the run as one the host starts itself, before it executes.
+    fn note_host_package(&self) {
+        let _ = self.host_package.set(());
+    }
+
+    /// Workflow #390 EXEC-3: whether the host started the run itself.
+    fn is_host_package(&self) -> bool {
+        self.host_package.get().is_some()
     }
 
     /// Workflow #385 MEM-1: the run's main package load, noted once after its preparation; a
@@ -1105,7 +1127,7 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) pinned_step: Option<(u32, u32)>,
     /// Workflow #373 NAV-6: whether the traces now recorded are an interrupt layer's.
     pub(super) interrupt_layer: bool,
-    entry_preflight_recorded: bool,
+    pub(super) entry_preflight_recorded: bool,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
@@ -1833,6 +1855,7 @@ impl RuntimeContainedTask<'_> {
     fn record_geometry_triggered_recovery_failure(
         &self,
         package_label: String,
+        role: Option<actingcommand_contract::TaskEntryRecoveryRole>,
         primary: &RuntimeHostError,
     ) -> Result<(), RequestFailure> {
         // Preserve the two original recovery failure facts after a classified failure,
@@ -1841,7 +1864,7 @@ impl RuntimeContainedTask<'_> {
             TaskSemanticFact::EntryRecoveryFailed {
                 package_label: Some(package_label),
                 outcome: primary.outcome(),
-                role: None,
+                role,
             },
             TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::FailClosed,
@@ -1872,18 +1895,20 @@ impl RuntimeContainedTask<'_> {
     /// operation consumed its last remaining execution budget.
     pub(super) fn record_geometry_triggered_prerequisite_failure(
         &self,
-        open_packages: &[String],
+        open_packages: &[(String, actingcommand_contract::TaskEntryRecoveryRole)],
         primary: &RuntimeHostError,
     ) -> Result<(), RequestFailure> {
         let outcome = primary.outcome();
         for fact in open_packages
             .iter()
             .rev()
-            .map(|package_label| TaskSemanticFact::EntryRecoveryFailed {
-                package_label: Some(package_label.clone()),
-                outcome: outcome.clone(),
-                role: None,
-            })
+            .map(
+                |(package_label, role)| TaskSemanticFact::EntryRecoveryFailed {
+                    package_label: Some(package_label.clone()),
+                    outcome: outcome.clone(),
+                    role: Some(*role),
+                },
+            )
             .chain([TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::FailClosed,
                 outcome: Some(outcome.clone()),
@@ -4783,16 +4808,10 @@ pub(super) fn prepare_contained_task(
     deadline: Instant,
 ) -> Result<PreparedContainedTask, RequestFailure> {
     let path = contained_task_package_path(request)?;
-    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
-    // structural only; the request names no digest, so the package carries no reference.
-    PreparedContainedTask::load_path(
-        instance_alias,
-        path,
-        &actingcommand_contract::PackageRef::default(),
-        vision_provider,
-        deadline,
-    )
-    .map_err(contained_task_declaration_failure)
+    // Workflow #336 PKG-S1/PKG-S5 (option 丙): the path chooses the loader and admission is
+    // structural only; the package is named by its path alone.
+    PreparedContainedTask::load_path(instance_alias, path, vision_provider, deadline)
+        .map_err(contained_task_declaration_failure)
 }
 
 /// The package path a contained-task request names, refused unless it is absolute.
@@ -4824,18 +4843,48 @@ pub(super) fn prepare_measured_contained_task(
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     deadline: Instant,
 ) -> Result<(PreparedContainedTask, PackageLoad), RequestFailure> {
-    let path = contained_task_package_path(request)?;
-    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
-    // structural only; the request names no digest, so the package carries no reference.
+    prepare_measured_naming_refusal(instance_alias, request, vision_provider, deadline)
+        .map_err(|(failure, _)| failure)
+}
+
+/// Workflow #386 SR-3: what a refused package admission names for the suspension rule: the
+/// refusal's registered code and the `package_id` the package's control declares.
+pub(super) struct RefusedPackage {
+    pub(super) code: Code,
+    pub(super) package_id: String,
+}
+
+/// A measured load: the prepared task and how its package was read.
+pub(super) type MeasuredLoad = (PreparedContainedTask, PackageLoad);
+
+/// A refused measured load: the request failure and, when known, the refused package.
+pub(super) type MeasuredRefusal = (RequestFailure, Option<Box<RefusedPackage>>);
+
+/// [`prepare_measured_contained_task`], whose refusal also names the refused package when the
+/// kernel read its `package_id` and the refusal's code is registered (Workflow #386 SR-3: a
+/// scheduled run's preparation suspends it at a suspend code).
+pub(super) fn prepare_measured_naming_refusal(
+    instance_alias: &str,
+    request: &ContainedTaskRequest,
+    vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
+    deadline: Instant,
+) -> Result<MeasuredLoad, MeasuredRefusal> {
+    let path = contained_task_package_path(request).map_err(|failure| (failure, None))?;
+    // Workflow #336 PKG-S1/PKG-S5 (option 丙): the path chooses the loader and admission is
+    // structural only; the package is named by its path alone.
     let started = Instant::now();
     let (prepared, bytes) = PreparedContainedTask::load_path_with_resident_bytes(
         instance_alias,
         path,
-        &actingcommand_contract::PackageRef::default(),
         vision_provider,
         deadline,
     )
-    .map_err(contained_task_declaration_failure)?;
+    .map_err(|error| {
+        let refused = Code::relayed(error.code().as_str())
+            .zip(error.package_id().map(str::to_owned))
+            .map(|(code, package_id)| Box::new(RefusedPackage { code, package_id }));
+        (contained_task_declaration_failure(error), refused)
+    })?;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     Ok((prepared, PackageLoad { elapsed_ms, bytes }))
 }
@@ -5786,6 +5835,8 @@ impl HostShared {
             resolved.instance_id(),
             false,
         )?;
+        // Workflow #390 EXEC-3: a startup package or a ladder rung's package.
+        active_run.control.note_host_package();
         active_run
             .control
             .set_deadline(
@@ -5817,22 +5868,18 @@ impl HostShared {
             startup_package::HostPackageRun::ReturnHome => failure,
         })?;
         active_run.control.note_package_load(package_load);
-        // Workflow #336 L2d: a configured return-home package on the ladder's first rung passes
-        // the checks of a return-home chain layer against the failed package and declares no
-        // prerequisite package, before its chain and any lease. Workflow #336 PKG-S4 (M-PKG D7):
-        // first, it is the package its `prerequisite_packages` entry names by `package_id`.
-        if let Some(failed) = &pending.configured_return_home {
-            if let Some(package_id) = self
-                .return_home_packages
-                .get(&(failed.game.clone(), failed.server.clone()))
-            {
-                prepared
-                    .package_descriptor()
-                    .require_configured_package_id(package_id)
-                    .map_err(prerequisite::kernel_refusal)?;
-            }
+        // Workflow #336 L2d: the registry's return-home package on the ladder's first rung
+        // passes the checks of a return-home chain layer against the failed package and
+        // declares no prerequisite package, before its chain and any lease. Workflow #336 PKG-S4
+        // (M-PKG D7): first, it is the package its registry entry names by `package_id`
+        // (Workflow #373 NAV-3a).
+        if let Some(configured) = &pending.configured_return_home {
+            prepared
+                .package_descriptor()
+                .require_configured_package_id(&configured.package_id)
+                .map_err(prerequisite::kernel_refusal)?;
             if let Some(detail) =
-                prerequisite::configured_return_home_incompatibility(&prepared, failed)
+                prerequisite::configured_return_home_incompatibility(&prepared, &configured.failed)
             {
                 return Err(prerequisite::configured_return_home_refusal(detail));
             }
@@ -6462,9 +6509,10 @@ impl HostShared {
             }) {
             Err(ContainedTaskRunError::Boundary(failure))
         } else if !prerequisites.is_empty() {
-            // Workflow #336 L2b: only a `linear_steps` package has prerequisite packages, and
-            // it has no required home entry page.
-            prerequisite::run_linear_gated(&prepared, &prerequisites, &mut runtime)
+            // Workflow #336 L2b: a package with prerequisite packages runs through their gate;
+            // Workflow #373 NAV-3a, a page-graph package that declares one included (its entry
+            // is checked by the gate, not by the home entry below).
+            prerequisite::run_gated(&prepared, &prerequisites, &mut runtime)
         } else if prepared.required_entry_pages().is_some()
             && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
         {
@@ -6477,6 +6525,11 @@ impl HostShared {
         } else if let Some(keys) = runtime.reading_keys.clone() {
             // Workflow #384 D2-S4: a fact refresh run reads only its requested keys.
             let execution = prepared.run_for_reading_keys(&mut runtime, &keys);
+            execution.and_then(|outcome| runtime.with_layer_end(outcome))
+        } else if control.is_host_package() {
+            // Workflow #390 EXEC-3 (R24): a run the host starts itself begins a page-graph
+            // application entry with its effect; the kernel still owns its run loop.
+            let execution = prepared.run_host_package(&mut runtime);
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         } else {
             let execution = prepared.run(&mut runtime);
@@ -7097,23 +7150,45 @@ impl HostShared {
         }
 
         // Workflow #336 L2d (R23): a request that binds no recovery package takes the
-        // return-home package actingd configures for the package's game and server.
+        // return-home package of the package's game and server; Workflow #373 NAV-3a (M-373
+        // §4.2, §4.3): the one the standard-pack registry of its game names, read now.
+        // `configured` is that package's `package_id`.
         let (binding, configured) = match task_request.recovery() {
-            Some(binding) => (binding, false),
-            None => match self
-                .configured_return_home(prepared.game(), prepared.server())
-                .map_err(RequestFailure::poison_without_terminal)
-                .map_err(ContainedTaskRunError::Boundary)?
-            {
-                Some(binding) => (binding, true),
-                None => {
+            Some(binding) => (binding.clone(), None),
+            None => match self.registry_return_home(prepared.game(), prepared.server()) {
+                Ok(Some(found)) => (found.binding, Some(found.package_id)),
+                Ok(None) => {
                     return fail_contained_task_entry(
                         runtime,
                         HostCode::ContainedTaskHomeRecoveryBindingMissing.as_str(),
                     );
                 }
+                Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                    return Err(ContainedTaskRunError::Boundary(failure));
+                }
+                // A broken game root closes the entry with its own outcome.
+                Err(mut failure) => {
+                    let outcome = failure.error.outcome();
+                    runtime
+                        .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                            disposition: TaskEntryTargetDisposition::FailClosed,
+                            outcome: Some(outcome.clone()),
+                        })
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    failure.state = RuntimeReceiptState::Failed;
+                    failure.task_failure = Some(TaskFailureEvidence {
+                        outcome,
+                        severe: false,
+                    });
+                    return Err(ContainedTaskRunError::Boundary(failure));
+                }
             },
         };
+        // Workflow #373 NAV-3a (M-373 §8.3): the registry's return-home package is recorded as
+        // the `return_home` layer; a request's own binding carries no role.
+        let role = configured
+            .is_some()
+            .then_some(actingcommand_contract::TaskEntryRecoveryRole::ReturnHome);
         let recovery_request = ContainedTaskRequest::new(binding.package_path()).map_err(|_| {
             ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryBindingInvalid.as_str())
         })?;
@@ -7131,23 +7206,19 @@ impl HostShared {
                 let code = failure.error.code();
                 let outcome = failure.error.outcome();
                 // Workflow #336 PKG-S2 (option 丙): the refused package's `package_id`, when it
-                // is known: the configured return-home package's, or the one its refused
+                // is known: the registry's return-home package's, or the one its refused
                 // declaration read. A request's own binding names only a path.
-                let package_label = if configured {
-                    self.return_home_packages
-                        .get(&(prepared.game().to_owned(), prepared.server().to_owned()))
-                        .cloned()
-                } else {
+                let package_label = configured.clone().or_else(|| {
                     failure
                         .error
                         .resource_declaration()
                         .and_then(|rejection| rejection.package_label.clone())
-                };
+                });
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_label,
                         outcome: outcome.clone(),
-                        role: None,
+                        role,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 if let Some(rejection) = failure.error.resource_declaration().cloned() {
@@ -7182,18 +7253,13 @@ impl HostShared {
                 return fail_contained_task_entry(runtime, code);
             }
         };
-        if configured {
-            // Workflow #336 PKG-S4 (M-PKG D7): a configured package is the package its
-            // `prerequisite_packages` entry names by `package_id`; another one is refused as a
-            // chain layer is, and starts no ladder.
-            if let Some(Err(error)) = self
-                .return_home_packages
-                .get(&(prepared.game().to_owned(), prepared.server().to_owned()))
-                .map(|package_id| {
-                    recovery
-                        .package_descriptor()
-                        .require_configured_package_id(package_id)
-                })
+        if let Some(package_id) = &configured {
+            // Workflow #336 PKG-S4 (M-PKG D7): the registry's package is the package its registry
+            // entry names by `package_id`; another one is refused as a chain layer is, and starts
+            // no ladder.
+            if let Err(error) = recovery
+                .package_descriptor()
+                .require_configured_package_id(package_id)
             {
                 runtime
                     .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
@@ -7235,7 +7301,7 @@ impl HostShared {
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
                 package_label: recovery_label.clone(),
-                role: None,
+                role,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         // Workflow #373 NAV-6: the recovery package's steps follow those of the interrupt
@@ -7262,7 +7328,7 @@ impl HostShared {
                     .map_err(ContainedTaskRunError::Boundary)?;
             }
             let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
-            if configured {
+            if configured.is_some() {
                 recovery.run_as_prerequisite(&mut recovery_runtime)
             } else {
                 recovery.run_entry_recovery(&mut recovery_runtime)
@@ -7297,7 +7363,7 @@ impl HostShared {
                         primary = primary.with_native_detail(detail.to_owned());
                     }
                     runtime
-                        .record_geometry_triggered_recovery_failure(recovery_label, &primary)
+                        .record_geometry_triggered_recovery_failure(recovery_label, role, &primary)
                         .map_err(ContainedTaskRunError::Boundary)?;
                     return Err(ContainedTaskRunError::Task(error));
                 }
@@ -7305,7 +7371,7 @@ impl HostShared {
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_label: Some(recovery_label),
                         outcome: Outcome::relayed(error.code().as_str()),
-                        role: None,
+                        role,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 return fail_contained_task_entry(runtime, error.code().as_str());
@@ -7326,7 +7392,11 @@ impl HostShared {
                     )
                 {
                     runtime
-                        .record_geometry_triggered_recovery_failure(recovery_label, &failure.error)
+                        .record_geometry_triggered_recovery_failure(
+                            recovery_label,
+                            role,
+                            &failure.error,
+                        )
                         .map_err(ContainedTaskRunError::Boundary)?;
                     return Err(ContainedTaskRunError::NonfatalOperation(failure));
                 }
@@ -7335,7 +7405,7 @@ impl HostShared {
                     .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
                         package_label: Some(recovery_label),
                         outcome: outcome.clone(),
-                        role: None,
+                        role,
                     })
                     .map_err(ContainedTaskRunError::Boundary)?;
                 runtime
@@ -7362,12 +7432,12 @@ impl HostShared {
                 package_label: recovery_label,
                 final_page: final_page.clone(),
                 executed_steps: recovery_outcome.executed_steps,
-                role: None,
+                role,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         // Workflow #336 L2d (R24): a configured `linear_steps` package ends on a Lab page id
         // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
-        let configured_linear = configured && recovery.execution_mode() == "linear_steps";
+        let configured_linear = configured.is_some() && recovery.execution_mode() == "linear_steps";
         // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry.
         if !configured_linear && !prepared.terminal_in_required_entry(&final_page) {
             return fail_contained_task_entry(
@@ -7430,13 +7500,30 @@ impl HostShared {
         request: &ContainedTaskRequest,
         deadline: Instant,
     ) -> Result<String, RequestFailure> {
+        self.replayed_package(instance_alias, request, deadline)
+            .map(|(package_label, _)| package_label)
+    }
+
+    /// [`Self::replayed_package_label`] with the package's game (Workflow #373 NAV-3a: the game
+    /// whose registry its prerequisite and return-home layers came from).
+    fn replayed_package(
+        &self,
+        instance_alias: &str,
+        request: &ContainedTaskRequest,
+        deadline: Instant,
+    ) -> Result<(String, String), RequestFailure> {
         prepare_contained_task(
             instance_alias,
             request,
             self.execution()?.vision_provider(),
             deadline,
         )
-        .map(|prepared| prepared.package_label().to_owned())
+        .map(|prepared| {
+            (
+                prepared.package_label().to_owned(),
+                prepared.game().to_owned(),
+            )
+        })
     }
 
     fn recover_contained_task(
@@ -7518,13 +7605,16 @@ impl HostShared {
             .ok_or_else(|| {
                 contained_task_package_failure(HostCode::ContainedTaskDeadlineOverflow)
             })?;
-        if let Some((_, recorded, _)) = packages.first()
-            && self.replayed_package_label(instance_alias, task_request, replay_deadline)?
-                != **recorded
-        {
-            return Err(contained_task_replay_denied(
-                HostCode::ContainedTaskRequestPackageReused,
-            ));
+        let mut replayed_game = None;
+        if let Some((_, recorded, _)) = packages.first() {
+            let (package_label, game) =
+                self.replayed_package(instance_alias, task_request, replay_deadline)?;
+            if package_label != **recorded {
+                return Err(contained_task_replay_denied(
+                    HostCode::ContainedTaskRequestPackageReused,
+                ));
+            }
+            replayed_game = Some(game);
         }
         let recovery_packages = semantic
             .iter()
@@ -7532,29 +7622,58 @@ impl HostShared {
                 // Workflow #373 NAV-6: an interrupt layer is no gate package.
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
                     package_label,
-                    role: None,
-                } => Some(package_label),
+                    role,
+                } if *role
+                    != Some(actingcommand_contract::TaskEntryRecoveryRole::InterruptHandler) =>
+                {
+                    Some((package_label, role.is_some()))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
         // Workflow #336 L2b: a prerequisite gate opens at most four distinct packages (three
-        // declared and one return-home, L2c), each the request's binding or one of the host's
-        // prerequisite packages. Workflow #336 PKG-S2: by `package_id`, a configured package's
-        // by its configuration key, the request's binding by its package admitted again.
+        // declared and one return-home, L2c), each the request's binding or a registry package.
+        // Workflow #336 PKG-S2: by `package_id`, the request's binding by its package admitted
+        // again. Workflow #373 NAV-3a: a layer recorded with a role (`prerequisite`,
+        // `return_home`) is a package of the standard-pack registry of the request's package's
+        // game, read now; one without a role is the request's binding.
         if recovery_packages.len() > prerequisite::MAX_PREREQUISITE_DEPTH + 1
             || recovery_packages
                 .iter()
                 .enumerate()
-                .any(|(index, recorded)| recovery_packages[..index].contains(recorded))
+                .any(|(index, (recorded, _))| {
+                    recovery_packages[..index]
+                        .iter()
+                        .any(|(earlier, _)| earlier == recorded)
+                })
         {
             return Err(contained_task_replay_denied(
                 HostCode::ContainedTaskRequestRecoveryReused,
             ));
         }
         let mut binding_label = None;
-        for recorded in &recovery_packages {
-            if self.prerequisite_packages.contains_key(recorded.as_str()) {
-                continue;
+        let mut registry_ids = None;
+        for (recorded, registry_layer) in &recovery_packages {
+            if *registry_layer {
+                if registry_ids.is_none() {
+                    let game = match replayed_game.take() {
+                        Some(game) => game,
+                        None => {
+                            self.replayed_package(instance_alias, task_request, replay_deadline)?
+                                .1
+                        }
+                    };
+                    registry_ids = Some(self.peek_game_registry(&game)?.package_ids());
+                }
+                if registry_ids
+                    .as_ref()
+                    .is_some_and(|ids: &BTreeSet<String>| ids.contains(recorded.as_str()))
+                {
+                    continue;
+                }
+                return Err(contained_task_replay_denied(
+                    HostCode::ContainedTaskRequestRecoveryReused,
+                ));
             }
             let Some(binding) = task_request.recovery() else {
                 return Err(contained_task_replay_denied(

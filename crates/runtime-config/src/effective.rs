@@ -11,7 +11,7 @@ use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
-use crate::scheduling::{FactRefreshConfig, SchedulingConfig};
+use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, SchedulingConfig};
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
@@ -447,6 +447,12 @@ impl EffectiveConfig {
     /// lift checks.
     pub fn lift_check_min_interval_ms(&self) -> Result<u64, ConfigFailure> {
         scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #386 SR-3: the `scheduling.pack_admission` keys in effect (the admission check of
+    /// `check-config` and of the background after start, and the suspend codes).
+    pub fn pack_admission(&self) -> Result<PackAdmissionConfig, ConfigFailure> {
+        scheduling::pack_admission(&|key: &str| self.value_or_shipped(key))
     }
 
     /// The instruction value of `key`, when one is in effect.

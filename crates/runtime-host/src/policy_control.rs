@@ -36,7 +36,8 @@ pub(crate) fn interruption_lifted_by_restart(failure_code: &CodeStr, consecutive
 pub enum PolicyExecutionInput {
     Succeeded,
     /// A failed run (Workflow #378 A2-P): its failure as the policy records it (see
-    /// `PolicyFailureRecord`), the #336 failure identity of a live `linear_steps` settlement,
+    /// `PolicyFailureRecord`), the #336 failure identity of a live settlement (a `linear_steps`
+    /// or, Workflow #390 EXEC-3, a page-graph run's),
     /// and the run's class.
     Failed {
         outcome: Outcome,

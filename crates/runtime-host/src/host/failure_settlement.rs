@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #336 L6 (§12.4-§12.6, R21, R22, R25; `contracts/policy-suspension.md`): the failure
-//! identity a scheduled `linear_steps` run's live settlement writes as its
-//! `policy.execution_recorded` `failure.failure_identity`, beside the failure's `outcome`
-//! (Workflow #378 A2-P).
+//! identity a scheduled run's live settlement writes as its `policy.execution_recorded`
+//! `failure.failure_identity`, beside the failure's `outcome` (Workflow #378 A2-P): a
+//! `linear_steps` run's, and since Workflow #390 EXEC-3 (FCM E-02) a page-graph run's.
 //!
 //! The scheduled path records, by decision id, what preparation resolved: whether the main
 //! package was admitted and is `linear_steps`, its game, and the prerequisite chain layer by
@@ -15,15 +15,20 @@
 //! content hash is measured. It measures the main package and each layer the run resolved, at
 //! the paths the run used, and records their hash prefixes in the identity (`x` for a package
 //! it could not measure, D18).
+//!
+//! Workflow #386 SR-3 (scheduling model §2.4 item 2): a scheduled run's preparation suspends its
+//! task package at the first refusal with a suspend code, and the background admission after
+//! start suspends the bound packages it refuses so (`crate::pack_admission`).
 
-use super::contained_task::{PackageLoad, prepare_measured_contained_task};
+use super::contained_task::{PackageLoad, RefusedPackage, prepare_measured_naming_refusal};
 use super::policy_outcome::policy_dispatch_intent;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, RERUN_ONLY_BACKEND_FAILURES,
-    encode_failure_base, failure_accumulates, failure_detail_fingerprint, failure_key,
-    failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
+    encode_failure_base, entry_checked, failure_accumulates, failure_detail_fingerprint,
+    failure_key, failure_rows, failure_step, identifier_text, in_restart_segment,
+    locate_error_frame,
 };
 use crate::suspension_lift::{LiftCheckTime, SuspensionLiftView, measure_package_hash};
 use actingcommand_contract::outcome::Outcome;
@@ -37,6 +42,9 @@ pub(super) struct ResolvedLayer {
     pub(super) package_id: String,
     /// The game and server whose return-home package this layer is.
     pub(super) return_home: Option<(String, String)>,
+    /// Workflow #373 NAV-3a: where the standard-pack registry put the package for the run;
+    /// `None` when it did not bind it.
+    pub(super) package_path: Option<PathBuf>,
 }
 
 /// What a scheduled run's preparation resolved, from the scheduled path's entry until its
@@ -78,13 +86,12 @@ impl HostShared {
             monotonic_ms: self.monotonic_ms()?,
             min_interval_ms: self.lift_check_min_interval_ms()?,
         };
-        Ok(SuspensionLiftView {
+        Ok(SuspensionLiftView::new(
             manifest,
-            prerequisite_packages: &self.prerequisite_packages,
-            return_home_packages: &self.return_home_packages,
-            checks: &self.lift_checks,
+            self.standard_packs.root(),
+            &self.lift_checks,
             time,
-        })
+        ))
     }
 
     /// Registers a scheduled run's decision as it enters the scheduled path.
@@ -118,12 +125,24 @@ impl HostShared {
         RequestFailure,
     > {
         // Workflow #385 MEM-1: the main package's load, which the run's timing evidence carries.
-        let (prepared, package_load) = prepare_measured_contained_task(
+        let (prepared, package_load) = match prepare_measured_naming_refusal(
             instance_alias,
             task_request,
             self.execution()?.vision_provider(),
             material_deadline,
-        )?;
+        ) {
+            Ok(prepared) => prepared,
+            Err((failure, refused)) => {
+                // Workflow #386 SR-3 (§2.4 item 2): the first refusal with a suspend code
+                // suspends the task package.
+                if let Some(refused) = refused {
+                    self.suspend_refused_package(task_request.package_path(), &refused)?;
+                }
+                return Err(failure);
+            }
+        };
+        self.pack_admission
+            .learn(task_request.package_path(), prepared.package_label())?;
         let mut layers = Vec::new();
         let chain = self.resolve_prerequisite_chain_recorded(
             instance_alias,
@@ -149,6 +168,51 @@ impl HostShared {
         Ok((prepared, chain?, package_load))
     }
 
+    /// Workflow #386 SR-3 (§2.4 item 2): suspends the task package a scheduled run's preparation
+    /// refused, when the refusal's code is a suspend code in effect.
+    fn suspend_refused_package(
+        &self,
+        path: &str,
+        refused: &RefusedPackage,
+    ) -> RuntimeHostResult<()> {
+        let settings = self.pack_admission_settings()?;
+        if crate::pack_admission::suspends(&settings.suspend_codes, refused.code) {
+            self.pack_admission
+                .suspend(path, &refused.package_id, refused.code)?;
+        }
+        Ok(())
+    }
+
+    /// Workflow #386 SR-3 (§2.4 item 2): the task package admission after start, unless
+    /// `scheduling.pack_admission.check_after_start` is off: each package location the procedure
+    /// bindings name is admitted once; a refusal with a suspend code suspends its package.
+    pub(super) fn check_pack_admission(&self) -> RuntimeHostResult<()> {
+        let settings = self.pack_admission_settings()?;
+        if !settings.check_after_start {
+            return Ok(());
+        }
+        let paths = match lock(&self.procedure_manifest, HostLocation::CheckPackAdmission)?.as_ref()
+        {
+            Some(manifest) => crate::pack_admission::bound_paths(manifest),
+            None => return Ok(()),
+        };
+        for path in paths {
+            if self.fatal.is_shutdown_requested() {
+                break;
+            }
+            match crate::pack_admission::admit(&path, &settings.suspend_codes) {
+                crate::pack_admission::Admission::Admitted { package_id } => {
+                    self.pack_admission.learn(&path, &package_id)?;
+                }
+                crate::pack_admission::Admission::Suspend { package_id, code } => {
+                    self.pack_admission.suspend(&path, &package_id, code)?;
+                }
+                crate::pack_admission::Admission::Refused => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Drops a decision's resolution once its execution record is written.
     pub(super) fn forget_scheduled_resolution(&self, decision_id: &str) -> RuntimeHostResult<()> {
         lock(
@@ -159,8 +223,9 @@ impl HostShared {
         Ok(())
     }
 
-    /// The policy execution input of a failed scheduled run (§12.4): a `linear_steps` run's
-    /// failure identity, or the original input for any other run. A fatal error is marked.
+    /// The policy execution input of a failed scheduled run (§12.4): the failure identity of a
+    /// run whose main package was admitted (`linear_steps` or, Workflow #390 EXEC-3, page
+    /// graph), or the original input for any other run. A fatal error is marked.
     pub(super) fn scheduled_failure_identity(
         &self,
         context: &PolicyRunContext,
@@ -229,9 +294,10 @@ impl HostShared {
             )?;
             return Ok(failed(None));
         };
-        // A main package that was not admitted (its mode is unknown) or is a page-graph
-        // package records no identity.
-        let Some(main) = resolution.main.filter(|main| main.linear) else {
+        // A main package that was not admitted (its mode is unknown) records no identity.
+        // Workflow #390 EXEC-3 (FCM E-02): a page-graph package records one as a `linear_steps`
+        // package does, so its failure is rerun at once (R22) by the same rules.
+        let Some(main) = resolution.main else {
             return Ok(failed(None));
         };
         let query = |query: EventQuery| {
@@ -241,18 +307,22 @@ impl HostShared {
         };
         let (rows, scope, operation) = if main.resolved {
             let rows = failure_rows(context.run_id(), query)?;
-            let (scope, operation) = failure_step(&rows, !main.layers.is_empty());
+            // A page-graph run's entry check is its gate, and its entry recovery package its
+            // layer (EXEC-3).
+            let gated = !main.layers.is_empty() || (!main.linear && entry_checked(&rows));
+            let (scope, operation) = failure_step(&rows, gated);
             (rows, scope, operation)
         } else {
             (Vec::new(), "prepare".to_owned(), "prepare".to_owned())
         };
-        let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game);
+        let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game, main.linear);
         // R25-2: an adb backend failure of a linear task that did not poison the run is rerun
         // only. Its class is already `Recoverable`: the terminal's `failure_severe` folds the
         // rule in where the failure arose, so the startup recovery and the ledger read the same
         // class (Workflow #378 A3 ruling 9).
-        let rerun_only_backend =
-            RERUN_ONLY_BACKEND_FAILURES.contains(&code.as_str()) && !failure.poison_runtime;
+        let rerun_only_backend = main.linear
+            && RERUN_ONLY_BACKEND_FAILURES.contains(&code.as_str())
+            && !failure.poison_runtime;
         let detail = failure_detail_fingerprint(
             failure
                 .error
@@ -260,7 +330,7 @@ impl HostShared {
                 .native_detail()
                 .map(|detail| detail.text()),
         );
-        let (main_package, layers) = settled_packages(&main, &self.prerequisite_packages);
+        let (main_package, layers) = settled_packages(&main);
         let mut identity = FailureIdentity {
             base: encode_failure_base(&code),
             key: failure_key(&code, &scope, &operation, &detail),
@@ -394,13 +464,10 @@ impl HostShared {
 
 /// Workflow #336 PKG-S3 (M-PKG §3.3, D18): the packages of a settled failure's identity: the
 /// main package and each layer the run resolved, with the content hash measured now at the path
-/// the run used (the mapping's, for a layer). A package that cannot be measured (removed, being
-/// replaced, unreadable), or a layer the mapping does not name, is `x`, and the failure is
-/// recorded as usual.
-fn settled_packages(
-    main: &ScheduledMain,
-    prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
-) -> (IdentityPackage, Vec<IdentityLayer>) {
+/// the run used (the registry's, for a layer; Workflow #373 NAV-3a). A package that cannot be
+/// measured (removed, being replaced, unreadable), or a layer the registry did not bind, is `x`,
+/// and the failure is recorded as usual.
+fn settled_packages(main: &ScheduledMain) -> (IdentityPackage, Vec<IdentityLayer>) {
     let measured = |path: Option<&str>| path.and_then(|path| measure_package_hash(path).ok());
     let main_package = IdentityPackage::measured(
         &main.package_id,
@@ -417,9 +484,11 @@ fn settled_packages(
                     .as_ref()
                     .map(|(game, server)| (game.as_str(), server.as_str())),
                 measured(
-                    prerequisite_packages
-                        .get(&layer.package_id)
-                        .map(ContainedTaskRecoveryBinding::package_path),
+                    layer
+                        .package_path
+                        .as_deref()
+                        .map(|path| path.to_string_lossy())
+                        .as_deref(),
                 )
                 .as_deref(),
             )
@@ -578,19 +647,8 @@ mod tests {
         let main_hash = assembled_package(&main_path, "main");
         let layer_hash = assembled_package(&layer_path, "layer");
         let home_hash = assembled_package(&home_path, "home");
-        let mapping = BTreeMap::from([
-            (
-                "neutral.layer".to_owned(),
-                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy())
-                    .expect("layer binding"),
-            ),
-            (
-                "neutral.home".to_owned(),
-                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy())
-                    .expect("home binding"),
-            ),
-        ]);
-        let main = ScheduledMain {
+        // Workflow #373 NAV-3a: each layer at the path the run's registry bound it to.
+        let mut main = ScheduledMain {
             linear: true,
             package_id: "neutral.main".to_owned(),
             package_path: main_path.to_string_lossy().into_owned(),
@@ -599,15 +657,17 @@ mod tests {
                 ResolvedLayer {
                     package_id: "neutral.layer".to_owned(),
                     return_home: None,
+                    package_path: Some(layer_path.clone()),
                 },
                 ResolvedLayer {
                     package_id: "neutral.home".to_owned(),
                     return_home: Some(("neutral".to_owned(), "test".to_owned())),
+                    package_path: Some(home_path.clone()),
                 },
             ],
             resolved: true,
         };
-        let (main_package, layers) = settled_packages(&main, &mapping);
+        let (main_package, layers) = settled_packages(&main);
         assert_eq!(
             main_package,
             IdentityPackage {
@@ -655,12 +715,11 @@ mod tests {
         );
         assert_eq!(FailureIdentity::parse(&encoded), Some(identity));
 
-        // S3-T8: the main package is gone and the home layer is no longer mapped at the
-        // settlement; both are `x`, and the identity still reads back.
+        // S3-T8: the main package is gone and the home layer is one the registry did not bind;
+        // both are `x`, and the identity still reads back.
         std::fs::remove_file(&main_path).expect("remove the main package");
-        let mapping =
-            BTreeMap::from([("neutral.layer".to_owned(), mapping["neutral.layer"].clone())]);
-        let (main_package, layers) = settled_packages(&main, &mapping);
+        main.layers[1].package_path = None;
+        let (main_package, layers) = settled_packages(&main);
         assert_eq!(main_package.hash, "x");
         assert_eq!(layers[0].hash(), hash12(&layer_hash));
         assert_eq!(layers[1].hash(), "x");

@@ -3,6 +3,12 @@
 //! Workflow #373 NAV-6 (model M-373 v1.1 §3, §4.3, §6, §7, §8): the standard-pack root reader,
 //! its registry, and the shared interrupt pages of a run.
 //!
+//! - **The registry** (§4.3; Workflow #373 NAV-3a). A game root's `bundle.json` registers its
+//!   packages (package id → directory) and, per server, its return-home package. A run that
+//!   resolves a prerequisite package or falls back to the return-home package reads the root of
+//!   its package's game when it uses it ([`GameRegistry`]); a package installed or replaced in
+//!   place is found by the next run, without a restart and without any configuration entry.
+//!
 //! - **The root.** `standard_packs.root` (actingd configuration, set once by the installer)
 //!   holds one directory per game, `<root>/<game>/`, with the root files `bundle.json`,
 //!   `pages.json` and `interrupts.json` beside the package directories. Nothing here names a
@@ -28,7 +34,7 @@ use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContai
 use super::*;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, PackageRef,
+    MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_PAGES_FILE,
     StandardPackInterrupts, StandardPackPages, StandardPackRegistry, StandardPackRootIssue,
     TaskEntryRecoveryRole, TaskInterruptThen,
@@ -39,11 +45,15 @@ use actingcommand_execution_kernel::{
 use serde::Serialize;
 use std::io;
 
-/// The standard-pack root of the host and, per game, the (package id, server) set its registry
-/// held when it was last read (§4.3; memory only).
+/// What a game's registry held when it was last read: its (package id, server) set and
+/// (Workflow #373 NAV-3a) its return-home package by server.
+type Registered = (BTreeSet<(String, String)>, BTreeMap<String, String>);
+
+/// The standard-pack root of the host and, per game, what its registry held when it was last
+/// read (§4.3; memory only).
 pub(super) struct StandardPackRoots {
     root: Option<PathBuf>,
-    registered: Mutex<BTreeMap<String, BTreeSet<(String, String)>>>,
+    registered: Mutex<BTreeMap<String, Registered>>,
 }
 
 impl StandardPackRoots {
@@ -53,6 +63,81 @@ impl StandardPackRoots {
             registered: Mutex::new(BTreeMap::new()),
         }
     }
+
+    /// `standard_packs.root`, when set.
+    pub(super) fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+}
+
+/// Workflow #373 NAV-3a (M-373 §4.3): the registry of one game, as a run reads it when it
+/// resolves a prerequisite package or a return-home package.
+pub(super) enum GameRegistry {
+    /// No `standard_packs.root` is set: nothing is registered.
+    RootUnset,
+    /// The root holds no root of the game (no directory, or none of the root files).
+    GameRootMissing,
+    Read {
+        directory: PathBuf,
+        registry: StandardPackRegistry,
+    },
+}
+
+impl GameRegistry {
+    /// Where the registry package `package_id` is, or why it is not bound (§4.3, the values of
+    /// `contained_task_prerequisite_unbound`).
+    pub(super) fn package_path(&self, package_id: &str) -> Result<PathBuf, RegistryProblem> {
+        match self {
+            Self::RootUnset => Err(RegistryProblem::RootUnset),
+            Self::GameRootMissing => Err(RegistryProblem::GameRootMissing),
+            Self::Read {
+                directory,
+                registry,
+            } => registry
+                .get(package_id)
+                .map(|entry| directory.join(&entry.directory))
+                .ok_or(RegistryProblem::NotListed),
+        }
+    }
+
+    /// The return-home package of `server` (its `maintenance[]` use `return_home`), when the
+    /// game has a registry that names one.
+    pub(super) fn return_home_package(&self, server: &str) -> Option<&str> {
+        match self {
+            Self::Read { registry, .. } => registry.return_home_package(server),
+            Self::RootUnset | Self::GameRootMissing => None,
+        }
+    }
+
+    /// The registry's package ids; none without a registry.
+    pub(super) fn package_ids(&self) -> BTreeSet<String> {
+        match self {
+            Self::Read { registry, .. } => registry.package_ids().map(str::to_owned).collect(),
+            Self::RootUnset | Self::GameRootMissing => BTreeSet::new(),
+        }
+    }
+}
+
+/// Workflow #373 NAV-3a (M-373 §4.3, §8.5): every game root's registry below `root`, read as
+/// the suspension lift checks read the packages of a failure identity: root files only, nothing
+/// recorded. A root that cannot be listed, and a game root that is broken, register nothing, so
+/// a layer they held is measured as missing.
+pub(crate) fn read_registries(root: Option<&Path>) -> Vec<(String, PathBuf, StandardPackRegistry)> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let Ok(games) = game_directories(root) else {
+        return Vec::new();
+    };
+    games
+        .into_iter()
+        .filter_map(
+            |(game, directory)| match read_game_root(&directory, &game) {
+                Ok(Some(read)) => Some((game, read.directory, read.registry)),
+                Ok(None) | Err(_) => None,
+            },
+        )
+        .collect()
 }
 
 /// One game root as read: where it is, its registry and, when present, its page list and its
@@ -322,7 +407,6 @@ pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
 struct RegisteredPack {
     package_id: String,
     path: PathBuf,
-    recorded: PackageRef,
 }
 
 impl RegisteredPack {
@@ -330,7 +414,6 @@ impl RegisteredPack {
         root.registry.get(package_id).map(|entry| Self {
             package_id: package_id.to_owned(),
             path: root.directory.join(&entry.directory),
-            recorded: entry.recorded.clone(),
         })
     }
 }
@@ -398,22 +481,24 @@ impl HostShared {
     }
 
     /// Records `standard_pack_registered` when `registry` differs from the one last read for
-    /// `game` (the first read included), and remembers it (§4.3).
+    /// `game` (the first read included), its return-home packages included (Workflow #373
+    /// NAV-3a), and remembers it (§4.3).
     fn note_standard_pack_registry(
         &self,
         game: &str,
         registry: &StandardPackRegistry,
     ) -> RuntimeHostResult<()> {
         let listed = registry.listed();
-        let previous = {
+        let current = (listed.clone(), registry.return_home_packages().clone());
+        let (previous, _) = {
             let mut registered = lock(
                 &self.standard_packs.registered,
                 HostLocation::StandardPackRegister,
             )?;
-            if registered.get(game) == Some(&listed) {
+            if registered.get(game) == Some(&current) {
                 return Ok(());
             }
-            registered.insert(game.to_owned(), listed.clone())
+            registered.insert(game.to_owned(), current)
         }
         .unwrap_or_default();
         let ids = |set: &BTreeSet<(String, String)>| {
@@ -442,7 +527,7 @@ impl HostShared {
     }
 
     /// A `runtime.lifecycle_observed` `standard_pack_read` record carrying `outcome` (§8.4).
-    fn record_standard_pack_read(&self, outcome: Outcome) -> RuntimeHostResult<()> {
+    pub(super) fn record_standard_pack_read(&self, outcome: Outcome) -> RuntimeHostResult<()> {
         self.append_event_raw(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -456,6 +541,35 @@ impl HostShared {
             ),
         )
         .map(|_| ())
+    }
+
+    /// Workflow #373 NAV-3a (M-373 §4.3, §7): the registry of `game`, read now, when a run
+    /// resolves a prerequisite package or a return-home package with it; a registry that changed
+    /// since it was last read is recorded (`standard_pack_registered`). A broken game root
+    /// refuses the run with the root's code, as a preparation refusal (no task record).
+    pub(super) fn read_game_registry(&self, game: &str) -> Result<GameRegistry, RequestFailure> {
+        let registry = self.peek_game_registry(game)?;
+        if let GameRegistry::Read { registry, .. } = &registry {
+            self.note_standard_pack_registry(game, registry)
+                .map_err(RequestFailure::poison_without_terminal)?;
+        }
+        Ok(registry)
+    }
+
+    /// [`Self::read_game_registry`] without the record of a changed registry, for a replay that
+    /// checks the layers its run recorded.
+    pub(super) fn peek_game_registry(&self, game: &str) -> Result<GameRegistry, RequestFailure> {
+        let Some(root) = &self.standard_packs.root else {
+            return Ok(GameRegistry::RootUnset);
+        };
+        match read_game_root(&root.join(game), game) {
+            Ok(None) => Ok(GameRegistry::GameRootMissing),
+            Ok(Some(read)) => Ok(GameRegistry::Read {
+                directory: read.directory,
+                registry: read.registry,
+            }),
+            Err(failure) => Err(failure.refusal(game)),
+        }
     }
 
     /// Workflow #373 NAV-6 (§7): the shared interrupt pages of a run of `prepared`, read in its
@@ -732,9 +846,8 @@ impl RuntimeContainedTask<'_> {
         Ok(())
     }
 
-    /// Admits a registry package by its path (Workflow #336 PKG-S1: structurally, its reference
-    /// recorded and compared with nothing); a refusal is `contained_task_navigation_package_invalid`
-    /// with the loader's code as its cause.
+    /// Admits a registry package by its path (Workflow #336 PKG-S1: structurally); a refusal is
+    /// `contained_task_navigation_package_invalid` with the loader's code as its cause.
     fn admit_layer_package(
         &self,
         pack: &RegisteredPack,
@@ -749,21 +862,15 @@ impl RuntimeContainedTask<'_> {
             .host
             .package_material_deadline(self.control.deadline())
             .map_err(ContainedTaskRunError::Boundary)?;
-        PreparedContainedTask::load_path(
-            self.instance_alias,
-            &pack.path,
-            &pack.recorded,
-            vision_provider,
-            deadline,
-        )
-        .map_err(|error| {
-            package_invalid(
-                &pack.package_id,
-                role,
-                NavigationProblem::AdmissionFailed,
-                Some(error.outcome()),
-            )
-        })
+        PreparedContainedTask::load_path(self.instance_alias, &pack.path, vision_provider, deadline)
+            .map_err(|error| {
+                package_invalid(
+                    &pack.package_id,
+                    role,
+                    NavigationProblem::AdmissionFailed,
+                    Some(error.outcome()),
+                )
+            })
     }
 
     /// A handler or `then.run` package of the run, admitted once (§7) and checked for its part

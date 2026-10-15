@@ -42,6 +42,9 @@ mod gate_382_a1;
 
 #[cfg(test)]
 mod gate_369_s6c;
+// Test-only: Workflow #384 D2-S5 (D2 model §8 T37), the fact refresh transitions' daemon lines.
+#[cfg(test)]
+mod gate_384_d2s5;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{
@@ -54,9 +57,9 @@ use actingcommand_contract::{
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_host::{
-    EmulatorAutostartReports, LedgerFailureSink, PolicyAdmissionContext, PolicyCadence,
-    PolicyCycle, PolicyDispatchAdmission, PolicyRecomputeKind, PolicyRunContext, PolicyTrigger,
-    PolicyWakes, RuntimeHost, RuntimeHostError, RuntimeLifecycleFailure,
+    EmulatorAutostartReports, FactRefreshTransition, LedgerFailureSink, PolicyAdmissionContext,
+    PolicyCadence, PolicyCycle, PolicyDispatchAdmission, PolicyRecomputeKind, PolicyRunContext,
+    PolicyTrigger, PolicyWakes, RuntimeHost, RuntimeHostError, RuntimeLifecycleFailure,
     RuntimeLifecycleFailureStage,
 };
 use codes::{ActingdCode, ActingdLocation};
@@ -210,6 +213,35 @@ fn write_daemon_reports(outcomes: &[Outcome], sink: &mut dyn Write) -> usize {
         .iter()
         .filter(|outcome| {
             sink.write_all(daemon_lines(outcome, None).as_bytes())
+                .and_then(|()| sink.flush())
+                .is_err()
+        })
+        .count()
+}
+
+/// Workflow #384 D2-S5 (D2 model §5.2, §8 T37): writes each fact refresh transition of a policy
+/// cycle as its daemon lines, one write each (A6a's writer): the developer line names the
+/// transition's code at its category's level with its values, its cycle and its number; the
+/// `OUTCOME actingd:` line carries its full outcome. Returns how many writes failed: a failed
+/// write never stops the driver (stderr is the last place actingd reports to).
+fn write_fact_refresh_transitions(
+    transitions: &[FactRefreshTransition],
+    sink: &mut dyn Write,
+) -> usize {
+    transitions
+        .iter()
+        .filter(|transition| {
+            let outcome = &transition.outcome;
+            let shown = outcome.to_string();
+            let values = shown
+                .strip_prefix(outcome.code().as_str())
+                .unwrap_or(&shown)
+                .trim_start();
+            let developer = format!(
+                "{values} cycle_seq={} transition_seq={}",
+                transition.cycle_seq, transition.transition_seq
+            );
+            sink.write_all(daemon_lines(outcome, Some(developer.trim_start())).as_bytes())
                 .and_then(|()| sink.flush())
                 .is_err()
         })
@@ -711,6 +743,12 @@ fn execute_policy_cycle(
     let cycle = host
         .evaluate_policy_cycle(trigger)
         .map_err(ActingdError::runtime)?;
+    // Workflow #384 D2-S5 (D2 model §5.2): the fact refresh's transitions at this cycle's yield
+    // point, as daemon lines; nothing is written to the ledger.
+    let _unwritten = write_fact_refresh_transitions(
+        &cycle.fact_refresh_transitions,
+        &mut std::io::stderr().lock(),
+    );
     let mut recompute_wakes = Vec::new();
     if cycle.pending_dispatch_intents.len() > MAX_TASKS {
         return Err(ActingdError::process(
@@ -3346,6 +3384,7 @@ mod tests {
             detection_planning_signals: Vec::new(),
             clock_slot_signals: Vec::new(),
             measurement: None,
+            fact_refresh_transitions: Vec::new(),
         }
     }
 

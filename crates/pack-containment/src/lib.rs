@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::PackageRef;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::page_projection::{
@@ -172,15 +171,6 @@ impl Default for ContainmentLimits {
     }
 }
 
-/// A local locator as content-directory admission reads it (a directory, or a content
-/// container file expanded in memory): its `content-directory.v1` reference and the bytes of
-/// every file, keyed by `/`-separated relative path.
-#[derive(Debug)]
-pub struct ContentDirectorySnapshot {
-    pub reference: actingcommand_contract::ContentDirectory,
-    pub entries: BTreeMap<String, Vec<u8>>,
-}
-
 #[derive(Debug, Default)]
 pub struct Containment {
     limits: ContainmentLimits,
@@ -193,53 +183,35 @@ impl Containment {
     /// PKG-S1, option 丙). The path chooses the reading: a directory, a `.json` container or a
     /// `.zip` container is a source package, compiled in memory; a `.zip` holding
     /// `resources/manifest.json` is an assembled package. Admission is structural only: neither
-    /// a digest of the package nor a pin inside it is computed or compared, and no name is read
-    /// as an identity. `recorded` is the caller's reference, kept on the bundle only as a record
-    /// for the fields that still carry it until PKG-S2 and PKG-S4 delete them; nothing checks
-    /// it against the material, and its caller has validated its form.
+    /// a digest of the package nor a pin inside it is computed or compared, no name is read as
+    /// an identity, and no reference is taken or kept (Workflow #336 PKG-S5).
     pub fn load_path(
         &mut self,
         instance: &InstanceId,
         locator: &Path,
-        recorded: &PackageRef,
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
-        // Workflow #288 A4: the Git source-tree reference is retired; it is refused before the
-        // locator is read.
-        if matches!(recorded, PackageRef::GitSourceTree(_)) {
-            return Err(source_error(PackContainmentCode::SourceTreeLoaderRetired));
-        }
         match content_dir::read(locator, self.limits, deadline)? {
             content_dir::LocatorContent::Entries(entries) => {
-                self.admit_source(instance, entries, recorded.clone(), observation, deadline)
+                self.admit_source(instance, entries, observation, deadline)
             }
             content_dir::LocatorContent::AssembledZip(bytes) => {
-                self.load_for(instance, &bytes, recorded, observation)
+                self.load_for(instance, &bytes, observation)
             }
         }
     }
 
     /// Workflow #288 A2b: reads `locator` exactly as `load_path` does (one bounded snapshot
-    /// under this loader's limits and `deadline`, links and unsafe entries refused), and
-    /// returns the `content-directory.v1` reference of what it holds with the bytes read, for
-    /// the authoring tools that still name a package by it. Nothing is parsed, and no admission
-    /// uses this reference.
+    /// under this loader's limits and `deadline`, links and unsafe entries refused) and returns
+    /// the bytes of every file, keyed by `/`-separated relative path, for the authoring tools
+    /// that copy a package. Nothing is parsed, hashed or admitted (Workflow #336 PKG-S5).
     pub fn snapshot_content_directory(
         &self,
         locator: &Path,
         deadline: std::time::Instant,
-    ) -> ContainmentResult<ContentDirectorySnapshot> {
-        let entries = content_dir::measure(locator, self.limits, deadline)?;
-        let reference = actingcommand_contract::ContentDirectory {
-            schema_version: actingcommand_contract::ContentDirectoryVersion::V1,
-            sha256: actingcommand_contract::content_directory_digest(
-                entries
-                    .iter()
-                    .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
-            ),
-        };
-        Ok(ContentDirectorySnapshot { reference, entries })
+    ) -> ContainmentResult<BTreeMap<String, Vec<u8>>> {
+        content_dir::measure(locator, self.limits, deadline)
     }
 
     /// Workflow #336 PKG-S3 (M-PKG §3.3): the content hash of the package at `locator`, in
@@ -270,18 +242,16 @@ impl Containment {
 
     /// Workflow #336: admits a content table already in memory (for example a content
     /// container just encoded and not yet written) as `load_path` admits a source package once
-    /// it is read: the shared entry rules, then the same assembly. `recorded` is kept as
-    /// `load_path` keeps it and compared with nothing.
+    /// it is read: the shared entry rules, then the same assembly.
     pub fn load_content_entries(
         &mut self,
         instance: &InstanceId,
         entries: BTreeMap<String, Vec<u8>>,
-        recorded: &PackageRef,
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
         let entries = content_dir::admit_entries(entries, self.limits, deadline)?;
-        self.admit_source(instance, entries, recorded.clone(), observation, deadline)
+        self.admit_source(instance, entries, observation, deadline)
     }
 
     /// Assembles one in-memory source snapshot and issues its capability; the material is not
@@ -290,7 +260,6 @@ impl Containment {
         &mut self,
         instance: &InstanceId,
         entries: BTreeMap<String, Vec<u8>>,
-        recorded: PackageRef,
         observation: bool,
         deadline: std::time::Instant,
     ) -> ContainmentResult<&LoadedBundle> {
@@ -300,7 +269,6 @@ impl Containment {
         }
         let bundle = LoadedBundle::from_memory_package(
             package,
-            recorded,
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
             Some(operation),
@@ -352,15 +320,13 @@ impl Containment {
     }
 
     /// Admits the bytes of an assembled package ZIP, structurally only (Workflow #336 PKG-S1):
-    /// no digest of the bytes is computed or compared. `recorded` is kept as `load_path` keeps
-    /// it.
+    /// no digest of the bytes is computed or compared.
     pub fn load(
         &mut self,
         instance: &InstanceId,
         task_zip_bytes: &[u8],
-        recorded: &PackageRef,
     ) -> ContainmentResult<&LoadedBundle> {
-        self.load_for(instance, task_zip_bytes, recorded, false)
+        self.load_for(instance, task_zip_bytes, false)
     }
 
     /// Admits the existing Lab resource layout without requiring an executable operation.
@@ -368,16 +334,14 @@ impl Containment {
         &mut self,
         instance: &InstanceId,
         zip_bytes: &[u8],
-        recorded: &PackageRef,
     ) -> ContainmentResult<&LoadedBundle> {
-        self.load_for(instance, zip_bytes, recorded, true)
+        self.load_for(instance, zip_bytes, true)
     }
 
     fn load_for(
         &mut self,
         instance: &InstanceId,
         task_zip_bytes: &[u8],
-        recorded: &PackageRef,
         observation: bool,
     ) -> ContainmentResult<&LoadedBundle> {
         if task_zip_bytes.len() as u64 > self.limits.max_compressed_bytes {
@@ -390,7 +354,6 @@ impl Containment {
         let package = MemoryPackage::from_zip(task_zip_bytes, self.limits, instance)?;
         let bundle = LoadedBundle::from_memory_package(
             package,
-            recorded.clone(),
             self.vision_provider.as_ref().map(Arc::clone),
             observation,
             None,
@@ -556,9 +519,6 @@ pub enum PackageLayout {
 pub struct LoadedBundle {
     projection_metadata: Option<VerifiedProjectionMetadata>,
     task_id: TaskId,
-    /// The reference the caller gave at admission, kept only as a record (Workflow #336
-    /// PKG-S1); admission never compares it with the material.
-    verified: PackageRef,
     layout: PackageLayout,
     entries: Arc<BTreeMap<String, Vec<u8>>>,
     entry_count: usize,
@@ -581,7 +541,6 @@ pub struct LoadedBundle {
 impl LoadedBundle {
     fn from_memory_package(
         package: MemoryPackage,
-        verified: PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         observation: bool,
         execution_operation: Option<Value>,
@@ -631,7 +590,6 @@ impl LoadedBundle {
         Ok(Self {
             projection_metadata,
             task_id: metadata.task_id,
-            verified,
             layout: metadata.layout,
             entries,
             entry_count: package.entry_count,
@@ -654,12 +612,6 @@ impl LoadedBundle {
 
     pub fn task_id(&self) -> &TaskId {
         &self.task_id
-    }
-
-    /// The caller's reference recorded at admission (Workflow #336 PKG-S1): a record only,
-    /// never checked against the material.
-    pub fn package_ref(&self) -> &PackageRef {
-        &self.verified
     }
 
     pub fn layout(&self) -> PackageLayout {
@@ -1977,34 +1929,25 @@ mod tests {
         );
         let instance = InstanceId::new("neutral-observation").unwrap();
         let bytes = zip_from_map(entries.clone());
-        let expected = recorded(&bytes);
         let mut containment = Containment::new();
-        let loaded = containment
-            .load_observation(&instance, &bytes, &expected)
-            .unwrap();
+        let loaded = containment.load_observation(&instance, &bytes).unwrap();
         assert_eq!(loaded.layout(), PackageLayout::Lab);
         assert!(loaded.operation().is_null());
         assert!(loaded.projection_metadata().is_some());
-        assert!(
-            Containment::new()
-                .load(&instance, &bytes, &expected)
-                .is_err()
-        );
+        assert!(Containment::new().load(&instance, &bytes).is_err());
         assert!(matches!(
-            Containment::new().load_observation(&instance, b"invalid zip", &expected),
+            Containment::new().load_observation(&instance, b"invalid zip"),
             Err(ContainmentError::MalformedZip { .. })
         ));
         let module = zip_with_entries(&[("manifest.json", br#"{"entry_task_id":"task_a"}"#)]);
         assert!(
             Containment::new()
-                .load_observation(&instance, &module, &recorded(&module))
+                .load_observation(&instance, &module)
                 .is_err()
         );
         entries.insert(operation_path.into(), br#"{"task_id":"task_a","post_admission_ocr":{"mode":"fields_v1","fields":[{"id":"name","target_id":"home_color","privacy":"personal"}]}}"#.to_vec());
         let bytes = zip_from_map(entries);
-        let loaded = containment
-            .load_observation(&instance, &bytes, &recorded(&bytes))
-            .unwrap();
+        let loaded = containment.load_observation(&instance, &bytes).unwrap();
         let metadata = loaded.projection_metadata().unwrap();
         assert_eq!(metadata.catalog().fields.len(), 1);
         assert_eq!(
@@ -2016,16 +1959,12 @@ mod tests {
     #[test]
     fn load_single_lab_package_and_evaluate_from_capability() {
         let zip = lab_package_zip("task_a", [255, 0, 0]);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("127.0.0.1:16384").expect("instance");
         let mut containment = Containment::new();
 
-        let bundle = containment
-            .load(&instance, &zip, &expected)
-            .expect("bundle loaded");
+        let bundle = containment.load(&instance, &zip).expect("bundle loaded");
 
         assert_eq!(bundle.task_id().as_str(), "task_a");
-        assert_eq!(bundle.package_ref(), &expected);
         let evaluator = bundle.evaluator().expect("evaluator");
         let scene = Scene::from_pixels(1, 1, &[255, 0, 0], ScenePixelFormat::Rgb8).expect("scene");
         let result = evaluator
@@ -2081,11 +2020,7 @@ mod tests {
             }
             let zip = zip_from_map(candidate);
             let mut containment = Containment::new();
-            let result = containment.load(
-                &InstanceId::new("neutral-instance").unwrap(),
-                &zip,
-                &recorded(&zip),
-            );
+            let result = containment.load(&InstanceId::new("neutral-instance").unwrap(), &zip);
             if mode < 3 {
                 assert_eq!(
                     result
@@ -2135,12 +2070,11 @@ mod tests {
         replace_manifested_entry(&mut entries, pack_path, &pack);
         replace_manifested_entry(&mut entries, pages_path, &pages);
         let zip = zip_from_map(entries);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("vision-instance").expect("instance");
         let mut no_provider = Containment::new();
 
         let bundle = no_provider
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect("runtime admission does not select a vision target");
         let error = bundle
             .evaluator()
@@ -2162,7 +2096,7 @@ mod tests {
 
         let mut metadata_validation = Containment::for_metadata_validation();
         let metadata_bundle = metadata_validation
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect("metadata validation admits the declared model without runtime capability");
         let inference_error = metadata_bundle
             .evaluator()
@@ -2181,7 +2115,7 @@ mod tests {
         let mut with_provider =
             Containment::with_vision_provider(Arc::new(ContainmentVisionProvider));
         let bundle = with_provider
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect("vision capability admits package");
         let result = bundle
             .evaluator()
@@ -2202,12 +2136,8 @@ mod tests {
         let b = InstanceId::new("b").expect("b");
         let mut containment = Containment::new();
 
-        containment
-            .load(&a, &zip_a, &recorded(&zip_a))
-            .expect("a loaded");
-        containment
-            .load(&b, &zip_b, &recorded(&zip_b))
-            .expect("b loaded");
+        containment.load(&a, &zip_a).expect("a loaded");
+        containment.load(&b, &zip_b).expect("b loaded");
 
         assert_eq!(
             containment.get(&a).expect("a bundle").task_id().as_str(),
@@ -2222,7 +2152,6 @@ mod tests {
     #[test]
     fn rejects_decompression_limit_without_oom() {
         let zip = zip_with_entries(&[("module/manifest.json", br#"{}"#.as_slice())]);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("inst").expect("instance");
         let mut containment = Containment::with_limits(ContainmentLimits {
             max_total_decompressed_bytes: 1,
@@ -2231,7 +2160,7 @@ mod tests {
         });
 
         let err = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect_err("limit rejected");
 
         assert!(matches!(err, ContainmentError::DecompressTooLarge { .. }));
@@ -2243,7 +2172,6 @@ mod tests {
             ("module/a.bin", b"1234".as_slice()),
             ("module/b.bin", b"567".as_slice()),
         ]);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("budget-instance").expect("instance");
 
         for (total_limit, resident_limit) in [(5, 10), (10, 5)] {
@@ -2254,7 +2182,7 @@ mod tests {
                 ..ContainmentLimits::default()
             });
             let err = containment
-                .load(&instance, &zip, &expected)
+                .load(&instance, &zip)
                 .expect_err("second entry must exceed the remaining budget");
 
             assert_eq!(
@@ -2316,12 +2244,11 @@ mod tests {
             ("module/manifest.json", br#"{}"#.as_slice()),
             ("../outside", b"x".as_slice()),
         ]);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("inst").expect("instance");
         let mut containment = Containment::new();
 
         let err = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect_err("zip slip rejected");
 
         assert!(matches!(err, ContainmentError::PathTraversal { .. }));
@@ -2334,12 +2261,8 @@ mod tests {
         let instance = InstanceId::new("inst").expect("instance");
         let mut containment = Containment::new();
 
-        containment
-            .load(&instance, &zip_a, &recorded(&zip_a))
-            .expect("first load");
-        containment
-            .load(&instance, &zip_b, &recorded(&zip_b))
-            .expect("second load");
+        containment.load(&instance, &zip_a).expect("first load");
+        containment.load(&instance, &zip_b).expect("second load");
 
         assert_eq!(
             containment
@@ -2403,12 +2326,11 @@ mod tests {
                 .into_bytes(),
             );
             let zip = zip_from_map(entries);
-            let expected = recorded(&zip);
             let instance = InstanceId::new("root-instance").expect("instance");
             let mut containment = Containment::new();
 
             let err = containment
-                .load(&instance, &zip, &expected)
+                .load(&instance, &zip)
                 .expect_err("custom root must be rejected");
 
             assert_eq!(
@@ -2432,12 +2354,11 @@ mod tests {
             br#"{}"#.to_vec(),
         );
         let zip = zip_from_map(entries);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("root-instance").expect("instance");
         let mut containment = Containment::new();
 
         let bundle = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect("exact resource root");
 
         assert_eq!(bundle.resource_root(), "resources");
@@ -2471,12 +2392,11 @@ mod tests {
         replace_manifested_entry(&mut entries, &operation_path, &operation);
 
         let zip = zip_from_map(entries);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("error-page-reference").expect("instance");
         let mut containment = Containment::new();
 
         let err = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect_err("missing packaged error page must fail");
 
         assert!(err.to_string().contains("error_pages"));
@@ -2501,13 +2421,10 @@ mod tests {
             operation["error_pages"] = error_pages;
             replace_manifested_entry(&mut entries, &operation_path, &operation);
             let zip = zip_from_map(entries);
-            let expected_hash = recorded(&zip);
             let instance = InstanceId::new(format!("error-page-{name}")).expect("instance");
             let mut containment = Containment::new();
 
-            let error = containment
-                .load(&instance, &zip, &expected_hash)
-                .expect_err(name);
+            let error = containment.load(&instance, &zip).expect_err(name);
 
             assert!(error.to_string().contains(expected), "{name}: {error}");
         }
@@ -2551,11 +2468,10 @@ mod tests {
         replace_manifested_entry(&mut entries, pages_path, &pages);
 
         let zip = zip_from_map(entries);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("error-page-detector").expect("instance");
         let mut containment = Containment::new();
         let bundle = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect("packaged error page");
         let scene = actingcommand_recognition::Scene::from_rgb8(1, 1, &[255, 0, 0]).expect("scene");
         let evaluation = bundle
@@ -2596,12 +2512,11 @@ mod tests {
         replace_manifested_entry(&mut entries, pages_path, &pages);
 
         let zip = zip_from_map(entries);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("error-page-conflict").expect("instance");
         let mut containment = Containment::new();
 
         let error = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect_err("packaged structural overlap");
 
         assert!(error.to_string().contains("structurally overlaps"));
@@ -2707,12 +2622,11 @@ mod tests {
         replace_manifested_entry(&mut entries, pages_path, &pages);
 
         let zip = zip_from_map(entries);
-        let expected = recorded(&zip);
         let instance = InstanceId::new("set-error-page-conflict").expect("instance");
         let mut containment = Containment::new();
 
         let error = containment
-            .load(&instance, &zip, &expected)
+            .load(&instance, &zip)
             .expect_err("second set member structurally overlaps error");
 
         assert!(error.to_string().contains("structurally overlaps"));
@@ -2843,12 +2757,6 @@ mod tests {
             manifest_path.to_string(),
             serde_json::to_vec(&manifest).unwrap(),
         );
-    }
-
-    /// The reference a caller records for a package ZIP: the package's own SHA-256, as
-    /// callers give it. Admission keeps it and compares it with nothing.
-    fn recorded(bytes: &[u8]) -> PackageRef {
-        PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
     }
 
     fn zip_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {

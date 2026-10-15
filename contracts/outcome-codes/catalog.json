@@ -1677,6 +1677,10 @@
       "type": "list<name>",
       "description": "Package ids a standard-pack registry lost since it was last read."
     },
+    "registry_problem": {
+      "type": "vocab:registry_problem",
+      "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a)."
+    },
     "event_type": {
       "type": "vocab:event_type",
       "description": "A ledger event type, for example the type of a performance event the contract rejected."
@@ -5137,6 +5141,20 @@
         },
         "max_per_run_invalid": {
           "description": "An interrupt's max_per_run is outside 1 to 8."
+        }
+      }
+    },
+    "registry_problem": {
+      "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a).",
+      "tokens": {
+        "root_unset": {
+          "description": "No standard_packs.root is set."
+        },
+        "game_root_missing": {
+          "description": "The root holds no game root of the dependent package's game."
+        },
+        "not_listed": {
+          "description": "The game root's bundle.json does not list the package."
         }
       }
     },

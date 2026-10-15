@@ -8,9 +8,7 @@
 // where the package is admitted, at the derived pack's threshold, with its flat-field score.
 // Templates and frames are synthetic and neutral.
 
-use actingcommand_contract::{
-    ContentDirectory, ContentDirectoryVersion, PackageRef, ResourceDeclarationReason,
-};
+use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, LoadedBundle};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{PackRegion, RecognitionMask, RecognitionTarget};
@@ -186,10 +184,6 @@ fn admit(
     containment.load_content_entries(
         &InstanceId::new("neutral-rec7").expect("instance"),
         entries,
-        &PackageRef::ContentDirectory(ContentDirectory {
-            schema_version: ContentDirectoryVersion::V1,
-            sha256: "d".repeat(64),
-        }),
         false,
         Instant::now() + Duration::from_secs(60),
     )

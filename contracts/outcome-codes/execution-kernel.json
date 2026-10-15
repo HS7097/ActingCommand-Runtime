@@ -1634,6 +1634,7 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "registry_problem": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",

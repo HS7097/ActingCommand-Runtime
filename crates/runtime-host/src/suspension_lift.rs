@@ -19,11 +19,11 @@ use crate::failure_identity::{
 };
 use crate::{ProcedureBinding, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::outcome::{Code, Outcome};
-use actingcommand_contract::{ContainedTaskRecoveryBinding, RuntimeErrorCode};
+use actingcommand_contract::{RuntimeErrorCode, StandardPackRegistry};
 use actingcommand_pack_containment::{Containment, ContainmentError};
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 /// How long one measurement may read a package (one bounded snapshot, as admission reads it).
@@ -147,8 +147,9 @@ impl LiftChecks {
     }
 
     /// The content hash of the package at `path` as of `time`: the latest measurement while it
-    /// is younger than the interval, else a new one.
-    fn current(
+    /// is younger than the interval, else a new one. Workflow #386 SR-3: a suspended task
+    /// package's lift check reads it too.
+    pub(crate) fn current(
         &self,
         path: &str,
         time: LiftCheckTime,
@@ -209,15 +210,61 @@ fn unmeasured(path: Option<&str>, package_id: Option<&str>, cause: Option<Code>)
     }
 }
 
+/// One game root's registry as a lift check reads it: its game, its directory, its registry.
+type GameRegistryRead = (String, PathBuf, StandardPackRegistry);
+
 /// The configuration a suspension is judged against (§12.7): the procedure bindings with their
-/// packages' locations, the prerequisite and return-home mappings, as read at startup (or by
-/// `actingd suspended`), and the lift checks' memory.
+/// packages' locations, as read at startup (or by `actingd suspended`), the standard-pack root
+/// whose registries name the prerequisite and return-home layers (Workflow #373 NAV-3a, M-373
+/// §4.3: read when a layer is first looked up, once per view), and the lift checks' memory.
 pub(crate) struct SuspensionLiftView<'a> {
+    // Workflow #386 SR-3: the pack admission's deferral reads the bindings and checks a
+    // suspended package's lift through the same memory and time.
     pub(crate) manifest: &'a ProcedureManifest,
-    pub(crate) prerequisite_packages: &'a BTreeMap<String, ContainedTaskRecoveryBinding>,
-    pub(crate) return_home_packages: &'a BTreeMap<(String, String), String>,
+    standard_packs_root: Option<&'a Path>,
+    registries: OnceLock<Vec<GameRegistryRead>>,
     pub(crate) checks: &'a LiftChecks,
     pub(crate) time: LiftCheckTime,
+}
+
+impl<'a> SuspensionLiftView<'a> {
+    pub(crate) fn new(
+        manifest: &'a ProcedureManifest,
+        standard_packs_root: Option<&'a Path>,
+        checks: &'a LiftChecks,
+        time: LiftCheckTime,
+    ) -> Self {
+        Self {
+            manifest,
+            standard_packs_root,
+            registries: OnceLock::new(),
+            checks,
+            time,
+        }
+    }
+
+    /// Every game root's registry, read on first use.
+    fn registries(&self) -> &[GameRegistryRead] {
+        self.registries
+            .get_or_init(|| crate::host::read_registries(self.standard_packs_root))
+    }
+
+    /// The registry packages whose package id has `id_hash`: (game, package id, path).
+    fn registered_with_hash(&self, id_hash: &str) -> Vec<(&str, &str, PathBuf)> {
+        self.registries()
+            .iter()
+            .flat_map(|(game, directory, registry)| {
+                registry
+                    .package_ids()
+                    .filter(move |package_id| package_id_hash(package_id) == id_hash)
+                    .filter_map(move |package_id| {
+                        registry.get(package_id).map(|entry| {
+                            (game.as_str(), package_id, directory.join(&entry.directory))
+                        })
+                    })
+            })
+            .collect()
+    }
 }
 
 impl SuspensionLiftView<'_> {
@@ -235,45 +282,54 @@ impl SuspensionLiftView<'_> {
         }
     }
 
-    /// The return-home package id the mapping has for the key hash, if exactly one.
-    fn return_home_id(&self, key_hash: &str) -> Option<&str> {
+    /// The return-home package the registries name for the (game, server) key hash, if exactly
+    /// one: its game, package id and path (`None` for the path when its game root does not list
+    /// it).
+    fn return_home_id(&self, key_hash: &str) -> Option<(&str, &str, Option<PathBuf>)> {
         let mut matching = self
-            .return_home_packages
+            .registries()
             .iter()
-            .filter(|((game, server), _)| return_home_key_hash(game, server) == key_hash);
+            .flat_map(|(game, directory, registry)| {
+                registry
+                    .return_home_packages()
+                    .iter()
+                    .filter(move |(server, _)| return_home_key_hash(game, server) == key_hash)
+                    .map(move |(_, package_id)| {
+                        (
+                            game.as_str(),
+                            package_id.as_str(),
+                            registry
+                                .get(package_id)
+                                .map(|entry| directory.join(&entry.directory)),
+                        )
+                    })
+            });
         match (matching.next(), matching.next()) {
-            (Some((_, package_id)), None) => Some(package_id.as_str()),
+            (Some(found), None) => Some(found),
             _ => None,
-        }
-    }
-
-    /// A mapped package's hash: `x` when the mapping names no package for the id.
-    fn current_mapped(&self, package_id: &str) -> RuntimeHostResult<Current> {
-        match self.prerequisite_packages.get(package_id) {
-            Some(binding) => self.measure(binding.package_path(), Some(package_id)),
-            None => Ok(Current::Hash(MISSING_HASH.to_owned())),
         }
     }
 
     fn current_layer(&self, layer: &IdentityLayer) -> RuntimeHostResult<Current> {
         match layer {
             IdentityLayer::Declared(package) => {
-                let mut matching = self
-                    .prerequisite_packages
-                    .keys()
-                    .filter(|package_id| package_id_hash(package_id) == package.id_hash);
-                match (matching.next(), matching.next()) {
-                    (None, _) => Ok(Current::Hash(MISSING_HASH.to_owned())),
-                    (Some(package_id), None) => self.current_mapped(package_id),
-                    (Some(_), Some(_)) => Ok(Current::Hash(MAPPING_CHANGED.to_owned())),
+                match self.registered_with_hash(&package.id_hash).as_slice() {
+                    [] => Ok(Current::Hash(MISSING_HASH.to_owned())),
+                    [(_, package_id, path)] => {
+                        self.measure(&path.to_string_lossy(), Some(*package_id))
+                    }
+                    _ => Ok(Current::Hash(MAPPING_CHANGED.to_owned())),
                 }
             }
             IdentityLayer::ReturnHome { key_hash, package } => {
                 match self
                     .return_home_id(key_hash)
-                    .filter(|package_id| package_id_hash(package_id) == package.id_hash)
+                    .filter(|(_, package_id, _)| package_id_hash(package_id) == package.id_hash)
                 {
-                    Some(package_id) => self.current_mapped(package_id),
+                    Some((_, package_id, Some(path))) => {
+                        self.measure(&path.to_string_lossy(), Some(package_id))
+                    }
+                    Some((_, _, None)) => Ok(Current::Hash(MISSING_HASH.to_owned())),
                     None => Ok(Current::Hash(MAPPING_CHANGED.to_owned())),
                 }
             }
@@ -307,20 +363,17 @@ impl SuspensionLiftView<'_> {
         })
     }
 
-    /// The package id a layer names in the current mapping, if exactly one key has its hash.
+    /// The package id a layer names in the current registries (Workflow #373 NAV-3a), if
+    /// exactly one registry package has its hash.
     pub(crate) fn layer_package_id(&self, layer: &IdentityLayer) -> Option<String> {
         if let IdentityLayer::ReturnHome { key_hash, .. } = layer
-            && let Some(package_id) = self.return_home_id(key_hash)
+            && let Some((_, package_id, _)) = self.return_home_id(key_hash)
             && package_id_hash(package_id) == layer.id_hash()
         {
             return Some(package_id.to_owned());
         }
-        let mut matching = self
-            .prerequisite_packages
-            .keys()
-            .filter(|package_id| package_id_hash(package_id) == layer.id_hash());
-        match (matching.next(), matching.next()) {
-            (Some(package_id), None) => Some(package_id.clone()),
+        match self.registered_with_hash(layer.id_hash()).as_slice() {
+            [(_, package_id, _)] => Some((*package_id).to_owned()),
             _ => None,
         }
     }

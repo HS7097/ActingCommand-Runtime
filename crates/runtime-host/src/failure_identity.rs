@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #336 L6 (§12.4, §12.7, `contracts/policy-suspension.md`): the failure identity a
-//! scheduled `linear_steps` run's settlement writes as the `policy.execution_recorded`
+//! scheduled run's settlement writes (a `linear_steps` run's, and since Workflow #390 EXEC-3 a
+//! page-graph run's) as the `policy.execution_recorded`
 //! `failure.failure_identity` (beside the failure's `outcome`, Workflow #378 A2-P), and the
 //! suspension lift rule read back from it. Pure: it reads only the rows and values its callers
 //! pass, never a ledger handle, an artifact, a clock or a lock.
@@ -55,10 +56,13 @@ const DETAIL_KEYS: &[&str] = &[
     "application",
 ];
 /// Failures of the main package's own steps whose screen does not match the package (R21).
+/// Workflow #390 EXEC-3 (wave 14 ruling 4): a page-graph step unconfirmed after all its retries
+/// is the graph counterpart of `contained_task_linear_intermediate_unobserved`.
 const MAIN_ACCUMULATING: &[&str] = &[
     actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved
         .as_str(),
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskGuardRefused.as_str(),
 ];
 /// Preparation refusals of the prerequisite chain: reproducible configuration problems (R21).
@@ -463,10 +467,30 @@ pub(crate) fn failure_step(rows: &[PersistedEvent], chain: bool) -> (String, Str
     (scope, operation)
 }
 
+/// Workflow #390 EXEC-3: whether a page-graph run checked its required entry (its
+/// `EntryRecoveryDecision`). That check is the run's gate and its entry recovery package its
+/// layer for [`failure_step`], as a `linear_steps` run's prerequisite chain is.
+pub(crate) fn entry_checked(rows: &[PersistedEvent]) -> bool {
+    rows.iter().any(|event| {
+        matches!(
+            semantic_fact(event),
+            Some(TaskSemanticFact::EntryRecoveryDecision { .. })
+        )
+    })
+}
+
 /// R25-1 (ruling 5961093808): whether a run failed inside its restart segment: it had a launch
 /// or restart application effect and no `StepFinished` page after the last one is the main
-/// interface of `game`.
-pub(crate) fn in_restart_segment(rows: &[PersistedEvent], game: &str) -> bool {
+/// interface of `game`: for a `linear_steps` run its main-interface predicate, for a page-graph
+/// run (Workflow #390 EXEC-3) the literal `home` the page-graph home checks keep.
+pub(crate) fn in_restart_segment(rows: &[PersistedEvent], game: &str, linear: bool) -> bool {
+    let main_interface = |page: &str| {
+        if linear {
+            linear_main_interface(game, page)
+        } else {
+            actingcommand_execution_kernel::canonical_page_anchor(game, page) == "home"
+        }
+    };
     let restarted = rows
         .iter()
         .filter(|event| {
@@ -489,7 +513,7 @@ pub(crate) fn in_restart_segment(rows: &[PersistedEvent], game: &str) -> bool {
             && matches!(
                 semantic_fact(event),
                 Some(TaskSemanticFact::StepFinished { page_label, .. })
-                    if linear_main_interface(game, page_label)
+                    if main_interface(page_label)
             )
     })
 }

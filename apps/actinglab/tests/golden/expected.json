@@ -597,7 +597,7 @@
       "error": {
         "blocked_by": [],
         "code": "resource_production_retired",
-        "message": "package build-task is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package digest/bundle"
+        "message": "package build-task is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package validate/bundle"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
@@ -614,7 +614,7 @@
       "error": {
         "blocked_by": [],
         "code": "resource_production_retired",
-        "message": "package build-pack is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package digest/bundle"
+        "message": "package build-pack is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package validate/bundle"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",

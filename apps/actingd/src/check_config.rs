@@ -238,6 +238,26 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         }
     }
     notes.extend(missing_readers);
+    // Workflow #386 SR-3 (scheduling model §2.4 item 2): with
+    // `scheduling.pack_admission.check_in_check_config` on, this Runtime's kernel admits every
+    // package `policy.procedure_manifest` locates; one refused with a suspend code is a
+    // `pack_admission_suspended` note and the configuration stays valid. Nothing is written.
+    let pack_admission =
+        actingcommand_runtime_config::EffectiveConfig::from_manifest(&checked.manifest)
+            .and_then(|config| config.pack_admission())
+            .map_err(|failure| {
+                staged(
+                    ActingdError::refused(failure.failure_code(), failure.outcome()),
+                    ActingdLocation::ConfigAssemble,
+                )
+            })?;
+    if pack_admission.check_in_check_config {
+        notes.extend(actingcommand_runtime_host::pack_admission_notes(
+            &checked.host,
+            &pack_admission.suspend_codes,
+            option_env!("ACTINGCOMMAND_RUNTIME_HEAD"),
+        ));
+    }
     // Workflow #361 C3: the plan startup would make, from the ledger read-only.
     let previewing = std::time::Instant::now();
     let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {

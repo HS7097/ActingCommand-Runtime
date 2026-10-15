@@ -23,6 +23,9 @@ mod env_detection;
 // Workflow #396 REC-4 (exec key 65): a Lab recording's click follows a template mark.
 #[cfg(test)]
 mod gate_396_rec4;
+// Workflow #336 PKG-S5 (exec key 66): record stop writes `<package_id>.<ext>`, replaced in place.
+#[cfg(test)]
+mod gate_336_pkgs5;
 // Test plan v2.2 E-5 G6 (exec key 35): record stop over a synthetic recording.
 #[cfg(test)]
 mod gate_e5_record_stop;
@@ -82,6 +85,8 @@ pub use actingcommand_execution_kernel::{
     OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts, OfflineReplayResult,
     replay_contained_task,
 };
+// Workflow #308 SEL-L6b: the scan replay of `actinglab replay --frames --select --scan`.
+pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_scan};
 
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,

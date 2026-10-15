@@ -443,8 +443,9 @@ impl ContainedTaskRuntime for OfflineRuntime {
     }
 }
 
-/// The empty fact snapshot of an offline select step, in the package's game and server.
-fn empty_offline_snapshot(request: SelectionStateRequest) -> InstanceFactSnapshot {
+/// The empty fact snapshot of an offline select step, in the package's game and server (also
+/// the snapshot of a replayed scan without `--facts`, Workflow #308 SEL-L6b).
+pub(crate) fn empty_offline_snapshot(request: SelectionStateRequest) -> InstanceFactSnapshot {
     InstanceFactSnapshot {
         snapshot_id: OFFLINE_SNAPSHOT_ID.to_owned(),
         ledger_position: OFFLINE_SNAPSHOT_POSITION,
@@ -1229,18 +1230,12 @@ mod tests {
         zip.finish().expect("finish zip").into_inner()
     }
 
-    /// The reference a caller records for the package: its own SHA-256, as callers give it.
-    fn recorded(bytes: &[u8]) -> actingcommand_contract::PackageRef {
-        actingcommand_contract::PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
-    }
-
     fn prepare(bytes: &[u8]) -> PreparedContainedTask {
-        PreparedContainedTask::load("neutral.instance", bytes, &recorded(bytes))
-            .expect("prepared task")
+        PreparedContainedTask::load("neutral.instance", bytes).expect("prepared task")
     }
 
     fn prepare_error(bytes: &[u8]) -> crate::ContainedTaskError {
-        PreparedContainedTask::load("neutral.instance", bytes, &recorded(bytes))
+        PreparedContainedTask::load("neutral.instance", bytes)
             .err()
             .expect("admission failure")
     }

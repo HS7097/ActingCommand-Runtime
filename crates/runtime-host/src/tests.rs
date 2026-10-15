@@ -120,6 +120,8 @@ mod gate_369s5;
 // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
 mod gate_369_s6c;
 mod gate_372k2;
+// Workflow #373 NAV-3a: page-graph prerequisite packages and the standard-pack registry.
+mod gate_373_nav3a;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
 mod gate_373_nav3b;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
@@ -150,11 +152,17 @@ mod gate_384_d2s2;
 mod gate_384_d2s3;
 // Workflow #384 D2-CHAIN and D2-S4: the fact refresh end to end, and the dispatch's reader check.
 mod gate_384_d2s4;
+// Workflow #384 D2-S5 and D2-S4's T31, T32: the transition recorder, its read, the stale intent
+// and the ledger the fact refresh leaves alone.
+mod gate_384_d2s5;
 // Workflow #385 P-m: the shadow measurement and its status read.
 mod gate_385_pm;
 // Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
 // suppressions a later build wrote.
 mod gate_386_sr2a;
+// Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
+// admission refuses with a suspend code.
+mod gate_386_sr3;
 // Workflow #387 D1b: D1-M3 to D1-M7.
 mod gate_387_d1b;
 // Workflow #387 D1c: the ladder's host rows (H-4 G6, G7; D1-L2, D1-L3, D1-L4).
@@ -177,6 +185,9 @@ mod gate_390_out1;
 // Workflow #390 EXEC-1 (forced compromise E-04): a guard refusal falls to the page's next
 // candidate operation.
 mod gate_390_exec1;
+// Workflow #390 EXEC-3 (forced compromise E-02): a page-graph task is rerun at once by its
+// failure identity.
+mod gate_390_exec3;
 // Workflow #390 OUT-2 (forced compromises O-01, O-02, S-01): designated effect sets, their
 // counts and caps.
 mod gate_390_out2;

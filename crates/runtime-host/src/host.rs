@@ -214,6 +214,7 @@ mod scheduling_pause;
 mod signatures;
 // Workflow #373 NAV-6: the standard-pack root reader and the shared interrupt pages of a run.
 mod standard_pack;
+pub(crate) use standard_pack::read_registries;
 pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
 mod startup_package;
 mod state_control;
@@ -522,16 +523,10 @@ pub struct RuntimeHostConfig {
     /// maintenance package bound by `instances[].recognition_package` that the start kept. The
     /// scheduler runs it to read the instance's facts (D2-S4); the start never prepares it.
     recognition_packages: BTreeMap<String, PathBuf>,
-    /// Workflow #336 L2b: per package id, the locator and content reference of a package a
-    /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
-    /// run resolves it; not a configuration fact.
-    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
-    /// Workflow #336 L2c: per (game, server), the package id (a key of `prerequisite_packages`)
-    /// of the return-home package a `linear_steps` package without a declared prerequisite
-    /// package falls back to; not a configuration fact.
-    return_home_packages: BTreeMap<(String, String), String>,
     /// Workflow #373 NAV-6: `standard_packs.root`, the directory of the installed standard
     /// packages' game roots; `None` reads no root. A startup key, never changed while running.
+    /// Workflow #373 NAV-3a: its registries are where every prerequisite package and every
+    /// return-home package is found (M-373 §4.3).
     standard_packs_root: Option<PathBuf>,
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2 step 4): where the ledger reports
     /// a retried write and its fatal stop; actingd's sink writes its lines and ends the process.
@@ -549,6 +544,10 @@ pub struct RuntimeHostConfig {
     /// the operating system's.
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// Workflow #386 SR-3, test only: holds the task package admission after start until the
+    /// test releases it.
+    #[cfg(test)]
+    pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -590,8 +589,6 @@ impl RuntimeHostConfig {
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
-            prerequisite_packages: BTreeMap::new(),
-            return_home_packages: BTreeMap::new(),
             standard_packs_root: None,
             ledger_failure_sink: None,
             runtime_commit: None,
@@ -601,7 +598,19 @@ impl RuntimeHostConfig {
             settlement_refusal_for_test: None,
             #[cfg(test)]
             network_connectivity_for_test: None,
+            #[cfg(test)]
+            pack_admission_hold_for_test: None,
         }
+    }
+
+    /// Workflow #386 SR-3, test only: the task package admission after start waits for `hold`.
+    #[cfg(test)]
+    pub(crate) fn with_pack_admission_hold_for_test(
+        mut self,
+        hold: Arc<crate::pack_admission::PackAdmissionHold>,
+    ) -> Self {
+        self.pack_admission_hold_for_test = Some(hold);
+        self
     }
 
     /// Workflow #369 S6c, test only: autostart claims read `read` instead of the operating
@@ -865,37 +874,6 @@ impl RuntimeHostConfig {
         &self.stuck_recovery
     }
 
-    /// Installs the prerequisite packages, keyed by package id (Workflow #336 L2b). A
-    /// `linear_steps` package that declares a `prerequisite_package_id` is resolved against
-    /// them at preparation; each package is admitted against its content reference only then.
-    pub fn with_prerequisite_packages(
-        mut self,
-        prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
-    ) -> Self {
-        self.prerequisite_packages = prerequisite_packages;
-        self
-    }
-
-    /// The configured prerequisite packages, keyed by package id.
-    pub const fn prerequisite_packages(&self) -> &BTreeMap<String, ContainedTaskRecoveryBinding> {
-        &self.prerequisite_packages
-    }
-
-    /// Installs the return-home packages, package ids of `prerequisite_packages` keyed by
-    /// (game, server) (Workflow #336 L2c, R16).
-    pub fn with_return_home_packages(
-        mut self,
-        return_home_packages: BTreeMap<(String, String), String>,
-    ) -> Self {
-        self.return_home_packages = return_home_packages;
-        self
-    }
-
-    /// The configured return-home package ids, keyed by (game, server).
-    pub const fn return_home_packages(&self) -> &BTreeMap<(String, String), String> {
-        &self.return_home_packages
-    }
-
     /// Workflow #373 NAV-6: sets `standard_packs.root`, the directory that holds one root per
     /// game (`<root>/<game>/`). Read at startup and in each run's preparation.
     pub fn with_standard_packs_root(mut self, root: Option<PathBuf>) -> Self {
@@ -1107,14 +1085,6 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.resource_packages.keys().collect::<Vec<_>>(),
             )
             .field("stuck_recovery", &self.stuck_recovery)
-            .field(
-                "prerequisite_packages",
-                &(!self.prerequisite_packages.is_empty()).then_some("<runtime-owned>"),
-            )
-            .field(
-                "return_home_packages",
-                &(!self.return_home_packages.is_empty()).then_some("<runtime-owned>"),
-            )
             .field("standard_packs_root", &self.standard_packs_root)
             .field("ledger_failure_sink", &self.ledger_failure_sink.is_some())
             .field("runtime_commit", &self.runtime_commit)
@@ -1141,6 +1111,8 @@ pub struct RuntimeHost {
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     /// Workflow #385 P-m: the host timer probe of the shadow measurement (PERF §3.2).
     performance_probe_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    /// Workflow #386 SR-3: the task package admission after start.
+    pack_admission_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     /// Workflow #381 R6: the timing this start printed as `actingd startup_recovery`.
     #[cfg(test)]
     startup_recovery: StartupRecoveryTiming,
@@ -1692,13 +1664,19 @@ impl RuntimeHost {
             unclassified_codes: Mutex::new(BTreeSet::new()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
-            prerequisite_packages: config.prerequisite_packages,
-            return_home_packages: config.return_home_packages,
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
+            fact_refresh_recorder: Mutex::new(
+                crate::fact_refresh_transitions::FactRefreshRecorder::default(),
+            ),
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
+            pack_admission: crate::pack_admission::PackAdmission::new(
+                config.runtime_commit.clone(),
+            ),
+            #[cfg(test)]
+            pack_admission_hold_for_test: config.pack_admission_hold_for_test.clone(),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -1729,6 +1707,7 @@ impl RuntimeHost {
             monitor_thread: None,
             performance_thread: None,
             performance_probe_thread: None,
+            pack_admission_thread: None,
             #[cfg(test)]
             startup_recovery: StartupRecoveryTiming::default(),
         };
@@ -2067,6 +2046,21 @@ impl RuntimeHost {
                     )?,
                 }
             }
+            // Workflow #386 SR-3 (scheduling model §2.4 item 2): the task package admission
+            // runs in the background, outside the start.
+            let admission_shared = Arc::clone(&shared);
+            host.pack_admission_thread = Some(
+                thread::Builder::new()
+                    .name("actingcommand-runtime-pack-admission".to_string())
+                    .spawn(move || pack_admission_check(admission_shared))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            HostCode::RuntimePackAdmissionSpawnFailed,
+                            HostLocation::StartRuntimeHost,
+                            RuntimeErrorCode::RuntimeHalted,
+                        )
+                    })?,
+            );
             shared.finish_install_preparation()?;
             if !held_startup {
                 publish_runtime_info(&host.info_path, &host.info)?;
@@ -2459,6 +2453,17 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PolicyCycle> {
         self.work_ref(crate::codes::HostLocation::EvaluatePolicyCycle)?
             .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
+    }
+
+    /// Workflow #384 D2-S5, test only: puts the fact refresh's transition recorder in the state
+    /// `recorder` holds.
+    #[cfg(test)]
+    pub(crate) fn replace_fact_refresh_recorder_for_test(
+        &self,
+        recorder: crate::fact_refresh_transitions::FactRefreshRecorder,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::RecordFactRefreshTransitions)?
+            .replace_fact_refresh_recorder_for_test(recorder)
     }
 
     #[cfg(test)]
@@ -3985,6 +3990,14 @@ impl RuntimeHost {
                 HostLocation::JoinRuntimePerformanceProbe,
             ),
         );
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            join_runtime_thread(
+                self.pack_admission_thread.take(),
+                HostLocation::JoinRuntimePackAdmission,
+            ),
+        );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -4451,16 +4464,15 @@ struct HostShared {
     // the stand-in for performance control's suspension.
     #[cfg(test)]
     performance_hold_for_test: AtomicBool,
-    // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
-    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
-    // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
-    return_home_packages: BTreeMap<(String, String), String>,
     // Workflow #384 D2-S4: by instance alias, the recognition maintenance package the start kept
     // and the keys its marks write, read once at startup.
     fact_refresh_bindings: BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,
     // Workflow #384 D2-S4: L (D2 model §3.1), when this start finished loading the instance
     // facts.
     instance_facts_loaded_at_unix_ms: u64,
+    // Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh's transition recorder of this
+    // owner epoch (memory only; no decision reads it).
+    fact_refresh_recorder: Mutex<crate::fact_refresh_transitions::FactRefreshRecorder>,
     // Workflow #373 NAV-6: the standard-pack root and the registry each game root held when it
     // was last read (memory only).
     standard_packs: standard_pack::StandardPackRoots,
@@ -4470,6 +4482,11 @@ struct HostShared {
     // Workflow #336 PKG-S3: the suspension lift checks' measurements and baselines (memory
     // only).
     lift_checks: crate::suspension_lift::LiftChecks,
+    // Workflow #386 SR-3: the task package suspensions of this process (memory only).
+    pack_admission: crate::pack_admission::PackAdmission,
+    // Workflow #386 SR-3, test only: the hold of the task package admission after start.
+    #[cfg(test)]
+    pack_admission_hold_for_test: Option<Arc<crate::pack_admission::PackAdmissionHold>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
@@ -4953,6 +4970,28 @@ fn reap_finished_connections(
         }
         shared.record_lifecycle_result(RuntimeLifecycleFailureStage::ShutdownJoin, failure, result);
     }
+}
+
+/// Workflow #386 SR-3 (scheduling model §2.4 item 2): the task package admission after start.
+/// It admits each package the procedure bindings locate once with this Runtime's kernel and
+/// suspends a package refused with a suspend code; it only suspends. A shutdown stops it between
+/// two packages.
+fn pack_admission_check(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
+    #[cfg(test)]
+    if let Some(hold) = &shared.pack_admission_hold_for_test
+        && !hold.await_release(|| shared.fatal.is_shutdown_requested())
+    {
+        return Ok(());
+    }
+    let result = shared.check_pack_admission();
+    if let Err(error) = &result {
+        shared.fatal.mark(error.clone())?;
+    }
+    #[cfg(test)]
+    if let Some(hold) = &shared.pack_admission_hold_for_test {
+        hold.finished();
+    }
+    result
 }
 
 fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {

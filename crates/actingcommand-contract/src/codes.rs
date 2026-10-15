@@ -184,6 +184,8 @@ crate::outcome_codes! {
         DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
         // Workflow #385 P-m (register §1.61 W15).
         PerformanceStatusCompleted => "request_performance_status_completed": success / none,
+        // Workflow #384 D2-S5 (register §1.68).
+        FactRefreshStatusCompleted => "request_fact_refresh_status_completed": success / none,
     }
 }
 
@@ -393,7 +395,6 @@ crate::outcome_codes! {
         ReleaseBoundaryMigrationMissing => "release_boundary_migration_missing": error / none,
         ResourceDeclarationInvalid => "resource_declaration_invalid": error / declaration_error,
         ResourceTargetsDocumentInvalid => "resource_targets_document_invalid": error / none,
-        ReturnHomePackageUnbound => "return_home_package_unbound": error / declaration_error,
         RuntimeDebugEventInvalid => "runtime_debug_event_invalid": error / none,
         RuntimeEventQueryResponseTooLarge => "runtime_event_query_response_too_large": error / none,
         RuntimeFactLedgerPositionInvalid => "runtime_fact_ledger_position_invalid": error / none,
@@ -638,11 +639,6 @@ crate::outcome_codes! {
         InvalidResourceTargetView => "invalid_resource_target_view": error / none,
         InvalidResourceTargetsApplied => "invalid_resource_targets_applied": error / none,
         InvalidResourceTargetsRejection => "invalid_resource_targets_rejection": error / none,
-        InvalidGitObjectId => "invalid_git_object_id": error / none,
-        InvalidPackageRepository => "invalid_package_repository": error / none,
-        InvalidSourceTreeReference => "invalid_source_tree_reference": error / none,
-        InvalidContentDirectoryReference => "invalid_content_directory_reference": error / none,
-        InvalidPackageSha256 => "invalid_package_sha256": error / none,
         InvalidBundleSource => "invalid_bundle_source": error / none,
         InvalidBundlePack => "invalid_bundle_pack": error / none,
         InvalidBundlePackPath => "invalid_bundle_pack_path": error / none,
@@ -688,6 +684,8 @@ crate::outcome_codes! {
         InvalidBindChannel => "invalid_bind_channel": error / none,
         // Workflow #385 P-m: a `PerformanceStatus` answer of the wrong shape.
         InvalidPerformanceStatus => "invalid_performance_status": error / none,
+        // Workflow #384 D2-S5: a `FactRefreshStatus` answer of the wrong shape.
+        InvalidFactRefreshStatus => "invalid_fact_refresh_status": error / none,
     }
 }
 

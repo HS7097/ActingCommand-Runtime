@@ -807,6 +807,7 @@ impl HostShared {
                     },
                     instance_occupancy: &|instance_alias| occupancy.get(instance_alias).copied(),
                     suspension_lift: &suspension_lift,
+                    pack_admission: &self.pack_admission,
                     fact_refresh: FactRefreshContext {
                         settings: fact_refresh_settings,
                         bindings: &self.fact_refresh_bindings,
@@ -838,12 +839,103 @@ impl HostShared {
         for signal in &cycle.clock_slot_signals {
             self.record_policy_planning_signal(signal.clone())?;
         }
+        // Workflow #386 SR-3 (scheduling model §11): the suspensions and lifts of task packages
+        // this evaluation acted on, each copied once per instance.
+        for signal in self.pack_admission.take_signals()? {
+            self.record_policy_planning_signal(signal)?;
+        }
+        // Workflow #384 D2-S5 (D2 model §5.1 MP-3): the cycle's yield point hands the reasons of
+        // its waiting candidates to the fact refresh's transition recorder, which only produces
+        // transitions: they stay in memory (the cycle's report), no decision reads them and
+        // nothing is written to the ledger. An instance the closure's positions 1-2 held as the
+        // cycle started raised no demand, so its keys are not observed.
+        if let Some(evaluation) = &cycle.evaluation {
+            let overdue_ms = self.fact_refresh_overdue_ms()?;
+            let held = |instance_alias: &str| {
+                crate::fact_refresh::instance_hold(
+                    instance_alias,
+                    scheduling_pause.deferral_code(instance_alias),
+                    occupancy.get(instance_alias).copied(),
+                )
+                .is_some()
+            };
+            let transitions = lock(
+                &self.fact_refresh_recorder,
+                HostLocation::RecordFactRefreshTransitions,
+            )?
+            .observe(evaluation, &held, time.unix_ms, overdue_ms);
+            cycle.fact_refresh_transitions = transitions;
+        }
         lock(
             &self.trusted_policy_dispatches,
             HostLocation::RecordTrustedPolicyDispatches,
         )?
         .record_cycle(&cycle, observed_monotonic_ms)?;
         Ok(cycle)
+    }
+
+    /// `RuntimeOperation::FactRefreshStatus` (Workflow #384 D2-S5, D2 model §6 S5, §8 T39;
+    /// register §1.68): the keys the fact refresh's transition recorder holds as waited for, read
+    /// from memory. Nothing is read from or appended to the ledger; an answer larger than one IPC
+    /// frame is refused `runtime_fact_refresh_status_too_large_for_frame` instead of failing the
+    /// frame write.
+    pub(super) fn fact_refresh_status_read(
+        &self,
+        request: &RuntimeRequest,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let status = lock(
+            &self.fact_refresh_recorder,
+            HostLocation::ReadFactRefreshStatus,
+        )?
+        .status();
+        let result = RuntimeResult::FactRefreshStatus {
+            status: Box::new(status),
+        };
+        let reply_bytes = RuntimeReceipt::success(
+            request,
+            RuntimeReceiptState::Completed,
+            None,
+            result.clone(),
+        )
+        .ok()
+        .and_then(|receipt| serde_json::to_vec(&receipt).ok())
+        .ok_or_else(|| RequestFailure::poison_without_terminal(receipt_error()))?
+        .len();
+        if reply_bytes > self.maximum_frame_bytes {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    HostCode::RuntimeFactRefreshStatusTooLargeForFrame,
+                    HostLocation::ReadFactRefreshStatus,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_native_detail(format!(
+                    "reply is {reply_bytes} bytes; one frame carries at most {} bytes",
+                    self.maximum_frame_bytes
+                )),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result,
+            failure_outcome: None,
+        })
+    }
+
+    /// Workflow #384 D2-S5, test only: the transition recorder in `recorder`'s state, as an
+    /// earlier run of cycles would have left it.
+    #[cfg(test)]
+    pub(super) fn replace_fact_refresh_recorder_for_test(
+        &self,
+        recorder: crate::fact_refresh_transitions::FactRefreshRecorder,
+    ) -> RuntimeHostResult<()> {
+        *lock(
+            &self.fact_refresh_recorder,
+            HostLocation::RecordFactRefreshTransitions,
+        )? = recorder;
+        Ok(())
     }
 
     #[cfg(test)]

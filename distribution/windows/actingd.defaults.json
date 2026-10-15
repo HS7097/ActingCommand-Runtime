@@ -297,6 +297,11 @@
     },
     "suspension": {
       "lift_check_min_interval_ms": 60000
+    },
+    "pack_admission": {
+      "check_in_check_config": true,
+      "check_after_start": true,
+      "suspend_codes": ["recognition_sample_budget_invalid"]
     }
   },
   "ledger_observer": {

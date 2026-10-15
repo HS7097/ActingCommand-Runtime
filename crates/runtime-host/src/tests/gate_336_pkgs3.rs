@@ -8,9 +8,10 @@
 // without a restart; a package that cannot be measured keeps the pause and is reported with
 // `lift_check_hash_unmeasured`.
 
+use super::gate_373_nav3a::StandardRoot;
+use super::gate_e4::exec_i6::{self, I6Pack, RESOLUTION};
 use super::*;
 use crate::failure_identity::{FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage};
-use actingcommand_contract::ContainedTaskRecoveryBinding;
 use actingcommand_contract::outcome::Outcome;
 use serde_json::Value;
 
@@ -25,21 +26,54 @@ const LIFT_INTERVAL_MS: u64 = 60_000;
 // The first lift check: an hour after the paused dispatch, when the task is due again.
 const FIRST_CHECK_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 3_600_000;
 
-// The packages of a pause: the main package the binding locates and a declared layer.
+// The packages of a pause: the main package the binding locates and a declared layer, which
+// (Workflow #373 NAV-3a) the standard-pack registry under `registry` lists.
 struct Packages {
     main: PathBuf,
     layer: PathBuf,
+    registry: PathBuf,
 }
 
 impl Packages {
     fn new(root: &TempDir) -> Self {
+        let mut registry = StandardRoot::new(root.path());
+        let layer = registry.list(LAYER_ID);
+        registry.write_bundle();
         let packages = Self {
             main: root.path().join("main.zip"),
-            layer: root.path().join("layer.zip"),
+            layer,
+            registry: registry.root,
         };
         write_package(&packages.main, &neutral_contained_task_package(false));
-        write_package(&packages.layer, &neutral_contained_task_package(true));
+        packages.write_layer(false);
         packages
+    }
+
+    // Writes the layer's source package directory (another resolution when `changed`) and
+    // gives the hash prefix a lift check reads for it now, through the registry.
+    fn write_layer(&self, changed: bool) -> String {
+        exec_i6::write_pack(
+            &self.layer,
+            &I6Pack {
+                package_id: LAYER_ID,
+                prerequisite: None,
+                resolution: if changed { (32, 18) } else { RESOLUTION },
+            },
+        );
+        let manifest = manifest_at(&self.main);
+        let checks = crate::suspension_lift::LiftChecks::default();
+        crate::suspension_lift::SuspensionLiftView::new(
+            &manifest,
+            Some(self.registry.as_path()),
+            &checks,
+            crate::suspension_lift::LiftCheckTime::ONE_READ,
+        )
+        .current_layer_hash(&IdentityLayer::Declared(IdentityPackage {
+            id_hash: id8(LAYER_ID),
+            hash: String::new(),
+        }))
+        .expect("the lift view reads the registry")
+        .expect("the layer's content hash")
     }
 }
 
@@ -81,7 +115,8 @@ fn manifest_at(main: &Path) -> ProcedureManifest {
     .expect("procedure manifest")
 }
 
-// The host configuration: the binding at the main package and the layer's mapping.
+// The host configuration: the binding at the main package and the standard-pack root whose
+// registry lists the layer.
 fn suspension_config(
     root: &TempDir,
     clock: &Arc<ManualRuntimeClock>,
@@ -90,11 +125,7 @@ fn suspension_config(
     config(root)
         .with_runtime_clock(clock.clone())
         .with_procedure_manifest(manifest_at(&packages.main))
-        .with_prerequisite_packages(BTreeMap::from([(
-            LAYER_ID.to_owned(),
-            ContainedTaskRecoveryBinding::new(packages.layer.to_string_lossy())
-                .expect("layer mapping"),
-        )]))
+        .with_standard_packs_root(Some(packages.registry.clone()))
 }
 
 fn start(root: &TempDir, clock: &Arc<ManualRuntimeClock>, packages: &Packages) -> RuntimeHost {
@@ -329,7 +360,7 @@ fn s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_rest
     let root = TempDir::new().expect("tempdir");
     let packages = Packages::new(&root);
     let main_hash = write_package(&packages.main, &neutral_contained_task_package(false));
-    let layer_hash = write_package(&packages.layer, &neutral_contained_task_package(true));
+    let layer_hash = packages.write_layer(false);
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = start(&root, &clock, &packages);
     pause(&host, &clock, identity(&main_hash, &layer_hash));
@@ -365,23 +396,29 @@ fn s3_t4_only_a_package_the_pause_names_lifts_it() {
     for (case, change, lifts) in [
         ("nothing changed", None, false),
         ("another package changed", Some("other.zip"), false),
-        ("the layer changed", Some("layer.zip"), true),
+        ("the layer changed", Some("layer"), true),
     ] {
         let root = TempDir::new().expect("tempdir");
         let packages = Packages::new(&root);
         let main_hash = write_package(&packages.main, &neutral_contained_task_package(false));
-        let layer_hash = write_package(&packages.layer, &neutral_contained_task_package(true));
+        let layer_hash = packages.write_layer(false);
         let other = root.path().join("other.zip");
         write_package(&other, &neutral_contained_task_package(false));
         let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
         let host = start(&root, &clock, &packages);
         pause(&host, &clock, identity(&main_hash, &layer_hash));
         assert_paused(&evaluate(&host, &clock, FIRST_CHECK_UNIX_MS, 41), case);
-        if let Some(file) = change {
-            write_package(
-                &root.path().join(file),
-                &neutral_non_home_start_contained_task_package(true),
-            );
+        match change {
+            Some("layer") => {
+                packages.write_layer(true);
+            }
+            Some(file) => {
+                write_package(
+                    &root.path().join(file),
+                    &neutral_non_home_start_contained_task_package(true),
+                );
+            }
+            None => {}
         }
         let state = evaluate(
             &host,
@@ -406,7 +443,7 @@ fn s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes() {
     let root = TempDir::new().expect("tempdir");
     let packages = Packages::new(&root);
     let main_hash = write_package(&packages.main, &neutral_contained_task_package(false));
-    let layer_hash = write_package(&packages.layer, &neutral_contained_task_package(true));
+    let layer_hash = packages.write_layer(false);
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = start(&root, &clock, &packages);
     pause(&host, &clock, identity(&main_hash, &layer_hash));
@@ -464,7 +501,7 @@ fn s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it() {
     let root = TempDir::new().expect("tempdir");
     let packages = Packages::new(&root);
     let main_hash = write_package(&packages.main, &neutral_contained_task_package(false));
-    let layer_hash = write_package(&packages.layer, &neutral_contained_task_package(true));
+    let layer_hash = packages.write_layer(false);
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = start(&root, &clock, &packages);
     pause(&host, &clock, identity(&main_hash, &layer_hash));
@@ -494,7 +531,7 @@ fn s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it() {
 
     let root = TempDir::new().expect("tempdir");
     let packages = Packages::new(&root);
-    let layer_hash = write_package(&packages.layer, &neutral_contained_task_package(true));
+    let layer_hash = packages.write_layer(false);
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = start(&root, &clock, &packages);
     pause(&host, &clock, identity("x", &layer_hash));
@@ -513,7 +550,7 @@ fn s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity() {
     let root = TempDir::new().expect("tempdir");
     let packages = Packages::new(&root);
     let main_hash = write_package(&packages.main, &neutral_contained_task_package(false));
-    let layer_hash = write_package(&packages.layer, &neutral_contained_task_package(true));
+    let layer_hash = packages.write_layer(false);
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = start(&root, &clock, &packages);
     pause(&host, &clock, identity(&main_hash, &layer_hash));

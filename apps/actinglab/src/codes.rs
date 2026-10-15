@@ -33,5 +33,33 @@ actingcommand_contract::outcome_codes! {
         /// Error. The `--facts` file is not one complete instance fact answer of a Runtime.
         ReplayFactsInvalid => "replay_facts_invalid": error / none,
         // ---- end of SEL-L6a
+        // ---- Workflow #308 SEL-L6b (pending): `actinglab replay --frames --select --scan`.
+        /// Error. The replayed scan did not cover its list: the evaluator ended it before its
+        /// coverage (the details carry the scan with its decision), or it failed with the
+        /// outcome the details carry as `end.outcome` (`selection_scan_replay_frame_missing`
+        /// when it needed a frame the sequence does not hold).
+        ReplayScanRefused => "replay_scan_refused": error / none,
+        /// Error. The `--scan` file could not be opened or read.
+        ReplayScanUnreadable => "replay_scan_unreadable": error / none,
+        /// Error. The `--scan` file is not one scan declaration of a select step.
+        ReplayScanInvalid => "replay_scan_invalid": error / none,
+        // ---- end of SEL-L6b
+        // ---- Workflow #331 RSU-1 (pending): `actinglab recognition-regression`.
+        /// Error. An `--evidence` file could not be opened or read.
+        RecognitionRegressionEvidenceUnreadable => "recognition_regression_evidence_unreadable": error / none,
+        /// Error. An `--evidence` file is not one page of a run's evidence (`request_id`, and
+        /// `steps` with their frame references), or its pages are of different runs, or it names
+        /// no frame.
+        RecognitionRegressionEvidenceInvalid => "recognition_regression_evidence_invalid": error / none,
+        /// Error. The ledger of `--state-root` could not be opened, is incomplete, or the run's
+        /// events or an artifact could not be read.
+        RecognitionRegressionLedgerUnreadable => "recognition_regression_ledger_unreadable": error / none,
+        /// Error. A frame reference of the evidence names no verified capture frame of the run in
+        /// the ledger of `--state-root`.
+        RecognitionRegressionFrameUnknown => "recognition_regression_frame_unknown": error / none,
+        /// Error. A referenced frame's material is not a PNG image, does not read or does not
+        /// decode.
+        RecognitionRegressionFrameInvalid => "recognition_regression_frame_invalid": error / none,
+        // ---- end of RSU-1
     }
 }

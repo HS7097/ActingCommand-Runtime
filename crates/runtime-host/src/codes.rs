@@ -563,6 +563,11 @@ actingcommand_contract::outcome_codes! {
         /// reads its key (keys `package_id`, `fact_key`, `reader_problem`); emitted once actingd
         /// loads a scheduling-layer document.
         FactReaderDocumentMismatch => "fact_reader_document_mismatch": warning / none,
+        /// Warning (Workflow #384 D2-S5). One instance's candidates have waited for one key
+        /// longer than `scheduling.fact_refresh.overdue_ms`: a transition of the fact refresh
+        /// recorder, reported once per wait and never read by a decision (keys `instance_id`,
+        /// `fact_key`, `elapsed_ms`; optional `package_id`).
+        FactReaderOverdue => "fact_reader_overdue": warning / none,
         FactPublicationSequenceMissing => "fact_publication_sequence_missing": error / none,
         FactPublisherProjectionMissing => "fact_publisher_projection_missing": error / none,
         FactRecordInvalid => "fact_record_invalid": error / none,
@@ -1094,6 +1099,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeFactSnapshotTooLargeForFrame => "runtime_fact_snapshot_too_large_for_frame": error / none,
         // Workflow #389 MCP-4: an instance fact read whose reply exceeds one IPC frame.
         InstanceFactSnapshotTooLargeForFrame => "instance_fact_snapshot_too_large_for_frame": error / none,
+        // Workflow #384 D2-S5: a fact refresh status read whose reply exceeds one IPC frame.
+        RuntimeFactRefreshStatusTooLargeForFrame => "runtime_fact_refresh_status_too_large_for_frame": error / none,
         RuntimeFactStale => "runtime_fact_stale": error / none,
         RuntimeFactStoreDesync => "runtime_fact_store_desync": error / none,
         RuntimeFrameEncodeFailed => "runtime_frame_encode_failed": error / none,
@@ -1116,6 +1123,9 @@ actingcommand_contract::outcome_codes! {
         RuntimeListenerAddressFailed => "runtime_listener_address_failed": error / none,
         RuntimeListenerConfigFailed => "runtime_listener_config_failed": error / none,
         RuntimeMonitorSpawnFailed => "runtime_monitor_spawn_failed": error / none,
+        /// Error. The thread of the task package admission after start could not be started;
+        /// the start fails (Workflow #386 SR-3).
+        RuntimePackAdmissionSpawnFailed => "runtime_pack_admission_spawn_failed": error / none,
         RuntimePerformanceSpawnFailed => "runtime_performance_spawn_failed": error / none,
         RuntimeProtocolInvalid => "runtime_protocol_invalid": error / none,
         RuntimeReferenceLeaked => "runtime_reference_leaked": error / none,
@@ -1461,6 +1471,8 @@ actingcommand_contract::outcome_locations! {
         CheckInstallLeases => "check_install_leases",
         CheckInstallPreparation => "check_install_preparation",
         CheckInstallSelfcheck => "check_install_selfcheck",
+        // Workflow #386 SR-3: the task package admission after start and its suspensions.
+        CheckPackAdmission => "check_pack_admission",
         CheckResourceReadingPools => "check_resource_reading_pools",
         CheckSchedulerCleanup => "check_scheduler_cleanup",
         CheckSuspensionLift => "check_suspension_lift",
@@ -1615,6 +1627,8 @@ actingcommand_contract::outcome_locations! {
         JoinRuntimeAccept => "join_runtime_accept",
         JoinRuntimeConnection => "join_runtime_connection",
         JoinRuntimeMonitor => "join_runtime_monitor",
+        // Workflow #386 SR-3.
+        JoinRuntimePackAdmission => "join_runtime_pack_admission",
         JoinRuntimePerformance => "join_runtime_performance",
         JoinRuntimePerformanceProbe => "join_runtime_performance_probe",
         JoinRuntimeSweeper => "join_runtime_sweeper",
@@ -1830,6 +1844,8 @@ actingcommand_contract::outcome_locations! {
         ReadPerformanceOwnedLeases => "read_performance_owned_leases",
         ReadPerformancePipelineQuiet => "read_performance_pipeline_quiet",
         ReadPerformanceStatus => "read_performance_status",
+        // Workflow #384 D2-S5.
+        ReadFactRefreshStatus => "read_fact_refresh_status",
         ReadPerformanceWorkloads => "read_performance_workloads",
         ReadPinnedPolicyCatalog => "read_pinned_policy_catalog",
         ReadPolicyAdmissionTime => "read_policy_admission_time",
@@ -1944,6 +1960,8 @@ actingcommand_contract::outcome_locations! {
         RecordSchedulerPreemption => "record_scheduler_preemption",
         RecordTrustedPolicyDispatch => "record_trusted_policy_dispatch",
         RecordTrustedPolicyDispatches => "record_trusted_policy_dispatches",
+        // Workflow #384 D2-S5.
+        RecordFactRefreshTransitions => "record_fact_refresh_transitions",
         RecoverAgentDispatcher => "recover_agent_dispatcher",
         RecoverApplicationLifecycle => "recover_application_lifecycle",
         RecoverContainedTask => "recover_contained_task",
@@ -2015,7 +2033,6 @@ actingcommand_contract::outcome_locations! {
         ResolvePolicySettlementInstance => "resolve_policy_settlement_instance",
         ResolvePrerequisiteChain => "resolve_prerequisite_chain",
         ResolveRetryRound => "resolve_retry_round",
-        ResolveReturnHomePackage => "resolve_return_home_package",
         ResolveRuntimeInstance => "resolve_runtime_instance",
         ResourceTargetViewActivePolicy => "resource_target_view_active_policy",
         ResourceTargetViewFacts => "resource_target_view_facts",

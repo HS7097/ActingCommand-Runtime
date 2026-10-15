@@ -82,19 +82,16 @@ pub struct LabRecording {
     pub artifact: Option<RecordingArtifact>,
 }
 
-/// Written by `record stop` (#336 L4): the package generated from the recording.
+/// Written by `record stop` (#336 L4): the package generated from the recording. Workflow #336
+/// PKG-S5 (option 丙): the package is named by its `package_id`; no digest of it is kept.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordingArtifact {
     /// `zip` or `json`.
     pub container: String,
-    /// The `content-directory.v1` digest of the package content.
-    pub digest: String,
-    /// The copy inside the recording, `lab/out/<digest>.<container>`.
+    /// The copy inside the recording, `lab/out/<package_id>.<container>`.
     pub path: String,
     pub lab_dir_path: Option<String>,
-    /// The sha256 of the container file bytes.
-    pub sha256: String,
     pub byte_count: u64,
     pub package_id: String,
     /// The prerequisite package id written into control.json (`--requires`).

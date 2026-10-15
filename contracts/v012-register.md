@@ -53,7 +53,7 @@ before SH-1 merges.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| D1 | `policy.fact_refresh_transition` | new event type, family `policy`, action `policy.fact_refresh` (new), info; G5 copies it; not tagged | SH-1 | AO-4 (gate) after D2-S5 (recorder) | payload `{cycle_seq, instance_id, fact_key, outcome}` (`outcome` = the transition's code); envelope `capture.source` = `fact_refresh_transitions`, lineage = owner epoch, revision = transition number (from 1 per epoch, +1 per transition, never reset); a skip is `ledger_store_revision_skipped` |
+| D1 | `policy.fact_refresh_transition` | new event type, family `policy`, action `policy.fact_refresh` (new), info; G5 copies it; not tagged | SH-1 | AO-4 (gate) after D2-S5 (recorder; built, §1.68, in memory only) | payload `{cycle_seq, instance_id, fact_key, outcome}` (`outcome` = the transition's code); envelope `capture.source` = `fact_refresh_transitions`, lineage = owner epoch, revision = transition number (from 1 per epoch, +1 per transition, never reset); a skip is `ledger_store_revision_skipped` |
 
 ### 1.3 Scheduling rules (#386, SCHED §11 X2)
 
@@ -1038,6 +1038,29 @@ configuration key.
 | DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
 | DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
 
+### 1.64 Wave 14 slice PKG-S5 (#336 option 丙, M-PKG v1.1 §3.5, §4.6; M-357a §7 TB12, §1.65)
+
+PKG-S5 names every pack by its `package_id` where the tools lay packages out: the bundle index
+v4 and the Lab's `record stop` output. It retires `actinglab package digest`, the package
+reference type `PackageRef` (with its content-directory, legacy ZIP and source-tree forms and the
+`sha256:`-prefixed serializers) and the authoring receipt's package hash. No record type and no
+persisted member: the rows are file formats and output shapes. A bundle index v1, v2 or v3 is
+not read (no old version is read, M-PKG §7). The content hash keeps its one entry,
+containment's `measure_content_hash`, for the suspension rule only (§2, "Failure identity").
+[package-reference.md](package-reference.md), "Content-directory tools and the bundle index",
+and [lab-recording.md](lab-recording.md), "Writing", are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P5-1 | bundle index v4 `actingcommand.bundle.v4` (`BundleIndex`): `{schema_version, game, source?, packs[] {package_id, server, entry_task_id, path, file_count, byte_count}, maintenance?, tables?}` | resource file format (the game root's `bundle.json`), replaces v2 and v3 | PKG-S5 | PKG-S5 (`package bundle`); resource side (PKG-S7) | `path` is exactly `packs/<package_id>`; `package_id` is one safe path segment, never `tables` in any ASCII case (`invalid_bundle_pack_path`), unique (`duplicate_bundle_pack`); no member carries a digest; `maintenance` (the bundle-level maintenance declarations, by `package_id`) is present when `package bundle --maintenance` gave it; a v2 or v3 `bundle.json` is `standard_pack_root_invalid` `malformed`; check-config's `standard_packs.games[].bundle_version` is 4 |
+| P5-2 | bundle v4 `tables` (M-357a §7 TB12) | optional member of P5-1 | PKG-S5 | resource side (PKG-S7 bundle script) | at most 64 unique table ids of `[a-z][a-z0-9_]{0,63}` (`invalid_bundle_index`); read and checked, otherwise ignored by the Runtime; the updater (#364 installer, PKG-S6 acsetup) replaces only the listed tables and leaves the root's other tables alone, tables before package directories; `package bundle` writes none; §1.65 TB12 is the shape's register row, this is its code |
+| P5-3 | `package bundle` layout `packs/<package_id>/` | tool output layout | PKG-S5 | PKG-S5 | named by the `package_id` the pack's `control.json` declares; the copy is admitted in full by its path, no digest computed; two packs of one `package_id`, or one that cannot name its directory, are `package_bundle_index_invalid` |
+| P5-4 | `record stop` output `<package_id>.<zip\|json>` (in the recording's `lab/out/` and in `--lab-dir`), replaced in place (M-PKG §3.5, D9) | tool output layout | PKG-S5 | PKG-S5 | written as `<name>.part`, an existing file set aside as `<name>.old-<unix_ms>`, the `.part` renamed into place, the old one deleted; a failed step is `record_state_io_failed` naming the `.part` file and any file left (`restored`, `left_files`); `record_artifact_name_conflict` is no longer written; a `--package-id` that is not one path segment is `validation_failed` |
+| P5-5 | `record stop` answer `lab {…, lab_dir_status: "written" \| "replaced" \| "to_write" \| "to_replace", …}` and its binding examples `prerequisite_entry_example {package_id, package_path}`, `binding_example {procedure_ref, operation_id, yield_points, scheduled_execution}`, `task_run_example` (`--package` only) | changed output members (removed `digest`, `sha256`, `package_ref`, `package_digest`; `present` gone) | PKG-S5 | PKG-S5 | MCP `ac_record_stop` keeps the binding parts inline without `package_ref`; the round trip compares the expanded table with the generated one entry by entry |
+| P5-6 | Lab recording state `RecordingArtifact {container, path, lab_dir_path?, byte_count, package_id, …}` (`actingcommand.lab-recording.v1`) | removed members `digest`, `sha256` (Lab state file, not the ledger) | PKG-S5 | PKG-S5 | a stopped recording given `--lab-dir` again reads its copy and replaces the `--lab-dir` file the same way |
+| P5-7 | `AuthoringValidationReport {checks}` | removed member `package_sha256` | PKG-S5 | PKG-S5 | the code `authoring_validation_package_hash_invalid` is deleted (pending) |
+| P5-8 | `actinglab package digest`; `PackageRef`, `ContentDirectory`, `ContentDirectoryVersion`, `GitSourceTree`, `GitOid`, `prefixed_reference`, `optional_prefixed_reference`; `describe_path`, the loaders' `recorded` parameter, `TaskPackageDescriptor.reference` | removed command and types | PKG-S5 | PKG-S5 | `package digest` is an unknown package command (`validation_failed`); the codes `invalid_git_object_id`, `invalid_package_repository`, `invalid_source_tree_reference`, `invalid_content_directory_reference`, `invalid_package_sha256` and `source_tree_loader_retired` are deleted (pending); guards `pkg_s5_no_package_reference_is_left` and `pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it` (S5-T5) |
+
 ### 1.65 DB-M: shared tables and the `table` value (#357, M-357a v1.1)
 
 M-357a adds no ledger shape and no wire shape: a table read is recorded through the existing members of `task.selection_evaluated` (C357 constraint, for M-357a: no new ledger type, field or enum value; M-357b changes the selection record for multi-select, Alice 2026-10-15, §1.66). The rows below are resource file formats, a bundle index member, interface members and confirmations that a persisted shape stays as it is. They land before the v0.12.0 tag so that DB-1 and DB-2 (0.12.x) add nothing a v0.12.0 reader must know. New codes, keys and vocabulary tokens are catalog entries, not rows.
@@ -1074,6 +1097,113 @@ A select step whose policy declares more than one candidate chooses up to N of t
 | MS9 | scheduling consumer: catalog compile refuses a document that declares `combination` or `equals_ref` | behaviour, no shape | DB-3a2 | — | `type_mismatch` (`"combination=declared consumer=scheduling"`, `"equals_ref=declared consumer=scheduling"`), as for record lists; 367-D1/D2 decide multi-dispatch |
 | MS10 | TB6 pin: `equals_ref` (a `field` or an unpinned single-key `table` read) beside `equals` and `equals_fact` | pack format, additive to TB6 | DB-3a2 | resource side | the pin takes the candidate's own value; no `otherwise`; only in a policy that declares more than one candidate; every distinct `equals_ref` needs one quota whose `value` is the same reference, with `min` = `max` on every bound, `unlisted: excluded` and the minimums summing to the declared count; the rows read through it enter `input_sha256`; the per-identity bound stays exact |
 
+### 1.67 Wave 14 slice NAV-3a (#373, M-373 v1.1 §4.2, §4.3, §8.3, §9.2)
+
+NAV-3a lets a page-graph package declare a prerequisite package and gives it the return-home
+fallback, and finds every prerequisite and return-home package in the standard-pack registry of
+its game (`<standard_packs.root>/<game>/bundle.json`, read when a run uses it) instead of the
+actingd configuration. [linear-steps.md](linear-steps.md), "Prerequisite packages" and
+"Return-home fallback", and [package-reference.md](package-reference.md), "Standard package
+root", are the contract. The vocabulary `registry_problem` and its key are catalog entries
+(§7); the deleted codes are listed in N3A-3.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N3A-1 | `TaskEntryRecoveryRole` values `prerequisite` and `return_home`: the `role` of `EntryRecoveryPackageAdmitted`, `EntryRecoveryCompleted`, `EntryRecoveryFailed` (`task.entry_preflight`) | new enum values of §1.12 N1's member | NAV-3a | NAV-3a | `prerequisite` on a declared layer of the prerequisite gate, `return_home` on its return-home layer and on the registry's return-home package of a page-graph home entry; a request's own recovery binding still carries none (M-373 §8.3). A replayed request takes a layer with a role as a registry package of the request's package's game |
+| N3A-2 | `contained_task_prerequisite_unbound` value `registry_problem` (`root_unset`, `game_root_missing`, `not_listed`) | new outcome value of an existing code | NAV-3a | NAV-3a | on the preparation refusal of a declared prerequisite package the registry does not bind (M-373 §4.3, §9.2) |
+| N3A-3 | actingd configuration `prerequisite_packages[] {package_id, package_path}` and `return_home_packages[] {game, server, package_id}` | removed configuration keys | NAV-3a | — | a configuration that carries either is `config_decode_failed` at `config_load`; no reader of the old form. Deleted (pending) with them: `prerequisite_packages_size_invalid`, `prerequisite_package_id_invalid`, `prerequisite_package_unavailable`, `prerequisite_package_not_regular`, `prerequisite_package_container_unsupported`, `prerequisite_package_request_invalid`, `prerequisite_package_duplicate`, `return_home_packages_size_invalid`, `return_home_package_key_invalid`, `return_home_package_duplicate` (actingd) and `return_home_package_unbound` (contract; `prerequisite_package_digest_invalid` left with PKG-S4), and the location `resolve_return_home_package` |
+| N3A-4 | the registry of a game root: package id → directory and server → return-home package (`bundle.json` v4 `maintenance[]` use `return_home`) | rule | NAV-3a | NAV-3a | `standard_pack_registered` (§1.12 N4) is written when either part changed since the last read; every listed package can be a prerequisite package (the `prerequisite` use derives nothing; PKG-S5's v4 refuses it, M-373 §3.8) |
+| N3A-5 | `navigable_route` control `prerequisite_package_id` | package declaration rule | NAV-3a | — | admitted for `navigable_route` (phased or not); `in_page_guard` and `recognize_only` are `contained_task_control_invalid` (`reason=prerequisite_execution_mode`, the retired `reason=prerequisite_requires_linear_steps` no longer appears); a `navigable_route` package declaring one needs an entry page (`reason=prerequisite_requires_page_entry`), which is then always checked first |
+| N3A-6 | `actingctl packs` and `ac_packs`: roles `prerequisite` and `return_home` | removed output rows and argument values (client only) | NAV-3a | NAV-3a | they named the retired keys; the roles left are `procedure`, `startup`, `resource_package`; the warning `return_home_package_unbound` is gone with its code |
+
+### 1.68 Wave 14 slice D2-S5 (#384 D2M §5.1 MP-3, §5.3 A-5, §6 S5, §7; v1.4.2)
+
+D2-S5 brings the fact refresh's transition recorder and its read;
+[scheduling/README.md](scheduling/README.md) ("Fact Refresh"),
+[runtime-interface.md](runtime-interface.md) and [runtime-config.md](runtime-config.md) are the
+contract. It writes no ledger record: the transitions stay in memory until AO-4's G5 gate copies
+them as D1 (§1.2), whose shape is unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D51 | `RuntimeOperation::FactRefreshStatus` → `RuntimeResult::FactRefreshStatus { status }` (W17) | runtime-client 2 (§3) | D2-S5 | D2-S5 | a general read from memory that reads and records nothing in the ledger (U-1 row: general read, no G14 copy); `status` is a `RuntimeFactRefreshStatus {cycle_seq, transition_seq, instances}`: the numbers of the latest cycle the recorder observed and of its latest transition in this owner epoch (0 before the first), and one row `{instance_alias, demands}` per instance with a waiting key (at most 256), each demand `{fact_key, outcome, package_id?, since_unix_ms, overdue}` (at most 256 per row): the latest cycle's reason (`fact_refresh_pending`, `_unresolved`, `_exhausted` or `_unbound` with its values), the recognition maintenance package that serves the key, when the wait began and whether `fact_reader_overdue` was reported for it; a completed receipt carries `request_fact_refresh_status_completed`; a wrong shape is `invalid_fact_refresh_status`; a reply past one IPC frame is refused `runtime_fact_refresh_status_too_large_for_frame` |
+| D52 | `actingctl fact-refresh [--instance <alias\|instance_id\|ADB port>]` ↔ `ac_overview` block `fact_refresh` (`sections` gains `fact_refresh`) (W18) | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | D2-S5 | D2-S5 | the D51 status, its `instances` narrowed to the selected one; CLI success `runtime_fact_refresh_reported`; actingd absent: the client's failure, exit 1; in `ac_overview` a failed read leaves a warning and `incomplete`, never an empty block; the block's place in the cut order (first) was registered by MCP-8 |
+| D53 | `config.parameters.scheduling`: `scheduling.fact_refresh.overdue_ms` | new configuration row | D2-S5 | D2-S5 | milliseconds, no default (§5: unset = not reported), so the row exists only when the configuration file names the key; settable, and an instruction can change it only then (`config_key_unknown` otherwise); read at every policy cycle's yield point |
+| D54 | actingd daemon lines on stderr: per fact refresh transition the developer line `<INFO\|WARN> actingd: <code> <values> cycle_seq=<n> transition_seq=<n>` and `OUTCOME actingd: <envelope>` (full) in one write (A6-1's writer) | process interface | D2-S5 | D2-S5 | the transitions of each evaluated cycle, in (instance, key) order; none for a deferred cycle; a line that cannot be written never stops the driver; a transition is an info or a warning, so it never becomes a terminal outcome the watchdog acts on (A6-9) |
+
+The codes `fact_refresh_resolved` (policy, info) and `fact_reader_overdue` (runtime-host,
+warning), both ladder class `none` and only transitions, never decision reasons; the read's
+`request_fact_refresh_status_completed`, `invalid_fact_refresh_status` (contract) and
+`runtime_fact_refresh_status_too_large_for_frame` (runtime-host); `runtime_fact_refresh_reported`
+(actingctl); and the locations `read_fact_refresh_status`, `record_fact_refresh_transitions`
+(runtime-host) and `runtime_fact_refresh_status` (runtime-client) are catalog entries, not rows
+(§7).
+
+### 1.69 Wave 14 slice SR-3 (#386 SCHED v1.4.2 §2.4, §10, §11, §12; M-PKG v1.1 §3.3, §3.4, §5.2; coordinator ruling 4 of wave 14)
+
+SR-3 suspends a task package that admission refuses with a code of
+`scheduling.pack_admission.suspend_codes`, by its `package_id` under the Runtime build, with the
+content hash PKG-S3's `measure_package_hash` measures right after the refusal (the S3-T6 guard
+lists the suspension point). The suspension is memory of the daemon process; no record type
+and no persisted member is new. [policy-suspension.md](policy-suspension.md), "Task package
+suspension", is the contract. The code `runtime_pack_admission_spawn_failed` (runtime-host,
+error, ladder class `none`), the locations `check_pack_admission` and
+`join_runtime_pack_admission`, and `actual_digest` and `runtime_commit` of
+`pack_admission_suspended` and `pack_admission_lifted` turning optional (pending entries: absent
+for a package that could not be measured, M-PKG D18, and for a build without a known commit)
+are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR3-1 | `policy.planning_signal_observed` of kind `goal_missed` whose outcome is `pack_admission_suspended` or `pack_admission_lifted` | new values of existing members (shape unchanged) | SR-3 | SR-3 | the evaluation's copy (the G5 choke point, no direct write): a suspension once per instance it defers a pair of (`task_id` the pair's task), a lift once per instance the suspension was copied for (no `task_id`); `signal_id` `signal:pack_admission:<suspended\|lifted>:<hex>`, `<hex>` the SHA-256 of the package, the instance, the evaluation time and the process's count of copies, so each copy has its own; values `package_id`, `actual_digest` (`sha256:<content hash>`), `failure_code` (a suspension only), `runtime_commit`; selected by kind and prefix, never by outcome, like the clock-slot records |
+| SR3-2 | `actingd suspended` (`actingcommand.actingd.suspended.v2`) top-level `packs[{package_id, failure_code, runtime_commit, paused_hash_prefix, current_hash_prefix, instances}]` | new report member (not persisted; `schema_version` unchanged) | SR-3 | SR-3 | read from the SR3-1 copies since the latest daemon start, a lift removing its instance; `current_hash_prefix` measured read-only at the location the copied task's procedure binds |
+| SR3-3 | `actingctl diagnose` and `ac_diagnose` member `packs` (with `packs_truncated` when cut) | new output member (A5's shapes kept; parity with the CLI unchanged) | SR-3 | SR-3 | the SR3-2 rows whose `instances` name the diagnosed instance, every row without one, verbatim; cut after `suspended`, before `report_warnings` |
+| SR3-4 | `config.parameters.scheduling`: `scheduling.pack_admission.check_in_check_config`, `.check_after_start`, `.suspend_codes` | new configuration rows (keys of the existing `scheduling` section, no new section) | SR-3 | SR-3 | boolean, boolean, list of codes the catalog lists and has not retired; defaults `true`, `true`, `["recognition_sample_budget_invalid"]` (`actingd.defaults.json`); settable, read where they are used (check-config, the background admission after start, each refusal of a scheduled run's preparation) |
+
+### 1.70 Wave 14 slice EXEC-3 (#390, forced-compromises mapping E-02; coordinator ruling 5 of wave 14)
+
+EXEC-3 lets a page-graph task use what R22 and R24 gave `linear_steps` tasks.
+[policy-suspension.md](policy-suspension.md) ("Immediate rerun", "Failure identity") and
+[application-lifecycle.md](application-lifecycle.md) ("In a run the host starts itself") are the
+contract. It adds no event type, no member, no enum value, no code and no configuration key: two
+existing records get new rules.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| X31 | `policy.execution_recorded` `failure.failure_identity` of a scheduled page-graph run | new rule of an existing member (shape unchanged) | EXEC-3 | EXEC-3 | the live settlement writes it for every run whose main package was admitted, `linear_steps` or page graph (format v2 unchanged); a page-graph run without a prerequisite chain that checked its required entry (an `EntryRecoveryDecision`) takes that check as its gate and its entry recovery package as its layer for the scope (`gate`, `pre:<I>`, `main`); its restart segment ends on the literal `home`; R25-2 stays a `linear_steps` rule; the startup reconciliation still writes none. So a page-graph failure scheduled for a retry is rerun at once (`failure_retry_immediate`) and its pause is lifted by its package's content hash. Wave 14 ruling 4 (fix round): `contained_task_step_unconfirmed` in the `main` scope, outside the restart segment, joins R21's failures that pause by repeating, as the graph counterpart of `contained_task_linear_intermediate_unobserved` (a coordinator reading of R21, reported to Alice) |
+| X32 | the order of a host package run's first records: `task.step_started` (from `<unrecognized>`), `application.intent`, `application.completed`, `task.effect_completed`, before the run's first `capture.completed` | new rule of existing records (shapes unchanged) | EXEC-3 | EXEC-3 | only in a startup package's and a recovery ladder rung's run, and only for a page-graph package whose `entry_page` is `any` and whose first operation is a `from: "any"` application effect (R24); every other run keeps the #316-B3 order (its initial frame first) |
+
+### 1.71 Wave 14 slice SEL-L6b (#308, forced-compromises mapping row SEL-L6b, T-01)
+
+SEL-L6b replays one select step's scan over a saved frame sequence through the kernel's own scan
+path (`dry_run_scan`, SEL-L3), with the facts SEL-L6a's whole-package replay gives a select
+step. It writes no ledger record, wire shape or configuration key; its only new shape is an
+actinglab operation output (L6B-1). [selection-graph.md](selection-graph.md), "Offline", is the
+contract. The actinglab codes `replay_scan_refused`, `replay_scan_unreadable` and
+`replay_scan_invalid` (error, ladder class `none`) are catalog entries, not rows (§7); the
+kernel's existing `selection_scan_replay_frame_missing`, `selection_state_unavailable` and
+`selection_fact_context_mismatch` are reused.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6B-1 | `actinglab replay --package <path> --frames <directory> --select <operation> --scan <file> [--facts <file>]`: `{mode: "offline_scan_replay", executed: false, package_id, task_id, operation_id, frames_given, facts, ocr, production_global_ledger_written: false, end: {status, coverage?, outcome?}, scan?}` | operation output (no persisted record; an actinglab result, read by a person or a CI job) | SEL-L6b | SEL-L6b | `end.status` `covered` (coverage `complete` or `early_stopped`, exit 0), `aborted` (the evaluator's decision ended the scan with coverage `not_started` or `incomplete`) or `failed` (`end.outcome`, the full outcome envelope); `scan` is the kernel's `ScanDryRun` (coverage, start evidence, extent, coverage viewports, rewind viewports, positions, members, unknown and gated-out positions, decision), absent when the scan failed; every end other than `covered` is `replay_scan_refused` with the output in the details. `--scan` is the step's scan declaration (S0 §2.1), the shape SEL-L4b admits from a package (§1.58 L3B-3), taken here as given |
+
+### 1.72 Wave 14 slice RSU-1 (#331, additions-v012 §1.5b row RSU-1; forced-compromises mapping T-01)
+
+RSU-1 is an actinglab offline command, `recognition-regression`. It replays the frames a run's
+ledger kept, named by MCP-6's per-step frame references, with the recognition of a new package
+or version, and compares each frame with its original record. It reads the state root
+read-only and writes no ledger record, wire shape or configuration key; its only new shape is
+its operation output (RS1-1). It is not wired into any CI. [recognition-regression.md](recognition-regression.md)
+is the contract. The actinglab codes `recognition_regression_evidence_unreadable`,
+`recognition_regression_evidence_invalid`, `recognition_regression_ledger_unreadable`,
+`recognition_regression_frame_unknown` and `recognition_regression_frame_invalid` (error, ladder
+class `none`) are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RS1-1 | `actinglab recognition-regression --state-root <root> --evidence <file>... (--package <path> \| --zip <path>)`: `{mode: "offline_recognition_regression", executed: false, request_id, package_id, frames: [{ref, steps, frame_id, status, targets?: [{target, original_matched, status, matched?, agrees?, score?, failure?}]}], targets: [{target, frames, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli}], summary: {records, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli, frames_referenced, frames_replayed, frames_material_missing, frames_without_original_record}, ocr, production_global_ledger_written: false}` | operation output (no persisted record; an actinglab result, read by a person or an agent) | RSU-1 | RSU-1 | a frame's `status` is `compared`, `material_missing` (#375 retention removed it) or `no_original_record`; a target's `status` is `compared`, `absent` (not in the package) or `failed`; `score` is `{kind, score_milli, threshold_milli}` (template), `{kind, distance_milli, max_distance_milli}` (colour), `{kind, confidence_milli}` (OCR) or `{kind, score_milli}` (classifier); `error_rate_milli` is the disagreements (`lost` + `gained`) per mille of the frames compared, rounded down, `null` when none was compared; the original record is the run's last `task.recognition_completed` fact on the frame; the input is MCP-6's evidence ([runtime-interface.md](runtime-interface.md), `run evidence`), of which only `request_id`, `steps[].step_index` and `steps[].frames[].ref` are read; exit 0 whenever the comparison was made |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1084,7 +1214,7 @@ readers in one PR.
 | PKG-S2 | `PackageAdmitted.package_sha256` (keep `package_label`, `task_label`); `EntryRecoveryPackageAdmitted/Completed/Failed.package_sha256` → `package_label`; effective configuration `EntryRecovery.package_sha256` → `package_label`; `TaskSelectionPolicy.package_sha256`; Lab declared refusal `declared_package`, `verified_package` → optional `package_label`; Lab evidence `expected_package_sha256` / `actual_package_sha256` → `package_label`; `EvidencePackage.sha256`; OCR comparison report `truth_set_sha256` and its runtime-client reader; run status `package_ref` / `recovery_packages` → `package_label` / `recovery_package_labels`; run summary digest checks; reading facts' `resource_bundle_hash` = SHA-256(`"package:" + package_id`) (shape unchanged). **Done (PKG-S2):** all of them, §1.31 P2-1 to P2-11; also the run summary's `package_digest` (now `package_label`), the in-package `sha256` keys made optional and ignored (D5), and request replay by `package_label` (a recorded label must be the request's package's, or a configured prerequisite package's or the recovery binding's `package_id`, each admitted again) |
 | PKG-S3 | `DispatchIntent.package_digest` (payload and storage equality); `ProcedureBinding.package_digest`; `binding_digest` tuple v3 = (`procedure_ref`, `operation_id`, `yield_points`); `PausedOn.package_digest` → content hashes parsed from the failure identity; suspension report members `paused_hash_prefix`, `current_hash_prefix`, `lifts_when: content_hash_changes`, `lifted_by: main_hash \| layer:<n> \| restart`. **Done (PKG-S3):** all of them, §1.47 P3-1 to P3-6; also the run identity check by path (the request's path against the binding's location) and `lifted[].effective` `next_evaluation` in place of `pending_restart` |
 | PKG-S4 | IPC `expected_sha256` of `PackageDebugRequest`, `ContainedTaskRecoveryBinding`, `ContainedTaskRequest`, the Lab operation, online observation and saved-artifact OCR requests; `PackageDebugSummary.verified_sha256`; configuration `startup_package.expected_sha256`, `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`, the resource declaration's `package_digest`. **Done (PKG-S4):** all of them, §1.55 P4-1 to P4-6; also the actingctl, MCP and actinglab digest flags and arguments, the `takeover` hint's `--package-ref`, the `package validate` / `lab validate` digest outputs, the dry-run record's `package_label` and the identity check of a configured prerequisite package (D7) |
-| PKG-S5 | bundle v4 `packs[] {package_id, server, entry_task_id, path = "packs/<package_id>", file_count, byte_count}` (the bundle-level maintenance declaration stays, coordinator 10-12); `RecordingArtifact.digest` / `.sha256` → `package_id`; `PackageRef`, `ContentDirectory` and the `sha256:` serializers |
+| PKG-S5 | bundle v4 `packs[] {package_id, server, entry_task_id, path = "packs/<package_id>", file_count, byte_count}` (the bundle-level maintenance declaration stays, coordinator 10-12); `RecordingArtifact.digest` / `.sha256` → `package_id`; `PackageRef`, `ContentDirectory` and the `sha256:` serializers. **Done (PKG-S5):** all of them, §1.64 P5-1 to P5-8; also bundle v4's optional `tables` (M-357a TB12) and its reserved `package_id` `tables`, the Lab output named `<package_id>.<ext>` and replaced in place (D9), `actinglab package digest` and the authoring receipt's `package_sha256` |
 
 **Failure identity, format v2** (PKG-S3, M-PKG §3.4):
 `<base>~v2~k<K>~m<I><H>[~p<I><H>]…[~r<Kh><I><H>]~f<F>`. `I` = the first 8 hex digits of the
@@ -1115,6 +1245,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
 | W14 | `EventQuery.event_types` (a set of event types, OR within it) and `EventQuery.fact_key` (an instance or runtime fact key) | runtime-client 2 | MCP-2 | two optional members of the `QueryEvents` query (`deny_unknown_fields`), absent when unused, so a query without them serializes, and fingerprints its cursor, as before; `event_types` is the alternative of `event_type` (at most 32, each once, none excluded, else `invalid_event_query_event_type_filter`); `fact_key` keeps only the records that name it (`fact.published`, `fact.invalidated`, `runtime.fact_recorded`, `runtime.fact_invalidated`), else `invalid_event_query_fact_key_filter`; [global-ledger-query.md](global-ledger-query.md) |
 | W15 | `RuntimeOperation::PerformanceStatus` → `RuntimeResult::PerformanceStatus { status }` | runtime-client 2 | P-m | the shadow measurement's status read; **done (P-m):** §1.61 W15, with its read output W16 |
+| W17 | `RuntimeOperation::FactRefreshStatus` → `RuntimeResult::FactRefreshStatus { status }` | runtime-client 2 | D2-S5 | the D2 S5 transition query (UIM §2.3); **done (D2-S5):** §1.68 D51, with its read output D52 (W18) |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
@@ -1164,8 +1295,8 @@ when it takes effect.
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
-| `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
-| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
+| `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
+| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
@@ -1178,6 +1309,8 @@ when it takes effect.
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A
   configuration that still carries them is refused (`config_decode_failed`); no reader of the old
   form exists. **Done (PKG-S4, §1.55 P4-3).**
+- Removed by Workflow #373 NAV-3a in the same revision: the top-level `prerequisite_packages`
+  and `return_home_packages` (§1.67 N3A-3); the standard-pack registry replaces them.
 - `governance.allowed_clients` is still accepted in v0.12.0; U-6 retires it.
 - Keys designed after v0.12.0 (#367 D1 decisions and later) bump the revision in their own release.
 

@@ -1,34 +1,41 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Prerequisite packages of `linear_steps` packages and their entry gate (Workflow #336 L2b;
-//! `contracts/linear-steps.md`, "Prerequisite packages").
+//! Prerequisite packages and their entry gate (Workflow #336 L2b; `contracts/linear-steps.md`,
+//! "Prerequisite packages").
 //!
-//! A `linear_steps` package may name, in its `control.json` `prerequisite_package_id`, the
-//! package that brings the screen to its first step; a `linear_steps` prerequisite may name its
-//! own, at most three packages besides the dependent one. The chain is resolved against the
-//! host's `prerequisite_packages` map and admitted at preparation (before any lease of a direct
-//! or host-scheduled run, inside the held lease of a policy run). Every refusal there is denied
-//! with a `contained_task_prerequisite_*` code and writes no task record.
+//! A `linear_steps` package, and (Workflow #373 NAV-3a, M-373 §4.2) a `navigable_route` package,
+//! may name, in its `control.json` `prerequisite_package_id`, the package that brings the screen
+//! to its entry; a prerequisite package of either mode may name its own, at most three packages
+//! besides the dependent one. The chain is resolved against the standard-pack registry of the
+//! dependent package's game (Workflow #373 NAV-3a, §4.3: `<standard_packs.root>/<game>/
+//! bundle.json`, read when the run is prepared) and admitted at preparation (before any lease of
+//! a direct or host-scheduled run, inside the held lease of a policy run). Every refusal there is
+//! denied with a `contained_task_prerequisite_*` code (or a broken game root's own code) and
+//! writes no task record.
 //!
-//! A `linear_steps` package that declares no prerequisite package and has a first step page
-//! falls back to the host's return-home package of its game and server (Workflow #336 L2c,
-//! R16): one more layer at the end of the chain, outside the three declared ones.
+//! A layer with a page entry that declares no prerequisite package falls back to the registry's
+//! return-home package of its game and server (Workflow #336 L2c, R16): one more layer at the end
+//! of the chain, outside the three declared ones. A page-graph package run as the run's own
+//! package keeps its home entry instead (R23).
 //!
-//! At run time the gate checks the first step on one frame; when it does not pass, the
-//! prerequisite package runs inside the same run (its own prerequisite first, layer by layer),
-//! and then the first step is awaited for its step timeout. Only the existing
+//! At run time the gate checks the layer's entry (a linear package's first step on one frame, a
+//! page-graph package's entry page or entry page set as its home entry is checked); when it does
+//! not pass, the prerequisite package runs inside the same run (its own prerequisite first, layer
+//! by layer), and then the entry is awaited for its step timeout. Only the existing
 //! `TaskEntryPreflight` facts are written: a fact belongs to the innermost prerequisite package
 //! opened (`EntryRecoveryPackageAdmitted`) and not yet closed (`EntryRecoveryCompleted` /
-//! `EntryRecoveryFailed`), or to the dependent package when none is open.
+//! `EntryRecoveryFailed`), or to the dependent package when none is open; each layer's records
+//! carry its `role`, `prerequisite` or `return_home`.
 
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, prepare_contained_task};
 use super::failure_settlement::ResolvedLayer;
+use super::standard_pack::GameRegistry;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
-use actingcommand_contract::TaskTimingBudgetOrigin;
 use actingcommand_contract::codes::{ContractLocation, DeviceSelfCheckFailure, SharedCode};
 use actingcommand_contract::outcome::Code;
+use actingcommand_contract::{TaskEntryRecoveryRole, TaskTimingBudgetOrigin};
 pub(super) use actingcommand_execution_kernel::MAX_PREREQUISITE_DEPTH;
 use actingcommand_execution_kernel::{MAX_GATED_STEPS, PrerequisiteChain};
 
@@ -66,8 +73,9 @@ fn prerequisite_admission_failure(mut failure: RequestFailure, detail: String) -
     failure
 }
 
-/// Workflow #336 L2d: why a return-home package from `return_home_packages` cannot stand in for
-/// `dependent` on the stuck-recovery ladder's first rung or in the page-graph home entry, as the
+/// Workflow #336 L2d: why the registry's return-home package (Workflow #373 NAV-3a) cannot stand
+/// in for `dependent` on the stuck-recovery ladder's first rung or in the page-graph home entry,
+/// as the
 /// detail of a `contained_task_prerequisite_incompatible` refusal: the checks the chain applies to
 /// a return-home layer, then a prerequisite package of its own, which neither path runs.
 pub(super) fn configured_return_home_incompatibility(
@@ -94,71 +102,112 @@ pub(super) fn configured_return_home_refusal(detail: String) -> RequestFailure {
 }
 
 /// A refusal of the shared prerequisite predicate, relayed with the kernel's code and detail and
-/// denied before any lease: a chain layer's, and (Workflow #336 PKG-S4, M-PKG D7) a configured
-/// return-home package that is not the package its `prerequisite_packages` entry names.
+/// denied before any lease: a chain layer's, and (Workflow #336 PKG-S4, M-PKG D7) a return-home
+/// package that is not the package its registry entry names.
 pub(super) fn kernel_refusal(
     error: actingcommand_execution_kernel::ContainedTaskError,
 ) -> RequestFailure {
-    RequestFailure::request(
-        RuntimeHostError::relayed_request(
-            error.code().as_str(),
-            RESOLVE_OPERATION.as_str(),
-            RuntimeErrorCode::PackageInvalid,
-        )
-        .with_native_detail(error.detail().unwrap_or("").to_owned()),
-        RuntimeReceiptState::Denied,
-        None,
+    registry_refusal(error, None)
+}
+
+/// [`kernel_refusal`] with, for `contained_task_prerequisite_unbound`, why the registry does not
+/// bind the package (Workflow #373 NAV-3a, M-373 §4.3: value `registry_problem`).
+fn registry_refusal(
+    error: actingcommand_execution_kernel::ContainedTaskError,
+    problem: Option<actingcommand_contract::RegistryProblem>,
+) -> RequestFailure {
+    let refused = RuntimeHostError::relayed_request(
+        error.code().as_str(),
+        RESOLVE_OPERATION.as_str(),
+        RuntimeErrorCode::PackageInvalid,
     )
+    .with_native_detail(error.detail().unwrap_or("").to_owned());
+    let refused = match problem {
+        Some(problem) => refused.with_outcome_values(|outcome| outcome.registry_problem(problem)),
+        None => refused,
+    };
+    RequestFailure::request(refused, RuntimeReceiptState::Denied, None)
+}
+
+/// Workflow #373 NAV-3a (M-373 §4.3): the registry's return-home package of a failed or
+/// entering package's game and server, as the ladder's first rung and the page-graph home entry
+/// take it (R23): its `package_id` and where it is.
+#[derive(Debug, Clone)]
+pub(super) struct RegistryReturnHome {
+    pub(super) package_id: String,
+    pub(super) binding: ContainedTaskRecoveryBinding,
 }
 
 impl HostShared {
-    /// The return-home package `layer` falls back to (Workflow #336 L2c, R16): only a
-    /// `linear_steps` package that declares no prerequisite package and has a first step page
-    /// (no application entry, R24), when the host maps its game and server to a package that is
-    /// not already in the chain.
+    /// The return-home package `layer` falls back to (Workflow #336 L2c, R16): a layer with a
+    /// page entry that declares no prerequisite package (no application entry, R24; Workflow #373
+    /// NAV-3a, a page-graph layer too), when the registry of its game names a return-home
+    /// package for its server that is not already in the chain.
     fn next_prerequisite(
-        &self,
         chain: &PrerequisiteChain,
+        registry: &GameRegistry,
     ) -> Option<actingcommand_execution_kernel::PrerequisiteLink> {
-        let layer = chain.dependent();
-        chain.next(
-            self.return_home_packages
-                .get(&(layer.game().to_owned(), layer.server().to_owned()))
-                .map(String::as_str),
-        )
+        chain.next(registry.return_home_package(chain.dependent().server()))
     }
 
-    /// The binding of the return-home package `return_home_packages` names for `game` and
+    /// Workflow #373 NAV-3a (M-373 §4.3): the registry's return-home package of `game` and
     /// `server` (Workflow #336 L2d, R23), for the stuck-recovery ladder and the page-graph home
-    /// entry of a run whose request binds no recovery package. actingd binds every configured
-    /// package id at startup (`return_home_package_unbound`); a host configured otherwise fails.
-    pub(super) fn configured_return_home(
+    /// entry of a run whose request binds no recovery package; `None` without a root, without a
+    /// root of the game, or when its bundle names none for the server. The registry is read now;
+    /// a broken game root is its own refusal.
+    pub(super) fn registry_return_home(
         &self,
         game: &str,
         server: &str,
-    ) -> RuntimeHostResult<Option<&ContainedTaskRecoveryBinding>> {
-        let Some(package_id) = self
-            .return_home_packages
-            .get(&(game.to_owned(), server.to_owned()))
-        else {
+    ) -> Result<Option<RegistryReturnHome>, RequestFailure> {
+        let registry = self.read_game_registry(game)?;
+        let Some(package_id) = registry.return_home_package(server) else {
             return Ok(None);
         };
-        self.prerequisite_packages
-            .get(package_id)
-            .map(Some)
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    SharedCode::ReturnHomePackageUnbound,
-                    HostLocation::ResolveReturnHomePackage,
-                    RuntimeErrorCode::RuntimeHalted,
-                )
-                .with_native_detail(format!("package_id={package_id}"))
-            })
+        let path = registry.package_path(package_id).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                SharedCode::ContainedTaskStateInvalid,
+                HostLocation::ResolvePrerequisiteChain,
+                RuntimeErrorCode::RuntimeHalted,
+            ))
+        })?;
+        let binding = ContainedTaskRecoveryBinding::new(path.to_string_lossy()).map_err(|_| {
+            prerequisite_refusal(
+                ADMISSION_FAILED,
+                format!("package_id={package_id} source=return_home"),
+            )
+        })?;
+        Ok(Some(RegistryReturnHome {
+            package_id: package_id.to_owned(),
+            binding,
+        }))
+    }
+
+    /// [`Self::registry_return_home`] for the stuck-recovery ladder: a broken game root is
+    /// recorded with its own outcome (`runtime.lifecycle_observed`, phase `standard_pack_read`)
+    /// and the ladder goes on without a return-home package; only a fatal failure stops it.
+    pub(super) fn ladder_return_home(
+        &self,
+        game: &str,
+        server: &str,
+    ) -> RuntimeHostResult<Option<RegistryReturnHome>> {
+        match self.registry_return_home(game, server) {
+            Ok(found) => Ok(found),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            Err(failure) => {
+                self.record_standard_pack_read(failure.error.outcome())?;
+                Ok(None)
+            }
+        }
     }
 
     /// Resolves and admits the prerequisite chain of `prepared` (§5.2.1): empty when it declares
     /// no prerequisite package and has no return-home fallback, otherwise the packages outermost
-    /// first. `material_deadline` is read only when there is a chain to admit.
+    /// first. `material_deadline` is read only when there is a chain to admit. Workflow #373
+    /// NAV-3a: the registry of the package's game is read only when the package declares a
+    /// prerequisite package or may fall back to the return-home package.
     pub(super) fn resolve_prerequisite_chain(
         &self,
         instance_alias: &str,
@@ -184,7 +233,18 @@ impl HostShared {
         recorded: &mut Vec<ResolvedLayer>,
     ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
         let mut qualification = PrerequisiteChain::new(prepared.package_descriptor());
-        let mut next = self.next_prerequisite(&qualification);
+        if qualification
+            .dependent()
+            .prerequisite_package_id()
+            .is_none()
+            && !qualification.may_fall_back()
+        {
+            return Ok(Vec::new());
+        }
+        // Workflow #373 NAV-3a (§4.3): every layer has the game of the package (a layer of
+        // another game is refused as incompatible), so one registry serves the whole chain.
+        let registry = self.read_game_registry(prepared.game())?;
+        let mut next = Self::next_prerequisite(&qualification, &registry);
         if next.is_none() {
             return Ok(Vec::new());
         }
@@ -192,18 +252,19 @@ impl HostShared {
         let mut chain: Vec<PreparedContainedTask> = Vec::new();
         while let Some(link) = next {
             let dependent = chain.last().unwrap_or(prepared);
+            let path = registry.package_path(&link.package_id);
             recorded.push(ResolvedLayer {
                 package_id: link.package_id.clone(),
                 return_home: link
                     .return_home
                     .then(|| (dependent.game().to_owned(), dependent.server().to_owned())),
+                package_path: path.as_ref().ok().cloned(),
             });
-            let binding = self.prerequisite_packages.get(&link.package_id);
             qualification
-                .begin(&link, binding.is_some())
-                .map_err(kernel_refusal)?;
-            let binding = binding.expect("shared prerequisite predicate checked the binding");
-            let request = ContainedTaskRequest::new(binding.package_path())
+                .begin(&link, path.is_ok())
+                .map_err(|error| registry_refusal(error, path.as_ref().err().copied()))?;
+            let path = path.expect("shared prerequisite predicate checked the binding");
+            let request = ContainedTaskRequest::new(path.to_string_lossy())
                 .map_err(|_| prerequisite_refusal(ADMISSION_FAILED, link.detail("")))?;
             let admitted = prepare_contained_task(
                 instance_alias,
@@ -215,7 +276,7 @@ impl HostShared {
             qualification
                 .admit(&link, admitted.package_descriptor())
                 .map_err(kernel_refusal)?;
-            next = self.next_prerequisite(&qualification);
+            next = Self::next_prerequisite(&qualification, &registry);
             chain.push(admitted);
         }
         qualification.finish().map_err(kernel_refusal)?;
@@ -224,16 +285,18 @@ impl HostShared {
 }
 
 /// The prerequisite packages of one gated run: those opened and not yet closed, outermost
-/// first, by `package_id` (Workflow #336 PKG-S2), and the steps the completed ones executed.
+/// first, by `package_id` (Workflow #336 PKG-S2) with their role (Workflow #373 NAV-3a), and the
+/// steps the completed ones executed.
 struct Gate {
-    open: Vec<String>,
+    open: Vec<(String, TaskEntryRecoveryRole)>,
     executed: u32,
 }
 
-/// The entry gate of a `linear_steps` package whose prerequisite chain is not empty (§5.3):
-/// the gate, then `EntryTargetDisposition { Started }` and the package itself, its step indices
-/// after those of the prerequisite packages that ran.
-pub(super) fn run_linear_gated(
+/// The entry gate of a package whose prerequisite chain is not empty (§5.3; Workflow #373
+/// NAV-3a, a `linear_steps` or a `navigable_route` package): the gate, then
+/// `EntryTargetDisposition { Started }` and the package itself, its step indices after those of
+/// the prerequisite packages that ran.
+pub(super) fn run_gated(
     prepared: &PreparedContainedTask,
     prerequisites: &[PreparedContainedTask],
     runtime: &mut RuntimeContainedTask<'_>,
@@ -243,6 +306,9 @@ pub(super) fn run_linear_gated(
         executed: 0,
     };
     gate_layer(runtime, &mut gate, 0, prepared, prerequisites)?;
+    // Workflow #373 NAV-3a: the gate recorded the entry decision; a page-graph package's own
+    // entry check in its run records only its recognition (as after the home entry).
+    runtime.entry_preflight_recorded = true;
     // Workflow #373 NAV-6: after the steps of the interrupt layers that ran so far too.
     runtime
         .begin_layer(gate.executed)
@@ -272,38 +338,44 @@ fn gate_layer(
     let Some((prerequisite, rest)) = chain.split_first() else {
         return Ok(());
     };
-    let required_page = package
-        .linear_entry_page()
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
-        })?;
+    // Workflow #373 NAV-3a: a linear package's entry is its first step's page; a page-graph
+    // package's is its entry page or its entry page set (M-373 §4.2).
+    let required_pages = package.gate_entry_pages().ok_or_else(|| {
+        ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+    })?;
     let initial = package
-        .recognize_linear_entry(runtime)
+        .recognize_gate_entry(runtime)
         .map_err(|error| fail_recognition(runtime, gate, layer == 0, error))?;
-    // Workflow #373 NAV-3b: a linear package's entry is one page.
+    let matched = initial.is_some();
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::Initial,
-            required_pages: vec![required_page.clone()],
-            matched_page: initial.then(|| required_page.clone()),
-            matched: initial,
+            required_pages: required_pages.clone(),
+            matched_page: initial,
+            matched,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     runtime
-        .record_entry_fact(TaskSemanticFact::EntryRecoveryDecision { required: !initial })
+        .record_entry_fact(TaskSemanticFact::EntryRecoveryDecision { required: !matched })
         .map_err(ContainedTaskRunError::Boundary)?;
-    if initial {
+    if matched {
         return Ok(());
     }
+    // Workflow #373 NAV-3a (M-373 §8.3): a layer that declares no prerequisite package has the
+    // registry's return-home package as its next layer; a declared one is a prerequisite.
+    let role = if package.prerequisite_package_id().is_none() {
+        TaskEntryRecoveryRole::ReturnHome
+    } else {
+        TaskEntryRecoveryRole::Prerequisite
+    };
     let package_label = prerequisite.package_label().to_owned();
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
             package_label: package_label.clone(),
-            role: None,
+            role: Some(role),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
-    gate.open.push(package_label.clone());
+    gate.open.push((package_label.clone(), role));
     gate_layer(runtime, gate, layer + 1, prerequisite, rest)?;
     // Preparation already refused a chain whose step bounds exceed the limit; Workflow #373
     // NAV-6: the interrupt layers' steps count too.
@@ -359,7 +431,7 @@ fn gate_layer(
             package_label,
             final_page,
             executed_steps: outcome.executed_steps,
-            role: None,
+            role: Some(role),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     gate.open.pop();
@@ -373,7 +445,7 @@ fn gate_layer(
             ));
         }
     };
-    // Page ids of different packages are not compared: the first step is awaited instead.
+    // Page ids of different packages are not compared: the entry is awaited instead.
     let budget = Duration::from_millis(package.effective_timing().step_timeout.milliseconds);
     let origin = if layer == 0 {
         TaskTimingBudgetOrigin::Task
@@ -387,15 +459,14 @@ fn gate_layer(
         .is_none()
         .then(|| prerequisite.package_label());
     let waited = package
-        .await_linear_entry(runtime, budget, origin, layer, return_home)
+        .await_gate_entry(runtime, budget, origin, layer, return_home)
         .map_err(|error| fail_recognition(runtime, gate, false, error))?;
-    let matched = waited.unmatched.is_none();
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::PostRecovery,
-            required_pages: vec![required_page.clone()],
-            matched_page: matched.then_some(required_page),
-            matched,
+            required_pages,
+            matched: waited.matched.is_some(),
+            matched_page: waited.matched,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     if let Some(error) = waited.unmatched {
@@ -447,7 +518,7 @@ fn fail_gate(
 /// those is carried out as its code alone unless `keep_task_error`.
 fn close_open(
     runtime: &RuntimeContainedTask<'_>,
-    open: &[String],
+    open: &[(String, TaskEntryRecoveryRole)],
     error: ContainedTaskRunError<RequestFailure>,
     keep_task_error: bool,
 ) -> ContainedTaskRunError<RequestFailure> {
@@ -516,16 +587,16 @@ fn close_open(
 /// `EntryTargetDisposition { FailClosed }` of the gate.
 fn record_closed(
     runtime: &RuntimeContainedTask<'_>,
-    open: &[String],
+    open: &[(String, TaskEntryRecoveryRole)],
     code: &str,
 ) -> Result<(), RequestFailure> {
     // Ledger revision 3: the gate's failure is each fact's outcome, the code it relays.
     let outcome = actingcommand_contract::outcome::Outcome::relayed(code);
-    for package_label in open.iter().rev() {
+    for (package_label, role) in open.iter().rev() {
         runtime.record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
             package_label: Some(package_label.clone()),
             outcome: outcome.clone(),
-            role: None,
+            role: Some(*role),
         })?;
     }
     runtime.record_entry_fact(TaskSemanticFact::EntryTargetDisposition {

@@ -409,6 +409,39 @@ impl HostShared {
         })
     }
 
+    /// Workflow #386 SR-3: the `scheduling.pack_admission` keys in effect, read at each refusal
+    /// of a scheduled run's preparation and by the task package admission after start.
+    pub(super) fn pack_admission_settings(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::PackAdmissionConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .pack_admission()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
+    /// Workflow #384 D2-S5: `scheduling.fact_refresh.overdue_ms` in effect, read at every policy
+    /// cycle's yield point; `None` when the configuration does not set it (nothing is reported).
+    pub(super) fn fact_refresh_overdue_ms(&self) -> RuntimeHostResult<Option<u64>> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .fact_refresh()
+            .map(|config| config.overdue_ms)
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
     /// at each suspension lift check.
     pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {

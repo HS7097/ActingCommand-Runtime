@@ -260,7 +260,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m; Workflow #384 D2-S5)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -282,8 +282,9 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
     "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status",
+    "actingcommand-actingctl::gate::mcp_fact_refresh_parity::gate_actingctl_fact_refresh_and_ac_overview_answer_the_same_fact_refresh_status",
 ]
-incident = ["#389", "#385 P-m"]
+incident = ["#389", "#385 P-m", "#384 D2-S5"]
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
@@ -593,7 +594,7 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
-# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} and prerequisite_packages {package_id, package_path} checks, and one that still carries startup_package.expected_sha256, prerequisite_packages[].package_digest or policy.procedure_manifest[].package_digest is config_decode_failed at config_load; actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
+# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks, and one that still carries startup_package.expected_sha256 or policy.procedure_manifest[].package_digest is config_decode_failed at config_load (prerequisite_packages left with Workflow #373 NAV-3a, host key 90); actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
 [[gate]]
 key = "55"
 coverage = "Y"
@@ -612,3 +613,21 @@ tests = [
     "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence",
 ]
 incident = ["#385 P-m"]
+# Workflow #336 PKG-S5 (option 丙): actinglab package digest is retired, an unknown package command (validation_failed, exit 2) (M-PKG v1.1 §4.6 S5-T4)
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_336_pkgs5::s5_t4_package_digest_is_an_unknown_package_command",
+]
+incident = ["#336 PKG-S5"]
+
+
+# Workflow #384 D2-S5 (D2 model v1.4.2 §5.2, §8 T37): each fact refresh transition is one actingd developer line at its category's level naming its code, every value the model requires of it, its cycle and its number, written together with one OUTCOME actingd line carrying the same outcome (A6a's writer); a write that fails is counted and never stops the driver
+[[gate]]
+key = "65"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_384_d2s5::d2s5_t37_each_transition_is_one_developer_line_and_one_outcome_line",
+]
+incident = ["#384"]

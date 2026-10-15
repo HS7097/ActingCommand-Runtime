@@ -970,3 +970,58 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_12_the_status_read_answers_from_memory_and_appends_nothing",
 ]
 incident = ["#385 P-m"]
+# Workflow #373 NAV-3a (model M-373 v1.1 §4.2, §4.3, §8.3; test rows N3a-2 to N3a-8): a page-graph package runs its declared prerequisite package as a prerequisite layer and rechecks its whole entry set; the chain runs through a page-graph layer; a prerequisite package listed in the game root's bundle.json resolves with no configuration entry; a standard pack replaced in place is used by the next run without a restart (a removed package is contained_task_prerequisite_unbound with registry_problem not_listed, the change recorded once as standard_pack_registered with its added and removed ids); an unset root and a missing game root are unbound with root_unset and game_root_missing; the bundle's return_home package is the fallback of a linear package and of a page-graph home entry (role return_home) and the package the ladder's first rung runs; a configuration with prerequisite_packages or return_home_packages is config_decode_failed at config_load
+[[gate]]
+key = "90"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_2_a_page_graph_package_runs_its_declared_prerequisite_and_rechecks_its_entry_set",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_3_a_page_graph_prerequisite_layer_leads_the_chain_on",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_4_a_prerequisite_package_listed_in_the_bundle_resolves_without_configuration",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_5_a_standard_pack_replaced_in_place_is_used_by_the_next_run",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_6_an_unset_root_and_a_missing_game_root_leave_the_prerequisite_unbound",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_7_a_linear_package_falls_back_to_the_registry_return_home_package",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_7_a_page_graph_package_falls_back_to_the_registry_return_home_package",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_7_the_ladder_first_rung_runs_the_registry_return_home_package",
+    "actingcommand-actingd::process::n3a_8_a_configuration_with_a_retired_prerequisite_key_does_not_decode",
+]
+incident = ["#373 NAV-3a"]
+
+# Workflow #384 D2-S5 and D2-S4's remaining rows (D2 model v1.4.2 §8 T31, T32, T35, T36, T38, T39): each change of a wait (pending, unresolved, resolved) is one transition, numbered from 1 through the owner epoch and none for the same input again; the recorder's state never changes a cycle; a wait past scheduling.fact_refresh.overdue_ms is reported once as fact_reader_overdue and never without the setting; FactRefreshStatus answers the waiting key, its code, its recognition maintenance package and when the wait began from memory and appends nothing; an intent evaluated before the reading is policy_facts_stale and the next one is admitted; the transitions stay in memory and the ledger gains no transition record (T34 waits for actingd to load a scheduling-layer document, D2-S1 decision D3)
+[[gate]]
+key = "91"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t35_each_change_of_a_wait_is_one_transition_numbered_through_the_epoch",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t36_the_recorder_s_state_never_changes_an_evaluation",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t38_a_wait_past_overdue_ms_is_reported_once_and_only_when_set",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t39_the_status_read_answers_the_wait_from_memory_and_appends_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s4_t31_an_intent_evaluated_before_the_reading_is_stale_and_the_next_one_is_admitted",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s4_t32_the_transitions_stay_in_memory_and_the_ledger_gains_no_new_record_kind",
+]
+incident = ["#384"]
+
+# Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 2 and 5, §11, rows T12, T13 and T31; coordinator ruling 4 of wave 14): check-config lists a package admission refuses with a suspend code as a pack_admission_suspended note and stays ok; the admission after start runs in the background, outside the start, and suspends it; the evaluation copies the suspension as a goal_missed planning signal, with no direct write; actingd suspended lists it under packs and ac_diagnose carries the instance's packs rows, codes and ids only
+[[gate]]
+key = "92"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::process::sr3_t12_check_config_lists_a_package_refused_with_a_suspend_code_and_stays_ok",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t13_actingd_suspended_lists_the_suspended_package_under_packs",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_386_sr3::sr3_t13_ac_diagnose_carries_the_instances_suspended_packages_as_codes_and_ids",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t31_the_admission_after_start_suspends_in_the_background_and_the_evaluation_copies_it",
+]
+incident = ["#386 SR-3"]
+
+
+# Workflow #390 EXEC-3 (FCM E-02; register §1.70): the live settlement of a scheduled page-graph run writes its failure identity (format v2: the failure code as its base, the run's package_id as its main package), so a failure scheduled for a retry is admitted again at the next evaluation after its backoff and the activity's sampled interval as failure_retry_immediate, before its trigger is due (R22), as a linear_steps task's is; a required-entry check made first is the run's gate scope and its entry recovery package its layer scope (wave 14 ruling 3); contained_task_step_unconfirmed in the main scope outside the restart segment pauses by repeating and a changed package lifts the pause (R21, wave 14 ruling 4)
+[[gate]]
+key = "93"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_scheduled_page_graph_failure_records_its_identity_and_is_rerun_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_two_identical_page_graph_step_failures_pause_the_pair_and_a_changed_package_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_page_graph_entry_check_failure_is_in_the_gate_scope",
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope",
+]
+incident = ["#390"]

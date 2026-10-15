@@ -1612,7 +1612,14 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         panic!("expected failed policy outcome")
     };
     assert_eq!(failure.outcome.code().as_str(), "page_confirmation_failed");
-    assert_eq!(failure.failure_identity, None);
+    // Workflow #390 EXEC-3: a page-graph run's failure records its failure identity (format v2,
+    // its base the failure code).
+    assert!(
+        failure
+            .failure_identity
+            .as_deref()
+            .is_some_and(|identity| identity.starts_with("page_confirmation_failed~v2~"))
+    );
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);
     assert_eq!(
@@ -2838,14 +2845,14 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
         serde_json::to_vec_pretty(&config).expect("config JSON"),
     )
     .expect("write config");
-    let digest = format!("{:064x}", 1);
+    // Workflow #336 PKG-S5: bundle v4, each pack in `packs/<package_id>`.
     let bundle = |game: &str| {
         json!({
-            "schema_version": "actingcommand.bundle.v2",
+            "schema_version": "actingcommand.bundle.v4",
             "game": game,
             "packs": [{"package_id": "neutral.test.features", "server": "test",
-                       "entry_task_id": "task", "digest": digest,
-                       "path": format!("packs/{digest}"), "file_count": 3, "byte_count": 64}]
+                       "entry_task_id": "task", "path": "packs/neutral.test.features",
+                       "file_count": 3, "byte_count": 64}]
         })
     };
     let game_root = |game: &str, files: Vec<(&str, Value)>| {
@@ -2917,7 +2924,7 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
     let games = packs["games"].as_array().expect("games");
     assert_eq!(games.len(), 2, "{packs}");
     assert_eq!(games[0]["game"], "neutral");
-    assert_eq!(games[0]["bundle_version"], 2);
+    assert_eq!(games[0]["bundle_version"], 4);
     assert_eq!(games[0]["pack_count"], 1);
     assert_eq!(
         games[0]["root_files"],
@@ -3111,11 +3118,11 @@ fn rd1b_check_config(config_path: &Path) -> (bool, Value) {
 
 /// Workflow #336 PKG-S4 (option 丙), model M-PKG v1.1 §4.5 S4-T1 and the configuration half of
 /// S4-T2: a configuration names its packages by their paths only. With `startup_package`
-/// `{package}` and a `prerequisite_packages` entry `{package_id, package_path}` it assembles and
-/// check-config passes, reporting the startup package by its path alone. One that still carries
-/// `startup_package.expected_sha256`, `prerequisite_packages[].package_digest` or
+/// `{package}` it assembles and check-config passes, reporting the startup package by its path
+/// alone. One that still carries `startup_package.expected_sha256` or
 /// `policy.procedure_manifest[].package_digest` is refused with `config_decode_failed` at stage
-/// `config_load`.
+/// `config_load`. (Workflow #373 NAV-3a retired `prerequisite_packages` with its
+/// `package_digest`: see `n3a_8_*`.)
 #[test]
 fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks() {
     let root = TempDir::new().expect("tempdir");
@@ -3135,8 +3142,6 @@ fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_check
     write_config(&config_path, root.path(), instance_id(), false);
     let mut config = read();
     config["instances"][0]["startup_package"] = json!({"package": package});
-    config["prerequisite_packages"] =
-        json!([{"package_id": "neutral.home", "package_path": package}]);
     write(&config);
 
     let (succeeded, checked) = rd1b_check_config(&config_path);
@@ -3151,8 +3156,6 @@ fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_check
     let digest = json!(format!("sha256:{}", "c".repeat(64)));
     let mut startup = config.clone();
     startup["instances"][0]["startup_package"]["expected_sha256"] = json!("c".repeat(64));
-    let mut prerequisite = config.clone();
-    prerequisite["prerequisite_packages"][0]["package_digest"] = digest.clone();
     write_legacy_physical_policy_config(&config_path, root.path(), instance_id());
     let policy = read();
     let (_, decoded) = rd1b_check_config(&config_path);
@@ -3164,10 +3167,53 @@ fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_check
     binding["policy"]["procedure_manifest"][0]["package_digest"] = digest;
     for (key, refused) in [
         ("startup_package.expected_sha256", startup),
-        ("prerequisite_packages[].package_digest", prerequisite),
         ("policy.procedure_manifest[].package_digest", binding),
     ] {
         write(&refused);
+        let (succeeded, checked) = rd1b_check_config(&config_path);
+        assert!(!succeeded, "{key}: {checked}");
+        assert_eq!(
+            (
+                &checked["outcome"]["code"],
+                &checked["outcome"]["values"]["stage"]
+            ),
+            (&json!("config_decode_failed"), &json!("config_load")),
+            "{key}: {checked}"
+        );
+    }
+}
+
+/// Workflow #373 NAV-3a (model M-373 v1.1 §4.3; test row N3a-8, host key 90): every
+/// prerequisite and return-home package is found in the standard-pack registry, so the
+/// configuration keys `prerequisite_packages` and `return_home_packages` are retired with no
+/// compatibility: a configuration that carries either is refused with `config_decode_failed` at
+/// stage `config_load`.
+#[test]
+fn n3a_8_a_configuration_with_a_retired_prerequisite_key_does_not_decode() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let package = root.path().join("packages").join("neutral.home");
+    fs::create_dir_all(&package).expect("package directory");
+    write_config(&config_path, root.path(), instance_id(), false);
+    let config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON");
+    let (succeeded, checked) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{checked}");
+    let mut prerequisite = config.clone();
+    prerequisite["prerequisite_packages"] =
+        json!([{"package_id": "neutral.home", "package_path": package}]);
+    let mut return_home = config;
+    return_home["return_home_packages"] =
+        json!([{"game": "neutral", "server": "test", "package_id": "neutral.home"}]);
+    for (key, refused) in [
+        ("prerequisite_packages", prerequisite),
+        ("return_home_packages", return_home),
+    ] {
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&refused).expect("config JSON"),
+        )
+        .expect("write config");
         let (succeeded, checked) = rd1b_check_config(&config_path);
         assert!(!succeeded, "{key}: {checked}");
         assert_eq!(
@@ -4534,4 +4580,157 @@ impl ExecutionBackendProvider for FakeProvider {
             "fake application backend must not be opened",
         ))
     }
+}
+
+/// Workflow #386 SR-3, test row T12 (frozen scheduling model v1.4.2 §2.4 item 2): with
+/// `scheduling.pack_admission.check_in_check_config` on (its default), `check-config` admits
+/// every package `policy.procedure_manifest` locates with this Runtime's kernel. The package it
+/// refuses with `recognition_sample_budget_invalid` (a suspend code by default) is a
+/// `pack_admission_suspended` note naming the package, its content hash and the refusal's code,
+/// and the configuration stays valid; the package it admits gives no note.
+#[test]
+fn sr3_t12_check_config_lists_a_package_refused_with_a_suspend_code_and_stays_ok() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let refused = refused_contained_task_package();
+    fs::write(root.path().join("policy").join("refused.zip"), &refused)
+        .expect("write the refused package");
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON");
+    let mut refused_binding = config["policy"]["procedure_manifest"][0].clone();
+    refused_binding["procedure_ref"] = json!("procedure.observe-b");
+    refused_binding["scheduled_execution"]["package_path"] = json!("policy/refused.zip");
+    config["policy"]["procedure_manifest"]
+        .as_array_mut()
+        .expect("procedure manifest array")
+        .push(refused_binding);
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args([
+            "check-config",
+            "--config",
+            config_path.to_str().expect("config path"),
+        ])
+        .output()
+        .expect("run actingd check-config");
+    let checked: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "check-config report: {error}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert!(output.status.success(), "{checked}");
+    assert_eq!(checked["outcome"]["code"], "check_config_passed");
+    let suspended = notes(&checked)
+        .into_iter()
+        .filter(|note| note["code"] == "pack_admission_suspended")
+        .collect::<Vec<_>>();
+    assert_eq!(suspended.len(), 1, "{checked}");
+    let values = &suspended[0]["values"];
+    assert_eq!(values["package_id"], "neutral.suspended.task", "{checked}");
+    assert_eq!(values["failure_code"], "recognition_sample_budget_invalid");
+    assert_eq!(
+        values["actual_digest"],
+        json!(format!("sha256:{:x}", Sha256::digest(&refused)))
+    );
+}
+
+/// The package the kernel refuses at admission with `recognition_sample_budget_invalid`: page
+/// `home` declares two frames 100 ms apart while the step timeout is 50 ms (Workflow #386 SR-1
+/// test row T5's package).
+fn refused_contained_task_package() -> Vec<u8> {
+    let entries = [
+        (
+            "control.json",
+            json!({
+                "schema_version": "Lab-1y.control.v1",
+                "package_id": "neutral.suspended.task",
+                "execution_mode": "navigable_route",
+                "game": "neutral",
+                "server": "test",
+                "resolution": {"width": 2, "height": 1},
+                "entry_task_id": "task",
+                "capture_interval_ms": 1,
+                "step_timeout_ms": 50,
+                "timeout_ms": 5000
+            }),
+        ),
+        (
+            "resources/manifest.json",
+            json!({"schema_version": "0.3", "entry_task_id": "task"}),
+        ),
+        (
+            "resources/operations/task/task.json",
+            json!({
+                "schema_version": "0.6",
+                "task_id": "task",
+                "game": "neutral",
+                "server_scope": ["test"],
+                "coordinate_space": {"width": 2, "height": 1},
+                "target_page": "terminal",
+                "operations": [{
+                    "id": "open_terminal",
+                    "from": "home",
+                    "to": "terminal",
+                    "click": {"kind": "point", "x": 1, "y": 0},
+                    "unguarded_trusted_coordinate": true,
+                    "retryable": false
+                }]
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": [
+                    {"type": "color", "id": "page/home",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                     "expected": [255, 0, 0]},
+                    {"type": "color", "id": "page/terminal",
+                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                     "expected": [0, 0, 255]},
+                    {"type": "color", "id": "guard/ready",
+                     "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+                     "expected": [0, 255, 0]}
+                ],
+                "target_consensus": {
+                    "page/home": {"samples": [{"frame": 0}, {"frame": 1}], "k": 2,
+                                  "sample_interval_ms": 100}
+                }
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            json!({"schema_version": "0.3", "pages": [
+                {"id": "neutral/home", "required": ["page/home"], "optional": [],
+                 "forbidden": []},
+                {"id": "neutral/terminal", "required": ["page/terminal"], "optional": [],
+                 "forbidden": []}
+            ]}),
+        ),
+    ];
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, value) in entries {
+        zip.start_file(path, options).expect("zip entry");
+        serde_json::to_writer(&mut zip, &value).expect("zip JSON");
+        zip.write_all(b"\n").expect("zip newline");
+    }
+    zip.finish().expect("finish zip").into_inner()
 }

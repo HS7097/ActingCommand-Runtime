@@ -66,7 +66,6 @@ impl HostShared {
             let observer = PreparedPageObservation::load_path(
                 instance_alias,
                 path,
-                &actingcommand_contract::PackageRef::default(),
                 &[],
                 self.execution()?.vision_provider(),
                 deadline,

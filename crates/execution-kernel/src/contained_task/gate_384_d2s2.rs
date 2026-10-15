@@ -13,8 +13,8 @@
 use super::*;
 use actingcommand_contract::codes::RuntimeContractCode;
 use actingcommand_contract::{
-    BundleIndexV3, BundleIndexV3Version, BundleMaintenance, BundlePackV2, MaintenanceUse,
-    ReaderProblem, validate_bundle_maintenance_declarations,
+    BundleIndex, BundleIndexVersion, BundleMaintenance, BundlePack, MaintenanceUse, ReaderProblem,
+    validate_bundle_maintenance_declarations,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
@@ -477,7 +477,6 @@ fn prepared(control: Value, program: Value, provider: Arc<PageNumbers>) -> Prepa
         scheduling_outcome,
         post_admission_ocr: None,
         post_admission_fields: None,
-        package_sha256: "fixture-sha256".into(),
         entry_count: 1,
         task_count: 1,
     }
@@ -535,21 +534,20 @@ fn d2s2_t8_one_recognition_package_per_server_and_an_unknown_use_is_refused() {
         RuntimeContractCode::DuplicateBundleMaintenanceRole.as_str()
     );
 
-    let digest = "a".repeat(64);
-    let index = BundleIndexV3 {
-        schema_version: BundleIndexV3Version::V3,
+    let index = BundleIndex {
+        schema_version: BundleIndexVersion::V4,
         game: "neutral".to_owned(),
         source: None,
-        packs: vec![BundlePackV2 {
+        packs: vec![BundlePack {
             package_id: "neutral.reading.task".to_owned(),
             server: "test".to_owned(),
             entry_task_id: "task".to_owned(),
-            path: format!("packs/{digest}"),
-            digest,
+            path: "packs/neutral.reading.task".to_owned(),
             file_count: 3,
             byte_count: 64,
         }],
-        maintenance: vec![entry("neutral.reading.task")],
+        maintenance: Some(vec![entry("neutral.reading.task")]),
+        tables: None,
     };
     crate::validate_bundle_maintenance(
         &index,
@@ -618,25 +616,24 @@ fn d2s2_t9_a_reader_navigates_and_reads_and_declares_no_operation() {
     );
     assert_eq!(qualified.reading_keys(), ["resource.k1"]);
 
-    let digest = "a".repeat(64);
-    let index = BundleIndexV3 {
-        schema_version: BundleIndexV3Version::V3,
+    let index = BundleIndex {
+        schema_version: BundleIndexVersion::V4,
         game: "neutral".to_owned(),
         source: None,
-        packs: vec![BundlePackV2 {
+        packs: vec![BundlePack {
             package_id: "neutral.reading.task".to_owned(),
             server: "test".to_owned(),
             entry_task_id: "task".to_owned(),
-            path: format!("packs/{digest}"),
-            digest,
+            path: "packs/neutral.reading.task".to_owned(),
             file_count: 3,
             byte_count: 64,
         }],
-        maintenance: vec![BundleMaintenance {
+        maintenance: Some(vec![BundleMaintenance {
             package_id: "neutral.reading.task".to_owned(),
             server: "test".to_owned(),
             uses: vec![MaintenanceUse::Recognition],
-        }],
+        }]),
+        tables: None,
     };
     let error = crate::validate_bundle_maintenance(&index, &[designated])
         .expect_err("a package with a designated operation is no recognition package");

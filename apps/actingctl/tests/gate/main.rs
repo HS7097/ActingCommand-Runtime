@@ -27,6 +27,8 @@ mod mcp_devices_parity;
 // Workflow #389 MCP-7: `actingctl diagnose` ↔ `ac_diagnose`.
 mod mcp_diagnose_parity;
 mod mcp_events_parity;
+// Workflow #384 D2-S5: `actingctl fact-refresh` ↔ the `fact_refresh` block of `ac_overview`.
+mod mcp_fact_refresh_parity;
 // Workflow #389 MCP-4: `actingctl facts`, `status --config` ↔ `ac_facts`.
 mod mcp_facts_parity;
 mod mcp_harness;

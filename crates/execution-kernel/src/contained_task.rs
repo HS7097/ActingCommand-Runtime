@@ -81,6 +81,9 @@ mod gate_386_sr1;
 // Workflow #308 SEL-L6a.
 #[cfg(test)]
 mod gate_308_l6a;
+// Workflow #308 SEL-L6b.
+#[cfg(test)]
+mod gate_308_l6b;
 // Workflow #308 SEL-L3.
 #[cfg(test)]
 mod gate_308_l3;
@@ -96,6 +99,9 @@ mod gate_390_exec1;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
+// Workflow #390 EXEC-3.
+#[cfg(test)]
+mod gate_390_exec3;
 // Workflow #390 OUT-2.
 #[cfg(test)]
 mod gate_390_out2;
@@ -115,6 +121,10 @@ mod gate_390_read1;
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
+// Workflow #373 NAV-3a, test row N3a-1 (exec key 67): a page-graph package declares a
+// prerequisite package.
+#[cfg(test)]
+mod gate_373_nav3a;
 // Test plan v2.2 E-5 G5 (exec key 3): linear_steps.
 #[cfg(test)]
 mod gate_e5_linear;
@@ -128,7 +138,7 @@ pub use readings::{
 };
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
-    dry_run_scan,
+    dry_run_scan, replay_scan,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -243,8 +253,10 @@ pub struct ContainedTaskError {
     timing: Option<Box<TaskTimingFailure>>,
     timing_check_position: Option<TaskTimingCheckPosition>,
     declaration_issue: Option<Box<actingcommand_contract::ResourceDeclarationIssue>>,
-    /// Workflow #336 PKG-S2 (option 丙): with a refused declaration, the `package_id` the
-    /// package's control declares, when preparation read one.
+    /// Workflow #336 PKG-S2 (option 丙): the `package_id` the package's control declares, when
+    /// preparation read one; a refused declaration's record names it. Workflow #386 SR-3: every
+    /// refusal after the control was read carries it, so a refusal names the package it
+    /// suspends.
     declaration_package: Option<Box<str>>,
     ppocr_diagnostics: actingcommand_contract::PpocrDiagnostics,
     /// Workflow #386 SR-1: the failure's outcome with the values its code declares, when the
@@ -374,6 +386,14 @@ impl ContainedTaskError {
     /// refused, when preparation read it from the package's control; the refusal record's
     /// `package_label`.
     pub fn declaration_package(&self) -> Option<&str> {
+        self.declaration_issue
+            .as_ref()
+            .and(self.declaration_package.as_deref())
+    }
+
+    /// Workflow #386 SR-3: the `package_id` the refused package's control declares, when
+    /// preparation read one, whatever the refusal: the task package a suspend code suspends.
+    pub fn package_id(&self) -> Option<&str> {
         self.declaration_package.as_deref()
     }
 }
@@ -2273,13 +2293,16 @@ pub struct ContainedTaskOutcome {
     pub designated_effect_caps: Vec<crate::DesignatedEffectCap>,
 }
 
-/// Workflow #336 L2b: the bounded wait for a `linear_steps` package's first step after its
-/// prerequisite package ran (`PreparedContainedTask::await_linear_entry`).
+/// Workflow #336 L2b: the bounded wait for a package's gate entry after its prerequisite package
+/// ran (`PreparedContainedTask::await_gate_entry`): a `linear_steps` package's first step, or
+/// (Workflow #373 NAV-3a) a page-graph package's entry page or entry page set.
 #[derive(Debug)]
-pub struct LinearEntryAwait {
+pub struct GateEntryAwait {
     /// The wait's own timing context; the run's task timing is not started by the wait.
     pub timing: ContainedTaskTimingContext,
-    /// `None` when the first step passed, otherwise the timed
+    /// The entry page that passed; `None` when none did.
+    pub matched: Option<String>,
+    /// `None` when the entry passed, otherwise the timed
     /// `contained_task_prerequisite_entry_unmatched` (or, after a return-home package,
     /// `contained_task_return_home_entry_unmatched`) failure of the spent budget.
     pub unmatched: Option<ContainedTaskError>,
@@ -2294,7 +2317,6 @@ pub struct PreparedContainedTask {
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     post_admission_fields: Option<PreparedOcrFields>,
-    package_sha256: actingcommand_contract::PackageRef,
     entry_count: usize,
     task_count: usize,
 }
@@ -2303,6 +2325,20 @@ pub struct PreparedContainedTask {
 pub(crate) struct ContainedTaskRunOptions {
     post_admission_ocr: PostAdmissionOcrExecution,
     entry: ContainedTaskEntry,
+    application_entry: ApplicationEntryRun,
+}
+
+/// Workflow #390 EXEC-3 (FCM E-02): how a page-graph package's application entry (its
+/// `entry_page` `"any"` and its first operation a `from: "any"` application effect) begins.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ApplicationEntryRun {
+    /// Slice #316-B3: the run takes its initial frame first; the effect runs only when that
+    /// frame shows no page of the package.
+    #[default]
+    AfterInitialFrame,
+    /// R24, in a run the host starts itself (a startup package, a recovery ladder rung): the
+    /// effect runs first, before any capture, as a `linear_steps` application entry's does.
+    First,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2317,6 +2353,7 @@ impl ContainedTaskRunOptions {
         Self {
             post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
             entry: ContainedTaskEntry::Ordinary,
+            application_entry: ApplicationEntryRun::AfterInitialFrame,
         }
     }
 }
@@ -2331,37 +2368,29 @@ enum PostAdmissionOcrExecution {
 impl PreparedContainedTask {
     /// Fully prepares the package `locator` names with the existing metadata-only vision
     /// capability, then returns only its read-only description. No executable task or provider
-    /// escapes. Workflow #336 PKG-S1: `recorded` is the caller's reference, recorded on the
-    /// description and compared with nothing.
+    /// escapes. Workflow #336 PKG-S5: the package is named by its path alone.
     pub fn describe_path(
         instance_label: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         deadline: std::time::Instant,
     ) -> Result<crate::TaskPackageDescriptor, ContainedTaskError> {
-        let bundle = ExternallyVerifiedBundle::load_metadata_path(
-            instance_label,
-            locator,
-            recorded,
-            deadline,
-        )
-        .map_err(contained_task_admission_error)?;
+        let bundle =
+            ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
+                .map_err(contained_task_admission_error)?;
         Ok(Self::from_bundle(bundle)?.package_descriptor())
     }
 
-    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path;
-    /// `recorded` is the caller's reference, kept as a record and compared with nothing.
+    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path
+    /// (since PKG-S5 no reference is taken).
     pub fn load_path(
         instance_label: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_path(
             instance_label,
             locator,
-            recorded,
             false,
             vision_provider,
             deadline,
@@ -2375,14 +2404,12 @@ impl PreparedContainedTask {
     pub fn load_path_with_resident_bytes(
         instance_label: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<(Self, u64), ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_path(
             instance_label,
             locator,
-            recorded,
             false,
             vision_provider,
             deadline,
@@ -2392,19 +2419,16 @@ impl PreparedContainedTask {
         Ok((Self::from_bundle(bundle)?, resident_bytes))
     }
 
-    /// Workflow #336: `load_path` for a content table already in memory; `recorded` is kept as
-    /// `load_path` keeps it.
+    /// Workflow #336: `load_path` for a content table already in memory.
     pub fn load_content_entries(
         instance_label: &str,
         entries: std::collections::BTreeMap<String, Vec<u8>>,
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load_content_entries(
             instance_label,
             entries,
-            recorded,
             false,
             vision_provider,
             deadline,
@@ -2413,44 +2437,31 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
-    /// Admits the bytes of an assembled package ZIP structurally; `recorded` is kept as
-    /// `load_path` keeps it (Workflow #336 PKG-S1).
-    pub fn load(
-        instance_label: &str,
-        zip_bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
-    ) -> Result<Self, ContainedTaskError> {
-        Self::load_with_optional_vision_provider(instance_label, zip_bytes, recorded, None)
+    /// Admits the bytes of an assembled package ZIP structurally (Workflow #336 PKG-S1).
+    pub fn load(instance_label: &str, zip_bytes: &[u8]) -> Result<Self, ContainedTaskError> {
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, None)
     }
 
     pub fn load_with_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Arc<dyn VisionProvider>,
     ) -> Result<Self, ContainedTaskError> {
-        Self::load_with_optional_vision_provider(
-            instance_label,
-            zip_bytes,
-            recorded,
-            Some(vision_provider),
-        )
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, Some(vision_provider))
     }
 
     fn load_with_optional_vision_provider(
         instance_label: &str,
         zip_bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
         vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = match vision_provider {
             Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
                 instance_label,
                 zip_bytes,
-                recorded,
                 provider,
             ),
-            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, recorded),
+            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes),
         }
         .map_err(contained_task_admission_error)?;
         Self::from_bundle(bundle)
@@ -2461,6 +2472,7 @@ impl PreparedContainedTask {
     pub fn from_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
         // Workflow #336 PKG-S2 (option 丙): a refused declaration names its package by the
         // `package_id` the package's control declares, when that is a label a record can carry.
+        // Workflow #386 SR-3: every refusal carries it, so a suspend code names its package.
         let package_label = bundle
             .loaded_bundle()
             .control()
@@ -2471,15 +2483,12 @@ impl PreparedContainedTask {
             })
             .map(Box::<str>::from);
         Self::prepare_bundle(bundle).map_err(|mut error| {
-            if error.declaration_issue.is_some() {
-                error.declaration_package = package_label;
-            }
+            error.declaration_package = package_label;
             error
         })
     }
 
     fn prepare_bundle(bundle: ExternallyVerifiedBundle) -> Result<Self, ContainedTaskError> {
-        let package_sha256 = bundle.loaded_bundle().package_ref().clone();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();
@@ -2583,7 +2592,6 @@ impl PreparedContainedTask {
             scheduling_outcome,
             post_admission_ocr,
             post_admission_fields,
-            package_sha256,
             entry_count,
             task_count,
         })
@@ -2595,10 +2603,6 @@ impl PreparedContainedTask {
 
     pub fn package_label(&self) -> &str {
         &self.control.package_id
-    }
-
-    pub fn package_sha256(&self) -> &actingcommand_contract::PackageRef {
-        &self.package_sha256
     }
 
     pub fn execution_mode(&self) -> &str {
@@ -2744,7 +2748,8 @@ impl PreparedContainedTask {
             && self.control.prerequisite_package_id.is_none()
     }
 
-    /// Workflow #336 L2b: the `prerequisite_package_id` of a `linear_steps` package.
+    /// Workflow #336 L2b: the `prerequisite_package_id` of a `linear_steps` package (Workflow
+    /// #373 NAV-3a: or of a `navigable_route` package).
     pub fn prerequisite_package_id(&self) -> Option<&str> {
         self.control.prerequisite_package_id.as_deref()
     }
@@ -2776,16 +2781,33 @@ impl PreparedContainedTask {
         pages.next().is_none().then_some(page)
     }
 
-    /// Channels needed before an application effect can repair the connection. This reads
-    /// only the hash-admitted program. An `any` linear application entry performs no capture
-    /// or input first; a page entry must still observe its page/prerequisite gate.
+    /// Workflow #373 NAV-3a (M-373 §4.2): the entry a prerequisite gate checks, as detector page
+    /// ids: a `linear_steps` package's first step page; a `navigable_route` package's required
+    /// entry (its entry page set, or its entry page when it has stages, is `home` with `any_of`,
+    /// or the package declares a prerequisite package). `None` for an application entry, for a
+    /// page-graph package whose entry the host does not check, and for every other mode.
+    pub fn gate_entry_pages(&self) -> Option<Vec<String>> {
+        match self.control.execution_mode.as_str() {
+            linear::LINEAR_STEPS => self.linear_entry_page().map(|page| vec![page.to_owned()]),
+            "navigable_route" => self.required_entry_pages().map(<[String]>::to_vec),
+            _ => None,
+        }
+    }
+
+    /// Channels needed before an application effect can repair the connection, for a run the
+    /// host starts itself (a recovery ladder rung). This reads only the hash-admitted program.
+    /// An `any` linear application entry performs no capture or input first, and neither does
+    /// a page-graph application entry there (Workflow #390 EXEC-3, R24); a page entry must
+    /// still observe its page/prerequisite gate.
     pub fn recovery_entry_channels(&self) -> (bool, bool) {
         let first = self.program.operations.first();
         let application_entry = self.control.execution_mode != "recognize_only"
             && first.is_some_and(|operation| {
                 operation.from == "any" && operation.application.is_some()
             });
-        let capture = !(application_entry && self.control.execution_mode == linear::LINEAR_STEPS);
+        let capture = !(application_entry
+            && (self.control.execution_mode == linear::LINEAR_STEPS
+                || self.has_graph_application_entry()));
         let input = self.control.execution_mode != "recognize_only"
             && !application_entry
             && self
@@ -2798,6 +2820,18 @@ impl PreparedContainedTask {
                 })
                 .any(|operation| operation.click.is_some() || operation.select.is_some());
         (capture, input)
+    }
+
+    /// Workflow #390 EXEC-3 (FCM E-02): whether this is a page-graph application entry
+    /// package: its `entry_page` is `"any"` and its first operation is a `from: "any"`
+    /// application effect, the shape of a `linear_steps` application entry (R24).
+    fn has_graph_application_entry(&self) -> bool {
+        self.control.execution_mode != linear::LINEAR_STEPS
+            && self.control.execution_mode != "recognize_only"
+            && self.program.single_entry_page() == Some(linear::ANY_PAGE)
+            && self.program.operations.first().is_some_and(|operation| {
+                operation.from == linear::ANY_PAGE && operation.application.is_some()
+            })
     }
 
     pub fn has_application_effect(&self) -> bool {
@@ -2891,6 +2925,15 @@ impl PreparedContainedTask {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        self.recognize_entry_window(runtime, &pages)
+    }
+
+    /// The entry check of [`Self::recognize_required_entry`] over `pages`.
+    fn recognize_entry_window<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        pages: &[&str],
+    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
         let mut started = Instant::now();
         let budget = Duration::from_millis(
             self.control
@@ -2922,7 +2965,7 @@ impl PreparedContainedTask {
                     None,
                     None,
                     timing,
-                    Some(PageCandidates::Exclusive(&pages)),
+                    Some(PageCandidates::Exclusive(pages)),
                     Some(timing.deadline()),
                 ) {
                     Ok(Ok(observation)) => return Ok(Some(observation.page_label)),
@@ -2944,7 +2987,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
             let capture_started = Instant::now();
-            let matched = self.recognize_entry_pages_frame(runtime, &pages, timing);
+            let matched = self.recognize_entry_pages_frame(runtime, pages, timing);
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
                 identity,
@@ -2989,15 +3032,25 @@ impl PreparedContainedTask {
         }
     }
 
-    /// Workflow #336 L2b: one observation of the first step's page. Declared target samples
-    /// use the shared capture transaction and a single bounded entry deadline.
+    /// Workflow #336 L2b: the first check of a prerequisite gate (§5.3): the entry page that
+    /// passed, or `None`. A `linear_steps` package's first step page is observed once; declared
+    /// target samples use the shared capture transaction and a single bounded entry deadline.
+    /// Workflow #373 NAV-3a (M-373 §4.2): a page-graph package's entry ([`Self::gate_entry_pages`])
+    /// is checked as its home entry is (Workflow #371-3, [`Self::recognize_required_entry`]).
     ///
     /// Workflow #373 NAV-6 (§4.4, §6.1): an unmatched frame is offered to the runtime's shared
     /// interrupt pages; after a handled one the check is made again on a fresh frame.
-    pub fn recognize_linear_entry<R: ContainedTaskRuntime>(
+    pub fn recognize_gate_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
+        if self.control.execution_mode != linear::LINEAR_STEPS {
+            let pages = self.gate_entry_pages().ok_or_else(|| {
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+            })?;
+            let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
+            return self.recognize_entry_window(runtime, &pages);
+        }
         let page = self
             .linear_entry_page()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
@@ -3023,10 +3076,10 @@ impl PreparedContainedTask {
                 actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
             );
             match self.recognize_entry_frame(runtime, page, timing) {
-                Ok(EntryFrame::Matched(_)) => return Ok(true),
+                Ok(EntryFrame::Matched(_)) => return Ok(Some(page.to_owned())),
                 Ok(EntryFrame::Unmatched(scene)) => {
                     if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
-                        return Ok(false);
+                        return Ok(None);
                     }
                 }
                 Err(failure) => retries.retry(failure, window)?,
@@ -3034,24 +3087,32 @@ impl PreparedContainedTask {
         }
     }
 
-    /// Workflow #336 L2b: after a prerequisite package ran, frames of the first step's page are
-    /// recognized one at a time, every capture interval of this package, until the page passes
-    /// or `budget` is spent. The wait keeps its own timing context of `origin` (each capture at
-    /// the `CapturePage` boundary, each sleep at `PageRecognitionWait`); the run's
-    /// `observe_task_timing` is not called. `layer` names the gate layer in the failure detail.
-    /// `return_home` names the return-home package that ran (Workflow #336 L2c): the failure is
-    /// then `contained_task_return_home_entry_unmatched` and its detail names that package.
-    pub fn await_linear_entry<R: ContainedTaskRuntime>(
+    /// Workflow #336 L2b: after a prerequisite package ran, frames of the gate entry
+    /// ([`Self::gate_entry_pages`]: the first step's page; Workflow #373 NAV-3a, a page-graph
+    /// package's whole entry) are recognized one at a time, every capture interval of this
+    /// package, until a page passes or `budget` is spent. The wait keeps its own timing context
+    /// of `origin` (each capture at the `CapturePage` boundary, each sleep at
+    /// `PageRecognitionWait`); the run's `observe_task_timing` is not called. `layer` names the
+    /// gate layer in the failure detail. `return_home` names the return-home package that ran
+    /// (Workflow #336 L2c): the failure is then `contained_task_return_home_entry_unmatched` and
+    /// its detail names that package.
+    pub fn await_gate_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         budget: Duration,
         origin: actingcommand_contract::TaskTimingBudgetOrigin,
         layer: usize,
         return_home: Option<&str>,
-    ) -> Result<LinearEntryAwait, ContainedTaskRunError<R::Error>> {
-        let page = self
-            .linear_entry_page()
+    ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
+        let entry = self
+            .gate_entry_pages()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let pages = entry.iter().map(String::as_str).collect::<Vec<_>>();
+        // The detail names the one page, or (Workflow #373 NAV-3a) every page of an entry set.
+        let required = match pages.as_slice() {
+            [page] => format!("required_page={page}"),
+            _ => format!("required_pages={}", pages.join(",")),
+        };
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let mut started = Instant::now();
         // Workflow #386 SR-1 (scheduling model §2.1): the observation window opens on the
@@ -3069,7 +3130,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
             let capture_started = Instant::now();
-            let matched = self.recognize_entry_frame(runtime, page, timing);
+            let matched = self.recognize_entry_pages_frame(runtime, &pages, timing);
             let capture_ended = Instant::now();
             if self.evaluator.pack().target_consensus.is_empty() {
                 runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
@@ -3082,9 +3143,10 @@ impl PreparedContainedTask {
                 });
             }
             let scene = match matched {
-                Ok(EntryFrame::Matched(_)) => {
-                    return Ok(LinearEntryAwait {
+                Ok(EntryFrame::Matched(page)) => {
+                    return Ok(GateEntryAwait {
                         timing,
+                        matched: Some(page),
                         unmatched: None,
                     });
                 }
@@ -3122,13 +3184,14 @@ impl PreparedContainedTask {
                     ),
                     None => (PREREQUISITE_ENTRY_UNMATCHED, String::new()),
                 };
-                return Ok(LinearEntryAwait {
+                return Ok(GateEntryAwait {
                     timing,
+                    matched: None,
                     unmatched: Some(
                         ContainedTaskError::with_detail(
                             code,
                             format!(
-                                "layer={layer} package_id={} required_page={page}{return_home}",
+                                "layer={layer} package_id={} {required}{return_home}",
                                 self.package_label()
                             ),
                         )
@@ -3495,7 +3558,7 @@ impl PreparedContainedTask {
             step_timeout,
             task_timeout,
             started,
-            options.entry,
+            options,
         );
         // Task and owner-classified nonfatal operation failures retain parsed facts.
         // Record failures and fatal/unknown operation failures forbid another write.
@@ -3511,6 +3574,24 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
         }
         result
+    }
+
+    /// Workflow #390 EXEC-3 (FCM E-02): runs the package as a run the host starts itself (a
+    /// startup package, a recovery ladder rung). A page-graph application entry package (its
+    /// `entry_page` `"any"`, its first operation a `from: "any"` application effect) begins
+    /// with that effect, before any capture, as a `linear_steps` application entry does (R24):
+    /// a page already shown does not skip it. Every other package runs as [`Self::run`] runs it.
+    pub fn run_host_package<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                application_entry: ApplicationEntryRun::First,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
     }
 
     /// Executes a compatible, already hash-admitted entry recovery package.
@@ -3562,8 +3643,9 @@ impl PreparedContainedTask {
         step_timeout: Duration,
         task_timeout: Duration,
         started: Instant,
-        entry: ContainedTaskEntry,
+        options: ContainedTaskRunOptions,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        let entry = options.entry;
         let capture_interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let task_deadline = started + task_timeout;
         let observation_timing = ContainedTaskTimingContext::new(
@@ -3619,6 +3701,12 @@ impl PreparedContainedTask {
                 && operation.application.is_some()
                 && self.control.execution_mode != "recognize_only"
         });
+        // Workflow #390 EXEC-3 (FCM E-02, R24): in a run the host starts itself, a page-graph
+        // application entry runs its effect before any capture; the arrival wait after the
+        // effect takes the run's first frame.
+        let application_first = options.application_entry == ApplicationEntryRun::First
+            && initial_application.is_some()
+            && self.has_graph_application_entry();
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
         let entry_timing = |now: Instant| {
             if consensus {
@@ -3631,7 +3719,9 @@ impl PreparedContainedTask {
             .entry_page
             .as_ref()
             .filter(|_| entry == ContainedTaskEntry::Ordinary);
-        let mut observation = if let Some(required_entry) = required_entry {
+        let mut observation = if application_first {
+            None
+        } else if let Some(required_entry) = required_entry {
             Some(self.await_ordinary_home_entry(
                 runtime,
                 ocr_collector,
@@ -5881,8 +5971,8 @@ struct TaskControl {
     prerequisite_package_id: Option<String>,
 }
 
-/// Workflow #336 L2b: a `prerequisite_package_id`, and a key of the host's prerequisite package
-/// map, is not empty, at most 256 bytes and has no control character.
+/// Workflow #336 L2b: a `prerequisite_package_id` is not empty, at most 256 bytes and has no
+/// control character.
 pub fn prerequisite_package_id_valid(package_id: &str) -> bool {
     !package_id.trim().is_empty()
         && package_id.len() <= MAX_PREREQUISITE_PACKAGE_ID_BYTES
@@ -5976,8 +6066,13 @@ impl TaskControl {
                     format!("reason={reason}"),
                 )
             };
-            if self.execution_mode != linear::LINEAR_STEPS {
-                return Err(invalid("prerequisite_requires_linear_steps"));
+            // Workflow #373 NAV-3a (M-373 §4.2): a `navigable_route` package (phased or not) may
+            // declare one too; `in_page_guard` and `recognize_only` may not.
+            if !matches!(
+                self.execution_mode.as_str(),
+                linear::LINEAR_STEPS | "navigable_route"
+            ) {
+                return Err(invalid("prerequisite_execution_mode"));
             }
             if !prerequisite_package_id_valid(prerequisite) {
                 return Err(invalid(SharedCode::PrerequisiteIdInvalid.as_str()));
@@ -6452,6 +6547,20 @@ impl TaskProgram {
         // Workflow #336: a step plan waits for its first step itself; no host entry preflight.
         if control.execution_mode == linear::LINEAR_STEPS {
             return Ok(None);
+        }
+        // Workflow #373 NAV-3a (M-373 §4.2): a page-graph package that declares a prerequisite
+        // package has its entry checked first, whatever page it is; without a page to check
+        // (no `entry_page`, or `any`) there is nothing the prerequisite package could lead to.
+        if control.prerequisite_package_id.is_some() {
+            return match self.single_entry_page() {
+                Some(page) if page != linear::ANY_PAGE => {
+                    resolve_page_reference(&control.game, page, detector).map(Some)
+                }
+                _ => Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+                    "reason=prerequisite_requires_page_entry",
+                )),
+            };
         }
         Ok(self
             .single_entry_page()
@@ -9692,7 +9801,6 @@ mod post_admission_ocr_tests {
                 entry_page: None,
                 post_admission_ocr: None,
                 post_admission_fields: Some(fields),
-                package_sha256: "fixture".into(),
                 entry_count: 1,
                 task_count: 1,
             };
@@ -10139,7 +10247,6 @@ mod post_admission_ocr_tests {
                 detector,
                 post_admission_ocr: None,
                 post_admission_fields: Some(fields),
-                package_sha256: "fixture".into(),
                 entry_count: 1,
                 task_count: 1,
             };
@@ -11380,7 +11487,6 @@ mod post_admission_ocr_tests {
             scheduling_outcome,
             post_admission_ocr: Some(post_admission_ocr),
             post_admission_fields: None,
-            package_sha256: "fixture-sha256".into(),
             entry_count: 6,
             task_count: 1,
         };
@@ -12054,7 +12160,6 @@ mod retry_wiring_tests {
             entry_page: None,
             scheduling_outcome: None,
             post_admission_ocr: None,
-            package_sha256: "fixture-sha256".into(),
             post_admission_fields: None,
             entry_count: 5,
             task_count: 1,
@@ -12138,17 +12243,12 @@ mod retry_wiring_tests {
             zip.write_all(&bytes).expect("zip bytes");
         }
         let bytes = zip.finish().expect("zip").into_inner();
-        let reference = actingcommand_contract::PackageRef::LegacyZipSha256(format!(
-            "{:x}",
-            Sha256::digest(&bytes)
-        ));
         let mut containment = actingcommand_pack_containment::Containment::new();
         let bundle = containment
             .load(
                 &actingcommand_pack_containment::InstanceId::new("neutral-select")
                     .expect("instance"),
                 &bytes,
-                &reference,
             )
             .expect("the package is admitted");
         selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)
@@ -12236,7 +12336,6 @@ mod retry_wiring_tests {
                 &actingcommand_pack_containment::InstanceId::new("neutral-select")
                     .expect("instance"),
                 &bytes,
-                &actingcommand_contract::PackageRef::LegacyZipSha256("0".repeat(64)),
             )
             .expect("the package is admitted");
         selection::prepare_select_steps(&mut task.program, &task.control, bundle, &task.evaluator)

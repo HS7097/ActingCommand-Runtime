@@ -236,7 +236,13 @@ const DECLARATIONS: &[(&str, Mode)] = &[
         "package dry-run",
         Mode::Refused("offline_device_scope_forbidden"),
     ),
+    // Both forms only read: the whole package (SEL-L6a) and one select step's scan with
+    // `--select <operation> --scan <file>` (Workflow #308 SEL-L6b).
     ("replay", Mode::Refused("offline_device_scope_forbidden")),
+    (
+        "recognition-regression",
+        Mode::Refused("offline_device_scope_forbidden"),
+    ),
     ("scheduling compile", Mode::Refused("validation_failed")),
     ("scheduling timeline", Mode::Refused("validation_failed")),
     // mixed
@@ -265,7 +271,6 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("package validate", Mode::NoEffect),
     ("package preflight", Mode::NoEffect),
     ("package inspect", Mode::NoEffect),
-    ("package digest", Mode::NoEffect),
     ("operation validate", Mode::NoEffect),
     ("operation inspect", Mode::NoEffect),
     ("operation explain", Mode::NoEffect),

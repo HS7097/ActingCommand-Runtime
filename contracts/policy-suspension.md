@@ -4,7 +4,8 @@ A scheduled `linear_steps` task that fails mid-run is recorded, rerun at once, a
 the same problem happens again; the pause is lifted automatically once the content of its
 package (or of a package its run went through) changes (Workflow #336, R17-R19, R21, R22, R25;
 PKG-S3, option 丙: judged by the content hashes the failure identity recorded, without a
-restart). Everything
+restart). Since Workflow #390 EXEC-3 (forced compromise E-02) a scheduled page-graph task
+follows the same rules: its failure records a failure identity too. Everything
 here uses the existing policy `on_failure`, the existing `policy.execution_recorded` and
 `runtime.failed` records and the existing `paused_task` disposition: no ledger event type or
 enum value is added. Since Workflow #378 A2-P the failure part of `policy.execution_recorded`
@@ -17,7 +18,7 @@ unlike the rest of this document, the condition termination adds one persisted m
 
 ## Catalog
 
-The recommended `on_failure` of a linear task is
+The recommended `on_failure` of a linear or a page-graph task is
 
 ```json
 {"action":"pause","retry_limit":1,"retry_backoff_ms":0,"escalation_threshold":2}
@@ -42,9 +43,11 @@ scheduled for a retry and has a live retry round is treated by the evaluator as 
 next evaluation, instead of at the next clock occurrence. `actingd` evaluates again right after
 a cycle in which a scheduled run failed, so that evaluation, not the wake computed before the
 run, sets the next wake (the end of the backoff). The feedback stop, placement, the
-loop and activity budgets and the activity windows still apply, and every rerun consumes the
-budgets like any dispatch. A page-graph task and a failure recorded without a failure
-identity keep waiting for their trigger and cooldown.
+loop and activity budgets, the activity's sampled interval after its previous admission
+(`policy_activity_interval_active`) and the activity windows still apply, and every rerun
+consumes the budgets like any dispatch. A failure recorded without a failure identity keeps waiting for
+its trigger and cooldown. A page-graph task's failure carries one (Workflow #390 EXEC-3), so a
+page-graph task is rerun at once as a linear one is.
 
 `PolicyControlState` owns the round. An admitted normal trigger opens it using the original
 `PolicyActivitySample` and budget receipt. An admission whose reason is
@@ -75,9 +78,10 @@ do not create a fresh origin after the original round ended.
 
 ## Failure identity
 
-The live settlement of a scheduled run whose main package was admitted as `linear_steps`
-writes the failure identity as `failure.failure_identity` of its `policy.execution_recorded`,
-beside the run's failure as `failure.outcome` (Workflow #378 A2-P):
+The live settlement of a scheduled run whose main package was admitted, as `linear_steps` or
+(Workflow #390 EXEC-3) as a page-graph package, writes the failure identity as
+`failure.failure_identity` of its `policy.execution_recorded`, beside the run's failure as
+`failure.outcome` (Workflow #378 A2-P):
 
 ```text
 <base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}~f<F>
@@ -88,7 +92,7 @@ beside the run's failure as `failure.outcome` (Workflow #378 A2-P):
 | `base` | The terminal `failure_code`, or the request error code when the run has no terminal. A code longer than 64 bytes or containing `~` is `h` and the first 16 hex digits of its SHA-256. |
 | `K` | The first 12 hex digits of SHA-256 over `actingcommand.failure-key.v1`, the original code, the scope, the step and detail′, joined by newlines. |
 | `m<I><H>` | The main package: `I` the first 8 hex digits of SHA-256 over its `package_id` (the admitted package's `package_label`), `H` the first 12 hex digits of its content hash measured when the failure is settled, or `x` when it could not be measured (removed, being replaced, unreadable). |
-| `p<I><H>` | One per declared prerequisite layer, outermost first: `I` as above for the layer's package id, `H` the content hash of the package `prerequisite_packages` maps it to, measured at the settlement, or `x` when it maps none or the package could not be measured. |
+| `p<I><H>` | One per declared prerequisite layer, outermost first: `I` as above for the layer's package id, `H` the content hash of the package at the path the run's standard-pack registry gave it (Workflow #373 NAV-3a), measured at the settlement, or `x` when the registry bound none or the package could not be measured. A lift check finds the layer's package in the registries read at the check. |
 | `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
 | `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate. |
 
@@ -100,12 +104,13 @@ control characters. A format v1 string (Workflow #336 L6, before PKG-S3) is not 
 `.zip` content container), or the SHA-256 of the whole file for an assembled package ZIP (one
 holding `resources/manifest.json`). It has one use: a pause. It is measured in two places only,
 read-only: when a scheduled failure is settled (the main package at the path the run used and
-each layer at the path its mapping names; SR-3 adds its suspension point) and at a lift check
+each layer at the path the run's standard-pack registry gave it, Workflow #373 NAV-3a; SR-3
+adds its suspension point) and at a lift check
 ("Lifting"). Admission never computes or compares it, and it is stored only inside the failure
 identity.
 
 Every other run writes no failure identity: a main package that was not admitted (its mode is
-unknown), a page-graph package, and the startup reconciliation of an interrupted settlement.
+unknown) and the startup reconciliation of an interrupted settlement.
 
 Every failed run records its failure as `failure.outcome`: the top node of its terminal's
 outcome (code, category and values, without its links), the top node of its request error when
@@ -127,6 +132,12 @@ outcome's category. The failure's code is the outcome's code, or for
   capture, a recheck after a completed layer).
 - `main`: every other failure.
 
+A page-graph run without a prerequisite chain (Workflow #390 EXEC-3) that checked its
+required entry (it wrote an `EntryRecoveryDecision`) treats that check as its gate and its
+entry recovery package as its prerequisite package above: `pre:<I>` while that package is
+open, `gate` before the entry started the package, `main` after. Without an entry check every
+failure of such a run is `main`.
+
 The step is the operation label of the scope's last `StepStarted`, `entry` without one.
 
 ### detail′
@@ -142,11 +153,14 @@ whole; no detail is empty. `attempts` is not kept, nor are `awaited` and `skip_t
 Only these failures can pause a task by repeating:
 
 - the `main` scope, outside the restart segment, with `page_confirmation_failed`,
-  `contained_task_linear_intermediate_unobserved` or `contained_task_guard_refused`: the main
-  package's own steps no longer match the screen;
+  `contained_task_linear_intermediate_unobserved`, `contained_task_step_unconfirmed` or
+  `contained_task_guard_refused`: the main package's own steps no longer match the screen. A
+  page-graph step unconfirmed after all its retries (`contained_task_step_unconfirmed`) is the
+  graph counterpart of a linear intermediate page not seen (Workflow #390 EXEC-3, wave 14
+  ruling 4);
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
-  configuration problem (a missing mapping, a package id that does not match, an
-  incompatible package).
+  configuration problem (a package the registry does not list, a package id that does not
+  match, an incompatible package).
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
@@ -156,7 +170,8 @@ errors.
 
 The restart segment (R25-1): the run had a `launch` or `restart` application effect
 (`application.intent`) and no `StepFinished` after the last one names a main-interface page
-(canonical anchor `home` or `step_<digits>_home`). A failure there is rerun only.
+(canonical anchor `home` or `step_<digits>_home`; for a page-graph run the literal `home`
+only, Workflow #390 EXEC-3). A failure there is rerun only.
 
 R25-2: a linear task's terminal `application_backend_operation_failed` or
 `input_backend_operation_failed` that did not poison the run is settled with the original
@@ -225,10 +240,11 @@ them):
 
 - the content hash of the main package, measured at the location its procedure's binding names
   (`scheduled_execution.package_path`);
-- for a `p` layer, the content hash of the package the prerequisite mapping now has for its id
-  hash (`x` when none; changed when several ids share the hash);
-- for the `r` layer, the return-home entry of its game and server (missing or another id is a
-  change), then its content hash as for a `p` layer.
+- for a `p` layer, the content hash of the package the standard-pack registries now list
+  under its id hash (Workflow #373 NAV-3a; `x` when none; changed when several packages share
+  the hash);
+- for the `r` layer, the registry's return-home package of its game and server (missing or
+  another id is a change), then its content hash as for a `p` layer.
 
 A lift check runs when the paused pair is due at an evaluation and again at its admission. It
 measures one package at most once per `scheduling.suspension.lift_check_min_interval_ms`
@@ -241,16 +257,16 @@ location) lifts nothing: the check keeps the pause, links a Warning
 as a note of the `policy_task_paused` reason, and measures again at a later check. A recorded
 `x` differs from every measured hash, so a package the settlement could not measure lifts the
 pause once a check measures it. A pause recorded without a failure identity (an exceeded
-runtime budget, a page-graph task) names no package: its main package is compared with the hash
+runtime budget) names no package: its main package is compared with the hash
 the pair's first lift check measured. A procedure that is no longer bound never lifts. The
-prerequisite and return-home mappings are the ones the daemon read at startup. An interrupted settlement
+registries are read at each lift check (once per check; `actingd suspended` reads the root its
+configuration names), so a standard pack replaced in place counts at the next check. An interrupted settlement
 (`policy_settlement_interrupted`) is lifted without a package update (Workflow #361 M6) when
 it is the first of its pair in a row: the next dispatch of the pair is admitted as usual,
 within its loop and activity budgets (the interrupted admission already counted against them).
 A second one in a row is lifted by a package update only. The count is rebuilt from the
 execution records, so nothing persisted changes. The next dispatch is admitted as usual;
-a linear task that fails again starts a new streak, since a recorded hash changed. A page-graph
-task records no failure identity, so the same failure pauses it again at once. The first
+a task that fails again starts a new streak, since a recorded hash changed. The first
 interrupted settlement in a row is lifted at the next start of this Runtime. There is
 no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
 suspension.
@@ -296,7 +312,10 @@ stdout is one JSON object:
    "gate_code":"policy_budget_exhausted","budget_dimension":"task_daily",
    "occurrence_unix_ms":0,"window_end_unix_ms":0,"next_eligible_unix_ms":0,"next_occurrence_unix_ms":0,
    "slot_fate":"next_window","slot_fate_settled":true,
-   "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}]}
+   "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}],
+ "packs":[{"package_id":"...","failure_code":"recognition_sample_budget_invalid",
+   "runtime_commit":"...","paused_hash_prefix":"...","current_hash_prefix":"...",
+   "instances":["..."]}]}
 ```
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
@@ -350,6 +369,18 @@ stdout is one JSON object:
     `{"parse_state":"unparsed","signal_id":"...","code":"..."}`, `code` being the outcome's
     code, and no warning.
 
+- `packs` (Workflow #386 SR-3): the task packages suspended since the latest daemon start (the
+  `daemon_started_at_unix_ms` above; every record when it is unknown) and not lifted, by
+  `package_id`, read from the evaluation's copies (`policy.planning_signal_observed` of kind
+  `goal_missed` whose `signal_id` starts with `signal:pack_admission:`; "Task package
+  suspension"). A suspension is memory of one daemon process, so copies from before its start
+  are not read. `failure_code` and `runtime_commit` are the latest copy's (`null` when absent),
+  `paused_hash_prefix` the first twelve hex digits of its `actual_digest` (`null` when the
+  package could not be measured), `current_hash_prefix` the package measured now at the location
+  the copied task's procedure binds (`null` when it cannot be measured or the task is not in the
+  catalog), and `instances` the instances it was copied for and not lifted on. Each member is a
+  code, an id or a hash, never a sentence.
+
 Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 `FATAL actingd: <code>` on stderr; once the configuration is loaded, stdout also carries
 `{"schema_version":"actingcommand.actingd.suspended.v1","status":"failed","code":...,
@@ -375,9 +406,9 @@ Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 ## Task package suspension (Workflow #386 SR-3)
 
 **Status.** Written ahead of its code (documentation slice SR-0, scheduling model v1.4.2 §2.4
-with option 丙 of board #336); slice SR-3 implements it, after PKG-S3 provides the content
-hash. Until then a package that admission refuses is prepared and refused again at every due
-dispatch.
+with option 丙 of board #336) and implemented by slice SR-3 (register §1.69), with PKG-S3's
+content hash. The not-running reason of `ac_overview` and of the instance status comes with
+slice SR-6b (Workflow #369 S7); the LoadPack lift check with Workflow #389 U-3.
 
 **What is suspended.** When admission refuses a task package with a code listed in
 `scheduling.pack_admission.suspend_codes` (default only `recognition_sample_budget_invalid`:
@@ -387,7 +418,9 @@ refused it. Admission depends only on the package's content and the kernel, so t
 neither a (task, instance) pair nor a standard package: a standard package is always installed
 and activated whole. Right after the refusal the Runtime measures the package's content hash
 once (the `content-directory.v1` computation, or the SHA-256 of the file for a legacy assembled
-ZIP). Admission itself never computes it.
+ZIP). Admission itself never computes it. The suspension is memory of the daemon process: a
+restart, and so another build, starts without it, and the background check after start judges
+the packages again.
 
 **Where it is found.** One rule, three places:
 
@@ -403,9 +436,12 @@ ZIP). Admission itself never computes it.
 
 **While suspended.** Every task bound to the package, on every instance, is deferred in the
 evaluation with `pack_admission_suspended` (third in the order of deferrals,
-`scheduling-blackout.md`): no intent and no further preparation. The other task packages of the
-same standard package are scheduled as usual. The refused dispatch keeps its execution record;
-no record shape changes.
+`scheduling-blackout.md`): no intent and no further preparation. A task is bound to the package
+when its procedure's binding locates a package whose `package_id` is the suspended one (the
+`package_id` admission read at that location). The other task packages of the same standard
+package are scheduled as usual. The refused dispatch keeps its execution record; no record shape
+changes. For the clock-slot records of Workflow #372 K2 the code is a persistent gate
+(`clock_slot_refused`).
 
 **Lifting.** A suspension lifts when the package's content hash differs from the recorded one
 (the package was fixed in place) or the Runtime build differs. The hash is measured again after
@@ -413,9 +449,10 @@ actingd starts (in the background), when the package is loaded (Workflow #389 Lo
 when the evaluation finds a task of the package due while it is suspended, at most once per
 package per minimum interval (a configuration key that Workflow #383 AO-0 registers, default
 60 s). No restart is needed. A package that cannot be measured at a check (removed, being
-replaced, unreadable) stays suspended, reports the warning `lift_check_hash_unmeasured`
-(`package_id`; M-PKG D18; spelling proposed here, registered by PKG-S3 with the lift check) and
-is checked again. After a lift the next preparation tries the package once; the same refusal
+replaced, unreadable) stays suspended, links the warning `lift_check_hash_unmeasured` (`path`,
+`package_id`, `caused_by` the read's refusal; M-PKG D18) as a note of the
+`pack_admission_suspended` reason, and is checked again. A package whose hash could not be
+measured right after the refusal lifts at the first check that measures it. After a lift the next preparation tries the package once; the same refusal
 under the same content hash and build suspends it again, so nothing loops. There is no manual
 lift.
 
@@ -423,19 +460,28 @@ lift.
 
 - `actingd suspended` gains the top-level list `packs` (an addition; `schema_version` is
   unchanged): one entry per suspended package with `package_id`, `failure_code`,
-  `runtime_commit`, `paused_hash_prefix` and `current_hash_prefix`;
-- MCP `ac_diagnose` carries the `packs` that concern the instance, and the not-running reason of
-  `ac_overview` and of the instance status shows `pack_admission_suspended`;
+  `runtime_commit`, `paused_hash_prefix`, `current_hash_prefix` and `instances` (see
+  "`actingd suspended`");
+- MCP `ac_diagnose` (and `actingctl diagnose`) carries the `packs` rows whose `instances` name
+  the diagnosed instance (every row without one); the not-running reason of `ac_overview` and of
+  the instance status shows `pack_admission_suspended` once SR-6b adds that reason;
 - the UI console shows it in the instance's status line (UI slice UI-1).
 
 **Ledger.** The probes copy what happened; there is no direct write. A suspension found by
-dispatch preparation is visible as that dispatch's execution record. One found by the
-background check is copied by the evaluation probe as one `pack_admission_suspended` outcome
-(`package_id`, `actual_digest` holding the content hash, `failure_code`, `runtime_commit`), and a
-lift as `pack_admission_lifted` (`package_id`, `actual_digest`, `runtime_commit`); which existing
-record type carries them is decided before SR-3 is dispatched. The suspension is an `error`: a
-person has to change the package, and the rest of the Runtime works on. It never triggers the
-recovery ladder.
+dispatch preparation is also visible as that dispatch's execution record. The evaluation, the
+policy-decision choke point the G5 probe copies (`ledger-observer.md`), copies each suspension it
+defers a pair of as a `pack_admission_suspended` outcome (`package_id`, `actual_digest` holding
+the content hash, `failure_code`, `runtime_commit`), once per instance, and each lift as
+`pack_admission_lifted` (`package_id`, `actual_digest` measured now, `runtime_commit`), once per
+instance the suspension was copied for. The record type is the existing
+`policy.planning_signal_observed` of kind `goal_missed` (coordinator ruling 4 of wave 14; the
+same carrier as the clock-slot records of Workflow #372 K2): `instance_id` is the instance, a
+suspension's `task_id` the task whose pair it deferred first there (a lift's is absent), its
+outcome the copied code, and its `signal_id` `signal:pack_admission:<suspended|lifted>:<hex>`,
+unique per copy. Like every planning signal it consumes no failure tax, advances no streak and
+wakes no agent. `actual_digest` is absent when the hash could not be measured, `runtime_commit`
+for a build without a known commit. The suspension is an `error`: a person has to change the
+package, and the rest of the Runtime works on. It never triggers the recovery ladder.
 
 **Unlike `paused_task`.** The per-pair pause above needs every pair to fail on its own; this
 suspension holds every pair of the package at once.

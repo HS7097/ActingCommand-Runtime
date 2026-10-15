@@ -238,6 +238,10 @@ pub struct PolicyCycle {
     /// Workflow #372 K2: the clock-slot records this cycle appends after its detection signals.
     pub clock_slot_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
+    /// Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh recorder's transitions at this
+    /// cycle's yield point, in memory only: actingd writes them as daemon lines, and no
+    /// decision reads them. Empty for a deferred cycle.
+    pub fact_refresh_transitions: Vec<crate::FactRefreshTransition>,
 }
 
 pub(crate) struct PolicyEvaluationContext<'a> {
@@ -255,6 +259,8 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #336 L6 (§12.7): the configuration a paused pair's suspension is lifted
     /// against, exactly as admission judges it.
     pub(crate) suspension_lift: &'a SuspensionLiftView<'a>,
+    /// Workflow #386 SR-3: the task package suspensions, judged with the same lift checks.
+    pub(crate) pack_admission: &'a crate::pack_admission::PackAdmission,
     /// Workflow #384 D2-S4: what the scheduler's fact refresh reads from the Runtime.
     pub(crate) fact_refresh: FactRefreshContext<'a>,
 }
@@ -1370,6 +1376,7 @@ impl PolicyHost {
             scheduling_pause,
             instance_occupancy,
             suspension_lift,
+            pack_admission,
             fact_refresh,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
@@ -1381,6 +1388,7 @@ impl PolicyHost {
                 detection_planning_signals: Vec::new(),
                 clock_slot_signals: Vec::new(),
                 measurement: None,
+                fact_refresh_transitions: Vec::new(),
             });
         }
         let active = self.active.as_ref().ok_or_else(|| {
@@ -1424,6 +1432,15 @@ impl PolicyHost {
                     instance_occupancy(&intent.instance_id),
                 ) {
                     return Ok(hold.eligibility(refresh));
+                }
+                // Workflow #386 SR-3 (scheduling model §2.4 item 3; `scheduling-blackout.md`,
+                // "Order of the deferrals", position 3): the task package is suspended.
+                if let Some(reason) = pack_admission.deferral(suspension_lift, intent, time.unix_ms)?
+                {
+                    return Ok(CandidateEligibility::Deferred {
+                        reason,
+                        next_wake_unix_ms: None,
+                    });
                 }
                 match self.control.preview_admission_lifted(
                     &active.compiled,
@@ -1527,6 +1544,8 @@ impl PolicyHost {
                 execution: PolicyEvaluationExecution::FullCatalogScan,
                 cost,
             }),
+            // The yield point adds the transitions (`evaluate_policy_cycle_authoritative`).
+            fact_refresh_transitions: Vec::new(),
         })
     }
 

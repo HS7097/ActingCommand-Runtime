@@ -1043,3 +1043,64 @@ tests = [
     "actingcommand-resource-tooling::lib::package_validate::tests::s4_package_validate_takes_no_hash_and_reports_none",
 ]
 incident = ["#336 PKG-S4"]
+# Workflow #336 PKG-S5 (option 丙; M-PKG v1.1 §3.5, §4.6 with M-357a TB12): package bundle copies each pack into packs/<package_id>/ and writes bundle v4 with no digest member, and refuses two packs of one package_id; bundle v2 and v3 are not read (malformed); bundle v4's optional tables list is read and checked, and a pack named tables is bundle_invalid; record stop writes <package_id>.<ext> and replaces a file of that name in place (a reader sees the old file or the new one), and a container that expands to another table fails its round trip; the content hash has one entry, containment's measure_content_hash, which no admission path reaches; no PackageRef is left (S5-T1, S5-T2, S5-T3, S5-T5, S5-T6)
+[[gate]]
+key = "66"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_336_pkgs5::s5_t1_package_bundle_lays_out_packs_by_package_id_in_bundle_v4_without_a_digest",
+    "actingcommand-resource-tooling::lib::gate_336_pkgs5::s5_t1_two_packs_declaring_one_package_id_are_refused",
+    "actingcommand-contract::lib::package::tests::s5_t2_a_bundle_index_v2_or_v3_is_refused",
+    "actingcommand-lab::lib::gate_336_pkgs5::s5_t3_record_stop_writes_its_package_as_its_package_id_and_replaces_one_of_that_name",
+    "actingcommand-lab::lib::gate_336_pkgs5::s5_t3_a_container_that_expands_to_another_table_fails_its_round_trip",
+    "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it",
+    "actingcommand-actinglab-architecture::workspace_guards::pkg_s5_no_package_reference_is_left",
+    "actingcommand-contract::lib::package::tests::s5_t6_bundle_v4_reads_its_tables_list_and_refuses_a_pack_named_tables",
+]
+incident = ["#336 PKG-S5"]
+
+# Workflow #373 NAV-3a (model M-373 v1.1 §4.2; test rows N3a-1, N3a-3): a navigable_route package's control may declare prerequisite_package_id (linear_steps still may; in_page_guard and recognize_only are refused with contained_task_control_invalid); the shared prerequisite chain goes on through page-graph layers, a page-graph layer with a page entry that declares none falling back to the return-home package, with today's depth, cycle and 1,000-step codes
+[[gate]]
+key = "67"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_373_nav3a::n3a_1_a_navigable_route_package_may_declare_a_prerequisite_package",
+    "actingcommand-execution-kernel::lib::maintenance::gate_373_nav3a::n3a_3_the_chain_goes_on_through_page_graph_layers_with_its_limits",
+]
+incident = ["#373 NAV-3a"]
+
+
+# Workflow #390 EXEC-3 (FCM E-02; register §1.70): in a run the host starts itself (a startup package, a recovery ladder rung), a page-graph package whose entry_page is any and whose first operation is a from-any application effect begins with that effect before any capture, as a linear_steps application entry does (R24): a page already shown, the terminal page included, does not skip it, and such a rung needs neither capture nor input before it; every other run takes its initial frame first and an already terminal page ends it without the effect (#316-B3)
+[[gate]]
+key = "68"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_a_host_package_run_begins_with_its_application_entry_whatever_the_screen_shows",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_another_run_keeps_the_initial_frame_before_the_application_entry",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_a_rung_needs_no_capture_before_a_page_graph_application_entry",
+]
+incident = ["#390"]
+
+
+# Workflow #308 SEL-L6b (FCM row SEL-L6b; compromise T-01): actinglab replay --frames --select <operation> --scan <file> replays one select step's scan through the kernel's scan path (dry_run_scan) over a recorded forward run, the step's dispatched frame first; the scan's policy evaluates the given fact snapshot at the instant it was read, or the empty offline snapshot, so a fresh fact keeps every card a member and a stale or missing one drops every card as unknown while the list is still covered; a recording that needs a frame it does not hold fails selection_scan_replay_frame_missing, never passes; a scan that does not cover its list exits non-zero with replay_scan_refused and its end's outcome; without an OCR model the scan replay is refused with lab_ocr_unavailable before any frame is evaluated
+[[gate]]
+key = "69"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6b::l6b_t1_a_scan_select_replays_over_a_saved_forward_run_with_the_given_facts",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6b::l6b_t2_a_recording_that_stops_before_the_list_ends_fails_typed",
+    "actingcommand-actinglab::replay_frames::replay_scan_of_a_step_that_is_not_a_select_exits_with_replay_scan_refused",
+    "actingcommand-actinglab::replay_frames::replay_scan_without_an_ocr_model_reports_ocr_unavailable_before_evaluating",
+]
+incident = ["#308"]
+
+
+# Workflow #331 RSU-1 (additions-v012 row RSU-1; compromise T-01): actinglab recognition-regression replays the frames a run's ledger kept, named by MCP-6's per-step frame references, with a new package or version, offline from the state root; per target of each frame's original record (the run's last recognition fact on the frame) it gives whether the package finds it now, its score and whether that agrees, and per target the counts and the error rate against the original record (disagreements per mille of the frames compared); a target the package lacks is absent and not compared, and a frame whose material is gone or that has no original record is listed and not compared; the package that ran agrees with its own record, and a version that changed a page's colour loses that page on every frame
+[[gate]]
+key = "70"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::recognition_regression::tests::rsu1_each_target_is_compared_with_its_original_record",
+    "actingcommand-actinglab::runtime_input_proxy::rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record",
+]
+incident = ["#331"]

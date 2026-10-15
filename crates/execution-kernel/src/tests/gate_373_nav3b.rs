@@ -8,9 +8,7 @@
 //! through `PreparedContainedTask::load`.
 
 use crate::{ContainedTaskCode, ContainedTaskError, PreparedContainedTask};
-use actingcommand_contract::PackageRef;
 use actingcommand_contract::outcome::Category;
-use actingcommand_pack_containment::Sha256Hash;
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
 use zip::{ZipWriter, write::FileOptions};
@@ -181,13 +179,7 @@ fn phased_task(entry_page: Value, extra: &[(&str, &str, &str, usize)]) -> Value 
 }
 
 fn admit(task: Value) -> Result<PreparedContainedTask, ContainedTaskError> {
-    let bytes = package(task);
-    let expected = Sha256Hash::digest(&bytes).to_string();
-    PreparedContainedTask::load(
-        "neutral.instance",
-        &bytes,
-        &PackageRef::LegacyZipSha256(expected),
-    )
+    PreparedContainedTask::load("neutral.instance", &package(task))
 }
 
 /// N3b-1: a set of 1–16 distinct pages, none `any`, each resolving to one page, and in a phased

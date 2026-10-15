@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const COMMAND: &str = "packs";
-const USAGE: &str = "usage: actingctl packs [--root <install root>] [--instance <alias|instance_id|adb port>] [--role procedure|prerequisite|return_home|startup|resource_package]";
+const USAGE: &str = "usage: actingctl packs [--root <install root>] [--instance <alias|instance_id|adb port>] [--role procedure|startup|resource_package]";
 /// The configuration of an install root without slots, as mcp-serve finds it.
 const ROOT_CONFIG_FILE: &str = "actingd.config.json";
 /// The file of a package that names its `package_id`.
@@ -36,16 +36,14 @@ const PROCEDURE_PACKAGE_PREFIX: &str = "package.";
 const MAX_CONTROL_BYTES: u64 = 1024 * 1024;
 
 /// Where a configuration binds a package (command table §4.12, roles). The recognition
-/// maintenance binding comes with D2-S2.
+/// maintenance binding comes with D2-S2. Workflow #373 NAV-3a (M-373 §4.3): prerequisite and
+/// return-home packages are no configuration bindings any more (the standard-pack registry
+/// holds them), so the roles `prerequisite` and `return_home` are gone with their keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Role {
     /// `policy.procedure_manifest[]`: installation level.
     Procedure,
-    /// `prerequisite_packages[]`: installation level.
-    Prerequisite,
-    /// `return_home_packages[]`, through the prerequisite package it names: installation level.
-    ReturnHome,
     /// `instances[].startup_package`: per instance.
     Startup,
     /// `instances[].resource_package`: per instance, path only.
@@ -54,13 +52,7 @@ pub(crate) enum Role {
 
 #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 impl Role {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::Procedure,
-        Self::Prerequisite,
-        Self::ReturnHome,
-        Self::Startup,
-        Self::ResourcePackage,
-    ];
+    pub(crate) const ALL: [Self; 3] = [Self::Procedure, Self::Startup, Self::ResourcePackage];
 
     /// The role a `--role` flag or `role` argument names.
     pub(crate) fn parse(text: &str) -> Option<Self> {
@@ -139,8 +131,7 @@ struct InstallationRow {
 
 pub(crate) struct Answer {
     packs: Packs,
-    /// Each warning once: `package_binding_unreadable {path, alias?}` and
-    /// `return_home_package_unbound {package_id}`.
+    /// Each warning once: `package_binding_unreadable {path, alias?}`.
     warnings: Vec<Outcome>,
 }
 
@@ -206,10 +197,6 @@ struct ConfigFile {
     instances: Vec<InstanceEntry>,
     #[serde(default)]
     policy: Option<PolicySection>,
-    #[serde(default)]
-    prerequisite_packages: Option<Vec<PrerequisiteEntry>>,
-    #[serde(default)]
-    return_home_packages: Option<Vec<ReturnHomeEntry>>,
 }
 
 #[derive(Deserialize)]
@@ -246,17 +233,6 @@ struct ProcedureEntry {
 struct ScheduledExecution {
     #[serde(default)]
     package_path: Option<PathBuf>,
-}
-
-#[derive(Deserialize)]
-struct PrerequisiteEntry {
-    package_id: String,
-    package_path: PathBuf,
-}
-
-#[derive(Deserialize)]
-struct ReturnHomeEntry {
-    package_id: String,
 }
 
 /// A package's control file, for its `package_id`.
@@ -447,7 +423,6 @@ impl Rows {
 
     fn installation(&mut self, file: &ConfigFile) -> Vec<InstallationRow> {
         let mut rows = Vec::new();
-        let prerequisites = file.prerequisite_packages.as_deref().unwrap_or_default();
         if self.wants(Role::Procedure) {
             for binding in file
                 .policy
@@ -472,47 +447,6 @@ impl Rows {
                     procedure_ref: Some(binding.procedure_ref.clone()),
                     operation_id: Some(binding.operation_id.clone()),
                     scheduled: binding.scheduled_execution.is_some(),
-                });
-            }
-        }
-        if self.wants(Role::Prerequisite) {
-            for entry in prerequisites {
-                let (path, readable) = self.installation_path(&entry.package_path);
-                rows.push(InstallationRow {
-                    role: Role::Prerequisite,
-                    package_id: Some(entry.package_id.clone()),
-                    path: Some(path),
-                    readable: Some(readable),
-                    procedure_ref: None,
-                    operation_id: None,
-                    scheduled: false,
-                });
-            }
-        }
-        if self.wants(Role::ReturnHome) {
-            for entry in file.return_home_packages.as_deref().unwrap_or_default() {
-                let bound = match prerequisites
-                    .iter()
-                    .find(|prerequisite| prerequisite.package_id == entry.package_id)
-                {
-                    Some(prerequisite) => Some(self.installation_path(&prerequisite.package_path)),
-                    // return_home_packages names a package prerequisite_packages does not bind.
-                    None => {
-                        self.warn(
-                            Outcome::new(SharedCode::ReturnHomePackageUnbound)
-                                .package_id(entry.package_id.as_str()),
-                        );
-                        None
-                    }
-                };
-                rows.push(InstallationRow {
-                    role: Role::ReturnHome,
-                    package_id: Some(entry.package_id.clone()),
-                    readable: bound.as_ref().map(|(_, readable)| *readable),
-                    path: bound.map(|(path, _)| path),
-                    procedure_ref: None,
-                    operation_id: None,
-                    scheduled: false,
                 });
             }
         }

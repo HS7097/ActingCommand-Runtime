@@ -6,7 +6,7 @@
 use crate::codes::ExecutionKernelCode;
 use crate::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::{BundleIndexV3, MaintenanceUse, PackageRef, ReaderProblem};
+use actingcommand_contract::{BundleIndex, MaintenanceUse, ReaderProblem};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_PREREQUISITE_DEPTH: usize = 3;
@@ -16,13 +16,14 @@ pub const MAX_GATED_STEPS: u64 = 1_000;
 pub struct TaskPackageDescriptor {
     package_id: String,
     entry_task_id: String,
-    reference: PackageRef,
     execution_mode: String,
     game: String,
     server: String,
     resolution: (u32, u32),
     prerequisite_package_id: Option<String>,
-    linear_entry_page: Option<String>,
+    /// Workflow #373 NAV-3a (M-373 §4.2): the entry a prerequisite gate checks (was the
+    /// `linear_steps` first step page alone): `None` when the package has no page entry.
+    entry_pages: Option<Vec<String>>,
     maximum_executed_steps: u32,
     startup_incompatibility: Option<&'static str>,
     prerequisite_incompatibility: Option<&'static str>,
@@ -43,13 +44,12 @@ impl PreparedContainedTask {
         TaskPackageDescriptor {
             package_id: self.package_label().to_owned(),
             entry_task_id: self.task_label().to_owned(),
-            reference: self.package_sha256().clone(),
             execution_mode: self.execution_mode().to_owned(),
             game: self.game().to_owned(),
             server: self.server().to_owned(),
             resolution: self.resolution(),
             prerequisite_package_id: self.prerequisite_package_id().map(str::to_owned),
-            linear_entry_page: self.linear_entry_page().map(str::to_owned),
+            entry_pages: self.gate_entry_pages(),
             maximum_executed_steps: self.maximum_executed_steps(),
             startup_incompatibility: self.startup_incompatibility(),
             prerequisite_incompatibility: self.prerequisite_incompatibility(),
@@ -66,9 +66,6 @@ impl TaskPackageDescriptor {
     pub fn entry_task_id(&self) -> &str {
         &self.entry_task_id
     }
-    pub fn reference(&self) -> &PackageRef {
-        &self.reference
-    }
     pub fn execution_mode(&self) -> &str {
         &self.execution_mode
     }
@@ -84,8 +81,9 @@ impl TaskPackageDescriptor {
     pub fn prerequisite_package_id(&self) -> Option<&str> {
         self.prerequisite_package_id.as_deref()
     }
-    pub fn linear_entry_page(&self) -> Option<&str> {
-        self.linear_entry_page.as_deref()
+    /// Workflow #373 NAV-3a: the entry a prerequisite gate checks; `None` without a page entry.
+    pub fn entry_pages(&self) -> Option<&[String]> {
+        self.entry_pages.as_deref()
     }
     pub fn maximum_executed_steps(&self) -> u32 {
         self.maximum_executed_steps
@@ -115,10 +113,10 @@ impl TaskPackageDescriptor {
         }
     }
 
-    /// Workflow #336 PKG-S4 (M-PKG D7): a configured return-home package is the package its
-    /// `prerequisite_packages` entry names by `package_id`, the identity its control declares
-    /// (never a digest); another package is refused as a chain layer is
-    /// (`contained_task_prerequisite_mismatch`).
+    /// Workflow #336 PKG-S4 (M-PKG D7): a return-home package is the package its registry entry
+    /// names by `package_id` (Workflow #373 NAV-3a: the standard-pack registry of its game), the
+    /// identity its control declares (never a digest); another package is refused as a chain
+    /// layer is (`contained_task_prerequisite_mismatch`).
     pub fn require_configured_package_id(
         &self,
         package_id: &str,
@@ -209,10 +207,25 @@ impl PrerequisiteChain {
         &self.dependent
     }
 
+    /// Workflow #373 NAV-3a (M-373 §4.2): whether the dependent layer, which declares no
+    /// prerequisite package, falls back to the return-home package of its game and server
+    /// (R16): it has a page entry and is not the return-home layer itself. A page-graph layer
+    /// falls back as a linear one does; a page-graph package run as the run's own package keeps
+    /// its home entry instead (the request's recovery binding, else the registry's return-home
+    /// package, R23), so it falls back through no chain.
+    pub fn may_fall_back(&self) -> bool {
+        self.dependent.prerequisite_package_id.is_none()
+            && !self.return_home
+            && self.dependent.entry_pages.is_some()
+            && (self.layers > 0 || self.dependent.execution_mode == "linear_steps")
+    }
+
+    /// The next layer: the dependent layer's declared prerequisite package, or the return-home
+    /// fallback `return_home_package` when [`Self::may_fall_back`] and it is not in the chain.
     pub fn next(&self, return_home_package: Option<&str>) -> Option<PrerequisiteLink> {
         let next = match &self.dependent.prerequisite_package_id {
             Some(package_id) => (package_id.clone(), false),
-            None if self.return_home || self.dependent.linear_entry_page.is_none() => return None,
+            None if !self.may_fall_back() => return None,
             None => {
                 let package_id = return_home_package.filter(|id| !self.visited.contains(*id))?;
                 (package_id.to_owned(), true)
@@ -291,10 +304,10 @@ impl PrerequisiteChain {
 
 /// Validate each pack's identity `(package_id, server, entry_task_id)`, every declared use and
 /// the complete chains against precisely the bindings this bundle will supply. Pure and shared
-/// with installers; descriptors must be obtained from each admitted pack in this index. The
-/// index's digests are compared with nothing (Workflow #336 PKG-S1).
+/// with installers; descriptors must be obtained from each admitted pack in this index. A pack
+/// is matched by its identity alone (Workflow #336 PKG-S5: bundle v4 carries no digest).
 pub fn validate_bundle_maintenance(
-    index: &BundleIndexV3,
+    index: &BundleIndex,
     packages: &[TaskPackageDescriptor],
 ) -> Result<(), ContainedTaskError> {
     let invalid = |detail: String| {
@@ -331,7 +344,7 @@ pub fn validate_bundle_maintenance(
     }
     let mut bindings = BTreeSet::new();
     let mut return_home = BTreeMap::new();
-    for entry in &index.maintenance {
+    for entry in index.maintenance() {
         let actual = by_id[entry.package_id.as_str()];
         for purpose in &entry.uses {
             if let Some(reason) = actual.use_incompatibility(*purpose) {
@@ -366,28 +379,26 @@ pub fn validate_bundle_maintenance(
 #[cfg(test)]
 mod gate_e1;
 
+// Workflow #373 NAV-3a, test row N3a-3 (exec key 67): the chain through page-graph layers.
+#[cfg(test)]
+mod gate_373_nav3a;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_contract::{
-        BundleIndexV3Version, BundlePackV2, ContentDirectory, ContentDirectoryVersion,
-    };
+    use actingcommand_contract::{BundleIndexVersion, BundlePack};
 
-    /// A described pack whose recorded reference is `reference`.
-    fn descriptor(package_id: &str, reference: &str) -> TaskPackageDescriptor {
+    /// A described pack.
+    fn descriptor(package_id: &str) -> TaskPackageDescriptor {
         TaskPackageDescriptor {
             package_id: package_id.to_owned(),
             entry_task_id: "neutral_task".to_owned(),
-            reference: PackageRef::ContentDirectory(ContentDirectory {
-                schema_version: ContentDirectoryVersion::V1,
-                sha256: reference.to_owned(),
-            }),
             execution_mode: "navigable_route".to_owned(),
             game: "neutral".to_owned(),
             server: "test".to_owned(),
             resolution: (2, 1),
             prerequisite_package_id: None,
-            linear_entry_page: None,
+            entry_pages: None,
             maximum_executed_steps: 1,
             startup_incompatibility: None,
             prerequisite_incompatibility: None,
@@ -396,40 +407,34 @@ mod tests {
         }
     }
 
-    /// A one-pack bundle index whose pack entry names `package_id` and the digest `a…a`.
-    fn index(package_id: &str) -> BundleIndexV3 {
-        let digest = "a".repeat(64);
-        BundleIndexV3 {
-            schema_version: BundleIndexV3Version::V3,
+    /// A one-pack bundle index v4 whose pack entry names `package_id`.
+    fn index(package_id: &str) -> BundleIndex {
+        BundleIndex {
+            schema_version: BundleIndexVersion::V4,
             game: "neutral".to_owned(),
             source: None,
-            packs: vec![BundlePackV2 {
+            packs: vec![BundlePack {
                 package_id: package_id.to_owned(),
                 server: "test".to_owned(),
                 entry_task_id: "neutral_task".to_owned(),
-                path: format!("packs/{digest}"),
-                digest,
+                path: format!("packs/{package_id}"),
                 file_count: 3,
                 byte_count: 64,
             }],
-            maintenance: Vec::new(),
+            maintenance: Some(Vec::new()),
+            tables: None,
         }
     }
 
     // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T6: bundle maintenance matches each pack
-    // by `(package_id, server, entry_task_id)`; the index digest is compared with nothing.
+    // by `(package_id, server, entry_task_id)`; since PKG-S5 the index carries no digest at all.
     #[test]
     fn s1_t6_bundle_maintenance_matches_packs_by_identity_and_ignores_the_index_digest() {
-        validate_bundle_maintenance(
-            &index("neutral.pack"),
-            &[descriptor("neutral.pack", &"b".repeat(64))],
-        )
-        .expect("an index digest that differs from the admitted content does not refuse");
-        let error = validate_bundle_maintenance(
-            &index("neutral.pack"),
-            &[descriptor("neutral.other", &"a".repeat(64))],
-        )
-        .expect_err("a pack with another package_id is refused");
+        validate_bundle_maintenance(&index("neutral.pack"), &[descriptor("neutral.pack")])
+            .expect("a pack of the indexed identity is matched");
+        let error =
+            validate_bundle_maintenance(&index("neutral.pack"), &[descriptor("neutral.other")])
+                .expect_err("a pack with another package_id is refused");
         assert_eq!(
             error.code().as_str(),
             ExecutionKernelCode::BundleMaintenanceInvalid.as_str()

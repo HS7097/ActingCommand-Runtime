@@ -16,7 +16,6 @@
 // Frames are synthetic: 96x64 pixels of flat gray with neutral noise patches; no OCR model is
 // installed and no device is used. Requirement basis: REC-M §6.1-§6.3, §7, §12 row REC-4.
 
-use crate::recording::container::table_digest;
 use crate::recording::crosscheck::admit;
 use crate::recording::store::{old_record_path, recording_path};
 use crate::{
@@ -338,10 +337,14 @@ fn simulated_tap(
     entries: &BTreeMap<String, Vec<u8>>,
     image: &Gray,
 ) -> (i32, i32) {
-    let digest = lab["digest"].as_str().expect("digest");
-    assert_eq!(digest, table_digest(entries));
-    let prepared = admit(entries, digest, &recording.ocr)
-        .unwrap_or_else(|error| panic!("admission: {}", error.code));
+    // The answer names the package's files; `entries` is the package written at its path.
+    assert_eq!(
+        lab["entries"],
+        json!(entries.keys().collect::<Vec<_>>()),
+        "{lab}"
+    );
+    let prepared =
+        admit(entries, &recording.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
     let frame = Frame::from_png(image.png(), CaptureBackendName::AdbScreencap).expect("frame");
     let result = simulate_contained_task(&prepared, vec![frame]).expect("simulation");
     match result.decision {

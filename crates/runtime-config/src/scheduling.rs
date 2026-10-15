@@ -11,9 +11,15 @@
 //! waits for the readings it handed to recognition, read by the host when a run joins. Workflow
 //! #384 D2-S4: `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
 //! `max_consecutive_failures`, the pace of the scheduler's recognition maintenance package
-//! dispatches, read by the host at every policy cycle. Workflow #336 PKG-S3:
+//! dispatches, read by the host at every policy cycle. Workflow #384 D2-S5:
+//! `fact_refresh.overdue_ms`, how long one instance may wait for one key before the transition
+//! recorder reports `fact_reader_overdue`; it has no default (unset, nothing is reported) and is
+//! read by the host at every policy cycle. Workflow #336 PKG-S3:
 //! `suspension.lift_check_min_interval_ms`, the least time between two measurements of one
 //! package's content hash by the suspension lift checks, read by the host at each check.
+//! Workflow #386 SR-3: `pack_admission.check_in_check_config`, `check_after_start` and
+//! `suspend_codes`, the task package admission check of `check-config` and of the background
+//! after start, and the admission codes that suspend a task package, read where they are used.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! host blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, and
@@ -93,11 +99,25 @@ pub const FACT_REFRESH_FAILURE_BACKOFF_MS: &str = "scheduling.fact_refresh.failu
 /// the activity day.
 pub const FACT_REFRESH_MAX_CONSECUTIVE_FAILURES: &str =
     "scheduling.fact_refresh.max_consecutive_failures";
+/// Workflow #384 D2-S5 (D2 model §3.4, §3.9 item 6): how long one instance's candidates may wait
+/// for one key before the transition recorder reports `fact_reader_overdue`. No default: unset,
+/// nothing is reported.
+pub const FACT_REFRESH_OVERDUE_MS: &str = "scheduling.fact_refresh.overdue_ms";
 
 /// Workflow #336 PKG-S3 (M-PKG §3.4, D1): the least time between two measurements of one
 /// package's content hash by the suspension lift checks.
 pub const SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS: &str =
     "scheduling.suspension.lift_check_min_interval_ms";
+
+/// Workflow #386 SR-3 (§2.4 item 2): whether `check-config` admits every package of
+/// `policy.procedure_manifest` with this Runtime's kernel.
+pub const PACK_ADMISSION_CHECK_IN_CHECK_CONFIG: &str =
+    "scheduling.pack_admission.check_in_check_config";
+/// Workflow #386 SR-3 (§2.4 item 2): whether the daemon admits them in the background after its
+/// start.
+pub const PACK_ADMISSION_CHECK_AFTER_START: &str = "scheduling.pack_admission.check_after_start";
+/// Workflow #386 SR-3 (§2.4 item 3): the admission codes that suspend a task package (a list).
+pub const PACK_ADMISSION_SUSPEND_CODES: &str = "scheduling.pack_admission.suspend_codes";
 
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
@@ -157,6 +177,8 @@ pub struct SchedulingFile {
     fact_refresh: Option<FactRefreshFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     suspension: Option<SuspensionFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_admission: Option<PackAdmissionFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -205,12 +227,21 @@ file_struct!(
         failure_backoff_ms,
         max_consecutive_failures,
         recognition_join_timeout_ms,
+        overdue_ms,
     }
 );
 file_struct!(
     /// Workflow #336 PKG-S3: the suspension lift checks.
     SuspensionFile {
         lift_check_min_interval_ms
+    }
+);
+file_struct!(
+    /// Workflow #386 SR-3: the task package admission check and its suspend codes.
+    PackAdmissionFile {
+        check_in_check_config,
+        check_after_start,
+        suspend_codes,
     }
 );
 file_struct!(
@@ -367,11 +398,40 @@ pub(crate) static ROWS: &[KeyRow] = &[
         JOIN_TIMEOUT,
         "D2-S2",
     ),
+    // Workflow #384 D2-S5: no default (register §5: unset = not reported), so only a file that
+    // names the key carries it, and an instruction can change it only then.
+    KeyRow {
+        default: DefaultSource::None,
+        ..row(
+            FACT_REFRESH_OVERDUE_MS,
+            ValueType::DurationMs,
+            KeyRange::Any,
+            "D2-S5",
+        )
+    },
     row(
         SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS,
         ValueType::DurationMs,
         KeyRange::Any,
         "PKG-S3",
+    ),
+    row(
+        PACK_ADMISSION_CHECK_IN_CHECK_CONFIG,
+        ValueType::Boolean,
+        KeyRange::Any,
+        "SR-3",
+    ),
+    row(
+        PACK_ADMISSION_CHECK_AFTER_START,
+        ValueType::Boolean,
+        KeyRange::Any,
+        "SR-3",
+    ),
+    row(
+        PACK_ADMISSION_SUSPEND_CODES,
+        ValueType::List,
+        KeyRange::Any,
+        "SR-3",
     ),
 ];
 
@@ -469,6 +529,17 @@ pub struct FactRefreshConfig {
     pub daily_limit: u32,
     pub failure_backoff_ms: u64,
     pub max_consecutive_failures: u32,
+    /// Workflow #384 D2-S5: when one key's wait is reported overdue; `None` when unset.
+    pub overdue_ms: Option<u64>,
+}
+
+/// Workflow #386 SR-3 (§2.4): the task package admission check of `check-config` and of the
+/// background after start, and the admission codes that suspend a task package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackAdmissionConfig {
+    pub check_in_check_config: bool,
+    pub check_after_start: bool,
+    pub suspend_codes: Vec<String>,
 }
 
 /// The `scheduling` section in effect, read and checked whole.
@@ -482,6 +553,7 @@ pub struct SchedulingConfig {
     pub not_run_diagnose_rows: u32,
     pub random_delay: RandomDelay,
     pub fact_refresh: FactRefreshConfig,
+    pub pack_admission: PackAdmissionConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -518,6 +590,15 @@ impl Reader<'_> {
         match self.scalar(key)? {
             FactScalar::DurationMs(ms) => Ok(ms),
             _ => Err(invalid(key, ConfigValueProblem::WrongType)),
+        }
+    }
+
+    /// A duration key without a default: `None` when the configuration does not carry it.
+    fn optional_duration(&self, key: &str) -> Result<Option<u64>, ConfigFailure> {
+        match (self.value)(key) {
+            None => Ok(None),
+            Some(FactScalar::DurationMs(ms)) => Ok(Some(ms)),
+            Some(_) => Err(invalid(key, ConfigValueProblem::WrongType)),
         }
     }
 
@@ -713,8 +794,27 @@ impl SchedulingConfig {
                 ],
             )?,
             fact_refresh: fact_refresh_from(&reader)?,
+            pack_admission: pack_admission_from(&reader)?,
         })
     }
+}
+
+/// Workflow #386 SR-3: the `pack_admission` keys from `reader`; a suspend code the catalog does
+/// not list is `code_unknown`, a retired one `code_retired`.
+fn pack_admission_from(reader: &Reader<'_>) -> Result<PackAdmissionConfig, ConfigFailure> {
+    Ok(PackAdmissionConfig {
+        check_in_check_config: reader.boolean(PACK_ADMISSION_CHECK_IN_CHECK_CONFIG)?,
+        check_after_start: reader.boolean(PACK_ADMISSION_CHECK_AFTER_START)?,
+        suspend_codes: reader.codes(PACK_ADMISSION_SUSPEND_CODES)?,
+    })
+}
+
+/// Workflow #386 SR-3: the `pack_admission` keys in effect, read alone (the host reads them at
+/// each admission refusal and at its background check; `check-config` reads them once).
+pub(crate) fn pack_admission(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<PackAdmissionConfig, ConfigFailure> {
+    pack_admission_from(&Reader { value })
 }
 
 /// Workflow #384 D2-S4: the fact refresh keys from `reader`, each by the key table's type and
@@ -726,6 +826,7 @@ fn fact_refresh_from(reader: &Reader<'_>) -> Result<FactRefreshConfig, ConfigFai
         daily_limit: reader.count(FACT_REFRESH_DAILY_LIMIT)?,
         failure_backoff_ms: reader.duration(FACT_REFRESH_FAILURE_BACKOFF_MS)?,
         max_consecutive_failures: reader.count(FACT_REFRESH_MAX_CONSECUTIVE_FAILURES)?,
+        overdue_ms: reader.optional_duration(FACT_REFRESH_OVERDUE_MS)?,
     })
 }
 

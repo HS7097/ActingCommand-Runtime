@@ -8,16 +8,15 @@ use actingcommand_contract::resource_declaration::{
     ProcedureBindingConfigFile, ScheduledExecutionConfigFile,
 };
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRecoveryBinding,
-    ContainedTaskRequest, InstanceId, InstanceResourcePackage, InstanceResourcePackageKind,
-    PackageRef, RuntimeConfigManifest,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ContainedTaskRequest, InstanceId,
+    InstanceResourcePackage, InstanceResourcePackageKind, RuntimeConfigManifest,
 };
 use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceKind,
     DeviceSerial, DeviceTarget, EnvOverrides, Frame, MaaTouchConfig, MinitouchConfig, PixelFormat,
     TouchBackendChoice, TouchBackendConfig,
 };
-use actingcommand_execution_kernel::{PreparedContainedTask, prerequisite_package_id_valid};
+use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
     MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
@@ -162,19 +161,12 @@ pub(super) struct ActingdConfigFile {
     /// ignored and named as `env_override_ignored:<VAR>`, never silently used.
     #[serde(default)]
     allow_env_overrides: Option<bool>,
-    /// Workflow #336 L2b: the packages a `linear_steps` package may name as its
-    /// `prerequisite_package_id`, each with its locator (Workflow #336 PKG-S4: no digest). Not a
-    /// configuration fact; read at startup.
-    #[serde(default)]
-    prerequisite_packages: Option<Vec<PrerequisitePackageConfigFile>>,
-    /// Workflow #336 L2c: per (game, server), the `prerequisite_packages` id of the return-home
-    /// package a `linear_steps` package without a declared prerequisite package falls back to.
-    /// Not a configuration fact; read at startup.
-    #[serde(default)]
-    return_home_packages: Option<Vec<ReturnHomePackageConfigFile>>,
     /// Workflow #373 NAV-6: the installed standard packs (`standard_packs.root`), read at
     /// startup. Workflow #387 D1c: the section's file is `crates/runtime-config`'s, and the key
-    /// is reported in `config.parameters.standard_packs`.
+    /// is reported in `config.parameters.standard_packs`. Workflow #373 NAV-3a (M-373 §4.3):
+    /// every prerequisite and return-home package is found in its registries, so the retired
+    /// `prerequisite_packages` and `return_home_packages` are unknown members
+    /// (`config_decode_failed`).
     #[serde(default)]
     standard_packs: Option<actingcommand_runtime_config::StandardPacksFile>,
     /// Workflow #387 D1c: the recovery ladder (`recovery_ladder.*`) and the Runtime-held keys
@@ -213,86 +205,6 @@ pub(super) struct ActingdConfigFile {
     install_root: Option<PathBuf>,
 }
 
-/// One `prerequisite_packages` entry (Workflow #336 L2b): the package id a `linear_steps`
-/// package names and the package locator (a relative path resolves against the configuration
-/// file's directory). Workflow #336 PKG-S4 (option 丙, M-PKG D7): no digest; an entry that
-/// still names `package_digest` does not decode (`config_decode_failed`). Nothing is opened or
-/// hashed at assembly; a run admits the package by its path when it resolves its prerequisite
-/// chain, and refuses it when its control declares another `package_id`
-/// (`contained_task_prerequisite_mismatch`).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PrerequisitePackageConfigFile {
-    package_id: String,
-    package_path: PathBuf,
-}
-
-/// The prerequisite package map by package id: at most `MAX_TASKS` entries
-/// (`prerequisite_packages_size_invalid`), each id valid (`prerequisite_package_id_invalid`)
-/// and unique (`prerequisite_package_duplicate`), each locator checked as a procedure
-/// binding's `package_path` is, under the `prerequisite_package_*` codes.
-fn assemble_prerequisite_packages(
-    configured: Vec<PrerequisitePackageConfigFile>,
-    source_root: &Path,
-) -> Result<BTreeMap<String, ContainedTaskRecoveryBinding>, Code> {
-    if configured.len() > MAX_TASKS {
-        return Err(ActingdCode::PrerequisitePackagesSizeInvalid.code());
-    }
-    let mut packages = BTreeMap::new();
-    for entry in configured {
-        if !prerequisite_package_id_valid(&entry.package_id) {
-            return Err(ActingdCode::PrerequisitePackageIdInvalid.code());
-        }
-        let request = contained_task_request(source_root, Some(entry.package_path))
-            .map_err(prerequisite_package_code)?;
-        let binding = ContainedTaskRecoveryBinding::new(request.package_path())
-            .map_err(|_| ActingdCode::PrerequisitePackageRequestInvalid.code())?;
-        if packages.insert(entry.package_id, binding).is_some() {
-            return Err(ActingdCode::PrerequisitePackageDuplicate.code());
-        }
-    }
-    Ok(packages)
-}
-
-/// A procedure package refusal under the `prerequisite_package_*` code it is reported as.
-fn prerequisite_package_code(code: Code) -> Code {
-    [
-        (
-            ActingdCode::ProcedurePackageUnavailable.code(),
-            ActingdCode::PrerequisitePackageUnavailable,
-        ),
-        (
-            ActingdCode::ProcedurePackageNotRegular.code(),
-            ActingdCode::PrerequisitePackageNotRegular,
-        ),
-        (
-            ActingdCode::ProcedurePackageContainerUnsupported.code(),
-            ActingdCode::PrerequisitePackageContainerUnsupported,
-        ),
-        (
-            ActingdCode::ProcedureTaskRequestInvalid.code(),
-            ActingdCode::PrerequisitePackageRequestInvalid,
-        ),
-        (
-            ActingdCode::ProcedurePackagePathMissing.code(),
-            ActingdCode::PrerequisitePackageRequestInvalid,
-        ),
-    ]
-    .into_iter()
-    .find_map(|(procedure, prerequisite)| (procedure == code).then_some(prerequisite.code()))
-    .unwrap_or(code)
-}
-
-/// One `return_home_packages` entry (Workflow #336 L2c): a game and server and the package id
-/// of their return-home package, a key of `prerequisite_packages`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ReturnHomePackageConfigFile {
-    game: String,
-    server: String,
-    package_id: String,
-}
-
 /// Workflow #387 D1c: one instance's stuck-recovery settings from the rows the configuration
 /// mechanism resolved: its `stuck_recovery` and `stuck_recovery_cooldown_secs`, which take the
 /// `recovery_ladder` section's values when the file names neither.
@@ -321,39 +233,6 @@ fn stuck_recovery_settings(
         }),
         _ => Err(ActingdCode::ConfigManifestInvalid.code()),
     }
-}
-
-/// The return-home package ids by (game, server): at most `MAX_TASKS` entries
-/// (`return_home_packages_size_invalid`); game and server not empty, at most 64 bytes, with no
-/// control character (`return_home_package_key_invalid`); each package id a key of
-/// `prerequisite_packages` (`return_home_package_unbound`); one entry per (game, server)
-/// (`return_home_package_duplicate`).
-fn assemble_return_home_packages(
-    configured: Vec<ReturnHomePackageConfigFile>,
-    prerequisite_packages: &BTreeMap<String, ContainedTaskRecoveryBinding>,
-) -> Result<BTreeMap<(String, String), String>, Code> {
-    if configured.len() > MAX_TASKS {
-        return Err(ActingdCode::ReturnHomePackagesSizeInvalid.code());
-    }
-    let key_valid = |value: &str| {
-        !value.trim().is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
-    };
-    let mut packages = BTreeMap::new();
-    for entry in configured {
-        if !key_valid(entry.game.as_str()) || !key_valid(entry.server.as_str()) {
-            return Err(ActingdCode::ReturnHomePackageKeyInvalid.code());
-        }
-        if !prerequisite_packages.contains_key(&entry.package_id) {
-            return Err(SharedCode::ReturnHomePackageUnbound.code());
-        }
-        if packages
-            .insert((entry.game, entry.server), entry.package_id)
-            .is_some()
-        {
-            return Err(ActingdCode::ReturnHomePackageDuplicate.code());
-        }
-    }
-    Ok(packages)
 }
 
 /// Workflow #385 P-c: the values of the `performance` section the start-up assembly reads
@@ -1056,7 +935,6 @@ pub(super) fn validate_resource_packages(
         PreparedContainedTask::load_path(
             alias,
             &path,
-            &PackageRef::default(),
             None,
             Instant::now() + RESOURCE_PACKAGE_DIRECTORY_DEADLINE,
         )
@@ -1458,16 +1336,6 @@ impl ActingdConfigFile {
             .policy
             .map(|policy| policy.assemble(&self.source_root))
             .transpose()?;
-        let prerequisite_packages = self
-            .prerequisite_packages
-            .map(|configured| assemble_prerequisite_packages(configured, &self.source_root))
-            .transpose()?
-            .unwrap_or_default();
-        let return_home_packages = self
-            .return_home_packages
-            .map(|configured| assemble_return_home_packages(configured, &prerequisite_packages))
-            .transpose()?
-            .unwrap_or_default();
         if let Some(policy) = policy.as_ref() {
             policy.validate_registry_modes(&provider)?;
             policy.validate_instance_identities(&configured_aliases)?;
@@ -1574,8 +1442,6 @@ impl ActingdConfigFile {
             .with_performance_control(performance_control)
             .with_startup_packages(startup_packages)
             .with_stuck_recovery(stuck_recovery)
-            .with_prerequisite_packages(prerequisite_packages)
-            .with_return_home_packages(return_home_packages)
             .with_standard_packs_root(standard_packs_root);
         // Every effective value is read back from `host`; the file only says what it named.
         let manifest = manifest::build(&manifest::ManifestInputs {
@@ -1971,8 +1837,8 @@ fn procedure_binding(
     Ok((binding, scheduled_task))
 }
 
-/// The request of a procedure binding or a prerequisite package (Workflow #336 PKG-S4, option
-/// 丙): its package by its path only. A relative path resolves against the configuration
+/// The request of a procedure binding (Workflow #336 PKG-S4, option 丙): its package by its
+/// path only. A relative path resolves against the configuration
 /// file's directory, and the path keeps its components so containment can refuse a link. The
 /// path chooses how the package is read, as containment does (M-PKG §3.2): a directory is a
 /// content directory, a `.zip` or `.json` file (ASCII case-insensitive) a container, an

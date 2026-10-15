@@ -123,7 +123,6 @@ impl HostShared {
             PreparedPageObservation::load_path(
                 instance_alias,
                 path,
-                &actingcommand_contract::PackageRef::default(),
                 input.targets(),
                 self.execution()?.vision_provider(),
                 deadline,

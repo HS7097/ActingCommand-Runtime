@@ -423,7 +423,6 @@ fn prepared(control: Value, program: Value) -> PreparedContainedTask {
         scheduling_outcome,
         post_admission_ocr: None,
         post_admission_fields: None,
-        package_sha256: "fixture-sha256".into(),
         entry_count: 1,
         task_count: 1,
     }
@@ -1455,7 +1454,7 @@ fn gate_linear_the_first_step_after_return_home_and_without_a_fallback() {
 
     let mut device = Device::new(vec![vec![Screen::Blank]]);
     let awaited = package
-        .await_linear_entry(
+        .await_gate_entry(
             &mut device,
             step_timeout,
             TaskTimingBudgetOrigin::Task,
@@ -1500,7 +1499,7 @@ fn gate_linear_the_first_step_after_return_home_and_without_a_fallback() {
 
     let mut device = Device::new(vec![vec![Screen::Home]]);
     let awaited = package
-        .await_linear_entry(
+        .await_gate_entry(
             &mut device,
             step_timeout,
             TaskTimingBudgetOrigin::Task,

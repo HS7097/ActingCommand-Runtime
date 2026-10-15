@@ -1271,6 +1271,20 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads what the scheduler's fact refresh waits for now (`FactRefreshStatus`, Workflow #384
+    /// D2-S5, D2 model §6 S5; register §1.68): per instance the keys its candidates wait for,
+    /// each with the latest cycle's reason, the recognition maintenance package that serves it
+    /// and when the wait began. Read-only: the Runtime reads and records nothing in the ledger.
+    pub fn fact_refresh_status(
+        &self,
+    ) -> RuntimeClientResult<actingcommand_contract::RuntimeFactRefreshStatus> {
+        const OPERATION: Location = ClientLocation::RuntimeFactRefreshStatus.location();
+        match self.execute(OPERATION, RuntimeOperation::FactRefreshStatus)? {
+            RuntimeResult::FactRefreshStatus { status } => Ok(*status),
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     pub fn configure_monitor(
         &self,
         instance_alias: &str,

@@ -2,6 +2,6 @@
 
 pub use actingcommand_resource_tooling::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, JsonDocument, PackageBundleRequest, PackageBundleResponse,
-    PackageDigestRequest, PackageDigestResponse, PackageValidateRequest, PackageValidationResponse,
-    RecognitionPackDiagnosticsResponse, UnsupportedRecognitionTargetResponse,
+    PackageValidateRequest, PackageValidationResponse, RecognitionPackDiagnosticsResponse,
+    UnsupportedRecognitionTargetResponse,
 };

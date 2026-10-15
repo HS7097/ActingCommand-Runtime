@@ -21,7 +21,7 @@ Runtime and recorded there as any `do --capture` or `session app` is.
 <state>/record-artifacts/<record_id>/lab/recording.json      actingcommand.lab-recording.v1
 <state>/record-artifacts/<record_id>/lab/frames/<sha256>.png frames, content-addressed
 <state>/record-artifacts/<record_id>/lab/crops/<sha256>.png  template crops, content-addressed
-<state>/record-artifacts/<record_id>/lab/out/<D>.<zip|json>  the package record stop generated
+<state>/record-artifacts/<record_id>/lab/out/<package_id>.<zip|json>  the package record stop generated
 ```
 
 `<instance>` and `<record_id>` use the file-stem rule of the `record` command: ASCII
@@ -345,7 +345,7 @@ purpose is to evaluate an OCR target:
   `observe` output report the OCR state (`available`, `execution_provider: "cpu"`, `vision_root`,
   and `unavailable` with the outcome).
 
-`package digest` and `package bundle` never load the provider.
+`package bundle` never loads the provider.
 
 ## Steps, frames and remediation
 
@@ -698,7 +698,7 @@ the package directory.
 **`--dry-run`** (also the global `--dry-run`) runs everything: the pre-checks, generation,
 admission, the first decision, the cross-check and the `--lab-dir` checks. It writes nothing,
 both states stay active, and the output has `status: "validated"`, `lab.status: "validated"`,
-`lab.would_write[]`, `lab.lab_dir_status: "to_write" | "present"` and `lab.lab_dir_to_create`.
+`lab.would_write[]`, `lab.lab_dir_status: "to_write" | "to_replace"` and `lab.lab_dir_to_create`.
 Its `lab.warnings` are those the final stop prints: run it first, mark what it asks for, then
 run `record stop`. The final stop closes the recording; afterwards `record mark` only answers
 `record_session_not_active` and a missing mark means recording again.
@@ -796,7 +796,7 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   cross-check. `generated_at_unix_ms` is the recording's `updated_at_unix_ms`, so the same
   recording generates the same bytes again.
 
-### Container and digest
+### Container and name
 
 With a template mark the package is a ZIP of the content-directory layout, otherwise one
 `actingcommand.package.content-json.v1` document; both hold the same files:
@@ -810,9 +810,10 @@ resources/operations/<task_id>/assets/<name>.png      (ZIP only)
 
 JSON documents are pretty-printed with a final newline. The ZIP has no directory entries,
 `/`-separated ASCII names in byte order, deflate and the timestamp 1980-01-01; the JSON
-container lists the files in path order. D is the `content-directory.v1` digest of these
-files (`package-reference.md`); the same content has the same D in either container and
-unpacked as a directory.
+container lists the files in path order. Workflow #336 PKG-S5 (option 丙): the package is
+named by its `package_id`, as `<package_id>.zip` or `<package_id>.json`; no digest of it is
+computed, recorded or answered. `--package-id` (or the default `<game>.<server>.<task_id>`)
+must therefore also be one path segment usable as a file name (`validation_failed`, exit 2).
 
 ### Self-checks
 
@@ -825,9 +826,10 @@ are checked by `package preflight` through that same preparation owner; actual s
 guard execution still requires the corresponding frames, provider and Runtime evidence.
 
 1. **Container round trip.** The encoded bytes expand (`expand_content_container`) to exactly
-   the generated files, whose digest is D.
-2. **Admission.** The kernel admits the files as actingd loads a content directory: the digest
-   comparison, source compilation, declarations and the `linear_steps` rules, with the Lab's OCR
+   the generated files, compared entry by entry (path and bytes); a difference is
+   `record_artifact_admission_failed` with `details{stage: "container_round_trip", paths}`.
+2. **Admission.** The kernel admits the files as actingd loads a content directory: source
+   compilation, declarations and the `linear_steps` rules, with the Lab's OCR
    provider when it has one (admission never calls it). A refusal is `record_artifact_admission_failed` (3) with
    `details{stage, loader_code, detail, declaration{file, pointer, reason}}`.
 3. **First decision.** The offline simulation of the package on recorded frames:
@@ -915,28 +917,36 @@ Warnings never refuse. The provenance and the output carry the same warnings.
 
 ### Writing
 
-Everything above is computed in memory first. Then:
+Everything above is computed in memory first. Then (Workflow #336 PKG-S5, M-PKG v1.1 §3.5 and
+D9: an output of the same name is replaced in place, never refused):
 
 1. **`--lab-dir`** (usually `<install root>\packages\<game>\`; never guessed) is checked before
    anything is written: a missing directory needs an existing parent and only it is created
-   (`lab_dir_created: true`), otherwise `record_lab_dir_invalid` (2). An existing
-   `<lab-dir>/<D>.<ext>` holding the content D is `lab_dir_status: "present"` and is not
-   written; holding anything else, or unreadable, it is `record_artifact_name_conflict` (3)
-   and stays untouched.
-2. The copy inside the recording, `lab/out/<D>.<ext>`, is written (an existing copy with the
-   same bytes is reused; other bytes are `record_artifact_name_conflict`).
-3. `<lab-dir>/<D>.<ext>.part-<unix_ms>` is written (create new) and renamed to
-   `<D>.<ext>` (`lab_dir_status: "written"`); a target that appeared meanwhile is
-   `record_artifact_name_conflict` and the `.part` file stays.
-4. `recording.json` becomes `stopped` with its `artifact` (`container`, `digest`, `path`,
-   `lab_dir_path`, `sha256` of the container bytes, `byte_count`, `package_id`, `requires`,
+   (`lab_dir_created: true`), otherwise `record_lab_dir_invalid` (2); an existing
+   `<lab-dir>/<package_id>.<ext>` must be a file (a directory or a link there is
+   `record_lab_dir_invalid`, reason `target_not_a_file`), and is replaced.
+2. The copy inside the recording, `lab/out/<package_id>.<ext>`, is written, replacing a file of
+   that name.
+3. `<lab-dir>/<package_id>.<ext>` is written the same way (`lab_dir_status: "written"`, or
+   `"replaced"` when a file of that name was there).
+4. `recording.json` becomes `stopped` with its `artifact` (`container`, `path`,
+   `lab_dir_path`, `byte_count`, `package_id`, `requires`,
    `game`, `server`, `locale`, `timeout_ms`, `arrival_timeout_ms`,
    `application_arrival_timeout_ms` (defaults applied), `generated_at_unix_ms`); then the
    session file is stopped.
 
+Every replacement (steps 2 and 3) writes `<name>.part` beside the target, sets an existing
+target aside as `<name>.old-<unix_ms>`, renames the `.part` file to the target and deletes the
+set-aside file. The target's name only ever changes by rename, so a reader opens the old file,
+the new one or none (between the two renames), never part of one. A failed step is
+`record_state_io_failed` (5) and nothing is skipped: the `.part` file stays and is named; when
+the new file cannot be renamed into place the old one is renamed back (`details.restored`); once
+the new file is in place, a set-aside file that cannot be deleted is named in
+`details.left_files`.
+
 A failure in steps 2–4 leaves both states active and names the files already written
-(`details.written_files`, `.part` files included); nothing is deleted. A stopped recording
-given `--lab-dir` again checks its copy's sha256 and repeats steps 1 and 3. It is not generated
+(`details.written_files`, `.part` files included); nothing else is deleted. A stopped recording
+given `--lab-dir` again reads its copy and repeats steps 1 and 3. It is not generated
 again, so a generation option that differs from what its package was generated with is refused
 before anything is written: a different `--requires` is `record_requires_conflict` (3); a
 different `--package-id`, `--game`, `--server`, `--locale`, `--timeout-ms`,
@@ -949,27 +959,29 @@ equal value is accepted.
 `{status: "stopped" | "validated", dry_run, record, path, lab}` where `lab` is `null` or:
 
 ```
-{status, dry_run, session_already_stopped?, container, digest, package_id, task_id,
+{status, dry_run, session_already_stopped?, container, package_id, task_id,
  path, lab_dir_path, lab_dir_status, lab_dir_created, written_files | would_write,
- sha256, byte_count, entries, steps, click_steps, application_steps[{step, op, action, source}],
+ byte_count, entries, steps, click_steps, application_steps[{step, op, action, source}],
  pages, transitions, optional_steps[{step, op, settle_ms, skip_to, same_as}],
  timeouts{timeout_ms, step_timeout_ms, arrival_timeout_ms,
  application_arrival_timeout_ms}, warnings, arrival_by_time_window, marks_not_evaluated,
  steps_needing_review, cross_check, first_decision, entry_overlay,
- package_ref, requires, prerequisite_entry_example, binding_example, task_run_example,
+ requires, prerequisite_entry_example, binding_example, task_run_example,
  catalog_on_failure_example, binding_requires}
 ```
 
-- `package_ref` is `{"schema_version":"actingcommand.package.content-directory.v1",
-  "sha256":"<D>"}`; the package is an ordinary content-directory package and loads as
-  `--package <D>.<ext> --package-ref '<package_ref>'`.
+- The package is an ordinary content-directory package and loads as
+  `--package <package_id>.<ext>` (`task_run_example`); no answer member names a digest or a
+  package reference (Workflow #336 PKG-S5).
 - `binding_example` is a complete `policy.procedure_manifest[]` entry: `procedure_ref` (the
-  package id), `package_digest`, `operation_id: "operation.contained_task"`, `yield_points:
-  []` and `scheduled_execution{mode: "device_registry", package_path}` with the absolute path
-  (a configuration in the install root may use `packages/<game>/<D>.<ext>`). Whether it is
-  scheduled still depends on the catalog task and its approval.
-- `prerequisite_entry_example` is the entry for the actingd `prerequisite_packages` when
-  another package names this one with `--requires`.
+  package id), `operation_id: "operation.contained_task"`, `yield_points: []` and
+  `scheduled_execution{mode: "device_registry", package_path}` with the absolute path (a
+  configuration in the install root may use `packages/<game>/<package_id>.<ext>`). Whether it
+  is scheduled still depends on the catalog task and its approval.
+- `prerequisite_entry_example` was the entry for the actingd `prerequisite_packages` when
+  another package names this one with `--requires`; since Workflow #373 NAV-3a that key is
+  retired and a prerequisite package is a package its game's installed standard pack lists, so
+  the example names a package id and path only: `{package_id, package_path}`.
 - `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
   "retry_backoff_ms":0,"escalation_threshold":2}`, the `on_failure` that
   `policy-suspension.md` ("Catalog") recommends; the `binding_requires` item about it says that
@@ -979,7 +991,8 @@ equal value is accepted.
   `settle_ms`, `skip_to` (the page of N) and `same_as` (the earlier step recorded for the same
   pop-up, or `null`); `[]` without optional steps.
 - `binding_requires` lists what a binding also needs: the catalog task and its approval; the
-  `prerequisite_packages` entry with `--requires`; without it, the return-home fallback (step
+  prerequisite package with `--requires` (listed by its game's installed standard pack,
+  Workflow #373 NAV-3a); without it, the return-home fallback (step
   1 should be the return-home package's final screen); the recommended `on_failure`; with
   application steps, that only an instance with an assigned application runs them and that an
   application entry package has no entry recognition (best configured as the instance's
@@ -993,7 +1006,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict`, `record_stop_option_conflict` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |
