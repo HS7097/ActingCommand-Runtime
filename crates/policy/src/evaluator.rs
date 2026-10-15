@@ -2278,7 +2278,7 @@ fn apply_priority_selection(
         candidate.rank.total_score = candidate
             .rank
             .total_score
-            .saturating_add(effective_milli.saturating_mul(1_000));
+            .saturating_add(effective_milli.saturating_mul(0));
         candidate.rank.effective_milli = effective_milli;
         let applied = target.applied();
         let resources = target.resources();
