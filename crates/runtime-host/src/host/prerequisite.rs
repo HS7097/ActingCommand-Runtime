@@ -207,16 +207,20 @@ impl HostShared {
     /// no prerequisite package and has no return-home fallback, otherwise the packages outermost
     /// first. `material_deadline` is read only when there is a chain to admit. Workflow #373
     /// NAV-3a: the registry of the package's game is read only when the package declares a
-    /// prerequisite package or may fall back to the return-home package.
+    /// prerequisite package or may fall back to the return-home package. Workflow #373 NAV-5
+    /// (M-373 §4.4): a run whose gate `navigated` has no return-home fallback of its own
+    /// package; the navigation takes its place.
     pub(super) fn resolve_prerequisite_chain(
         &self,
         instance_alias: &str,
         prepared: &PreparedContainedTask,
+        navigated: bool,
         material_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
     ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
         self.resolve_prerequisite_chain_recorded(
             instance_alias,
             prepared,
+            navigated,
             material_deadline,
             &mut Vec::new(),
         )
@@ -229,6 +233,7 @@ impl HostShared {
         &self,
         instance_alias: &str,
         prepared: &PreparedContainedTask,
+        navigated: bool,
         material_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
         recorded: &mut Vec<ResolvedLayer>,
     ) -> Result<Vec<PreparedContainedTask>, RequestFailure> {
@@ -237,7 +242,7 @@ impl HostShared {
             .dependent()
             .prerequisite_package_id()
             .is_none()
-            && !qualification.may_fall_back()
+            && (navigated || !qualification.may_fall_back())
         {
             return Ok(Vec::new());
         }
@@ -458,9 +463,12 @@ fn gate_layer(
         .prerequisite_package_id()
         .is_none()
         .then(|| prerequisite.package_label());
-    let waited = package
-        .await_gate_entry(runtime, budget, origin, layer, return_home)
-        .map_err(|error| fail_recognition(runtime, gate, false, error))?;
+    // Workflow #373 NAV-5 (§5.2 item 1): the run's own recheck's last frame is the first
+    // locate's.
+    runtime.retain_entry_scene = layer == 0 && runtime.navigates();
+    let waited = package.await_gate_entry(runtime, budget, origin, layer, return_home);
+    runtime.retain_entry_scene = false;
+    let waited = waited.map_err(|error| fail_recognition(runtime, gate, false, error))?;
     runtime
         .record_entry_fact(TaskSemanticFact::EntryRecognition {
             phase: TaskEntryRecognitionPhase::PostRecovery,
@@ -470,10 +478,17 @@ fn gate_layer(
         })
         .map_err(ContainedTaskRunError::Boundary)?;
     if let Some(error) = waited.unmatched {
+        // Workflow #373 NAV-5 (M-373 §4.4 ① then ②): the declared chain ran and the run's
+        // own entry still does not pass; with navigation data the run navigates.
+        if layer == 0 && runtime.navigates() {
+            gate.executed = runtime.navigate_to_entry(package, gate.executed)?;
+            return Ok(());
+        }
         // The failure's timing belongs to the wait's own budget.
         runtime.task_timing.replace_context(Some(waited.timing));
         return Err(fail_gate(runtime, gate, ContainedTaskRunError::Task(error)));
     }
+    runtime.entry_scene = None;
     Ok(())
 }
 

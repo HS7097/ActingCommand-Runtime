@@ -16,6 +16,7 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_ledger::IdKind;
 use actingcommand_page_detector::PageDetector;
+use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
 };
@@ -458,10 +459,13 @@ fn execute_navigation_route<P: LabPorts>(
                 &["page_guard"],
             ));
         }
-        let (input, recognition) = resolve_navigation_edge_input(context, &edge)?;
+        let (input, recognition, scene) = resolve_navigation_edge_input(context, &edge)?;
+        // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
+        // follows a target covers the box its target matches on this frame.
+        let frame_regions = destructive_frame_regions(context, edge.from_page(), scene)?;
         context
             .graph
-            .validate_resolved_input(&edge, &input)
+            .validate_resolved_input_on_frame(&edge, &input, &frame_regions)
             .map_err(drive_decision_error)?;
         let device = send_semantic_input(context.lab, &input)?;
         let arrived = poll_for_page(context, edge.to_page())?;
@@ -490,17 +494,64 @@ fn execute_navigation_route<P: LabPorts>(
     Ok((executed, current_page))
 }
 
+/// The resolved input, its target's recognition, and the frame's scene when one was captured
+/// to resolve it.
+type ResolvedEdgeInput = (
+    SemanticInput,
+    Option<crate::NavigationTargetRecognitionResponse>,
+    Option<Scene>,
+);
+
+/// Workflow #373 NAV-5 (wave-17 ruling 21): the boxes the destructive regions of `page` that
+/// follow a target cover on the current frame (`scene`, the edge's own when it captured one); a
+/// target that does not pass covers nothing there.
+fn destructive_frame_regions<P: LabPorts>(
+    context: &mut NavigationExecutionContext<'_, P>,
+    page: &str,
+    scene: Option<Scene>,
+) -> LabResult<Vec<PackRect>> {
+    let graph = context.graph;
+    let targets = graph.frame_destructive_targets(page);
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scene = match scene {
+        Some(scene) => scene,
+        None => recognition_scene(context.lab, context.input)?,
+    };
+    let mut regions = Vec::new();
+    for (target_id, offset) in targets {
+        let evaluation = context
+            .evaluator
+            .evaluate_target(&scene, target_id)
+            .map_err(|error| LabError::usage(error.to_string()))?;
+        if !evaluation.passed {
+            continue;
+        }
+        let rect = target_evaluation_rect(&evaluation)?;
+        regions.push(match offset {
+            Some(offset) => drive_offset_rect(
+                rect,
+                evaluation
+                    .template
+                    .and_then(|template| template.scale_milli),
+                offset,
+            )
+            .map_err(drive_decision_error)?,
+            None => rect,
+        });
+    }
+    Ok(regions)
+}
+
 fn resolve_navigation_edge_input<P: LabPorts>(
     context: &mut NavigationExecutionContext<'_, P>,
     edge: &NavigationEdge,
-) -> LabResult<(
-    SemanticInput,
-    Option<crate::NavigationTargetRecognitionResponse>,
-)> {
+) -> LabResult<ResolvedEdgeInput> {
     let (target_id, offset) = match edge.input() {
         SemanticInput::TargetCenter { target_id } => (target_id, None),
         SemanticInput::TargetOffset { target_id, offset } => (target_id, Some(*offset)),
-        _ => return Ok((edge.input().clone(), None)),
+        _ => return Ok((edge.input().clone(), None, None)),
     };
     let scene = recognition_scene(context.lab, context.input)?;
     let evaluation = context
@@ -541,6 +592,7 @@ fn resolve_navigation_edge_input<P: LabPorts>(
             target_id: target_id.clone(),
             evaluation: evaluation_response,
         }),
+        Some(scene),
     ))
 }
 

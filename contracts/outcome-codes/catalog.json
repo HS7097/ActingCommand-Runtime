@@ -1685,6 +1685,10 @@
       "type": "vocab:registry_problem",
       "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a)."
     },
+    "navigation_limit": {
+      "type": "vocab:navigation_limit",
+      "description": "Which navigation bound a run reached (Workflow #373 NAV-5)."
+    },
     "event_type": {
       "type": "vocab:event_type",
       "description": "A ledger event type, for example the type of a performance event the contract rejected."
@@ -5108,10 +5112,10 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json or pages.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json or pages.json but no bundle.json."
         },
         "pages_missing": {
-          "description": "The game root holds interrupts.json but no pages.json."
+          "description": "The game root holds interrupts.json or navigation.json but no pages.json."
         },
         "page_id_invalid": {
           "description": "A page id is not 1-64 bytes of [a-z][a-z0-9_]*."
@@ -5145,6 +5149,27 @@
         },
         "max_per_run_invalid": {
           "description": "An interrupt's max_per_run is outside 1 to 8."
+        },
+        "edges_count": {
+          "description": "navigation.json holds more than 1024 edges (Workflow #373 NAV-5)."
+        },
+        "edge_page_invalid": {
+          "description": "An edge's from or to is no page id: any, a draft's @origin or another word outside [a-z][a-z0-9_]* (Workflow #373 NAV-5)."
+        },
+        "edge_page_unlisted": {
+          "description": "An edge's from or to is not a page of pages.json (Workflow #373 NAV-5)."
+        },
+        "edge_self_loop": {
+          "description": "An edge's from and to are the same page (Workflow #373 NAV-5)."
+        },
+        "edge_duplicate": {
+          "description": "Two edges have the same from, to and package_id (Workflow #373 NAV-5)."
+        },
+        "recovery_chain_count": {
+          "description": "recovery_chain names no package, or more than 8 (Workflow #373 NAV-5)."
+        },
+        "recovery_chain_duplicate": {
+          "description": "recovery_chain names a package twice (Workflow #373 NAV-5)."
         }
       }
     },
@@ -5205,6 +5230,29 @@
         },
         "page_set_mismatch": {
           "description": "The feature package's pages are not exactly the pages of pages.json."
+        },
+        "terminal_mismatch": {
+          "description": "An edge's package does not end on the edge's to page (Workflow #373 NAV-5)."
+        },
+        "application_entry": {
+          "description": "An edge's package is an application entry package (its entry is any), which no edge may be (Workflow #373 NAV-5)."
+        }
+      }
+    },
+    "navigation_limit": {
+      "description": "Which navigation bound a run reached (Workflow #373 NAV-5).",
+      "tokens": {
+        "locates": {
+          "description": "The 16 full matches of one entry gate."
+        },
+        "hops": {
+          "description": "The 16 edges one entry gate may run."
+        },
+        "steps": {
+          "description": "The 1000 steps of a run, the next layer's max_steps included."
+        },
+        "interrupts": {
+          "description": "The 16 shared interrupt handlings of a run."
         }
       }
     },
@@ -7012,7 +7060,8 @@
       "contract",
       "execution-kernel",
       "lab",
-      "pack-containment"
+      "pack-containment",
+      "runtime-host"
     ],
     "negotiate_": [
       "runtime-host"

@@ -2466,7 +2466,7 @@ impl HostShared {
             Err(_) => return Ok(RestartEntry::RunOnly),
         };
         if let Err(failure) =
-            self.resolve_prerequisite_chain(&pending.instance_alias, &prepared, || {
+            self.resolve_prerequisite_chain(&pending.instance_alias, &prepared, false, || {
                 Ok(material_deadline)
             })
         {

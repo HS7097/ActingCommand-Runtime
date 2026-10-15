@@ -5,9 +5,9 @@
 use crate::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::{
     BundleMaintenance, LabErrorClass, ResourceDeclarationIssue, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_PAGES_FILE, page_projection::ProjectionMetadata, parse_standard_pack_interrupts,
-    parse_standard_pack_pages, resource_declaration::ProcedureBindingConfigFile,
-    validate_bundle_maintenance_declarations,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, page_projection::ProjectionMetadata,
+    parse_standard_pack_interrupts, parse_standard_pack_navigation, parse_standard_pack_pages,
+    resource_declaration::ProcedureBindingConfigFile, validate_bundle_maintenance_declarations,
 };
 use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
 use actingcommand_pack_containment::source::{
@@ -354,6 +354,16 @@ impl DeclarationReader {
             parse_standard_pack_interrupts(&bytes, Some(&pages.game), &pages)
                 .map_err(|issue| invalid(path, &issue.to_string()))?;
             "standard_pack_interrupts"
+        } else if path == Path::new(STANDARD_PACK_NAVIGATION_FILE) {
+            // Workflow #373 NAV-5: the edges and the recovery chain, against the page list beside
+            // them; the bundle generator checks the packages they name (M-373 §3.9).
+            let pages_path = Path::new(STANDARD_PACK_PAGES_FILE);
+            let pages = self.read(pages_path, MAX_DOCUMENT_BYTES)?;
+            let pages = parse_standard_pack_pages(&pages, None)
+                .map_err(|issue| invalid(pages_path, &issue.to_string()))?;
+            parse_standard_pack_navigation(&bytes, Some(&pages.game), &pages)
+                .map_err(|issue| invalid(path, &issue.to_string()))?;
+            "standard_pack_navigation"
         } else if (name == "maa-semantic-mapping.json"
             && parent.file_name().is_some_and(|p| p == "tasks"))
             || (name == "maa.tasks.json"

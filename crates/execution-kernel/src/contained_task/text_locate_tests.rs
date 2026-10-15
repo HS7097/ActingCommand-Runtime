@@ -704,3 +704,120 @@ fn n6_14_two_interrupt_pages_on_one_located_read_call_the_provider_once() {
     assert_eq!(matched, ["neutral/notice", "neutral/alert"]);
     assert_eq!(provider.calls(), 1);
 }
+
+// Workflow #373 NAV-5, test row N5-13 (model M-373 v1.1 §5.2, §5.5; REC-M §3.3): a feature
+// package's page set is one page recognition. Its located reads, each distinct request once, are
+// checked against one consumer's budget of four calls when its page set is admitted: four
+// distinct requests pass, a fifth is refused. One full match of every page on a frame, as a
+// locate evaluates the feature package, then calls the provider once per distinct request: two
+// pages reading the same request call it once.
+#[test]
+fn n5_13_a_full_match_reads_each_request_once_within_the_admitted_budget() {
+    let region = |index: i32| rect(10 + index * 110, 10, 100, 50);
+    let pack = |reads: i32| {
+        let mut targets = vec![json!({"type": "color", "id": "page/home",
+                                      "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                                      "expected": [255, 0, 0]})];
+        targets.push(ocr("text/twin", region(0), Some(detect())));
+        targets.extend(
+            (0..reads)
+                .map(|index| ocr(&format!("text/read{index}"), region(index), Some(detect()))),
+        );
+        load_pack_from_json_str(
+            &json!({
+                "schema_version": "0.7",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 640, "height": 360},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": targets
+            })
+            .to_string(),
+        )
+        .expect("recognition pack")
+    };
+    let pages = |reads: i32| {
+        let mut pages = vec![
+            json!({"id": "neutral/home", "required": ["page/home"]}),
+            json!({"id": "neutral/twin", "required": ["text/twin"]}),
+        ];
+        pages.extend((0..reads).map(|index| {
+            json!({"id": format!("neutral/read{index}"),
+                                                     "required": [format!("text/read{index}")]})
+        }));
+        PageDetector::new(
+            serde_json::from_value(json!({"schema_version": "0.6", "pages": pages}))
+                .expect("page set"),
+        )
+        .expect("page detector")
+    };
+    let provider = Arc::new(FixedOcr {
+        blocks: list_blocks()
+            .into_iter()
+            .map(|(text, rect)| (text.to_owned(), rect))
+            .collect(),
+        calls: AtomicUsize::new(0),
+    });
+    let evaluator = |reads: i32| {
+        RecognitionEvaluator::with_vision_provider(
+            pack(reads),
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            provider.clone(),
+        )
+        .expect("recognition evaluator")
+    };
+
+    // `text/twin` reads the request of `text/read0`: four distinct requests are admitted, five
+    // are not.
+    pages(4)
+        .validate(&evaluator(4))
+        .expect("four distinct reads fit the budget");
+    assert!(
+        pages(5).validate(&evaluator(5)).is_err(),
+        "a fifth distinct read exceeds the page recognition's budget"
+    );
+
+    let control = control();
+    let program = TaskProgram {
+        schema_version: "0.9".to_string(),
+        task_id: "task".to_string(),
+        game: "neutral".to_string(),
+        server_scope: vec!["test".to_string()],
+        coordinate_space: control.resolution,
+        entry_page: None,
+        phases: None,
+        timeout_ms: None,
+        max_steps: None,
+        target_page: Some(PageDeclaration::Singleton("home".to_string())),
+        error_pages: Vec::new(),
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        resource_readings: None,
+        resource_adjustments: None,
+        stability_termination: None,
+        recovery: None,
+        defaults: TaskOperationDefaults::default(),
+        operations: Vec::new(),
+    };
+    let features = PreparedContainedTask {
+        control,
+        program,
+        evaluator: evaluator(4),
+        detector: pages(4),
+        entry_page: None,
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        post_admission_fields: None,
+        entry_count: 6,
+        task_count: 1,
+    };
+    let scene = scene_from_frame(&home_frame()).expect("scene");
+    let all = features.page_ids();
+
+    features
+        .matching_pages_on_scene(&scene, &all)
+        .expect("one scene evaluation of every page");
+
+    assert_eq!(all.len(), 6);
+    assert_eq!(provider.calls(), 4);
+}

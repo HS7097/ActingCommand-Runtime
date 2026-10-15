@@ -38,7 +38,10 @@ use actingcommand_page_detector::{
     PageBatchResult, PageDetector, PageEvaluation, PageOutcome, PageSet, PageTargetRole,
     require_all_page_evaluations,
 };
-use actingcommand_recognition::{Scene, ScenePixelFormat};
+// Workflow #373 NAV-5: the runtime keeps the scene of an entry check's last frame for its
+// first locate (M-373 §5.2 item 1).
+pub use actingcommand_recognition::Scene;
+use actingcommand_recognition::ScenePixelFormat;
 use actingcommand_recognition_pack::{
     OcrProviderExecutionEvidence, OcrTextEvidence, PackRect, PackRegion, RecognitionEvaluator,
     RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
@@ -2820,6 +2823,54 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #373 NAV-5 (M-373 §4.4): the entry the host checks when the run's game has
+    /// navigation data, as detector page ids: a `linear_steps` package's first step page; a
+    /// `navigable_route` package's declared `entry_page`, one page or an entry page set, whether
+    /// or not the host checks it without navigation data. `None` for an application entry
+    /// (`any`, R24), an entry page that does not resolve to one page, and every other mode.
+    pub fn navigation_entry_pages(&self) -> Option<Vec<String>> {
+        match self.control.execution_mode.as_str() {
+            linear::LINEAR_STEPS => self.linear_entry_page().map(|page| vec![page.to_owned()]),
+            "navigable_route" => match self.required_entry_pages() {
+                Some(required) => Some(required.to_vec()),
+                None => {
+                    let entry = self
+                        .program
+                        .single_entry_page()
+                        .filter(|page| *page != linear::ANY_PAGE)?;
+                    resolve_page_reference(&self.control.game, entry, &self.detector)
+                        .ok()
+                        .map(|page| vec![page])
+                }
+            },
+            _ => None,
+        }
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §5.3): whether the package's entry is `any` (an application
+    /// entry package, R24): a `linear_steps` package whose first step starts from `any`, or a
+    /// page-graph package whose `entry_page` is `any`.
+    pub fn has_application_entry(&self) -> bool {
+        match self.control.execution_mode.as_str() {
+            linear::LINEAR_STEPS => self
+                .program
+                .operations
+                .first()
+                .is_some_and(|operation| operation.from == linear::ANY_PAGE),
+            _ => self.program.single_entry_page() == Some(linear::ANY_PAGE),
+        }
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §5.3): whether the package ends on `page` (a page id without
+    /// the game prefix): its `target_page`, or a page of its target page set.
+    pub fn terminal_holds_page(&self, page: &str) -> bool {
+        self.program.target_pages().is_ok_and(|targets| {
+            targets
+                .iter()
+                .any(|target| crate::canonical_page_anchor(&self.control.game, target) == page)
+        })
+    }
+
     /// Channels needed before an application effect can repair the connection, for a run the
     /// host starts itself (a recovery ladder rung). This reads only the hash-admitted program.
     /// An `any` linear application entry performs no capture or input first, and neither does
@@ -3115,6 +3166,25 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #373 NAV-5 (M-373 §4.4): the first check of the entry gate of a run whose game
+    /// has navigation data ([`Self::navigation_entry_pages`]): a `linear_steps` package's first
+    /// step page as [`Self::recognize_gate_entry`] checks it, a page-graph package's declared
+    /// entry as its home entry is checked ([`Self::recognize_required_entry`]); its unmatched
+    /// frame is offered to the runtime's shared interrupt pages.
+    pub fn recognize_navigation_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
+        if self.control.execution_mode == linear::LINEAR_STEPS {
+            return self.recognize_gate_entry(runtime);
+        }
+        let pages = self
+            .navigation_entry_pages()
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
+        self.recognize_entry_window(runtime, &pages)
+    }
+
     /// Workflow #336 L2b: after a prerequisite package ran, frames of the gate entry
     /// ([`Self::gate_entry_pages`]: the first step's page; Workflow #373 NAV-3a, a page-graph
     /// package's whole entry) are recognized one at a time, every capture interval of this
@@ -3135,6 +3205,36 @@ impl PreparedContainedTask {
         let entry = self
             .gate_entry_pages()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        self.await_entry_pages(runtime, &entry, budget, origin, layer, return_home)
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §5.3, "到了入口"): once the navigation reached the run's entry,
+    /// the package's own recheck of [`Self::navigation_entry_pages`], awaited as
+    /// [`Self::await_gate_entry`] awaits a gate entry for `budget` (the package's step timeout).
+    /// The caller decides the code of an unmatched entry; the wait's own failure carries the
+    /// spent budget.
+    pub fn await_navigation_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
+    ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
+        let entry = self
+            .navigation_entry_pages()
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        self.await_entry_pages(runtime, &entry, budget, origin, 0, None)
+    }
+
+    /// The wait of [`Self::await_gate_entry`] over the entry `entry`.
+    fn await_entry_pages<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        entry: &[String],
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
+        layer: usize,
+        return_home: Option<&str>,
+    ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
         let pages = entry.iter().map(String::as_str).collect::<Vec<_>>();
         // The detail names the one page, or (Workflow #373 NAV-3a) every page of an entry set.
         let required = match pages.as_slice() {
@@ -3477,6 +3577,48 @@ impl PreparedContainedTask {
             .collect())
     }
 
+    /// Workflow #373 NAV-5 (M-373 §5.2 item 1, §5.3 item 4): one new frame for a locate or a
+    /// hop's check, of this package's resolution (the feature package's, which is the run's):
+    /// captured at the `CapturePage` boundary of `timing`, its `CaptureCompleted` recorded, its
+    /// scene returned for [`Self::matching_pages_on_scene`].
+    pub fn capture_scene<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        timing: ContainedTaskTimingContext,
+    ) -> Result<Scene, ContainedTaskRunError<R::Error>> {
+        let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
+        let identity = runtime.task_boundary_identity(boundary);
+        let started = runtime.monotonic_now();
+        let captured = self.capture_scene_frame(runtime);
+        let ended = runtime.monotonic_now();
+        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+            boundary,
+            identity,
+            context: timing,
+            started,
+            ended,
+            succeeded: captured.is_ok(),
+        });
+        captured
+    }
+
+    fn capture_scene_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<Scene, ContainedTaskRunError<R::Error>> {
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        self.control.resolution.validate_frame(&frame)?;
+        runtime
+            .record(ContainedTaskTrace::CaptureCompleted {
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(scene_from_frame(&frame)?)
+    }
+
     /// Workflow #373 NAV-6: this package's page ids.
     pub fn page_ids(&self) -> Vec<&str> {
         self.detector.page_ids().collect()
@@ -3659,6 +3801,32 @@ impl PreparedContainedTask {
             runtime,
             ContainedTaskRunOptions {
                 entry: ContainedTaskEntry::BoundRecovery,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
+    }
+
+    /// Workflow #373 NAV-5 (wave-17 ruling 1, the open point of Workflow #390 EXEC-3 ruling 2):
+    /// a step of a navigation recovery chain is a run the host starts itself, entered as
+    /// [`Self::run_as_prerequisite`] enters a layer, with the option of a startup package and a
+    /// ladder rung ([`Self::run_host_package`]): a page-graph application entry (its
+    /// `entry_page` `"any"`, its first operation a `from: "any"` application effect) begins with
+    /// that effect, before any capture.
+    pub fn run_as_host_layer<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        if !self.is_prerequisite_compatible() {
+            return Err(ContainedTaskError::new(
+                SharedCode::ContainedTaskPrerequisiteIncompatible.code(),
+            )
+            .into());
+        }
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                entry: ContainedTaskEntry::BoundRecovery,
+                application_entry: ApplicationEntryRun::First,
                 ..ContainedTaskRunOptions::default()
             },
         )

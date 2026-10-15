@@ -485,7 +485,9 @@ cancelled, paused) from any capture of the gate.
 **Ledger.** Only the existing `TaskEntryPreflight` facts and effective configuration records
 are written; a run has at most seven effective configuration records (initial, one per
 prerequisite package, the return-home package of "Return-home fallback" below included,
-capture, input). Each `EntryRecovery*` fact of a layer carries its `role` (Workflow #373 NAV-3a:
+capture, input), and one more for each distinct package it runs as a shared interrupt layer
+(Workflow #373 NAV-6) or a navigation layer (Workflow #373 NAV-5, an edge's package or a
+recovery chain step, M-373 §8.3). Each `EntryRecovery*` fact of a layer carries its `role` (Workflow #373 NAV-3a:
 `prerequisite` or `return_home`; a request's own recovery binding carries none), so the ledger
 tells the return-home layer from a declared one. The facts are told apart by these rules:
 
@@ -534,6 +536,12 @@ page-graph chain end succeeds with no step on its target page, so it is the bett
 chain. A flow whose first page appears only sometimes stays a page-graph package.
 
 ## Return-home fallback
+
+Workflow #373 NAV-5 (M-373 §4.4): when the run's game root holds navigation data that lists the
+package's entry (`package-reference.md`, "Standard package root", "Navigation"), the run's own
+package has no return-home fallback: its gate navigates in its place, and a declared
+prerequisite chain that ran without bringing the entry is followed by the navigation instead of
+`contained_task_prerequisite_entry_unmatched`. A layer of a chain keeps the fallback below.
 
 Workflow #336 R16. A `linear_steps` package that declares no `prerequisite_package_id` and
 whose first step is a page (no application entry) falls back to the return-home package of its

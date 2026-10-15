@@ -644,6 +644,9 @@ package admitted, and reports `standard_packs`:
 "standard_packs":{"root":"D:/runtime/packages","root_problem":null,"games":[{"game":"neutral","bundle_version":3,"pack_count":4,"root_files":["bundle.json","pages.json","interrupts.json"],"problem":null},{"game":"other","bundle_version":null,"pack_count":null,"root_files":["bundle.json","interrupts.json"],"problem":{"code":"standard_pack_root_invalid","category":"error","values":{"operation":"standard_pack_read","game":"other","path":"D:/runtime/packages/other/interrupts.json","standard_pack_problem":"pages_missing","json_pointer":""}}}]}
 ```
 
+`root_files` lists the root files present: `bundle.json`, `pages.json`,
+`interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, which is checked
+against `pages.json` and the registry as a run's preparation checks it.
 A directory that holds none of the root files is not a game root and is not
 listed. A broken game root is listed with its `problem` and adds one warning;
 `status` stays `ok`, because the configuration itself is valid: the root's

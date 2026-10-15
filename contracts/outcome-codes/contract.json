@@ -17179,6 +17179,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_task_navigation": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Event or record sanitization refused a value: invalid task navigation record (Workflow #373 NAV-5: navigation_located with an attempt outside 1 to 16 or matched pages that are not the first 8 of at most 256 counted, or navigation_route_planned with more than 16 hops).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "invalid_configure_settings": {
       "category": "error",
       "ladder_class": "none",

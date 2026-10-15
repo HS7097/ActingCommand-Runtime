@@ -631,7 +631,20 @@ fn execute_runtime_navigation_route(
         let (input, recognition) =
             resolve_runtime_navigation_edge_input(ctx.evaluator, &guard_scene.scene, &edge)?;
         if !ctx.allow_destructive {
-            reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
+            // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
+            // follows a target covers the box its target matches on the guard frame.
+            let frame_regions = destructive_frame_regions(
+                ctx.evaluator,
+                &guard_scene.scene,
+                &edge.from_page,
+                ctx.destructive_clicks,
+            )?;
+            reject_destructive_overlap_on_frame(
+                &edge,
+                &input,
+                ctx.destructive_clicks,
+                &frame_regions,
+            )?;
         }
         let runtime_action = runtime_input_action(&input)?;
         let action_id = execute_runtime_debug_input(ctx.session, ctx.instance, runtime_action)?;
