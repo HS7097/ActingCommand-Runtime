@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 const BASIS_POINTS_MAX: u16 = 10_000;
+const DEFAULT_HEAVY_THRESHOLD_MILLI: u64 = 1_500;
 
 #[derive(Debug, Clone)]
 pub struct PerformanceControlConfig {
@@ -23,6 +24,9 @@ pub struct PerformanceControlConfig {
     clock_jump_threshold: Duration,
     normal_heavy_dispatch_limit: u16,
     pressured_heavy_dispatch_limit: u16,
+    /// Workflow #385 PM-CFG (`performance.load.heavy_threshold_milli`): a weighted workload whose
+    /// `cpu_milli + gpu_milli + io_milli` reaches it is heavy.
+    heavy_threshold_milli: u64,
 }
 
 impl Default for PerformanceControlConfig {
@@ -34,6 +38,7 @@ impl Default for PerformanceControlConfig {
             clock_jump_threshold: Duration::from_secs(30),
             normal_heavy_dispatch_limit: 2,
             pressured_heavy_dispatch_limit: 1,
+            heavy_threshold_milli: DEFAULT_HEAVY_THRESHOLD_MILLI,
         }
     }
 }
@@ -62,6 +67,12 @@ impl PerformanceControlConfig {
         self
     }
 
+    /// Workflow #385 PM-CFG (PERF §10.1): `performance.load.heavy_threshold_milli` in effect.
+    pub fn with_heavy_threshold_milli(mut self, heavy_threshold_milli: u64) -> Self {
+        self.heavy_threshold_milli = heavy_threshold_milli;
+        self
+    }
+
     pub const fn escalation_samples(&self) -> u16 {
         self.escalation_samples
     }
@@ -86,6 +97,11 @@ impl PerformanceControlConfig {
         self.pressured_heavy_dispatch_limit
     }
 
+    /// The effective heavy threshold (`with_heavy_threshold_milli`, default 1 500).
+    pub const fn heavy_threshold_milli(&self) -> u64 {
+        self.heavy_threshold_milli
+    }
+
     pub fn validate(&self) -> RuntimeHostResult<()> {
         if self.escalation_samples == 0
             || self.recovery_samples == 0
@@ -94,6 +110,7 @@ impl PerformanceControlConfig {
             || self.normal_heavy_dispatch_limit == 0
             || self.pressured_heavy_dispatch_limit == 0
             || self.pressured_heavy_dispatch_limit > self.normal_heavy_dispatch_limit
+            || self.heavy_threshold_milli == 0
         {
             return Err(control_fatal(
                 HostCode::PerformanceControlConfigInvalid,
@@ -432,7 +449,9 @@ impl PerformanceBalanceController {
         let heavy_count = u16::try_from(
             workloads
                 .iter()
-                .filter(|workload| is_heavy(&workload.load_profile))
+                .filter(|workload| {
+                    is_heavy(&workload.load_profile, self.config.heavy_threshold_milli)
+                })
                 .count(),
         )
         .map_err(|_| {
@@ -858,7 +877,7 @@ const fn previous_level(level: PerformanceControlLevel) -> PerformanceControlLev
     }
 }
 
-fn is_heavy(profile: &LoadProfile) -> bool {
+fn is_heavy(profile: &LoadProfile, heavy_threshold_milli: u64) -> bool {
     match profile {
         LoadProfile::Heavy => true,
         LoadProfile::Light => false,
@@ -867,10 +886,10 @@ fn is_heavy(profile: &LoadProfile) -> bool {
             gpu_milli,
             io_milli,
         } => {
-            u32::from(*cpu_milli)
-                .saturating_add(u32::from(*gpu_milli))
-                .saturating_add(u32::from(*io_milli))
-                >= 1_500
+            u64::from(*cpu_milli)
+                .saturating_add(u64::from(*gpu_milli))
+                .saturating_add(u64::from(*io_milli))
+                >= heavy_threshold_milli
         }
     }
 }

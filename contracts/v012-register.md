@@ -1319,6 +1319,22 @@ table goes from 34 to 35 tools (observer 19 to 20).
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
 | GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
+### 1.87 Wave 17 slice PM-CFG: the monitor reads its row (#385, PERF v1.4.2 §10.1; wave-17 ruling 10)
+
+Every key of §5's `performance.monitor.*` / `.pressure.*` / `.load.*` row, parsed, checked and
+defaulted since P-c (§1.24), now takes effect: the start-up assembly reads the row once
+(`MonitorSettings` in runtime-config, refusing a value that breaks a rule as `perf_config_invalid`
+naming the key) and hands it to the performance monitor, its host sampler and the performance
+controller. Each default is the constant the monitor ran with before, so a configuration that names
+none behaves as before; no pacing mode changes (`performance.pacing.mode` stays `observe`). No
+persisted record, wire shape, outcome code or configuration key changes;
+[runtime-config.md](runtime-config.md) ("The performance section") and
+[performance-control.md](performance-control.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1402,7 +1418,7 @@ when it takes effect.
 | `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms` | M387 §7.1 | D1c | D1c (v0.12.0) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
-| `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m (v0.12.0) |
+| `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m `gpu_aggregate`; PM-CFG every other key (v0.12.0, §1.87) |
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |

@@ -157,6 +157,8 @@ mod gate_384_d2s4;
 mod gate_384_d2s5;
 // Workflow #385 P-m: the shadow measurement and its status read.
 mod gate_385_pm;
+// Workflow #385 PM-CFG: the monitor, its sampler and the controller read the monitor's row.
+mod gate_385_pmcfg;
 // Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
 // suppressions a later build wrote.
 mod gate_386_sr2a;

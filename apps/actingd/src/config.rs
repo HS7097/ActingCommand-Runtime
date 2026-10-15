@@ -236,11 +236,13 @@ fn stuck_recovery_settings(
 }
 
 /// Workflow #385 P-c: the values of the `performance` section the start-up assembly reads
-/// (PERF §10.1, §10.3), from the rows the configuration mechanism resolved: the monitor's
-/// pressure streaks, and the controller's clock jump and heavy-dispatch limits, which the host
-/// took from code constants until now.
+/// (PERF §10.1, §10.3), from the rows the configuration mechanism resolved: every key of the
+/// monitor's row (PM-CFG: through runtime-config; a value that breaks a rule is refused there,
+/// naming its key, into `refused`), and the controller's clock jump and heavy-dispatch limits,
+/// which the host took from code constants until now.
 fn performance_settings(
     parameters: &[actingcommand_contract::ConfigParameter],
+    refused: &mut Option<Outcome>,
 ) -> Result<(PerformanceMonitorConfig, PerformanceControlConfig), Code> {
     let value = |key: &str| {
         parameters
@@ -258,26 +260,21 @@ fn performance_settings(
         Some(actingcommand_contract::FactScalar::DurationMs(ms)) => Duration::from_millis(*ms),
         _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
     };
-    // Workflow #385 P-m (PERF §3.4): how the GPU's engines make one utilisation.
-    let gpu_aggregate = match value(monitor::GPU_AGGREGATE) {
-        Some(actingcommand_contract::FactScalar::String(word)) if word == "max_engine_type" => {
-            actingcommand_runtime_host::GpuAggregate::MaxEngineType
-        }
-        Some(actingcommand_contract::FactScalar::String(word)) if word == "sum" => {
-            actingcommand_runtime_host::GpuAggregate::Sum
-        }
-        _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
-    };
-    let monitor_config = PerformanceMonitorConfig::default()
-        .with_pressure_start_samples(small(monitor::PRESSURE_START_SAMPLES)?)
-        .with_pressure_end_samples(small(monitor::PRESSURE_END_SAMPLES)?)
-        .with_gpu_aggregate(gpu_aggregate);
+    // Workflow #385 PM-CFG (PERF §10.1; register §5 "Read by P-m"): the monitor, its sampler
+    // and the controller read every key of the row in effect.
+    let monitor =
+        monitor::MonitorSettings::parse(&|key: &str| value(key).cloned()).map_err(|failure| {
+            *refused = Some(failure.outcome());
+            failure.failure_code().code()
+        })?;
+    let monitor_config = PerformanceMonitorConfig::default().with_settings(&monitor);
     let control_config = PerformanceControlConfig::default()
         .with_clock_jump_threshold(clock_jump)
         .with_heavy_dispatch_limits(
             small(pacing::HEAVY_DISPATCH_LIMIT_NORMAL)?,
             small(pacing::HEAVY_DISPATCH_LIMIT_PAUSED)?,
-        );
+        )
+        .with_heavy_threshold_milli(monitor.heavy_threshold_milli);
     Ok((monitor_config, control_config))
 }
 
@@ -1436,7 +1433,7 @@ impl ActingdConfigFile {
         // Workflow #385 P-c: the monitor and the controller take the section's values in
         // effect.
         let (performance_monitor, performance_control) =
-            performance_settings(&mechanism_parameters)?;
+            performance_settings(&mechanism_parameters, refused)?;
         host = host
             .with_performance_monitor(performance_monitor)
             .with_performance_control(performance_control)
@@ -3595,5 +3592,155 @@ mod tests {
                 assert_eq!(parameter.source, source, "{key}");
             }
         }
+    }
+
+    // Workflow #385 PM-CFG (wave-17 ruling 10; PERF §10.1; register §5 "Read by P-m"): the
+    // assembly hands the monitor, its sampler and the controller every key of the monitor's row
+    // in effect: §10.1's defaults when the file names none, which are the constants the monitor
+    // and the controller ran with before, and the file's values when it names them. A value of
+    // the row that breaks one of its rules refuses the assembly as perf_config_invalid naming
+    // the key.
+    #[test]
+    fn pmcfg_the_monitor_and_the_controller_take_every_key_of_the_monitor_row() {
+        use actingcommand_runtime_config::ConfigCode;
+        use actingcommand_runtime_config::performance::monitor::{
+            GpuAggregate, MonitorSettings, PressureSeverity, PressureThresholds,
+        };
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let base = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.fixture", "instance_id": id.transport(),
+                "fixture_backend": {
+                    "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}], "max_inputs": 1
+                }
+            }]
+        });
+        let mut named = base.clone();
+        named["performance"] = json!({
+            "monitor": {
+                "sample_interval_ms": 3_000, "context_window_ms": 45_000,
+                "summary_interval_ms": 90_000, "max_pipeline_samples": 2_048,
+                "process_coverage_min_bp": 9_800, "max_system_samples": 32,
+                "max_consecutive_failures": 5, "control_freshness_multiplier": 3,
+                "stutter_frame_gap_ms": 800
+            },
+            "load": {"heavy_threshold_milli": 1_200},
+            "pressure_start_samples": 4,
+            "pressure_end_samples": 5,
+            "pressure": {
+                "thresholds": {"cpu": [7_500, 6_000], "ram": [8_000, 7_000],
+                               "gpu": [8_000, 6_500], "disk_queue_milli": [2_500, 1_500],
+                               "disk_latency_us": [30_000, 20_000],
+                               "process_cpu_bp": 3_000, "process_io_bps": 33_554_432},
+                "severity": {"critical_bp": 9_400, "elevated_bp": 8_800,
+                             "third_party_critical": [4, 9_000],
+                             "third_party_elevated": [3, 7_000]},
+                "gpu_aggregate": "sum"
+            }
+        });
+        // §10.1's defaults.
+        let defaults = MonitorSettings {
+            sample_interval_ms: 2_000,
+            context_window_ms: 30_000,
+            summary_interval_ms: 60_000,
+            max_pipeline_samples: 4_096,
+            process_coverage_min_bp: 9_900,
+            max_system_samples: 64,
+            max_consecutive_failures: 3,
+            control_freshness_multiplier: 2,
+            stutter_frame_gap_ms: 1_000,
+            heavy_threshold_milli: 1_500,
+            pressure_start_samples: 3,
+            pressure_end_samples: 3,
+            thresholds: PressureThresholds {
+                cpu_bp: (8_500, 7_000),
+                ram_bp: (9_000, 8_000),
+                gpu_bp: (9_000, 7_500),
+                disk_queue_milli: (4_000, 2_000),
+                disk_latency_us: (50_000, 25_000),
+                process_cpu_bp: 4_000,
+                process_io_bps: 67_108_864,
+            },
+            severity: PressureSeverity {
+                critical_bp: 9_700,
+                elevated_bp: 9_200,
+                third_party_critical: (3, 8_000),
+                third_party_elevated: (2, 6_000),
+            },
+            gpu_aggregate: GpuAggregate::MaxEngineType,
+        };
+        // The values the file names.
+        let configured = MonitorSettings {
+            sample_interval_ms: 3_000,
+            context_window_ms: 45_000,
+            summary_interval_ms: 90_000,
+            max_pipeline_samples: 2_048,
+            process_coverage_min_bp: 9_800,
+            max_system_samples: 32,
+            max_consecutive_failures: 5,
+            control_freshness_multiplier: 3,
+            stutter_frame_gap_ms: 800,
+            heavy_threshold_milli: 1_200,
+            pressure_start_samples: 4,
+            pressure_end_samples: 5,
+            thresholds: PressureThresholds {
+                cpu_bp: (7_500, 6_000),
+                ram_bp: (8_000, 7_000),
+                gpu_bp: (8_000, 6_500),
+                disk_queue_milli: (2_500, 1_500),
+                disk_latency_us: (30_000, 20_000),
+                process_cpu_bp: 3_000,
+                process_io_bps: 33_554_432,
+            },
+            severity: PressureSeverity {
+                critical_bp: 9_400,
+                elevated_bp: 8_800,
+                third_party_critical: (4, 9_000),
+                third_party_elevated: (3, 7_000),
+            },
+            gpu_aggregate: GpuAggregate::Sum,
+        };
+        for (value, expected) in [(base.clone(), defaults), (named, configured)] {
+            let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+            let assembly = config.assemble().expect("runtime assembly");
+            assert_eq!(
+                assembly.host.performance_monitor(),
+                Some(&PerformanceMonitorConfig::default().with_settings(&expected))
+            );
+            assert_eq!(
+                assembly.host.performance_control().heavy_threshold_milli(),
+                expected.heavy_threshold_milli
+            );
+        }
+        // The defaults are the constants the monitor and the controller ran with before.
+        assert_eq!(
+            PerformanceMonitorConfig::default().with_settings(&defaults),
+            PerformanceMonitorConfig::default()
+        );
+        assert_eq!(
+            PerformanceControlConfig::default().heavy_threshold_milli(),
+            defaults.heavy_threshold_milli
+        );
+
+        // A context window shorter than the sampling period.
+        let mut broken = base;
+        broken["performance"] = json!({"monitor": {"context_window_ms": 1_500}});
+        let config = serde_json::from_value::<ActingdConfigFile>(broken).expect("typed config");
+        let Err((code, refusal)) = config.assemble_or_refusal() else {
+            panic!("the assembly is refused");
+        };
+        assert_eq!(code, ConfigCode::PerfConfigInvalid.code());
+        assert!(refusal.is(code));
+        assert_eq!(
+            refusal.value("config_key"),
+            Some(&json!("performance.monitor.context_window_ms"))
+        );
     }
 }

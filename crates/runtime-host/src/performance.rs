@@ -27,6 +27,9 @@ use actingcommand_host_metrics::{
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCommitObservation, GlobalLedgerCommitSnapshot,
 };
+use actingcommand_runtime_config::performance::monitor::{
+    GpuAggregate as ConfiguredGpuAggregate, MonitorSettings, PressureSeverity, PressureThresholds,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
@@ -51,8 +54,10 @@ const DEFAULT_PRESSURE_END_SAMPLES: u16 = 3;
 const MAX_PRESSURE_STREAK_SAMPLES: u16 = 30;
 const DEFAULT_TOP_PROCESS_COUNT: usize = 5;
 const MAX_OWNED_PROCESS_COUNT: usize = 32;
+const DEFAULT_CONTROL_FRESHNESS_MULTIPLIER: u64 = 2;
+const DEFAULT_PROCESS_COVERAGE_MIN_BASIS_POINTS: u16 = 9_900;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerformanceMonitorConfig {
     sample_interval: Duration,
     context_window: Duration,
@@ -69,6 +74,12 @@ pub struct PerformanceMonitorConfig {
     /// Workflow #385 P-m (`performance.pressure.gpu_aggregate`): how the GPU's engines make
     /// one utilisation.
     gpu_aggregate: GpuAggregate,
+    /// Workflow #385 PM-CFG (`performance.monitor.control_freshness_multiplier`): a sample stays
+    /// fresh for the controller this many sampling periods.
+    control_freshness_multiplier: u64,
+    /// Workflow #385 PM-CFG (`performance.monitor.process_coverage_min_bp`): the sampler counts
+    /// the process metrics only when at least this share of the processes was readable.
+    process_coverage_min_basis_points: u16,
 }
 
 impl Default for PerformanceMonitorConfig {
@@ -87,11 +98,60 @@ impl Default for PerformanceMonitorConfig {
             owned_processes: BTreeMap::new(),
             thresholds: PerformanceThresholds::default(),
             gpu_aggregate: GpuAggregate::default(),
+            control_freshness_multiplier: DEFAULT_CONTROL_FRESHNESS_MULTIPLIER,
+            process_coverage_min_basis_points: DEFAULT_PROCESS_COVERAGE_MIN_BASIS_POINTS,
         }
     }
 }
 
 impl PerformanceMonitorConfig {
+    /// Workflow #385 PM-CFG (PERF §10.1; register §5 "Read by P-m"): the monitor's values in
+    /// effect. `performance.load.heavy_threshold_milli` is the controller's
+    /// (`PerformanceControlConfig::with_heavy_threshold_milli`).
+    pub fn with_settings(self, settings: &MonitorSettings) -> Self {
+        let MonitorSettings {
+            sample_interval_ms,
+            context_window_ms,
+            summary_interval_ms,
+            max_pipeline_samples,
+            process_coverage_min_bp,
+            max_system_samples,
+            max_consecutive_failures,
+            control_freshness_multiplier,
+            stutter_frame_gap_ms,
+            heavy_threshold_milli: _,
+            pressure_start_samples,
+            pressure_end_samples,
+            thresholds,
+            severity,
+            gpu_aggregate,
+        } = *settings;
+        Self {
+            sample_interval: Duration::from_millis(sample_interval_ms),
+            context_window: Duration::from_millis(context_window_ms),
+            summary_interval: Duration::from_millis(summary_interval_ms),
+            max_system_samples,
+            max_pipeline_samples,
+            max_event_references: self.max_event_references,
+            max_consecutive_failures,
+            pressure_start_samples,
+            pressure_end_samples,
+            top_process_count: self.top_process_count,
+            owned_processes: self.owned_processes,
+            thresholds: PerformanceThresholds::from_settings(
+                &thresholds,
+                &severity,
+                stutter_frame_gap_ms,
+            ),
+            gpu_aggregate: match gpu_aggregate {
+                ConfiguredGpuAggregate::MaxEngineType => GpuAggregate::MaxEngineType,
+                ConfiguredGpuAggregate::Sum => GpuAggregate::Sum,
+            },
+            control_freshness_multiplier,
+            process_coverage_min_basis_points: process_coverage_min_bp,
+        }
+    }
+
     pub fn with_owned_process(mut self, pid: u32, label: impl Into<String>) -> Self {
         self.owned_processes.insert(pid, label.into());
         self
@@ -146,6 +206,11 @@ impl PerformanceMonitorConfig {
             || !(1..=MAX_PRESSURE_STREAK_SAMPLES).contains(&self.pressure_end_samples)
             || self.top_process_count == 0
             || self.top_process_count > 32
+            || self.process_coverage_min_basis_points > BASIS_POINTS_MAX
+            || duration_ms(self.sample_interval)
+                .ok()
+                .and_then(|interval| interval.checked_mul(self.control_freshness_multiplier))
+                .is_none_or(|freshness| freshness == 0)
             || self.owned_processes.len() > MAX_OWNED_PROCESS_COUNT
             || self
                 .owned_processes
@@ -161,7 +226,7 @@ impl PerformanceMonitorConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PerformanceThresholds {
     pub(crate) cpu_start_basis_points: u16,
     pub(crate) cpu_end_basis_points: u16,
@@ -169,13 +234,25 @@ pub(crate) struct PerformanceThresholds {
     pub(crate) ram_end_basis_points: u16,
     pub(crate) gpu_start_basis_points: u16,
     pub(crate) gpu_end_basis_points: u16,
-    pub(crate) disk_queue_start_milli: u32,
-    pub(crate) disk_queue_end_milli: u32,
+    pub(crate) disk_queue_start_milli: u64,
+    pub(crate) disk_queue_end_milli: u64,
     pub(crate) disk_latency_start_micros: u64,
     pub(crate) disk_latency_end_micros: u64,
     pub(crate) process_cpu_start_basis_points: u16,
     pub(crate) process_io_start_bytes_per_second: u64,
     pub(crate) stutter_frame_gap_ms: u64,
+    /// Workflow #385 PM-CFG (`performance.pressure.severity` `critical_bp`): a utilisation at or
+    /// above it is critical.
+    pub(crate) critical_basis_points: u16,
+    /// `performance.pressure.severity` `elevated_bp`: a utilisation at or above it, below
+    /// critical, is high.
+    pub(crate) high_basis_points: u16,
+    /// `performance.pressure.severity` `third_party_critical`: `(process count, peak process
+    /// CPU)`; other programs' load reaching either is critical.
+    pub(crate) third_party_critical: (u16, u16),
+    /// `performance.pressure.severity` `third_party_elevated`: the same pair, from which that
+    /// load is high.
+    pub(crate) third_party_high: (u16, u16),
 }
 
 impl Default for PerformanceThresholds {
@@ -194,11 +271,58 @@ impl Default for PerformanceThresholds {
             process_cpu_start_basis_points: 4_000,
             process_io_start_bytes_per_second: 64 * 1024 * 1024,
             stutter_frame_gap_ms: 1_000,
+            critical_basis_points: 9_700,
+            high_basis_points: 9_200,
+            third_party_critical: (3, 8_000),
+            third_party_high: (2, 6_000),
         }
     }
 }
 
 impl PerformanceThresholds {
+    /// Workflow #385 PM-CFG: `performance.pressure.thresholds`, `.severity` and
+    /// `performance.monitor.stutter_frame_gap_ms` in effect.
+    fn from_settings(
+        thresholds: &PressureThresholds,
+        severity: &PressureSeverity,
+        stutter_frame_gap_ms: u64,
+    ) -> Self {
+        let PressureThresholds {
+            cpu_bp: (cpu_start_basis_points, cpu_end_basis_points),
+            ram_bp: (ram_start_basis_points, ram_end_basis_points),
+            gpu_bp: (gpu_start_basis_points, gpu_end_basis_points),
+            disk_queue_milli: (disk_queue_start_milli, disk_queue_end_milli),
+            disk_latency_us: (disk_latency_start_micros, disk_latency_end_micros),
+            process_cpu_bp: process_cpu_start_basis_points,
+            process_io_bps: process_io_start_bytes_per_second,
+        } = *thresholds;
+        let PressureSeverity {
+            critical_bp: critical_basis_points,
+            elevated_bp: high_basis_points,
+            third_party_critical,
+            third_party_elevated: third_party_high,
+        } = *severity;
+        Self {
+            cpu_start_basis_points,
+            cpu_end_basis_points,
+            ram_start_basis_points,
+            ram_end_basis_points,
+            gpu_start_basis_points,
+            gpu_end_basis_points,
+            disk_queue_start_milli,
+            disk_queue_end_milli,
+            disk_latency_start_micros,
+            disk_latency_end_micros,
+            process_cpu_start_basis_points,
+            process_io_start_bytes_per_second,
+            stutter_frame_gap_ms,
+            critical_basis_points,
+            high_basis_points,
+            third_party_critical,
+            third_party_high,
+        }
+    }
+
     fn validate(&self) -> RuntimeHostResult<()> {
         if self.cpu_start_basis_points > BASIS_POINTS_MAX
             || self.cpu_end_basis_points >= self.cpu_start_basis_points
@@ -213,6 +337,12 @@ impl PerformanceThresholds {
             || self.process_cpu_start_basis_points > BASIS_POINTS_MAX
             || self.process_io_start_bytes_per_second == 0
             || self.stutter_frame_gap_ms == 0
+            || self.critical_basis_points > BASIS_POINTS_MAX
+            || self.high_basis_points > self.critical_basis_points
+            || self.third_party_high.0 == 0
+            || self.third_party_high.0 > self.third_party_critical.0
+            || self.third_party_high.1 > self.third_party_critical.1
+            || self.third_party_critical.1 > BASIS_POINTS_MAX
         {
             return Err(performance_fatal(
                 HostCode::PerformanceThresholdInvalid,
@@ -699,6 +829,7 @@ impl PerformanceMonitor {
                 ProcessLoadThresholds {
                     cpu_basis_points: config.thresholds.process_cpu_start_basis_points,
                     io_bytes_per_second: config.thresholds.process_io_start_bytes_per_second,
+                    min_coverage_basis_points: config.process_coverage_min_basis_points,
                 },
             )
         } else {
@@ -1218,7 +1349,7 @@ impl PerformanceMonitor {
         }))
     }
 
-    /// The control freshness window: twice the sample interval.
+    /// The control freshness window: `control_freshness_multiplier` sample intervals.
     fn control_freshness_ms(&self, operation: impl Into<Location>) -> RuntimeHostResult<u64> {
         let operation: Location = operation.into();
         let config = self
@@ -1226,7 +1357,7 @@ impl PerformanceMonitor {
             .as_ref()
             .ok_or_else(|| performance_fatal(HostCode::PerformanceMonitorDisabled, operation))?;
         duration_ms(config.sample_interval)?
-            .checked_mul(2)
+            .checked_mul(config.control_freshness_multiplier)
             .ok_or_else(|| {
                 performance_fatal(HostCode::PerformanceControlDurationOverflow, operation)
             })
@@ -1990,7 +2121,7 @@ fn pressure_above_start(
                 latency_micros,
             },
         ) => {
-            *queue_depth_milli >= thresholds.disk_queue_start_milli
+            u64::from(*queue_depth_milli) >= thresholds.disk_queue_start_milli
                 || *latency_micros >= thresholds.disk_latency_start_micros
         }
         (PerformancePressureKind::ThirdParty, PerformancePressureValue::ProcessLoad { .. }) => true,
@@ -2020,7 +2151,7 @@ fn pressure_above_end(
                 latency_micros,
             },
         ) => {
-            *queue_depth_milli >= thresholds.disk_queue_end_milli
+            u64::from(*queue_depth_milli) >= thresholds.disk_queue_end_milli
                 || *latency_micros >= thresholds.disk_latency_end_micros
         }
         (PerformancePressureKind::ThirdParty, PerformancePressureValue::ProcessLoad { .. }) => true,
@@ -2039,7 +2170,7 @@ fn pressure_severity(
             | PerformancePressureKind::Ram
             | PerformancePressureKind::Gpu,
             PerformancePressureValue::Utilization { basis_points },
-        ) => *basis_points >= 9_700,
+        ) => *basis_points >= thresholds.critical_basis_points,
         (
             PerformancePressureKind::DiskIo,
             PerformancePressureValue::DiskIo {
@@ -2047,7 +2178,7 @@ fn pressure_severity(
                 latency_micros,
             },
         ) => {
-            *queue_depth_milli >= thresholds.disk_queue_start_milli.saturating_mul(2)
+            u64::from(*queue_depth_milli) >= thresholds.disk_queue_start_milli.saturating_mul(2)
                 || *latency_micros >= thresholds.disk_latency_start_micros.saturating_mul(2)
         }
         (
@@ -2057,7 +2188,10 @@ fn pressure_severity(
                 peak_cpu_basis_points,
                 ..
             },
-        ) => *process_count >= 3 || *peak_cpu_basis_points >= 8_000,
+        ) => {
+            *process_count >= thresholds.third_party_critical.0
+                || *peak_cpu_basis_points >= thresholds.third_party_critical.1
+        }
         // Workflow #383 register X1 (PERF §3.4): a backlog's tier names its severity; the
         // monitor samples no backlog before P-s.
         (
@@ -2074,12 +2208,15 @@ fn pressure_severity(
                 available_bytes,
                 thresholds,
             } => *available_bytes < thresholds.hard_bytes,
-            PerformancePressureValue::Utilization { basis_points } => *basis_points >= 9_200,
+            PerformancePressureValue::Utilization { basis_points } => {
+                *basis_points >= thresholds.high_basis_points
+            }
             PerformancePressureValue::DiskIo {
                 queue_depth_milli,
                 latency_micros,
             } => {
-                *queue_depth_milli >= thresholds.disk_queue_start_milli.saturating_add(2_000)
+                u64::from(*queue_depth_milli)
+                    >= thresholds.disk_queue_start_milli.saturating_add(2_000)
                     || *latency_micros
                         >= thresholds.disk_latency_start_micros.saturating_add(25_000)
             }
@@ -2087,7 +2224,10 @@ fn pressure_severity(
                 process_count,
                 peak_cpu_basis_points,
                 ..
-            } => *process_count >= 2 || *peak_cpu_basis_points >= 6_000,
+            } => {
+                *process_count >= thresholds.third_party_high.0
+                    || *peak_cpu_basis_points >= thresholds.third_party_high.1
+            }
             PerformancePressureValue::LedgerBacklog { tier, .. } => *tier >= 2,
         };
         if high {
