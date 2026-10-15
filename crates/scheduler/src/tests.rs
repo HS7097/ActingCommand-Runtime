@@ -1654,6 +1654,107 @@ fn an_immediate_try_never_jumps_an_eligible_entry() {
     assert_eq!(scheduler.queued_count(instance_id), 1);
 }
 
+// Workflow #369 Q-3 (4), S6c (wave 13 coordinator ruling 6; merge ledger :303): while a
+// scheduling pause holds the gate, the immediate try of a routine claim that waits in the queue (a
+// ladder, a startup package, an autostart) is never granted on a free instance: it is refused
+// `lease_busy` and the instance stays free, so the claim waits queued as a gated entry. An
+// operator claim passes the closed gate, a policy dispatch keeps its own admission (it is never
+// queued), and with the gate open the routine claim is granted at once.
+#[test]
+fn s6c_a_routine_claim_under_a_held_gate_is_never_granted_at_once() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let instance_id = instance(&issuer);
+    for kind in [
+        ClaimKind::Ladder,
+        ClaimKind::StartupPackage,
+        ClaimKind::Autostart,
+    ] {
+        let routine = claim(
+            &issuer,
+            instance_id,
+            holder(&issuer).1,
+            connection(2),
+            kind,
+            LeasePriority::Normal,
+        );
+        let refused = scheduler
+            .prepare_claim_acquire(routine, ClaimGate::RoutineHeld, 3)
+            .expect_err("a held gate holds the routine claim back");
+        assert_eq!(refused, SchedulerError::GateHeld, "{kind:?}");
+        assert_eq!(refused.code().as_str(), "lease_busy", "{kind:?}");
+        assert_eq!(refused.projection().code, RuntimeErrorCode::LeaseBusy);
+        assert!(!refused.is_fatal(), "{kind:?}");
+        assert!(
+            scheduler.active_lease(instance_id).is_none(),
+            "{kind:?}: the instance stays free"
+        );
+    }
+
+    let operator = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(3),
+        ClaimKind::EmulatorControl,
+        LeasePriority::Normal,
+    );
+    let preparation = scheduler
+        .prepare_claim_acquire(operator, ClaimGate::RoutineHeld, 3)
+        .expect("an operator claim passes a held gate");
+    let operator_token = scheduler
+        .commit_acquire(preparation, 3)
+        .expect("operator grant");
+    assert_eq!(
+        scheduler
+            .active_lease(instance_id)
+            .expect("operator holds")
+            .kind(),
+        ClaimKind::EmulatorControl
+    );
+    scheduler
+        .release(request(&issuer), &operator_token, connection(3), 3)
+        .expect("operator release");
+
+    let policy = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(4),
+        ClaimKind::PolicyDispatch,
+        LeasePriority::Normal,
+    );
+    assert!(
+        scheduler
+            .prepare_claim_acquire(policy, ClaimGate::RoutineHeld, 4)
+            .is_ok(),
+        "a policy dispatch is not queued, so the gate is its admission's own check"
+    );
+
+    let autostart = claim(
+        &issuer,
+        instance_id,
+        holder(&issuer).1,
+        connection(5),
+        ClaimKind::Autostart,
+        LeasePriority::Normal,
+    );
+    let preparation = scheduler
+        .prepare_claim_acquire(autostart, ClaimGate::Open, 4)
+        .expect("an open gate grants the routine claim at once");
+    scheduler
+        .commit_acquire(preparation, 4)
+        .expect("autostart grant");
+    assert_eq!(
+        scheduler
+            .active_lease(instance_id)
+            .expect("autostart holds")
+            .kind(),
+        ClaimKind::Autostart
+    );
+}
+
 #[test]
 fn hand_off_bypasses_and_keeps_the_queue() {
     let issuer = ids();

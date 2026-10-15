@@ -370,6 +370,11 @@ pub enum SchedulerError {
         kind: ClaimKind,
         position: u32,
     },
+    /// Workflow #369 Q-3 (4) (S6c): an immediate try, on a free instance, of a queued routine
+    /// claim the routine gate holds back (a scheduling pause holds its instance or the global
+    /// gate); it is never granted at once and waits as a gated entry. Refused `lease_busy`, as a
+    /// try that would jump an eligible entry is.
+    GateHeld,
 }
 
 impl SchedulerError {
@@ -379,7 +384,9 @@ impl SchedulerError {
             Self::InvalidConnection => SchedulerCode::InvalidConnectionId.code(),
             Self::IdentifierIssuance => SchedulerCode::IdentifierIssuanceFailed.code(),
             Self::ExpiryOverflow => SchedulerCode::LeaseExpiryOverflow.code(),
-            Self::Busy { .. } | Self::QueueAhead { .. } => RuntimeErrorCode::LeaseBusy.code(),
+            Self::Busy { .. } | Self::QueueAhead { .. } | Self::GateHeld => {
+                RuntimeErrorCode::LeaseBusy.code()
+            }
             Self::Cooldown { .. } => RuntimeErrorCode::LeaseCooldown.code(),
             Self::StaleOwnerEpoch => RuntimeErrorCode::StaleOwnerEpoch.code(),
             Self::LeaseMismatch => RuntimeErrorCode::LeaseMismatch.code(),
@@ -429,7 +436,7 @@ impl SchedulerError {
                 ..
             } => RuntimeErrorProjection::new(RuntimeErrorCode::LeaseBusy, false)
                 .with_holder(*holder_id, *lease_id),
-            Self::QueueAhead { .. } => {
+            Self::QueueAhead { .. } | Self::GateHeld => {
                 RuntimeErrorProjection::new(RuntimeErrorCode::LeaseBusy, false)
             }
             Self::Cooldown { retry_after_ms } => {
@@ -939,7 +946,9 @@ impl SeedScheduler {
     }
 
     /// Workflow #369 Q-3 (5), Q-6: an immediate try of `claim` on its instance. It is granted
-    /// only on a free instance where no eligible entry waits (`QueueAhead` otherwise).
+    /// only on a free instance where no eligible entry waits (`QueueAhead` otherwise). Q-3 (4)
+    /// (S6c): a routine claim that waits in the queue is never granted at once while `gate` holds
+    /// it back (`GateHeld`); it waits queued.
     pub fn prepare_claim_acquire(
         &mut self,
         claim: ClaimRequest,
@@ -1055,6 +1064,16 @@ impl SeedScheduler {
             }
             if let Some(ahead) = first_eligible(state, policy.gate, now_monotonic_ms) {
                 return Err(queue_ahead(state, ahead));
+            }
+            // Workflow #369 Q-3 (4) (S6c): while a pause holds the gate, a routine claim that
+            // waits in the queue (a ladder, a startup package, an autostart) waits as a gated
+            // entry from the first moment, even on a free instance. A policy dispatch is never
+            // queued: its pause deferral is the admission's own, before the scheduler is asked.
+            if policy.gate == ClaimGate::RoutineHeld
+                && policy.kind.gated_by_pause()
+                && policy.kind != ClaimKind::PolicyDispatch
+            {
+                return Err(SchedulerError::GateHeld);
             }
         }
         let expires_at_monotonic_ms =

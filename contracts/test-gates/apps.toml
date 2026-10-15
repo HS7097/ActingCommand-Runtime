@@ -472,3 +472,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
 ]
 incident = ["#378 A7"]
+
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, test (10)): the configured emulator starts' report lines are actingd daemon lines (one developer line and one OUTCOME actingd line each, A6a's writer); a report write that fails is counted and never stops actingd, and the pass goes on to the last line
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_369_s6c::s6c_a_failed_report_write_does_not_stop_actingd",
+]
+incident = ["#369", "#361"]

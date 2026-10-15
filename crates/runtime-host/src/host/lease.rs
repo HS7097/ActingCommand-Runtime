@@ -3870,10 +3870,12 @@ impl HostShared {
                     )?;
                     return Ok(HostClaimAdmission::Granted(token));
                 }
-                // Held, an entry ahead, or a takeover cooldown: the claim waits in the queue.
+                // Held, an entry ahead, a takeover cooldown, or (Workflow #369 Q-3 (4), S6c) a
+                // routine claim a scheduling pause holds back: the claim waits in the queue.
                 Err(
                     SchedulerError::Busy { .. }
                     | SchedulerError::QueueAhead { .. }
+                    | SchedulerError::GateHeld
                     | SchedulerError::Cooldown { .. },
                 ) => {}
                 Err(error) => {

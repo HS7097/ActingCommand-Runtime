@@ -891,3 +891,22 @@ tests = [
     "actingcommand-runtime-config::lib::device_state_tests::rd5b_keys_device_state_values_that_break_a_rule_are_refused",
 ]
 incident = ["#398"]
+
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it waits queued as a gated entry from the first moment (never granted at once on the free instance, merge ledger :303) until the resume; a pause during the wait makes it queue again and release, so the pause completes; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
+[[gate]]
+key = "86"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_1_the_claim_holds_its_instance_from_the_enqueue",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_2_no_internet_then_internet_after_two_reads_starts_the_emulator",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_3_an_unknown_status_starts_at_once_with_one_line",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_4_no_internet_for_600_s_refuses_the_start_with_the_failure_pair",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_yields_and_the_pause_completes",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_7_a_cli_start_during_the_wait_supersedes_the_claim",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_8_a_failed_preparation_hands_the_key_to_the_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_9_two_instances_start_in_configuration_order_and_the_waiting_claim_renews",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_a_start_whose_provider_step_fails_cancels_the_queued_startup_claim",
+    "actingcommand-scheduler::lib::tests::s6c_a_routine_claim_under_a_held_gate_is_never_granted_at_once",
+]
+incident = ["#369", "#361"]

@@ -20960,6 +20960,283 @@
       "description": "The device-state sampling of the bound handsets could not start (#398 R1 RD-5b, model-398 section 7.2): its thread could not be spawned. The Runtime does not run without it.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "emulator_autostart_instance_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured emulator start (actingd start_emulator, Workflow #369 S6c) names an alias that is not a registered instance; the Runtime host's start fails. alias names it.",
+      "common_causes": "A host configured by another embedder than actingd, whose own configuration check refuses such a start (start_emulator_requires_discovery_binding).",
+      "handling": "Correct the configured instances, then start again."
+    },
+    "emulator_autostart_requires_physical_instance": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured emulator start (Workflow #369 S6c) names a fixture instance, which has no emulator to start; the Runtime host's start fails. alias names it.",
+      "common_causes": "A host configured by another embedder than actingd, whose own configuration check refuses such a start.",
+      "handling": "Configure start_emulator only on a discovery-bound instance, then start again."
+    },
+    "emulator_autostart_queued": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_network_ready": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "elapsed_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An autostart claim read internet access from the operating system's connectivity status (Workflow #369 S6c, P3); elapsed_ms is how long it waited since its grant. The claim goes on to its start turn. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_network_status_unknown": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "connectivity_reason": "required",
+        "os_error": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The operating system's connectivity status is unknown (connectivity_reason, and os_error when the system gave one); the autostart claim goes on without waiting (Workflow #369 S6c, P3). A report line.",
+      "common_causes": "An older Windows without the connectivity query, a failed query, or a level the build does not know.",
+      "handling": "TBD"
+    },
+    "emulator_autostart_network_unready": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "elapsed_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No internet access was reported within 600 s (Workflow #369 S6c, P3): the configured start is refused with command.rejected and runtime.failed under the autostart claim, and the claim releases its key; elapsed_ms is the wait. Also its report line. The instance stays stopped.",
+      "common_causes": "The host had no network, or only local access, while actingd started.",
+      "handling": "Start the instance with emulator control once the network is up."
+    },
+    "emulator_autostart_started": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured start was performed and the connection preparation after it passed (Workflow #369 S6c); the key went to the instance's startup package, if one is configured. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_preparation_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured start was performed, but the connection preparation after it did not pass (Workflow #369 S6c); the preparation recorded its failure, and the ladder it admitted holds the key. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured start ended without its emulator started (Workflow #369 S6c): its failure is the caused_by link (a refused claim, a refused renewal, a failed control), recorded where it happened. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_superseded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator emulator control waits on the instance: the autostart claim releases its key before its start, with no failure pair (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_yielded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scheduling pause holds the instance or the global gate: the autostart claim queues again as a gated entry and releases its key; the resume grants it again (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_skipped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_interrupted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drain or a shutdown ended the autostart claim before its start; it releases its key, and the next daemon start enqueues it again (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -27659,6 +27936,30 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: begin or end the lease step of a handset's screen check (Workflow #398 RD-5b)."
+    },
+    "enqueue_emulator_autostart": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: enqueue the configured emulator starts' claims (Workflow #369 S6c)."
+    },
+    "run_emulator_autostart": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: an autostart claim's hold and start on its instance's worker (Workflow #369 S6c)."
+    },
+    "emulator_autostart_reports": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: the report lines of the configured emulator starts (Workflow #369 S6c)."
     }
   }
 }

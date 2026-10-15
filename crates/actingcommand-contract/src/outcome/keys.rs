@@ -47,6 +47,7 @@ outcome_keys! {
     raw_text_sensitivity: vocab(sensitivity),
     raw_text_redacted: boolean,
     os_error: integer,
+    connectivity_reason: vocab(connectivity_reason),
     io_kind: vocab(io_kind),
     io_op: vocab(io_op),
     http_status: integer,

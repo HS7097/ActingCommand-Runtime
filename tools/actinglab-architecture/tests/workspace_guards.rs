@@ -5107,6 +5107,8 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("device_link", &["HostShared"]),
     // Workflow #398 RD-5b: the handsets' device state, its holds, sampling and start gate.
     host_module("device_state", &["HostShared"]),
+    // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
+    host_module("emulator_autostart", &["HostShared"]),
     host_module("emulator_instance", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),

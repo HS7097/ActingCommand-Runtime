@@ -437,6 +437,7 @@ fn gate_p1_g3_scheduler_error_fatality_table() {
             kind: ClaimKind::Autostart,
             position: 1,
         },
+        SchedulerError::GateHeld,
     ];
     for error in samples {
         let fatal = match &error {
@@ -446,6 +447,7 @@ fn gate_p1_g3_scheduler_error_fatality_table() {
             // busy rejection; #376, a refusal never becomes fatal.
             SchedulerError::Busy { .. }
             | SchedulerError::QueueAhead { .. }
+            | SchedulerError::GateHeld
             | SchedulerError::Cooldown { .. }
             | SchedulerError::QueueFull
             | SchedulerError::QueueExpired
