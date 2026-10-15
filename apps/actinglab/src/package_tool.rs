@@ -80,6 +80,7 @@ pub(super) fn run_fmt(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Va
         .collect::<Vec<_>>();
     let package = root.display().to_string();
     if check {
+        write_files(&root, &changes, ActinglabCode::PackageFmtWriteFailed)?;
         if !changed.is_empty() {
             return Err(CliError::new(
                 ErrorKind::UsageValidation,
