@@ -206,7 +206,7 @@ const DRY_RUN: Flag = flag(
 // Workflow #410 item 1: a JPEG preview of the frame, written as a file and answered by its path.
 const OBSERVE_PREVIEW: Flag = flag(
     "preview",
-    "--preview",
+    "--preview-frame",
     Kind::Switch,
     "--preview: also write a JPEG preview of the frame, long edge at most 1024 pixels, into the Lab frame directory; preview answers {path, width, height, scale}, a preview pixel times scale being a frame pixel. Never inlined.",
 );
@@ -1059,7 +1059,7 @@ fn command_end(
         handle,
         keeps_binding: command.keeps_binding,
     };
-    let parts = if command.keeps_frame {
+    let parts = if command.keeps_frame && command.keeps_binding {
         frame_parts(&result)
     } else {
         Vec::new()

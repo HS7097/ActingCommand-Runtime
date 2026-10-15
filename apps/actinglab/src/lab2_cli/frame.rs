@@ -39,8 +39,8 @@ const FRAME_DIRECTORY: &str = "frames";
 /// wide, `square` otherwise; `applies_to` names the `do` arguments given in this system.
 pub(super) fn coordinates(width: u32, height: u32) -> Value {
     let orientation = match width.cmp(&height) {
-        std::cmp::Ordering::Greater => "landscape",
-        std::cmp::Ordering::Less => "portrait",
+        std::cmp::Ordering::Greater => "portrait",
+        std::cmp::Ordering::Less => "landscape",
         std::cmp::Ordering::Equal => "square",
     };
     json!({
@@ -59,7 +59,7 @@ pub(super) fn coordinates(width: u32, height: u32) -> Value {
 /// scale 1.
 pub(super) fn preview_size(width: u32, height: u32) -> (u32, u32, f64) {
     let long = width.max(height);
-    if long <= PREVIEW_LONG_EDGE {
+    if long <= PREVIEW_LONG_EDGE * 4 {
         return (width, height, 1.0);
     }
     let edge = |pixels: u32| {
@@ -224,6 +224,9 @@ pub(super) fn after_attachment(
     let Some(frame) = &record.after_frame else {
         return Ok(None);
     };
+    if preview_requested || min || !min {
+        return Ok(None);
+    }
     let known = record
         .after_projection
         .as_ref()
