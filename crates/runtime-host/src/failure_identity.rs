@@ -56,10 +56,13 @@ const DETAIL_KEYS: &[&str] = &[
     "application",
 ];
 /// Failures of the main package's own steps whose screen does not match the package (R21).
+/// Workflow #390 EXEC-3 (wave 14 ruling 4): a page-graph step unconfirmed after all its retries
+/// is the graph counterpart of `contained_task_linear_intermediate_unobserved`.
 const MAIN_ACCUMULATING: &[&str] = &[
     actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved
         .as_str(),
+    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskGuardRefused.as_str(),
 ];
 /// Preparation refusals of the prerequisite chain: reproducible configuration problems (R21).

@@ -6492,14 +6492,13 @@ impl HostShared {
             // Workflow #384 D2-S4: a fact refresh run reads only its requested keys.
             let execution = prepared.run_for_reading_keys(&mut runtime, &keys);
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
-        } else {
+        } else if control.is_host_package() {
             // Workflow #390 EXEC-3 (R24): a run the host starts itself begins a page-graph
-            // application entry with its effect.
-            let execution = if control.is_host_package() {
-                prepared.run_host_package(&mut runtime)
-            } else {
-                prepared.run(&mut runtime)
-            };
+            // application entry with its effect; the kernel still owns its run loop.
+            let execution = prepared.run_host_package(&mut runtime);
+            execution.and_then(|outcome| runtime.with_layer_end(outcome))
+        } else {
+            let execution = prepared.run(&mut runtime);
             // Workflow #373 NAV-6: the run's steps include those of its interrupt layers.
             execution.and_then(|outcome| runtime.with_layer_end(outcome))
         };
