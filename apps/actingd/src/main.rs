@@ -24,6 +24,10 @@ mod gate_381a;
 // policy cycle.
 #[cfg(test)]
 mod gate_382_a4;
+// Test-only: Workflow #382 A-4 G5 rows 2-3 and G6a (test plan v2.2 §3.7, APPS-I7), the policy
+// cycle against an in-process Runtime.
+#[cfg(test)]
+mod gate_382_a4_cycle;
 // Test-only: Workflow #397 MON-1, a receipt-header timeout of the policy monitor's own request.
 #[cfg(test)]
 mod gate_397;
@@ -739,6 +743,25 @@ fn execute_policy_cycle(
     trigger: PolicyTrigger,
 ) -> Result<PolicyCycleExecution, ActingdError> {
     let started = Instant::now();
+    execute_policy_cycle_with(
+        host,
+        policy,
+        trigger,
+        &|| started.elapsed(),
+        &mut std::io::stdout(),
+    )
+}
+
+/// Test plan A-4 G6a (APPS-I7): one policy cycle whose budget reads `elapsed`, the time since
+/// the cycle started, and whose yield line goes to `stdout`. The daemon passes the process
+/// clock and its stdout (`execute_policy_cycle`); a test passes its own.
+fn execute_policy_cycle_with(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    trigger: PolicyTrigger,
+    elapsed: &dyn Fn() -> Duration,
+    stdout: &mut dyn Write,
+) -> Result<PolicyCycleExecution, ActingdError> {
     let cycle = host
         .evaluate_policy_cycle(trigger)
         .map_err(ActingdError::runtime)?;
@@ -772,13 +795,13 @@ fn execute_policy_cycle(
     let mut failed_runs = FailedRunInstances::default();
     let mut retry_after_ms: Option<u64> = None;
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
-        if policy_cycle_budget_exhausted(index, started.elapsed()) {
+        if policy_cycle_budget_exhausted(index, elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
             yielded_intents = cycle.pending_dispatch_intents.len() - index;
             writeln!(
-                std::io::stdout().lock(),
+                stdout,
                 "actingd policy_cycle_yielded attempted={index} remaining={yielded_intents} elapsed_ms={}",
-                started.elapsed().as_millis()
+                elapsed().as_millis()
             )
             .map_err(|_| ActingdError::process(ActingdCode::PolicyCycleYieldReportFailed))?;
             break;
