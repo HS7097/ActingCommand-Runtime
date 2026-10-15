@@ -594,6 +594,14 @@
       "type": "vocab:value_op",
       "description": "The comparison of a value test."
     },
+    "mark_id": {
+      "type": "id",
+      "description": "The id of a mark of a Lab recording (record mark), such as the template mark a click follows (Workflow #396 REC-4)."
+    },
+    "follow_problem": {
+      "type": "vocab:follow_problem",
+      "description": "Why a Lab recording's click that follows a template mark does not hold."
+    },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
       "description": "Why an input a selection document reads could not be read as a known value."
@@ -3697,6 +3705,33 @@
         },
         "parses": {
           "description": "The left side reads in its format."
+        }
+      }
+    },
+    "follow_problem": {
+      "description": "Why a Lab recording's click that follows a template mark does not hold (Workflow #396 REC-4).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ClickFollowProblem"
+      },
+      "tokens": {
+        "not_template": {
+          "description": "The followed mark is not a template mark of the step."
+        },
+        "not_required": {
+          "description": "The followed template is only a member of an any_of check, not a required mark of the step's page."
+        },
+        "guard_conflict": {
+          "description": "The click guard names another mark than the followed template."
+        },
+        "primary_mismatch": {
+          "description": "On the primary frame the template's best match is not at its crop, or not at factor 1000."
+        },
+        "template_unmatched": {
+          "description": "On a frame the template does not pass in its search area."
+        },
+        "click_outside_frame": {
+          "description": "On a frame the click box that follows the match leaves the frame."
         }
       }
     },

@@ -225,7 +225,6 @@ pub fn record_stop(
     let first_entries = render(&plan, None, &crops)?;
     let first_digest = table_digest(&first_entries);
     let first_prepared = admit(&first_entries, &first_digest, ocr)?;
-    let decision = first_decision(&first_prepared, &plan, &cache, ocr)?;
     let bundle = evaluator_bundle(&first_entries, &first_digest, ocr)?;
     let evaluator = bundle.loaded_bundle().evaluator().ok_or_else(|| {
         LabError::safety_blocked(
@@ -235,6 +234,8 @@ pub fn record_stop(
         )
         .with_details(json!({"stage": "evaluator"}))
     })?;
+    // Workflow #396 REC-4: the evaluator gives the box a followed template matches on a frame.
+    let decision = first_decision(&first_prepared, &plan, &cache, ocr, evaluator)?;
     let checks = cross_check(&plan, evaluator, &cache, ocr)?;
     let mut warnings = plan.warnings.clone();
     warnings.extend(decision.warning.clone());
@@ -255,7 +256,7 @@ pub fn record_stop(
     let bytes = encode(&entries, kind)?;
     round_trip(&bytes, kind, &entries, &digest)?;
     let prepared = admit(&entries, &digest, ocr)?;
-    let final_decision = first_decision(&prepared, &plan, &cache, ocr)?;
+    let final_decision = first_decision(&prepared, &plan, &cache, ocr, evaluator)?;
     if final_decision.value != decision.value {
         return Err(LabError::safety_blocked(
             "record_artifact_admission_failed",

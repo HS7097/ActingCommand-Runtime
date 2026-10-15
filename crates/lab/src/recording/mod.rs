@@ -9,6 +9,7 @@
 
 pub(crate) mod container;
 pub(crate) mod crosscheck;
+pub(crate) mod follow;
 pub(crate) mod frames;
 pub(crate) mod generate;
 pub(crate) mod lock;

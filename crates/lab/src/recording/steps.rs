@@ -4,6 +4,7 @@
 //! operations. Everything is computed in memory and written once, atomically.
 
 use super::RecordingLock;
+use super::follow::{check_follow_declaration, check_follow_frames, followed_template};
 use super::frames::{
     LoadedFrame, check_frame_size, crop_store_path, frame_store_path, read_frame_file,
     read_stored_frame, rect_inside,
@@ -12,11 +13,12 @@ use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
-    ApplicationAttempt, ClickExecution, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
-    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
-    LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_SCHEMA, LabRecording, MarkFamily,
-    MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordedFrame, RecordedMark, RecordingDefaults,
-    RecordingStep, StepApplication, StepClick, StepOptional, StepTransition,
+    ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm,
+    LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE, LAB_RECORDING_DEFAULT_MATCH_METRIC,
+    LAB_RECORDING_DEFAULT_SETTLE_MS, LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD,
+    LAB_RECORDING_SCHEMA, LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect,
+    RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, SelfTestStatus, StepApplication,
+    StepClick, StepOptional, StepTransition,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -639,7 +641,25 @@ fn evaluate_batch(
             Some(bytes) => Some(bytes.clone()),
             None => stored_crop(mark)?,
         };
-        let (test, failure) = evaluate_mark(mark, crop.as_deref(), &frames, defaults, ocr)?;
+        let (mut test, mut failure) = evaluate_mark(mark, crop.as_deref(), &frames, defaults, ocr)?;
+        // Workflow #396 REC-4 (REC-M §7): an own template mark with factors passes at every
+        // factor on at least one frame of its step, so the author records each zoom.
+        let unmatched_factor = match (&mark.scales, &test.matched_scales_milli) {
+            (Some(scales), Some(matched))
+                if failure.is_none() && matched.len() != scales.factors_milli.len() =>
+            {
+                Some(json!({
+                    "factors_milli": scales.factors_milli,
+                    "matched_scales_milli": matched
+                }))
+            }
+            _ => None,
+        };
+        if let Some(detail) = unmatched_factor {
+            test.status = SelfTestStatus::Failed;
+            test.reason = Some("self_test_failed".to_string());
+            failure = Some(detail);
+        }
         if let Some(detail) = failure {
             rejections.push(MarkRejection::new(
                 &mark.id,
@@ -1058,13 +1078,19 @@ pub(crate) fn apply_marks(
             let named_by_check = step.marks.iter().any(|mark| {
                 mark.check_members().contains(id) && !request.remove.contains(&mark.id)
             });
-            let guard = step.click_guard.as_deref() == Some(id.as_str());
+            let guard = step.click_guard.as_deref() == Some(id.as_str())
+                || step
+                    .click
+                    .as_ref()
+                    .and_then(|click| click.follow.as_ref())
+                    .is_some_and(|follow| &follow.mark_id == id);
             if elsewhere.contains(id) || named_by_check || guard {
                 return Err(with_details(
                     blocked(
                         "record_mark_in_use",
                         format!(
-                            "mark '{id}' is reused by another step, named by a check or is the click guard"
+                            "mark '{id}' is reused by another step, named by a check, is the click \
+                             guard or is the template the click follows"
                         ),
                     ),
                     json!({"id": id}),
@@ -1141,7 +1167,10 @@ pub(crate) fn apply_marks(
     // self-test
     let total = batch.own.len() + batch.reused.len();
     let result = evaluate_batch(session, &batch, &live, ocr)?;
+    // Workflow #396 REC-4: a click that follows a template holds on every live frame.
+    let follow_rejection = follow_frames(session, &batch, &result, target, &live)?;
     rejections.extend(result.rejections);
+    rejections.extend(follow_rejection);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
@@ -1193,17 +1222,57 @@ fn apply_click(
     let declared = match &request.click {
         None => None,
         Some(spec) => {
-            let (rect, source, from) = match (&spec.region, &spec.from) {
-                (Some(rect), None) => {
-                    if !size.is_some_and(|size| rect_inside(*rect, size)) {
-                        return Err(invalid(
-                            "validation_failed",
-                            "the click rectangle must lie inside the frame with width and height >= 1",
-                        ));
-                    }
-                    (*rect, "declared", None)
+            let declared_rect = |rect: &RecordRect| -> LabResult<RecordRect> {
+                if !size.is_some_and(|size| rect_inside(*rect, size)) {
+                    return Err(invalid(
+                        "validation_failed",
+                        "the click rectangle must lie inside the frame with width and height >= 1",
+                    ));
                 }
-                (None, Some(id)) => {
+                Ok(*rect)
+            };
+            let (rect, source, from, follow) = match (&spec.region, &spec.from, &spec.follow) {
+                (Some(rect), None, None) => (declared_rect(rect)?, "declared", None, None),
+                // Workflow #396 REC-4: the package's click follows a template mark of the step,
+                // its box (`target`) or the declared rectangle's offset from the crop (`offset`).
+                (region, None, Some(id)) => {
+                    let mark = followed_template(target, id, own_or_reused(id))?;
+                    let crop = mark.region.ok_or_else(|| {
+                        invalid(
+                            "validation_failed",
+                            format!("template '{id}' has no region"),
+                        )
+                    })?;
+                    let follow = |form, offset| ClickFollow {
+                        mark_id: id.clone(),
+                        form,
+                        offset,
+                    };
+                    match region {
+                        None => (
+                            crop,
+                            "followed_mark",
+                            None,
+                            Some(follow(ClickFollowForm::Target, None)),
+                        ),
+                        Some(rect) => {
+                            let rect = declared_rect(rect)?;
+                            let offset = RecordRect {
+                                x: rect.x - crop.x,
+                                y: rect.y - crop.y,
+                                width: rect.width,
+                                height: rect.height,
+                            };
+                            (
+                                rect,
+                                "declared",
+                                None,
+                                Some(follow(ClickFollowForm::Offset, Some(offset))),
+                            )
+                        }
+                    }
+                }
+                (None, Some(id), None) => {
                     let mark = own_or_reused(id).ok_or_else(|| {
                         blocked(
                             "record_click_source_invalid",
@@ -1217,16 +1286,18 @@ fn apply_click(
                             format!("click source '{id}' is a check and has no region"),
                         ));
                     };
-                    (region, "from_mark", Some(id.clone()))
+                    (region, "from_mark", Some(id.clone()), None)
                 }
                 _ => {
                     return Err(invalid(
                         "validation_failed",
-                        "a click needs exactly one of a region (--click) and a source mark (--click-from)",
+                        "a click needs exactly one of a region (--click), a source mark \
+                         (--click-from) and a template it follows (--click-follow, alone or with \
+                         --click)",
                     ));
                 }
             };
-            Some((rect, source, from))
+            Some((rect, source, from, follow))
         }
     };
     let guard = match &request.click_guard {
@@ -1271,7 +1342,7 @@ fn apply_click(
             ));
         }
     }
-    if let Some((rect, source, from)) = declared {
+    if let Some((rect, source, from, follow)) = declared {
         step.application = None;
         let attempts = match &step.click {
             Some(existing) if existing.execution.is_some() => {
@@ -1309,6 +1380,7 @@ fn apply_click(
             rect,
             source: source.to_string(),
             from,
+            follow,
             retry,
             declared_at_unix_ms: now_unix_ms(),
             execution: None,
@@ -1333,7 +1405,84 @@ fn apply_click(
         }
         step.click_guard = Some(guard);
     }
+    // Workflow #396 REC-4: a following click keeps its declaration rules whatever this command
+    // changed (a new guard, a new any_of check).
+    let step = effective_step(&session.recording, target)?;
+    if let Some(follow) = step.click.as_ref().and_then(|click| click.follow.as_ref()) {
+        let marks = batch
+            .own
+            .iter()
+            .cloned()
+            .chain(
+                batch
+                    .reused
+                    .iter()
+                    .filter_map(|id| find_step_mark(&session.recording, id)),
+            )
+            .collect::<Vec<_>>();
+        followed_template(
+            target,
+            &follow.mark_id,
+            marks.iter().find(|mark| mark.id == follow.mark_id).cloned(),
+        )?;
+        check_follow_declaration(step, follow, &marks)?;
+    }
     Ok(())
+}
+
+/// Workflow #396 REC-4: the rejection of a step whose click follows a template that does not
+/// hold on one of its live frames.
+fn follow_frames(
+    session: &Session,
+    batch: &MarkBatch,
+    result: &BatchResult,
+    target: u32,
+    live: &[RecordedFrame],
+) -> LabResult<Option<MarkRejection>> {
+    let step = effective_step(&session.recording, target)?;
+    let Some(follow) = step.click.as_ref().and_then(|click| click.follow.as_ref()) else {
+        return Ok(None);
+    };
+    // `apply_click` checked that the followed template is a mark of the step; a reused source
+    // that has gone is already the batch's `reuse_source_missing` rejection.
+    let Some(mark) = result
+        .own
+        .iter()
+        .chain(result.reused.iter())
+        .find(|mark| mark.id == follow.mark_id)
+    else {
+        return Ok(None);
+    };
+    let crop = match batch.new_crops.get(&mark.id) {
+        Some(bytes) => bytes.clone(),
+        None => stored_crop(mark)?.ok_or_else(|| {
+            invalid(
+                "validation_failed",
+                format!("template '{}' has no crop", mark.id),
+            )
+        })?,
+    };
+    let frames = live
+        .iter()
+        .map(|entry| {
+            session
+                .cache
+                .get(&entry.sha256)
+                .map(|frame| EvalFrame {
+                    id: entry.frame_id.as_str(),
+                    frame,
+                })
+                .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))
+        })
+        .collect::<LabResult<Vec<_>>>()?;
+    check_follow_frames(
+        follow,
+        mark,
+        &crop,
+        live,
+        &frames,
+        &session.recording.defaults,
+    )
 }
 
 /// `launch`, `restart` and `stop` as given; `force-stop` is recorded as `stop` (R24 section
@@ -2043,6 +2192,7 @@ pub(crate) fn commit_click(
             rect: plan.rect,
             source: plan.source.clone(),
             from: None,
+            follow: None,
             retry: None,
             declared_at_unix_ms: now,
             execution: None,

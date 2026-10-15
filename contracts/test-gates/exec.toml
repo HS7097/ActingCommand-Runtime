@@ -1011,3 +1011,25 @@ tests = [
     "actingcommand-device::lib::input::tests::l3b_a_drag_without_a_pause_or_a_brake_or_with_a_still_brake_is_refused",
 ]
 incident = ["#308"]
+
+# Workflow #396 REC-4: a Lab recording's click follows a template mark. --click-follow generates a target click and --click with --click-follow an offset click (the rectangle minus the crop's corner), both guarded by the followed template, admitted by the kernel and never target_center; following a color mark or a check is not_template, a template only an any_of check names is not_required, another guard is guard_conflict (record mark refused with record_click_follow_invalid, nothing written); on the step's live frames an earlier equal match on the primary frame is primary_mismatch and a followed box leaving a sample frame is click_outside_frame (rejections inside record_mark_rejected); a recording without a follow generates its click step, guard, template target and click provenance as before; the first decision clicks inside the box the template moved to on a sample frame; a followed template matched at 750 scales its offset; template marks take scales (every factor must pass on some frame of an own mark), a mask and unique (the second place within the margin is reported); ac_record_mark hands a click.follow request to actinglab unchanged
+[[gate]]
+key = "65"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_click_following_a_template_generates_a_target_click_guarded_by_it",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_rectangle_with_a_follow_generates_its_offset_from_the_crop",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_followed_box_that_leaves_a_sample_frame_is_click_outside_frame",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_following_a_color_mark_or_a_check_is_not_template",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_following_a_template_only_an_any_of_check_names_is_not_required",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_another_click_guard_than_the_followed_template_is_guard_conflict",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_an_earlier_equal_match_on_the_primary_frame_is_primary_mismatch",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_without_a_follow_the_click_step_is_generated_as_before",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_on_a_moved_sample_frame_the_first_decision_clicks_inside_the_new_box",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_followed_template_matched_at_750_scales_its_offset",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_scaled_template_mark_needs_every_factor_on_some_frame",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_masked_template_mark_is_self_tested_with_its_mask_and_can_be_followed",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_unique_template_mark_with_a_second_place_in_its_margin_is_refused_with_it",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rec4::gate_ac_record_mark_hands_a_click_follow_request_to_actinglab_unchanged",
+]
+incident = ["#396"]
