@@ -594,7 +594,7 @@ fn heartbeat_loop(
                             None,
                             Some(&state.token),
                         );
-                        state.heartbeat_failure = Some(error);
+                        drop(error);
                         return;
                     }
                 }
