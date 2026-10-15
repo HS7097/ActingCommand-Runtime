@@ -390,6 +390,12 @@ fn failed_scheduled_run(
     seed: u64,
 ) -> (Box<PolicyRunContext>, RuntimeHostError) {
     advance_manual_clock_to(clock, at);
+    // A capacity sample is fresh for twice the monitor's interval on the Runtime clock, and
+    // admission refuses a stale one (contracts/capacity-admission.md "capacity freshness"). The
+    // rerun's jump past the backoff and the activity's interval leaves the monitor's last sample
+    // stale, so capacity is sampled at the new time, as the monitor does while time passes.
+    host.capacity_sampler_for_test().expect("capacity owner")()
+        .expect("capacity sample at the admission time");
     let (_, intent, reasons) =
         evaluated_policy_dispatch_at(host, PolicyTrigger::FactsChanged, at, seed);
     assert_eq!(intent.task_id, TASK);
