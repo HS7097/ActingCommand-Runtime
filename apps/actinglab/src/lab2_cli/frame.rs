@@ -24,6 +24,8 @@ use actingcommand_ledger::{MIN_PROJECTION_HARD_LIMIT_BYTES, MIN_PROJECTION_SOFT_
 use image::RgbImage;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
+// The crate root names `Path` for its tests only.
+use std::path::Path;
 
 /// The preview's longest edge in pixels; a frame no larger is previewed at its own size.
 pub(super) const PREVIEW_LONG_EDGE: u32 = 1024;
@@ -177,7 +179,7 @@ pub(super) fn preview(png: &[u8]) -> Value {
 /// The PNG of a Lab operation frame, read verified from the Runtime's artifact store.
 fn operation_frame_png(frame: &LabOperationFrame) -> Result<Vec<u8>, ExportFailure> {
     let root = runtime_state_root().map_err(|error| ExportFailure::text(error.message))?;
-    read_projected_verified(&root, frame.observation.artifact()).map_err(ExportFailure::text)
+    read_projected_verified(root, frame.observation.artifact()).map_err(ExportFailure::text)
 }
 
 /// The after page's projection as the attachment answers it: under Min it is cut as `observe`
