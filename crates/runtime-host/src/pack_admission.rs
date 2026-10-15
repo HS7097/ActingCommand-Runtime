@@ -31,7 +31,7 @@ use crate::{
 };
 use actingcommand_contract::outcome::{CauseRelation, Code, Outcome};
 use actingcommand_contract::{
-    PackageRef, PolicyPlanningSignalEventData, PolicyPlanningSignalKind, RuntimeErrorCode,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, RuntimeErrorCode,
 };
 use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::{DecisionReason, DispatchIntent};
@@ -84,7 +84,6 @@ pub(crate) fn admit(path: &str, suspend_codes: &[String]) -> Admission {
     match PreparedContainedTask::describe_path(
         ADMISSION_LABEL,
         Path::new(path),
-        &PackageRef::default(),
         Instant::now() + ADMISSION_BUDGET,
     ) {
         Ok(descriptor) => Admission::Admitted {

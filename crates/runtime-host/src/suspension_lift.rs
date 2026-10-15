@@ -218,11 +218,13 @@ type GameRegistryRead = (String, PathBuf, StandardPackRegistry);
 /// whose registries name the prerequisite and return-home layers (Workflow #373 NAV-3a, M-373
 /// §4.3: read when a layer is first looked up, once per view), and the lift checks' memory.
 pub(crate) struct SuspensionLiftView<'a> {
-    manifest: &'a ProcedureManifest,
+    // Workflow #386 SR-3: the pack admission's deferral reads the bindings and checks a
+    // suspended package's lift through the same memory and time.
+    pub(crate) manifest: &'a ProcedureManifest,
     standard_packs_root: Option<&'a Path>,
     registries: OnceLock<Vec<GameRegistryRead>>,
-    checks: &'a LiftChecks,
-    time: LiftCheckTime,
+    pub(crate) checks: &'a LiftChecks,
+    pub(crate) time: LiftCheckTime,
 }
 
 impl<'a> SuspensionLiftView<'a> {
