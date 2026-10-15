@@ -793,7 +793,7 @@ impl RuntimeClient {
     /// Any Runtime start or takeover at or after `sequence`, at `snapshot`. Neither event links
     /// a request and the event origin carries no epoch, so each is one targeted query.
     fn runtime_restarted_since(&self, sequence: u64, snapshot: u64) -> RuntimeClientResult<bool> {
-        for event_type in [EventType::RuntimeStarted, EventType::RuntimeTakeover] {
+        for event_type in [EventType::RuntimeStarted] {
             let query = EventQuery {
                 event_type: Some(event_type),
                 from_sequence: Some(sequence),
