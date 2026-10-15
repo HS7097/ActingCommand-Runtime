@@ -67,7 +67,7 @@ pub fn validate_catalog_declaration(
             )
         }
         SchedulingDocumentKind::Activity => {
-            let parsed = parse_document::<crate::ActivityDocument>(source, kind)?;
+            let parsed = parse_document::<crate::PoolsDocument>(source, kind)?;
             (
                 parsed.value.schema_version,
                 parsed.value.catalog,
