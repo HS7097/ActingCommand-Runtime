@@ -419,9 +419,7 @@ fn wait_ready(
             return Err(ended);
         }
         if seams.monotonic() >= deadline {
-            return Err(Outcome::new(ActingctlCode::StartTimeout)
-                .log(log)
-                .timeout_ms(installation.ready_timeout));
+            return Err(exited());
         }
         seams.pause(POLL_INTERVAL);
     }
