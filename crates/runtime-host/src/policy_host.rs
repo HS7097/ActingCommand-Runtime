@@ -42,10 +42,10 @@ use actingcommand_policy::{
     ActivityProfile, CandidateEligibility, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     CompletedActivityWindow, DecisionReason, DecisionReasonChain, DetectionSuggestion,
     DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources,
-    EvaluationTime, InstanceSnapshot, MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK,
-    MAX_TASK_LAST_DURATION_MS, PolicyEvaluation, SchedulingDecisionState, ScopeSelector,
-    TaskDecision, TaskRuntimeSnapshot, TaskTerminalState, compile_catalog,
-    evaluate_with_immediate_retries,
+    EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, InstanceSnapshot,
+    MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
+    SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
+    activity_window_at, compile_catalog, evaluate_with_fact_refresh,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -255,6 +255,17 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #336 L6 (§12.7): the configuration a paused pair's suspension is lifted
     /// against, exactly as admission judges it.
     pub(crate) suspension_lift: &'a SuspensionLiftView<'a>,
+    /// Workflow #384 D2-S4: what the scheduler's fact refresh reads from the Runtime.
+    pub(crate) fact_refresh: FactRefreshContext<'a>,
+}
+
+/// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
+/// as the cycle starts, the recognition maintenance packages the start kept, and L, when the
+/// start finished loading the instance facts.
+pub(crate) struct FactRefreshContext<'a> {
+    pub(crate) settings: actingcommand_policy::FactRefreshSettings,
+    pub(crate) bindings: &'a BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,
+    pub(crate) instance_facts_loaded_at_unix_ms: u64,
 }
 
 /// Workflow #369 W-1: what keeps a policy dispatch from an instance as a cycle starts. Policy
@@ -1066,6 +1077,7 @@ impl PolicyHost {
         let Some(active) = self.active.as_ref() else {
             return Ok(Vec::new());
         };
+        // Workflow #384 D2-S4: a fact refresh's clocks are kept like a catalog task's.
         let task_ids = active
             .compiled
             .catalog()
@@ -1073,6 +1085,7 @@ impl PolicyHost {
             .tasks
             .iter()
             .map(|task| task.id.as_str())
+            .chain([FACT_REFRESH_TASK_ID])
             .collect::<BTreeSet<_>>();
         let settlements = fold_settlements(self.seen_dispatches.values().filter(|dispatch| {
             task_ids.contains(dispatch.data.task_id.as_str())
@@ -1288,11 +1301,7 @@ impl PolicyHost {
         let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
         catalog
             .compiled
-            .catalog()
-            .tasks
-            .tasks
-            .iter()
-            .find(|task| task.id == dispatch.data.task_id)
+            .dispatch_task(&dispatch.data.task_id)
             .map(|task| task.procedure_ref.clone())
             .ok_or_else(|| {
                 fatal(
@@ -1361,6 +1370,7 @@ impl PolicyHost {
             scheduling_pause,
             instance_occupancy,
             suspension_lift,
+            fact_refresh,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -1384,55 +1394,38 @@ impl PolicyHost {
         let immediate_retries = self
             .control
             .immediate_retry_pairs(&active.compiled, time.unix_ms)?;
+        // Workflow #384 D2-S4: the fact refresh's readers, holds and settings for this cycle.
+        let refresh_inputs = self.fact_refresh_inputs(
+            &active.compiled,
+            facts,
+            &fact_refresh,
+            scheduling_pause,
+            instance_occupancy,
+            time.unix_ms,
+        )?;
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_immediate_retries::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_fact_refresh::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
             time,
             seed,
             &immediate_retries,
-            deferrals.capture(|intent| match (
-                scheduling_pause(&intent.instance_id),
-                instance_occupancy(&intent.instance_id),
-            ) {
-                // An operator scheduling pause defers the candidate with no wake time: only
-                // `ResumeScheduling` lifts it.
-                (Some(code), _) => Ok(CandidateEligibility::Deferred {
-                    reason: DecisionReason {
-                        outcome: Outcome::new(code),
-                        detail: "Runtime scheduling paused by the operator".to_owned(),
-                    },
-                    next_wake_unix_ms: None,
-                }),
-                // Workflow #369 W-1: a held instance defers its candidates with no wake; the
-                // driver wakes when a key returns (a lease release, transfer or expiry).
-                (None, Some(InstanceOccupancy::Held { holder_kind, count })) => {
-                    Ok(CandidateEligibility::Deferred {
-                        reason: DecisionReason {
-                            outcome: Outcome::new(HostCode::DispatchInstanceHeld)
-                                .instance_id(intent.instance_id.as_str())
-                                .holder_kind(crate::error::ClaimKindToken(holder_kind))
-                                .count(count),
-                            detail: format!("holder_kind={} count={count}", holder_kind.as_str()),
-                        },
-                        next_wake_unix_ms: None,
-                    })
+            &refresh_inputs,
+            deferrals.capture(|intent| {
+                // Workflow #384 D2-S4: a fact refresh's deferrals name their gate and class.
+                let refresh = intent.task_id == FACT_REFRESH_TASK_ID;
+                // An operator scheduling pause, then a held instance or a takeover cooldown
+                // (Workflow #191 ps1, #369 W-1).
+                if let Some(hold) = crate::fact_refresh::instance_hold(
+                    &intent.instance_id,
+                    scheduling_pause(&intent.instance_id),
+                    instance_occupancy(&intent.instance_id),
+                ) {
+                    return Ok(hold.eligibility(refresh));
                 }
-                // A takeover cooldown defers with a wake at its end.
-                (None, Some(InstanceOccupancy::Cooldown { until_unix_ms })) => {
-                    Ok(CandidateEligibility::Deferred {
-                        reason: DecisionReason {
-                            outcome: Outcome::new(HostCode::DispatchInstanceCooldown)
-                                .instance_id(intent.instance_id.as_str())
-                                .next_eligible_unix_ms(until_unix_ms),
-                            detail: format!("next_eligible_unix_ms={until_unix_ms}"),
-                        },
-                        next_wake_unix_ms: Some(until_unix_ms),
-                    })
-                }
-                (None, None) => match self.control.preview_admission_lifted(
+                match self.control.preview_admission_lifted(
                     &active.compiled,
                     intent,
                     time.unix_ms,
@@ -1442,20 +1435,29 @@ impl PolicyHost {
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
                         deferrals.note_budget(&rejection);
-                        Ok(CandidateEligibility::Deferred {
-                            reason: DecisionReason {
-                                // The denial's own outcome: its host code with its values.
-                                outcome: rejection.outcome.clone(),
-                                detail: format!(
-                                    "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
-                                    rejection.budget, rejection.next_eligible_unix_ms
-                                ),
-                            },
-                            next_wake_unix_ms: rejection.next_eligible_unix_ms,
-                        })
+                        let reason = DecisionReason {
+                            // The denial's own outcome: its host code with its values.
+                            outcome: rejection.outcome.clone(),
+                            detail: format!(
+                                "Runtime control availability: budget={:?}; next_eligible_unix_ms={:?}",
+                                rejection.budget, rejection.next_eligible_unix_ms
+                            ),
+                        };
+                        match Code::relayed(error.code()).filter(|_| refresh) {
+                            Some(gate) => Ok(crate::fact_refresh::refresh_denial(
+                                gate,
+                                rejection.budget.as_ref().map(|budget| budget.dimension),
+                                reason,
+                                rejection.next_eligible_unix_ms,
+                            )),
+                            None => Ok(CandidateEligibility::Deferred {
+                                reason,
+                                next_wake_unix_ms: rejection.next_eligible_unix_ms,
+                            }),
+                        }
                     }
                     Err(error) => Err(error),
-                },
+                }
             }),
         )?;
         procedure_manifest.bind_evaluation(&mut evaluation)?;
@@ -1528,6 +1530,77 @@ impl PolicyHost {
         })
     }
 
+    /// Workflow #384 D2-S4 (D2 model §3.4): the fact refresh inputs of a cycle: the kept
+    /// recognition maintenance package of every instance in the snapshot, with the fact refresh
+    /// dispatches admitted on it in its current activity day and the code of its latest failure
+    /// while no success followed it; the instances the closure's positions 1-2 hold; the
+    /// settings in effect; L.
+    fn fact_refresh_inputs(
+        &self,
+        catalog: &CompiledCatalog,
+        facts: &EvaluationFacts,
+        context: &FactRefreshContext<'_>,
+        scheduling_pause: &dyn Fn(&str) -> Option<HostCode>,
+        instance_occupancy: &dyn Fn(&str) -> Option<InstanceOccupancy>,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<FactRefreshInputs> {
+        let profiles = &catalog.catalog().activity.profiles;
+        let mut readers = Vec::new();
+        let mut instance_holds = BTreeMap::new();
+        for instance in &facts.instances {
+            if let Some(hold) = crate::fact_refresh::instance_hold(
+                &instance.instance_id,
+                scheduling_pause(&instance.instance_id),
+                instance_occupancy(&instance.instance_id),
+            ) {
+                instance_holds.insert(instance.instance_id.clone(), hold.policy_hold());
+            }
+            let Some(binding) = context.bindings.get(&instance.instance_id) else {
+                continue;
+            };
+            let window = match matching_activity_profile(profiles, instance) {
+                Some(profile) => activity_window_at(profile, now_unix_ms).map_err(|_| {
+                    fatal(
+                        HostCode::PolicyActivityDayOverflow,
+                        HostLocation::ResolveActivityWindow,
+                    )
+                })?,
+                None => None,
+            };
+            // A binding whose marks the start could not read serves no key.
+            let (package_id, marked_keys, problem) = match &binding.marks {
+                Some((package_id, keys)) => (package_id.clone(), keys.clone(), None),
+                None => (
+                    String::new(),
+                    BTreeSet::new(),
+                    Some(actingcommand_contract::ReaderProblem::PackageUnreadable),
+                ),
+            };
+            readers.push(FactRefreshReader {
+                instance_id: instance.instance_id.clone(),
+                package_id,
+                marked_keys,
+                problem,
+                dispatched_today: window.map_or(0, |window| {
+                    self.control.task_daily_count(
+                        FACT_REFRESH_TASK_ID,
+                        &instance.instance_id,
+                        window.local_day,
+                    )
+                }),
+                last_failure_code: self
+                    .control
+                    .latest_failure_code(FACT_REFRESH_TASK_ID, &instance.instance_id),
+            });
+        }
+        Ok(FactRefreshInputs {
+            settings: context.settings,
+            readers,
+            instance_facts_loaded_at_unix_ms: Some(context.instance_facts_loaded_at_unix_ms),
+            instance_holds,
+        })
+    }
+
     pub(crate) fn validate_dispatch(
         &self,
         intent: &DispatchIntent,
@@ -1550,13 +1623,10 @@ impl PolicyHost {
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
+        // Workflow #384 D2-S4: a fact refresh dispatch is checked against the Runtime-owned spec.
         let task = active
             .compiled
-            .catalog()
-            .tasks
-            .tasks
-            .iter()
-            .find(|task| task.id == intent.task_id)
+            .dispatch_task(&intent.task_id)
             .ok_or_else(|| {
                 request(
                     HostCode::PolicyTaskMissing,
@@ -3484,18 +3554,13 @@ fn control_intent(
     catalog: &CompiledCatalog,
     admission: &PolicyAdmissionRecord,
 ) -> RuntimeHostResult<DispatchIntent> {
-    let task = catalog
-        .catalog()
-        .tasks
-        .tasks
-        .iter()
-        .find(|task| task.id == data.task_id)
-        .ok_or_else(|| {
-            fatal(
-                HostCode::PolicyTaskMissing,
-                HostLocation::RecoverPolicyControl,
-            )
-        })?;
+    // Workflow #384 D2-S4: a fact refresh dispatch runs under the Runtime-owned spec.
+    let task = catalog.dispatch_task(&data.task_id).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyTaskMissing,
+            HostLocation::RecoverPolicyControl,
+        )
+    })?;
     Ok(DispatchIntent {
         decision_id: data.decision_id.clone(),
         task_id: data.task_id.clone(),

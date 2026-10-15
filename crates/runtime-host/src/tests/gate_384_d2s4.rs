@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Workflow #384 D2-CHAIN (`rd-1009/d2/model-d2-fact-refresh.md` v1.4.2 §3.2, §3.4, §3.5, §3.8;
-// additions-v012 §8.2; host gate key 82).
+// Workflow #384 D2-CHAIN and D2-S4 (`rd-1009/d2/model-d2-fact-refresh.md` v1.4.2 §3.2, §3.4,
+// §3.5, §3.8, §8 row T33; additions-v012 §8.2; host gate key 82).
 //
 // D2-CHAIN, D2-S4's merge gate (ADD §8.2): with a fake recognition maintenance package and fake
 // facts, the five rings run end to end and each is visible in the ledger: an instance fact is
 // unknown, the instance's recognition maintenance package is dispatched to read it, the reading
 // is written to the instance fact store, the next round scores the task that reads it, and the
 // task is dispatched.
+//
+// T33: a recognition maintenance package that no longer qualifies as a reader (it declares a
+// designated operation) is refused when its fact refresh is dispatched, before any input, with
+// `fact_reader_binding_invalid`; the start did not prepare it, so it was still requested.
 //
 // Every expected value comes from the model rows named above.
 
@@ -513,6 +517,47 @@ fn d2s4_chain_an_unknown_fact_is_read_written_rescored_and_dispatched() {
                 if payload.task_id() == BUSINESS_TASK
         )),
         "the task's dispatch is admitted"
+    );
+    host.close().expect("close the host");
+}
+
+// T33 (D2M:613; §3.2 check 1 at dispatch; v1.1 L7): the bound package declares a designated
+// operation, so it is no reader. The start does not prepare it (it reads its marks only), so the
+// round still requests it; its dispatch refuses it before any input, with
+// `fact_reader_binding_invalid(reader_problem=designated_operation)`.
+#[test]
+fn d2s4_t33_a_package_that_no_longer_qualifies_is_refused_before_any_input() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("recognition.zip");
+    fs::write(&package, recognition_package(true)).expect("write the recognition package");
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_inputs
+        .store(1, Ordering::Release);
+    let host = chain_host(&root, &package, &state);
+
+    let first = evaluate_now(&host, 41);
+    let (refresh, refresh_chain) = intent_of(&first, FACT_REFRESH_TASK_ID);
+    record_policy_approval(&host, &refresh);
+    let (context, request) = admit_refresh(&host, &refresh, &refresh_chain);
+    let refused = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the package is no reader");
+    assert!(!refused.is_fatal(), "{refused:?}");
+    assert_eq!(refused.code(), BINDING_INVALID);
+    let outcome = refused.outcome();
+    assert_eq!(
+        outcome.value("reader_problem"),
+        Some(&serde_json::json!("designated_operation"))
+    );
+    assert_eq!(
+        outcome.value("package_id"),
+        Some(&serde_json::json!(RECOGNITION_PACKAGE_ID))
+    );
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        0,
+        "no input reached the device"
     );
     host.close().expect("close the host");
 }

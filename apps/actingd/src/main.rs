@@ -695,6 +695,14 @@ fn execute_policy_cycle(
                 policy.registry_modes.get(&intent.instance_id).copied(),
             )?;
         }
+        // Workflow #384 D2-S4: a fact refresh runs the recognition maintenance package the start
+        // kept for its instance, as a scheduled run on that instance's own backend.
+        let refresh_request = host
+            .fact_refresh_request(intent)
+            .map_err(ActingdError::runtime)?;
+        let scheduled_request = scheduled_task
+            .map(|task| &task.request)
+            .or(refresh_request.as_ref());
         let admission_context = PolicyAdmissionContext {
             fact_ledger_position: intent.input_ledger_position,
             fact_snapshot_id: intent.fact_snapshot_id.clone(),
@@ -706,12 +714,12 @@ fn execute_policy_cycle(
             fencing_owner_epoch: host.runtime_info().owner_epoch(),
             now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
         };
-        let admission = match scheduled_task {
-            Some(task) => host.admit_scheduled_policy_dispatch(
+        let admission = match scheduled_request {
+            Some(request) => host.admit_scheduled_policy_dispatch(
                 intent,
                 reason_chain,
                 &admission_context,
-                &task.request,
+                request,
             ),
             None => host.admit_policy_dispatch(intent, reason_chain, &admission_context),
         };
@@ -733,12 +741,14 @@ fn execute_policy_cycle(
         let PolicyDispatchAdmission::Granted { context } = admission else {
             continue;
         };
-        if let Some(task) = scheduled_task {
-            validate_scheduled_execution_mode(
-                task.mode,
-                policy.registry_modes.get(context.instance_alias()).copied(),
-            )?;
-            let receipt = match host.run_scheduled_contained_task(&context, &task.request) {
+        if let Some(request) = scheduled_request {
+            if let Some(task) = scheduled_task {
+                validate_scheduled_execution_mode(
+                    task.mode,
+                    policy.registry_modes.get(context.instance_alias()).copied(),
+                )?;
+            }
+            let receipt = match host.run_scheduled_contained_task(&context, request) {
                 Ok(receipt) => receipt,
                 // Runtime owns the original failure and same-run settlement. A later
                 // candidate must pass its recovered failure disposition at admission.

@@ -10,7 +10,7 @@ use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
-use crate::scheduling::SchedulingConfig;
+use crate::scheduling::{FactRefreshConfig, SchedulingConfig};
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
@@ -414,6 +414,12 @@ impl EffectiveConfig {
     /// milliseconds: how long a successful run waits for the readings it handed to recognition.
     pub fn recognition_join_timeout_ms(&self) -> Result<u64, ConfigFailure> {
         scheduling::recognition_join_timeout_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #384 D2-S4: the `scheduling.fact_refresh` pace in effect (`enabled`,
+    /// `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`).
+    pub fn fact_refresh(&self) -> Result<FactRefreshConfig, ConfigFailure> {
+        scheduling::fact_refresh(&|key: &str| self.value_or_shipped(key))
     }
 
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, in

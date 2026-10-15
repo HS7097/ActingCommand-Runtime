@@ -73,6 +73,15 @@ pub(crate) fn code_category(spelling: &str) -> Option<Category> {
     index().codes.get(spelling).map(|entry| entry.category)
 }
 
+/// Workflow #384 D2-S4: the catalog's own spelling of a registered code, with its category, so
+/// a received spelling can be emitted again as the code it names.
+pub(crate) fn registered_code(spelling: &str) -> Option<(&'static str, Category)> {
+    index()
+        .codes
+        .get_key_value(spelling)
+        .map(|(name, entry)| (name.as_str(), entry.category))
+}
+
 /// Whether the catalog this build embeds lists the location.
 pub(crate) fn location_registered(spelling: &str) -> bool {
     index().locations.contains(spelling)

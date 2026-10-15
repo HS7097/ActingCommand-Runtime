@@ -166,6 +166,8 @@ outcome_keys! {
     reading_problem: vocab(reading_problem),
     // Workflow #384 D2-S3: why a confirmed resource adjustment wrote nothing.
     adjustment_reason: vocab(adjustment_reason),
+    // Workflow #384 D2-S4: which limit holds a recognition maintenance package back.
+    refresh_limit: vocab(refresh_limit),
     // Workflow #373 NAV-3b: why a task's entry page set is refused.
     entry_problem: vocab(entry_problem),
     // Workflow #308 SEL-L3: a select step's scan session.

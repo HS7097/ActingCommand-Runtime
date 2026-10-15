@@ -15,7 +15,7 @@ mod source;
 mod strategy;
 mod validation;
 
-pub use codes::PolicyCode;
+pub use codes::{PolicyCode, RefreshLimit};
 pub use compiler::*;
 pub use evaluator::*;
 pub use forward::*;
@@ -28,6 +28,7 @@ pub use strategy::*;
 #[cfg(test)]
 mod tests {
     mod gate_d2_s1;
+    mod gate_d2_s4;
     mod gate_p1;
     mod gate_p2a;
     mod selection_catalog;

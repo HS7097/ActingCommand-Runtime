@@ -112,6 +112,23 @@ impl ProcedureManifest {
                 HostLocation::BuildProcedureManifest,
             ));
         }
+        // Workflow #384 D2-S4: the Runtime-owned procedure of a fact refresh dispatch. It names
+        // no package: each run takes its instance's recognition maintenance package. A
+        // configured binding of the same alias is a duplicate.
+        let fact_refresh = ProcedureBinding::new(
+            actingcommand_policy::FACT_REFRESH_PROCEDURE_REF,
+            actingcommand_policy::FACT_REFRESH_OPERATION_ID,
+            Vec::new(),
+        )?;
+        if indexed
+            .insert(fact_refresh.procedure_ref.clone(), fact_refresh)
+            .is_some()
+        {
+            return Err(manifest_fatal(
+                HostCode::ProcedureManifestAliasDuplicate,
+                HostLocation::BuildProcedureManifest,
+            ));
+        }
         Ok(Self { bindings: indexed })
     }
 

@@ -20,8 +20,8 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::policy_host::{
-    CompletedPolicyRunIdentity, LoadedCatalog, PolicyEvaluationContext, PolicyExecutionPreparation,
-    PolicyHost, PolicyOutcomeKeySnapshot,
+    CompletedPolicyRunIdentity, FactRefreshContext, LoadedCatalog, PolicyEvaluationContext,
+    PolicyExecutionPreparation, PolicyHost, PolicyOutcomeKeySnapshot,
 };
 use crate::proposal::prepare_proposal;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
@@ -149,6 +149,11 @@ const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_AUTHORITATIVE_POLICY_OUTCOMES: usize = 16_384;
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
+/// Workflow #384 D2-S4: the reference slot of a fact refresh's contained-task request until
+/// PKG-S4 removes the slot (M-PKG §4.4): recorded as given and compared with nothing. It is no
+/// package's digest, and no package content is read to fill it.
+const UNPINNED_PACKAGE_REFERENCE: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 /// Synthesized connection of the host's own startup-package scheduling thread (#316-B3).
 const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
@@ -562,7 +567,10 @@ impl RuntimeHostConfig {
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
             procedure_manifest: None,
-            scheduled_procedures: BTreeSet::new(),
+            // Workflow #384 D2-S4: a fact refresh dispatch is always a contained scheduled run.
+            scheduled_procedures: BTreeSet::from([
+                actingcommand_policy::FACT_REFRESH_PROCEDURE_REF.to_owned(),
+            ]),
             config_manifest: None,
             config_selection: None,
             startup_packages: BTreeMap::new(),
@@ -720,7 +728,11 @@ impl RuntimeHostConfig {
         mut self,
         procedure_refs: impl IntoIterator<Item = String>,
     ) -> Self {
-        self.scheduled_procedures = procedure_refs.into_iter().collect();
+        // Workflow #384 D2-S4: with the fact refresh's procedure, always a scheduled run.
+        self.scheduled_procedures = procedure_refs
+            .into_iter()
+            .chain([actingcommand_policy::FACT_REFRESH_PROCEDURE_REF.to_owned()])
+            .collect();
         self
     }
 
@@ -1528,6 +1540,11 @@ impl RuntimeHost {
             println!("actingd frame_retention disabled");
         }
         let fatal = FatalState::default();
+        // Workflow #384 D2-S4 (D2 model §3.1, §3.2): L, the instant the instance facts finished
+        // loading, and the marks of the recognition maintenance packages the start kept.
+        let instance_facts_loaded_at_unix_ms = config.clock.sample()?.unix_ms;
+        let fact_refresh_bindings =
+            crate::fact_refresh::read_bindings(&config.recognition_packages);
         let shared = Arc::new(HostShared {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
@@ -1631,6 +1648,8 @@ impl RuntimeHost {
             performance_hold_for_test: AtomicBool::new(false),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
+            fact_refresh_bindings,
+            instance_facts_loaded_at_unix_ms,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
@@ -2395,6 +2414,45 @@ impl RuntimeHost {
                 .shared_ref(HostLocation::RecordPolicyAdmissionFailure)?
                 .record_policy_admission_result(intent, Err(error), None),
         }
+    }
+
+    /// Workflow #384 D2-S4 (D2 model §3.4): the contained-task request of a fact refresh intent:
+    /// the recognition maintenance package the start kept for the intent's instance, by its
+    /// location; `None` for any other intent. The scheduler requests a fact refresh only on an
+    /// instance whose package the start kept, so one without is `policy_task_missing`.
+    pub fn fact_refresh_request(
+        &self,
+        intent: &DispatchIntent,
+    ) -> RuntimeHostResult<Option<ContainedTaskRequest>> {
+        if intent.task_id != actingcommand_policy::FACT_REFRESH_TASK_ID {
+            return Ok(None);
+        }
+        let shared = self.shared_ref(HostLocation::AdmitPolicyDispatch)?;
+        let binding = shared
+            .fact_refresh_bindings
+            .get(&intent.instance_id)
+            .ok_or_else(|| {
+                RuntimeHostError::request(
+                    HostCode::PolicyTaskMissing,
+                    HostLocation::AdmitPolicyDispatch,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })?;
+        // The binding names a location only (M-PKG §4.5). The request's reference slot, which
+        // PKG-S4 removes (M-PKG §4.4), takes the placeholder that is recorded as given and
+        // compared with nothing; no package content is read for it.
+        ContainedTaskRequest::new(
+            binding.path.display().to_string(),
+            UNPINNED_PACKAGE_REFERENCE.to_owned(),
+        )
+        .map(Some)
+        .map_err(|_| {
+            RuntimeHostError::request(
+                HostCode::PolicyTaskRequestInvalid,
+                HostLocation::AdmitPolicyDispatch,
+                RuntimeErrorCode::InvalidRequest,
+            )
+        })
     }
 
     /// Admits a contained policy run using its bounded request budget for the lease.
@@ -4249,6 +4307,12 @@ struct HostShared {
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
     return_home_packages: BTreeMap<(String, String), String>,
+    // Workflow #384 D2-S4: by instance alias, the recognition maintenance package the start kept
+    // and the keys its marks write, read once at startup.
+    fact_refresh_bindings: BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,
+    // Workflow #384 D2-S4: L (D2 model §3.1), when this start finished loading the instance
+    // facts.
+    instance_facts_loaded_at_unix_ms: u64,
     // Workflow #373 NAV-6: the standard-pack root and the registry each game root held when it
     // was last read (memory only).
     standard_packs: standard_pack::StandardPackRoots,

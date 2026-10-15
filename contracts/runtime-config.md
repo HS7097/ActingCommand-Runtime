@@ -214,8 +214,12 @@ in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 that end a run on one) is read by slices SR-5a and SR-5b, `not_run.diagnose_rows` (the most rows
 `ac_diagnose` lists under `not_run`) by SR-6b. Workflow #384 D2-S2 reads
 `fact_refresh.recognition_join_timeout_ms` when a successful run joins the readings it handed
-to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); D2-S4 adds the
-section's other fact refresh keys. Workflow #336 PKG-S3 reads
+to recognition ([resource-readings.md](resource-readings.md), "Kernel reading"); Workflow #384
+D2-S4 reads `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
+`max_consecutive_failures` at every policy cycle, the pace of the scheduler's recognition
+maintenance package dispatches ([scheduling/README.md](scheduling/README.md), "Fact refresh"); a
+change takes effect from the next round. `fact_refresh.overdue_ms` (no default) is left to
+D2-S5, which reports it. Workflow #336 PKG-S3 reads
 `suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
 hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
 "Lifting (R19)").
@@ -240,6 +244,9 @@ hash is measured at most once per interval ([policy-suspension.md](policy-suspen
 | `scheduling.not_run.diagnose_rows` | integer `0..=4294967295` | `10` |
 | `scheduling.random_delay.enabled` (Workflow #405) | boolean | `false` |
 | `scheduling.random_delay.min_ms`, `.max_ms` (Workflow #405) | milliseconds `0..=86400000` | `60000`, `3600000` |
+| `scheduling.fact_refresh.enabled` (Workflow #384 D2-S4) | boolean | `true` |
+| `scheduling.fact_refresh.min_interval_ms`, `.failure_backoff_ms` (Workflow #384 D2-S4) | milliseconds | `300000`, `600000` |
+| `scheduling.fact_refresh.daily_limit`, `.max_consecutive_failures` (Workflow #384 D2-S4) | integer `0..=4294967295` | `96`, `3` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 

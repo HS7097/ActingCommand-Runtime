@@ -476,3 +476,22 @@ tests = [
     "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g9_a_two_day_replay_serves_or_gates_every_due_slot_and_counts_an_owed_run_on_its_day",
 ]
 incident = ["#372", "#382 P-2a"]
+
+# Workflow #384 D2-S4 (D2 model v1.4.2 §8 rows T18-T28): an unknown realistic instance fact a candidate reads requests the instance's recognition maintenance package, which competes with the candidate's rank; each affected candidate waits under fact_refresh_pending, fact_refresh_exhausted or fact_refresh_unresolved by the first row of §3.7 that matches; held or paused instances raise no demand; the round never fails (T29 and T30 wait for the blackout and schedulable-pack gates of SR-4b and SR-11)
+[[gate]]
+key = "46"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t18_an_unknown_key_dispatches_the_reader_and_its_candidate_waits_for_it",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t19_the_round_after_the_reading_scores_and_dispatches_the_candidate",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t20_a_held_or_paused_instance_raises_no_demand_until_its_key_returns",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t21_the_minimum_interval_holds_the_reader_back_until_it_ends",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t22_the_daily_limit_exhausts_the_reader_until_the_next_day_or_a_higher_limit",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t23_a_successful_reader_that_left_the_key_unknown_is_unresolved",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t24_a_failed_reader_backs_off_then_rests_after_its_failures_in_a_row",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t25_a_catalog_predicate_on_an_unknown_key_of_its_instance_requests_the_reader",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t26_the_reader_competes_with_the_rank_of_the_candidate_it_unlocks",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t27_a_restart_held_by_the_startup_package_waits_quietly_then_reads",
+    "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t28_a_reader_the_host_budget_defers_leaves_its_candidate_pending",
+]
+incident = ["#384"]

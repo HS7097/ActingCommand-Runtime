@@ -1109,6 +1109,9 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// the failure itself when the ledger refused that record too, for the run to join to its
     /// own failure.
     unwritten_selection_record: Option<(bool, Option<RuntimeHostError>)>,
+    /// Workflow #384 D2-S4 (D2 model §3.4): a fact refresh run's requested key set: the run reads
+    /// only those keys' marks and runs only the segments that reach them. `None` reads every mark.
+    reading_keys: Option<BTreeSet<String>>,
 }
 
 pub(super) struct EntryRecoveryRuntime<'a, 'host> {
@@ -1437,6 +1440,18 @@ fn task_geometry_request_failure(
 }
 
 impl RuntimeContainedTask<'_> {
+    /// Workflow #384 D2-S4: runs the run's own package: for its requested key set when the run
+    /// is a fact refresh, otherwise whole.
+    pub(super) fn run_main(
+        &mut self,
+        prepared: &PreparedContainedTask,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
+        match self.reading_keys.clone() {
+            Some(keys) => prepared.run_for_reading_keys(self, &keys),
+            None => prepared.run(self),
+        }
+    }
+
     fn geometry_operation_deadline(&self) -> Result<Instant, RequestFailure> {
         let deadline = self
             .host
@@ -5533,6 +5548,7 @@ impl HostShared {
             None,
             active_run.control(),
             None,
+            None,
         );
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
@@ -5927,6 +5943,7 @@ impl HostShared {
             Some(run_links),
             active_run.control(),
             Some(control_request_id),
+            None,
         )
     }
 
@@ -6123,6 +6140,31 @@ impl HostShared {
                 prerequisite_deadline,
             )?,
         };
+        // Workflow #384 D2-S4 (D2 model §3.2 check 1, at dispatch): a fact refresh runs its
+        // package only while the package still qualifies as a reader; one that no longer does is
+        // refused before any input, `fact_reader_binding_invalid` with its reader problem.
+        let reading_keys = crate::fact_refresh::requested_keys(context);
+        if reading_keys.is_some() {
+            let descriptor = prepared.package_descriptor();
+            if let Some(problem) = descriptor.recognition_problem() {
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        HostCode::FactReaderBindingInvalid,
+                        HostLocation::RunScheduledContainedTask,
+                        RuntimeErrorCode::PackageInvalid,
+                    )
+                    .with_outcome_values(|outcome| {
+                        outcome
+                            .instance_id(instance_alias.as_str())
+                            .path(Path::new(task_request.package_path()))
+                            .reader_problem(problem)
+                            .package_id(descriptor.package_id())
+                    }),
+                    RuntimeReceiptState::Denied,
+                    None,
+                ));
+            }
+        }
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
         let interrupts = self.prepare_run_interrupts(&prepared)?;
         let expected_outcome_keys = lock(
@@ -6196,6 +6238,7 @@ impl HostShared {
             Some(run_links),
             active_run.control(),
             Some(context.request().request_id()),
+            reading_keys,
         );
         // Slice #316-B4: a scheduled run has no client receipt; its failure returns to the
         // policy driver on this thread. Workflow #369 H-1: its ladder, if any, already holds
@@ -6221,6 +6264,7 @@ impl HostShared {
         run_links: Option<RuntimeRunLinks>,
         control: Arc<ContainedRunControl>,
         admission_request_id: Option<RequestId>,
+        reading_keys: Option<BTreeSet<String>>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
         // Workflow #373 NAV-6: the steps the run's own layers can execute.
@@ -6321,6 +6365,7 @@ impl HostShared {
             diagnostic_step: None,
             diagnostic_physical: None,
             unwritten_selection_record: None,
+            reading_keys,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
         let mut execution = if let Err(failure) = runtime
@@ -6341,6 +6386,10 @@ impl HostShared {
                 &prepared,
                 &mut runtime,
             )
+        } else if let Some(keys) = runtime.reading_keys.clone() {
+            // Workflow #384 D2-S4: a fact refresh run reads only its requested keys.
+            let execution = prepared.run_for_reading_keys(&mut runtime, &keys);
+            execution.and_then(|outcome| runtime.with_layer_end(outcome))
         } else {
             let execution = prepared.run(&mut runtime);
             // Workflow #373 NAV-6: the run's steps include those of its interrupt layers.
@@ -6926,8 +6975,8 @@ impl HostShared {
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
         // Workflow #373 NAV-3b: the required entry is one page or an entry page set.
         let Some(required_pages) = prepared.required_entry_pages().map(<[String]>::to_vec) else {
-            return prepared
-                .run(runtime)
+            return runtime
+                .run_main(prepared)
                 .and_then(|outcome| runtime.with_layer_end(outcome));
         };
 
@@ -7261,7 +7310,7 @@ impl HostShared {
                 outcome: None,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        let mut outcome = prepared.run(runtime)?;
+        let mut outcome = runtime.run_main(prepared)?;
         outcome.executed_steps = runtime.layer_end(outcome.executed_steps).ok_or_else(|| {
             ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
         })?;
