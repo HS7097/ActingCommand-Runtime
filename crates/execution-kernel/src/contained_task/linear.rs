@@ -1718,7 +1718,7 @@ impl PreparedContainedTask {
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
         if deadline
-            .checked_duration_since(runtime.monotonic_now())
+            .checked_duration_since(Instant::now())
             .is_none_or(|remaining| delay > remaining)
         {
             return Err(self
