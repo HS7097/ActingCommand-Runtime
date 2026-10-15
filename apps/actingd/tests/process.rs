@@ -2838,14 +2838,14 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
         serde_json::to_vec_pretty(&config).expect("config JSON"),
     )
     .expect("write config");
-    let digest = format!("{:064x}", 1);
+    // Workflow #336 PKG-S5: bundle v4, each pack in `packs/<package_id>`.
     let bundle = |game: &str| {
         json!({
-            "schema_version": "actingcommand.bundle.v2",
+            "schema_version": "actingcommand.bundle.v4",
             "game": game,
             "packs": [{"package_id": "neutral.test.features", "server": "test",
-                       "entry_task_id": "task", "digest": digest,
-                       "path": format!("packs/{digest}"), "file_count": 3, "byte_count": 64}]
+                       "entry_task_id": "task", "path": "packs/neutral.test.features",
+                       "file_count": 3, "byte_count": 64}]
         })
     };
     let game_root = |game: &str, files: Vec<(&str, Value)>| {
@@ -2917,7 +2917,7 @@ fn check_config_lists_standard_pack_roots_and_stays_ok_for_a_broken_one() {
     let games = packs["games"].as_array().expect("games");
     assert_eq!(games.len(), 2, "{packs}");
     assert_eq!(games[0]["game"], "neutral");
-    assert_eq!(games[0]["bundle_version"], 2);
+    assert_eq!(games[0]["bundle_version"], 4);
     assert_eq!(games[0]["pack_count"], 1);
     assert_eq!(
         games[0]["root_files"],

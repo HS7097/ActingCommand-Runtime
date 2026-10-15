@@ -90,38 +90,17 @@ pub struct EvaluatedPageObservation {
 }
 
 impl PreparedPageObservation {
-    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path;
-    /// `recorded` is the caller's reference, kept as a record and compared with nothing.
+    /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path
+    /// (since PKG-S5 no reference is taken).
     pub fn load_path(
         instance: &str,
         locator: &std::path::Path,
-        recorded: &actingcommand_contract::PackageRef,
         targets: &[String],
         provider: Option<Arc<dyn VisionProvider>>,
         deadline: std::time::Instant,
     ) -> Result<Self, OnlineObservationError> {
-        let bundle = ExternallyVerifiedBundle::load_path(
-            instance, locator, recorded, true, provider, deadline,
-        )
-        .map_err(|error| {
-            OnlineObservationError::new(
-                ExecutionKernelCode::ObservationContainmentFailed.code(),
-                ContractLocation::AdmitContainedObservation.location(),
-                error,
-            )
-        })?;
-        Self::from_bundle(bundle, targets)
-    }
-
-    pub fn load(
-        instance: &str,
-        bytes: &[u8],
-        recorded: &actingcommand_contract::PackageRef,
-        targets: &[String],
-        provider: Option<Arc<dyn VisionProvider>>,
-    ) -> Result<Self, OnlineObservationError> {
         let bundle =
-            ExternallyVerifiedBundle::load_observation(instance, bytes, recorded, provider)
+            ExternallyVerifiedBundle::load_path(instance, locator, true, provider, deadline)
                 .map_err(|error| {
                     OnlineObservationError::new(
                         ExecutionKernelCode::ObservationContainmentFailed.code(),
@@ -129,6 +108,23 @@ impl PreparedPageObservation {
                         error,
                     )
                 })?;
+        Self::from_bundle(bundle, targets)
+    }
+
+    pub fn load(
+        instance: &str,
+        bytes: &[u8],
+        targets: &[String],
+        provider: Option<Arc<dyn VisionProvider>>,
+    ) -> Result<Self, OnlineObservationError> {
+        let bundle = ExternallyVerifiedBundle::load_observation(instance, bytes, provider)
+            .map_err(|error| {
+                OnlineObservationError::new(
+                    ExecutionKernelCode::ObservationContainmentFailed.code(),
+                    ContractLocation::AdmitContainedObservation.location(),
+                    error,
+                )
+            })?;
         Self::from_bundle(bundle, targets)
     }
 

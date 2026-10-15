@@ -14,7 +14,7 @@
 
 use super::{PolicyBootstrap, RESOURCE_PACKAGE_DIRECTORY_DEADLINE, manifest};
 use actingcommand_contract::outcome::{Code, Outcome};
-use actingcommand_contract::{ConfigSubsystem, PackageRef, ReaderProblem};
+use actingcommand_contract::{ConfigSubsystem, ReaderProblem};
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_runtime_host::{
     RuntimeHostConfig, recognition_binding_ignored, recognition_binding_invalid,
@@ -101,8 +101,7 @@ fn read_binding(
     match read {
         BindingRead::Prepare => {
             let descriptor =
-                PreparedContainedTask::describe_path(alias, path, &PackageRef::default(), deadline)
-                    .map_err(unreadable)?;
+                PreparedContainedTask::describe_path(alias, path, deadline).map_err(unreadable)?;
             recognition_binding_qualification(alias, path, &descriptor)?;
             Ok((
                 descriptor.package_id().to_owned(),

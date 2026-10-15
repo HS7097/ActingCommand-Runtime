@@ -3,7 +3,7 @@
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::{
     ContainedTaskRequest, MAX_READONLY_OBSERVATION_ARTIFACT_BYTES,
-    MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES, PackageRef,
+    MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES,
 };
 use actingcommand_device::{CaptureBackendName, Frame, parse_png_dimensions};
 use actingcommand_lab::{
@@ -90,7 +90,6 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     let prepared = PreparedContainedTask::load_path(
         "offline.simulation",
         &package,
-        &PackageRef::default(),
         crate::offline_ocr::lab_ocr().provider(),
         deadline,
     )

@@ -1,211 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Immutable package identity, independent of the local material locator.
+//! A package's identity is the `package_id` its `control.json` declares and a package is found
+//! by its path (Workflow #336 option 丙). This module holds the path rules, the content hash
+//! of the suspension rule and the bundle index of a standard package.
 
 use crate::codes::RuntimeContractCode;
 use crate::{RuntimeContractError, RuntimeContractResult};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GitObjectAlgorithm {
-    Sha1,
-    Sha256,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GitOid {
-    pub algorithm: GitObjectAlgorithm,
-    pub hex: String,
-}
-
-impl GitOid {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        let length = match self.algorithm {
-            GitObjectAlgorithm::Sha1 => 40,
-            GitObjectAlgorithm::Sha256 => 64,
-        };
-        if self.hex.len() != length || !lower_hex(&self.hex) {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidGitObjectId,
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum GitSourceTreeVersion {
-    #[serde(rename = "actingcommand.package.git-source-tree.v1")]
-    V1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GitSourceTree {
-    pub schema_version: GitSourceTreeVersion,
-    pub repository: String,
-    pub commit: GitOid,
-    pub bundle_path: String,
-    pub tree: GitOid,
-}
-
-impl GitSourceTree {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        self.commit.validate()?;
-        self.tree.validate()?;
-        let repository = self.repository.strip_prefix("https://").ok_or_else(|| {
-            RuntimeContractError::new(RuntimeContractCode::InvalidPackageRepository)
-        })?;
-        let (host, path) = repository.split_once('/').ok_or_else(|| {
-            RuntimeContractError::new(RuntimeContractCode::InvalidPackageRepository)
-        })?;
-        if self.repository.len() > 512
-            || host.is_empty()
-            || host != host.to_ascii_lowercase()
-            || !host
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b".-".contains(&c))
-            || !safe_source_path(path)
-            || !path
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'/' | b'.'))
-            || path.ends_with(".git")
-            || path == "."
-            || self.commit.algorithm != self.tree.algorithm
-            || !safe_source_path(&self.bundle_path)
-        {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidSourceTreeReference,
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum ContentDirectoryVersion {
-    #[serde(rename = "actingcommand.package.content-directory.v1")]
-    V1,
-}
-
-/// The domain line that opens every `content-directory.v1` digest input.
+/// The domain line that opens every `content-directory.v1` content hash input.
 pub const CONTENT_DIRECTORY_V1: &str = "actingcommand.package.content-directory.v1";
-
-/// A package identified only by the content of its directory: no repository, commit or
-/// path participates. `sha256` is the lowercase hex `content_directory_digest`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContentDirectory {
-    pub schema_version: ContentDirectoryVersion,
-    pub sha256: String,
-}
-
-impl ContentDirectory {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        if self.sha256.len() != 64 || !lower_hex(&self.sha256) {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidContentDirectoryReference,
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// The legacy string encoding preserves existing record bytes. Versioned references
-/// carry their own wire version and the entire identity in the same typed slot. The
-/// untagged variants are tried in order, so new variants are only ever appended.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PackageRef {
-    LegacyZipSha256(String),
-    GitSourceTree(Box<GitSourceTree>),
-    ContentDirectory(ContentDirectory),
-}
-
-// Older policy payloads can omit the binding. Keep them decodable; every recovery validation
-// rejects this unresolved value. Workflow #336 PKG-S1: package admission only records a
-// reference, so a caller with none to record (an instance resource package) passes this one.
-impl Default for PackageRef {
-    fn default() -> Self {
-        Self::LegacyZipSha256(String::new())
-    }
-}
-
-impl PackageRef {
-    pub fn prefixed_wire_value(&self) -> serde_json::Value {
-        match self {
-            Self::LegacyZipSha256(hash) if hash.is_empty() => {
-                serde_json::Value::String(String::new())
-            }
-            Self::LegacyZipSha256(hash) => serde_json::Value::String(format!("sha256:{hash}")),
-            Self::GitSourceTree(reference) => serde_json::json!(reference),
-            Self::ContentDirectory(reference) => serde_json::json!(reference),
-        }
-    }
-
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        match self {
-            Self::LegacyZipSha256(value) => {
-                if value.len() != 64 || !lower_hex(value) {
-                    return Err(RuntimeContractError::new(
-                        RuntimeContractCode::InvalidPackageSha256,
-                    ));
-                }
-                Ok(())
-            }
-            Self::GitSourceTree(value) => value.validate(),
-            Self::ContentDirectory(value) => value.validate(),
-        }
-    }
-
-    /// The ZIP digest a legacy reference carries. Workflow #336 PKG-S1: a reference no longer
-    /// chooses how a package is read; containment reads every package by its path.
-    pub fn legacy_sha256(&self) -> Option<&str> {
-        match self {
-            Self::LegacyZipSha256(value) => Some(value),
-            Self::GitSourceTree(_) | Self::ContentDirectory(_) => None,
-        }
-    }
-
-    pub fn parse_argument(value: &str) -> RuntimeContractResult<Self> {
-        let reference = if value.trim_start().starts_with('{') {
-            // A JSON object can only decode as one of the versioned object references.
-            serde_json::from_str(value).map_err(|_| {
-                RuntimeContractError::new(RuntimeContractCode::InvalidSourceTreeReference)
-            })?
-        } else {
-            Self::LegacyZipSha256(value.strip_prefix("sha256:").unwrap_or(value).to_owned())
-        };
-        reference.validate()?;
-        Ok(reference)
-    }
-}
-
-impl From<String> for PackageRef {
-    fn from(value: String) -> Self {
-        Self::LegacyZipSha256(value.strip_prefix("sha256:").unwrap_or(&value).to_owned())
-    }
-}
-
-impl From<&str> for PackageRef {
-    fn from(value: &str) -> Self {
-        value.to_owned().into()
-    }
-}
-
-impl From<&String> for PackageRef {
-    fn from(value: &String) -> Self {
-        value.clone().into()
-    }
-}
-
-impl From<&PackageRef> for PackageRef {
-    fn from(value: &PackageRef) -> Self {
-        value.clone()
-    }
-}
 
 pub fn safe_source_path(value: &str) -> bool {
     value == "."
@@ -262,8 +66,8 @@ fn lower_hex(value: &str) -> bool {
 /// The single `content-directory.v1` digest: SHA-256 over the domain line followed by one
 /// `<hex sha256 of the bytes>  <path>\n` line per regular file, ordered by the UTF-8 bytes
 /// of the `/`-separated relative path. Callers supply distinct, already admitted paths.
-/// Workflow #336 PKG-S1: no admission computes or compares it; only the designated measuring
-/// and authoring callers use it.
+/// Workflow #336 PKG-S5 (M-PKG v1.1 §3.3): the content hash of the suspension rule. Its one
+/// caller is containment's `measure_content_hash`; no admission, tool or recording computes it.
 pub fn content_directory_digest<'a>(
     files: impl IntoIterator<Item = (&'a str, [u8; 32])>,
 ) -> String {
@@ -289,9 +93,17 @@ fn lower_hex_string(bytes: &[u8]) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BundleIndexVersion {
-    #[serde(rename = "actingcommand.bundle.v2")]
-    V2,
+    #[serde(rename = "actingcommand.bundle.v4")]
+    V4,
 }
+
+/// The directory of a standard package's game root that holds its tables (Workflow #357
+/// M-357a §2.1): a reserved name, so no pack of a bundle is named so.
+pub const RESERVED_TABLES_DIRECTORY: &str = "tables";
+/// The most table ids a bundle's `tables` list names (M-357a TB12).
+pub const MAX_BUNDLE_TABLES: usize = 64;
+/// The longest table id (M-357a §2.1: `[a-z][a-z0-9_]{0,63}`).
+pub const MAX_BUNDLE_TABLE_ID_BYTES: usize = 64;
 
 /// Where a bundle's packs were built from. Information only: it never takes part in a
 /// pack's identity.
@@ -328,21 +140,20 @@ impl BundleSource {
     }
 }
 
-/// One task pack of a bundle: the content directory `path` (`packs/<digest>`), whose
-/// `content-directory.v1` digest is `digest`.
+/// One task pack of a bundle (Workflow #336 PKG-S5): its content directory `path` is
+/// `packs/<package_id>`. No digest names or identifies it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BundlePackV2 {
+pub struct BundlePack {
     pub package_id: String,
     pub server: String,
     pub entry_task_id: String,
-    pub digest: String,
     pub path: String,
     pub file_count: u64,
     pub byte_count: u64,
 }
 
-impl BundlePackV2 {
+impl BundlePack {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if !bundle_identifier(&self.server)
             || !bundle_text(&self.package_id)
@@ -353,9 +164,11 @@ impl BundlePackV2 {
                 RuntimeContractCode::InvalidBundlePack,
             ));
         }
-        if self.digest.len() != 64
-            || !lower_hex(&self.digest)
-            || self.path != format!("packs/{}", self.digest)
+        if !package_id_names_one_path_segment(&self.package_id)
+            || self
+                .package_id
+                .eq_ignore_ascii_case(RESERVED_TABLES_DIRECTORY)
+            || self.path != format!("packs/{}", self.package_id)
         {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidBundlePackPath,
@@ -365,45 +178,10 @@ impl BundlePackV2 {
     }
 }
 
-/// `bundle.json` of a standard package's resource section (Workflow #288): each package id
-/// mapped to its hash-named content directory. A file format only, never persisted in the
-/// ledger. It names no default package: the applications table beside it does
-/// (`servers.<server>.default_package_id`). Version 1 remains a separate shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BundleIndexV2 {
-    pub schema_version: BundleIndexVersion,
-    pub game: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<BundleSource>,
-    pub packs: Vec<BundlePackV2>,
-}
-
-impl BundleIndexV2 {
-    /// At least one pack; package ids and digests unique; every `path` is `packs/<digest>`.
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        if !bundle_identifier(&self.game) || self.packs.is_empty() {
-            return Err(RuntimeContractError::new(
-                RuntimeContractCode::InvalidBundleIndex,
-            ));
-        }
-        if let Some(source) = &self.source {
-            source.validate()?;
-        }
-        let mut package_ids = std::collections::BTreeSet::new();
-        let mut digests = std::collections::BTreeSet::new();
-        for pack in &self.packs {
-            pack.validate()?;
-            if !package_ids.insert(pack.package_id.as_str())
-                || !digests.insert(pack.digest.as_str())
-            {
-                return Err(RuntimeContractError::new(
-                    RuntimeContractCode::DuplicateBundlePack,
-                ));
-            }
-        }
-        Ok(())
-    }
+/// Whether a `package_id` can name its package's directory or file (`packs/<package_id>`,
+/// `<package_id>.<ext>`): one safe path segment, never `.` or `..`.
+pub fn package_id_names_one_path_segment(package_id: &str) -> bool {
+    package_id != "." && !package_id.contains('/') && safe_source_path(package_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -440,7 +218,7 @@ crate::outcome_vocabulary! {
     }
 }
 
-/// Source declarations and bundle v3 use this same shape. Machine and instance bindings
+/// Source declarations and the bundle index use this same shape. Machine and instance bindings
 /// belong to the consuming installer, not to a resource bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -485,41 +263,63 @@ pub fn validate_bundle_maintenance_declarations(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BundleIndexV3Version {
-    #[serde(rename = "actingcommand.bundle.v3")]
-    V3,
-}
-
+/// `bundle.json` of a standard package's resource section (Workflow #288; bundle v4, Workflow #336
+/// PKG-S5): each pack named by its `package_id`, in the directory `packs/<package_id>`. A file
+/// format only, never persisted in the ledger. It names no default package: the applications
+/// table beside it does (`servers.<server>.default_package_id`). Earlier versions (v1, v2 and
+/// v3) are other shapes no reader of this build accepts.
+// Interface anchor `package` (contracts/component-interfaces.md): raise its revision in
+// distribution/windows/component-interfaces.json when packs need what older readers lack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BundleIndexV3 {
-    pub schema_version: BundleIndexV3Version,
+pub struct BundleIndex {
+    pub schema_version: BundleIndexVersion,
     pub game: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<BundleSource>,
-    pub packs: Vec<BundlePackV2>,
-    pub maintenance: Vec<BundleMaintenance>,
+    pub packs: Vec<BundlePack>,
+    /// The bundle's maintenance declarations (`package bundle --maintenance`), each naming a
+    /// pack by its `package_id`; absent when the bundle declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<Vec<BundleMaintenance>>,
+    /// Workflow #357 M-357a TB12: the tables the standard package ships in the game root's
+    /// `tables/` directory, by table id. Only an updater uses it (it replaces exactly these
+    /// tables and leaves the others of the root alone); the Runtime parses and checks it and
+    /// otherwise ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<String>>,
 }
 
-impl BundleIndexV3 {
-    /// Structural closure only; actual material admission and use eligibility are owned by
-    /// execution-kernel and must also pass before a consumer installs these bindings.
+impl BundleIndex {
+    /// At least one pack; package ids unique; every `path` is `packs/<package_id>` and no pack
+    /// is named `tables`; maintenance declarations close over the packs; the table list holds
+    /// at most 64 unique table ids.
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        BundleIndexV2 {
-            schema_version: BundleIndexVersion::V2,
-            game: self.game.clone(),
-            source: self.source.clone(),
-            packs: self.packs.clone(),
+        if !bundle_identifier(&self.game) || self.packs.is_empty() {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidBundleIndex,
+            ));
         }
-        .validate()?;
-        if self.maintenance.len() > self.packs.len() {
+        if let Some(source) = &self.source {
+            source.validate()?;
+        }
+        let mut package_ids = std::collections::BTreeSet::new();
+        for pack in &self.packs {
+            pack.validate()?;
+            if !package_ids.insert(pack.package_id.as_str()) {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::DuplicateBundlePack,
+                ));
+            }
+        }
+        let maintenance = self.maintenance();
+        if maintenance.len() > self.packs.len() {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidBundleMaintenance,
             ));
         }
-        validate_bundle_maintenance_declarations(&self.maintenance)?;
-        for entry in &self.maintenance {
+        validate_bundle_maintenance_declarations(maintenance)?;
+        for entry in maintenance {
             if !self
                 .packs
                 .iter()
@@ -530,27 +330,35 @@ impl BundleIndexV3 {
                 ));
             }
         }
+        if let Some(tables) = &self.tables {
+            let unique = tables
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
+            if tables.len() > MAX_BUNDLE_TABLES
+                || unique.len() != tables.len()
+                || !tables.iter().all(|table_id| bundle_table_id(table_id))
+            {
+                return Err(RuntimeContractError::new(
+                    RuntimeContractCode::InvalidBundleIndex,
+                ));
+            }
+        }
         Ok(())
     }
-}
 
-// Interface anchor `package` (contracts/component-interfaces.md): raise its revision in
-// distribution/windows/component-interfaces.json when packs need what older readers lack.
-/// Version-specific shapes keep required v3 fields mandatory and keep v2 strict.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum BundleIndex {
-    V3(BundleIndexV3),
-    V2(BundleIndexV2),
-}
-
-impl BundleIndex {
-    pub fn validate(&self) -> RuntimeContractResult<()> {
-        match self {
-            Self::V2(index) => index.validate(),
-            Self::V3(index) => index.validate(),
-        }
+    /// The maintenance declarations, none when the bundle declares none.
+    pub fn maintenance(&self) -> &[BundleMaintenance] {
+        self.maintenance.as_deref().unwrap_or_default()
     }
+}
+
+/// A table id of a bundle's `tables` list (M-357a §2.1): 1-64 bytes of `[a-z][a-z0-9_]*`.
+fn bundle_table_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= MAX_BUNDLE_TABLE_ID_BYTES
+        && bytes.next().is_some_and(|first| first.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 /// A game or server key of a bundle: 1-128 bytes of `[a-z0-9._-]`, usable as one path segment.
@@ -572,62 +380,7 @@ pub(crate) fn bundle_text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-/// Existing prefixed ZIP digest slots retain their canonical bytes while
-/// source-tree values carry the common versioned reference.
-pub mod prefixed_reference {
-    use super::*;
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(value: &PackageRef, serializer: S) -> Result<S::Ok, S::Error> {
-        value.prefixed_wire_value().serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<PackageRef, D::Error> {
-        let value = PackageRef::deserialize(deserializer)?;
-        match value {
-            PackageRef::LegacyZipSha256(hash) if hash.is_empty() => {
-                Ok(PackageRef::LegacyZipSha256(hash))
-            }
-            PackageRef::LegacyZipSha256(hash) => {
-                let hash = hash.strip_prefix("sha256:").ok_or_else(|| {
-                    serde::de::Error::custom("policy package digest requires sha256 prefix")
-                })?;
-                Ok(hash.into())
-            }
-            source => Ok(source),
-        }
-    }
-}
-
-pub mod optional_prefixed_reference {
-    use super::*;
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(
-        value: &Option<PackageRef>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        value
-            .as_ref()
-            .map(PackageRef::prefixed_wire_value)
-            .serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<PackageRef>, D::Error> {
-        let value = Option::<PackageRef>::deserialize(deserializer)?;
-        match value {
-            Some(PackageRef::LegacyZipSha256(hash)) if hash.is_empty() => {
-                Ok(Some(PackageRef::LegacyZipSha256(hash)))
-            }
-            Some(PackageRef::LegacyZipSha256(hash)) => {
-                let hash = hash.strip_prefix("sha256:").ok_or_else(|| {
-                    serde::de::Error::custom("policy package digest requires sha256 prefix")
-                })?;
-                Ok(Some(hash.into()))
-            }
-            source => Ok(source),
-        }
-    }
-}
+// Workflow #336 PKG-S5 (exec key 66): bundle v4, tests S5-T2 and S5-T6.
+#[cfg(test)]
+#[path = "package_tests.rs"]
+mod tests;

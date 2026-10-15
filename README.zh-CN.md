@@ -303,7 +303,7 @@ actinglab --json --instance <alias> record mark --step <n> --transition window -
 actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     # 不一定出现的画面
 actinglab --json --instance <alias> record status
 actinglab --json --instance <alias> record stop --dry-run     # 全部检查都跑、什么都不写；按 lab.warnings 补标
-actinglab --json --instance <alias> record stop --lab-dir <包目录>     # 写出 <D>.zip 或 <D>.json，并打印 binding_example
+actinglab --json --instance <alias> record stop --lab-dir <包目录>     # 写出 <package_id>.zip 或 .json（同名的直接替换），并打印 binding_example
 actingctl resume --state-root <state-root> --instance <alias>
 
 # 离线账本维护（不装配提供者、IPC 与设备）

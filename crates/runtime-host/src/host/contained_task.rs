@@ -4781,16 +4781,10 @@ pub(super) fn prepare_contained_task(
     deadline: Instant,
 ) -> Result<PreparedContainedTask, RequestFailure> {
     let path = contained_task_package_path(request)?;
-    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
-    // structural only; the request names no digest, so the package carries no reference.
-    PreparedContainedTask::load_path(
-        instance_alias,
-        path,
-        &actingcommand_contract::PackageRef::default(),
-        vision_provider,
-        deadline,
-    )
-    .map_err(contained_task_declaration_failure)
+    // Workflow #336 PKG-S1/PKG-S5 (option 丙): the path chooses the loader and admission is
+    // structural only; the package is named by its path alone.
+    PreparedContainedTask::load_path(instance_alias, path, vision_provider, deadline)
+        .map_err(contained_task_declaration_failure)
 }
 
 /// The package path a contained-task request names, refused unless it is absolute.
@@ -4823,13 +4817,12 @@ pub(super) fn prepare_measured_contained_task(
     deadline: Instant,
 ) -> Result<(PreparedContainedTask, PackageLoad), RequestFailure> {
     let path = contained_task_package_path(request)?;
-    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
-    // structural only; the request names no digest, so the package carries no reference.
+    // Workflow #336 PKG-S1/PKG-S5 (option 丙): the path chooses the loader and admission is
+    // structural only; the package is named by its path alone.
     let started = Instant::now();
     let (prepared, bytes) = PreparedContainedTask::load_path_with_resident_bytes(
         instance_alias,
         path,
-        &actingcommand_contract::PackageRef::default(),
         vision_provider,
         deadline,
     )

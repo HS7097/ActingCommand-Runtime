@@ -6,7 +6,7 @@
 use crate::codes::ExecutionKernelCode;
 use crate::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::{BundleIndexV3, MaintenanceUse, PackageRef, ReaderProblem};
+use actingcommand_contract::{BundleIndex, MaintenanceUse, ReaderProblem};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_PREREQUISITE_DEPTH: usize = 3;
@@ -16,7 +16,6 @@ pub const MAX_GATED_STEPS: u64 = 1_000;
 pub struct TaskPackageDescriptor {
     package_id: String,
     entry_task_id: String,
-    reference: PackageRef,
     execution_mode: String,
     game: String,
     server: String,
@@ -43,7 +42,6 @@ impl PreparedContainedTask {
         TaskPackageDescriptor {
             package_id: self.package_label().to_owned(),
             entry_task_id: self.task_label().to_owned(),
-            reference: self.package_sha256().clone(),
             execution_mode: self.execution_mode().to_owned(),
             game: self.game().to_owned(),
             server: self.server().to_owned(),
@@ -65,9 +63,6 @@ impl TaskPackageDescriptor {
     }
     pub fn entry_task_id(&self) -> &str {
         &self.entry_task_id
-    }
-    pub fn reference(&self) -> &PackageRef {
-        &self.reference
     }
     pub fn execution_mode(&self) -> &str {
         &self.execution_mode
@@ -291,10 +286,10 @@ impl PrerequisiteChain {
 
 /// Validate each pack's identity `(package_id, server, entry_task_id)`, every declared use and
 /// the complete chains against precisely the bindings this bundle will supply. Pure and shared
-/// with installers; descriptors must be obtained from each admitted pack in this index. The
-/// index's digests are compared with nothing (Workflow #336 PKG-S1).
+/// with installers; descriptors must be obtained from each admitted pack in this index. A pack
+/// is matched by its identity alone (Workflow #336 PKG-S5: bundle v4 carries no digest).
 pub fn validate_bundle_maintenance(
-    index: &BundleIndexV3,
+    index: &BundleIndex,
     packages: &[TaskPackageDescriptor],
 ) -> Result<(), ContainedTaskError> {
     let invalid = |detail: String| {
@@ -331,7 +326,7 @@ pub fn validate_bundle_maintenance(
     }
     let mut bindings = BTreeSet::new();
     let mut return_home = BTreeMap::new();
-    for entry in &index.maintenance {
+    for entry in index.maintenance() {
         let actual = by_id[entry.package_id.as_str()];
         for purpose in &entry.uses {
             if let Some(reason) = actual.use_incompatibility(*purpose) {
@@ -369,19 +364,13 @@ mod gate_e1;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_contract::{
-        BundleIndexV3Version, BundlePackV2, ContentDirectory, ContentDirectoryVersion,
-    };
+    use actingcommand_contract::{BundleIndexVersion, BundlePack};
 
-    /// A described pack whose recorded reference is `reference`.
-    fn descriptor(package_id: &str, reference: &str) -> TaskPackageDescriptor {
+    /// A described pack.
+    fn descriptor(package_id: &str) -> TaskPackageDescriptor {
         TaskPackageDescriptor {
             package_id: package_id.to_owned(),
             entry_task_id: "neutral_task".to_owned(),
-            reference: PackageRef::ContentDirectory(ContentDirectory {
-                schema_version: ContentDirectoryVersion::V1,
-                sha256: reference.to_owned(),
-            }),
             execution_mode: "navigable_route".to_owned(),
             game: "neutral".to_owned(),
             server: "test".to_owned(),
@@ -396,40 +385,34 @@ mod tests {
         }
     }
 
-    /// A one-pack bundle index whose pack entry names `package_id` and the digest `a…a`.
-    fn index(package_id: &str) -> BundleIndexV3 {
-        let digest = "a".repeat(64);
-        BundleIndexV3 {
-            schema_version: BundleIndexV3Version::V3,
+    /// A one-pack bundle index v4 whose pack entry names `package_id`.
+    fn index(package_id: &str) -> BundleIndex {
+        BundleIndex {
+            schema_version: BundleIndexVersion::V4,
             game: "neutral".to_owned(),
             source: None,
-            packs: vec![BundlePackV2 {
+            packs: vec![BundlePack {
                 package_id: package_id.to_owned(),
                 server: "test".to_owned(),
                 entry_task_id: "neutral_task".to_owned(),
-                path: format!("packs/{digest}"),
-                digest,
+                path: format!("packs/{package_id}"),
                 file_count: 3,
                 byte_count: 64,
             }],
-            maintenance: Vec::new(),
+            maintenance: Some(Vec::new()),
+            tables: None,
         }
     }
 
     // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T6: bundle maintenance matches each pack
-    // by `(package_id, server, entry_task_id)`; the index digest is compared with nothing.
+    // by `(package_id, server, entry_task_id)`; since PKG-S5 the index carries no digest at all.
     #[test]
     fn s1_t6_bundle_maintenance_matches_packs_by_identity_and_ignores_the_index_digest() {
-        validate_bundle_maintenance(
-            &index("neutral.pack"),
-            &[descriptor("neutral.pack", &"b".repeat(64))],
-        )
-        .expect("an index digest that differs from the admitted content does not refuse");
-        let error = validate_bundle_maintenance(
-            &index("neutral.pack"),
-            &[descriptor("neutral.other", &"a".repeat(64))],
-        )
-        .expect_err("a pack with another package_id is refused");
+        validate_bundle_maintenance(&index("neutral.pack"), &[descriptor("neutral.pack")])
+            .expect("a pack of the indexed identity is matched");
+        let error =
+            validate_bundle_maintenance(&index("neutral.pack"), &[descriptor("neutral.other")])
+                .expect_err("a pack with another package_id is refused");
         assert_eq!(
             error.code().as_str(),
             ExecutionKernelCode::BundleMaintenanceInvalid.as_str()

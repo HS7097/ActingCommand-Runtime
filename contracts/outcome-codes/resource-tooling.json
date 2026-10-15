@@ -911,20 +911,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "authoring_validation_package_hash_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "resource-tooling",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A resource authoring transaction refused or failed: validation package hash invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "record_promote_target_exists": {
       "category": "error",
       "ladder_class": "none",

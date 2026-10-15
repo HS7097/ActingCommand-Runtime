@@ -7,7 +7,6 @@
 //! the first step under an overall darkening). Every refusal is
 //! `record_artifact_admission_failed` or `record_step_self_mismatch`; warnings never refuse.
 
-use super::container::table_digest;
 use super::follow::followed_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep};
@@ -15,9 +14,7 @@ use super::model::{ClickFollow, MarkFamily, RecordRect, RecordedFrame};
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::LabCode;
-use actingcommand_contract::{
-    ContentDirectory, ContentDirectoryVersion, InputAction, LabError, LabResult, PackageRef,
-};
+use actingcommand_contract::{InputAction, LabError, LabResult};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_execution_kernel::{
     ExternallyVerifiedBundle, OfflineDecision, PreparedContainedTask, simulate_contained_task,
@@ -51,15 +48,6 @@ fn admission_failed(stage: &str, message: String, mut details: Value) -> LabErro
     )
 }
 
-/// The content-directory reference the recording records for its package (Workflow #336
-/// PKG-S1: admission keeps it as a record and compares it with nothing).
-pub(crate) fn content_reference(digest: &str) -> PackageRef {
-    PackageRef::ContentDirectory(ContentDirectory {
-        schema_version: ContentDirectoryVersion::V1,
-        sha256: digest.to_string(),
-    })
-}
-
 fn containment_code(error: &ContainmentError) -> Option<&'static str> {
     match error {
         ContainmentError::SourceTree { code } => Some(code.as_str()),
@@ -67,13 +55,12 @@ fn containment_code(error: &ContainmentError) -> Option<&'static str> {
     }
 }
 
-/// Section 4.6 item 1: the encoded container expands to exactly the generated table, whose
-/// digest is `digest`.
+/// Section 4.6 item 1: the encoded container expands to exactly the generated table, entry by
+/// entry (Workflow #336 PKG-S5: the table itself is compared, no digest of it).
 pub(crate) fn round_trip(
     bytes: &[u8],
     kind: ContentContainer,
     entries: &BTreeMap<String, Vec<u8>>,
-    digest: &str,
 ) -> LabResult<()> {
     let expanded =
         expand_content_container(bytes, kind, ContainmentLimits::default()).map_err(|error| {
@@ -96,14 +83,6 @@ pub(crate) fn round_trip(
             json!({"paths": differing}),
         ));
     }
-    let actual = table_digest(&expanded);
-    if actual != digest {
-        return Err(admission_failed(
-            "container_round_trip",
-            format!("the expanded container has the digest {actual}, not {digest}"),
-            json!({"expected": digest, "actual": actual}),
-        ));
-    }
     Ok(())
 }
 
@@ -113,13 +92,11 @@ pub(crate) fn round_trip(
 /// first decision (Workflow #396 LAB-3); admission itself never calls it.
 pub(crate) fn admit(
     entries: &BTreeMap<String, Vec<u8>>,
-    digest: &str,
     ocr: &LabOcr,
 ) -> LabResult<PreparedContainedTask> {
     PreparedContainedTask::load_content_entries(
         ADMISSION_INSTANCE,
         entries.clone(),
-        &content_reference(digest),
         ocr.provider(),
         Instant::now() + ADMISSION_BUDGET,
     )
@@ -144,13 +121,11 @@ pub(crate) fn admit(
 /// Lab's OCR provider when it has one (Workflow #396 LAB-3).
 pub(crate) fn evaluator_bundle(
     entries: &BTreeMap<String, Vec<u8>>,
-    digest: &str,
     ocr: &LabOcr,
 ) -> LabResult<ExternallyVerifiedBundle> {
     ExternallyVerifiedBundle::load_content_entries(
         ADMISSION_INSTANCE,
         entries.clone(),
-        &content_reference(digest),
         false,
         ocr.provider(),
         Instant::now() + ADMISSION_BUDGET,

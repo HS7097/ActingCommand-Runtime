@@ -435,13 +435,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
         serde_json::to_writer(&mut package, &value).unwrap();
     }
     let incompatible = package.finish().unwrap().into_inner();
-    let hash = format!("{:x}", Sha256::digest(&incompatible));
-    let prepared = PreparedContainedTask::load(
-        "fixture01.instance",
-        &incompatible,
-        &actingcommand_contract::PackageRef::LegacyZipSha256(hash.clone()),
-    )
-    .unwrap();
+    let prepared = PreparedContainedTask::load("fixture01.instance", &incompatible).unwrap();
     assert!(!prepared.is_entry_recovery_compatible());
     struct UnreachableRecovery;
     impl ContainedTaskRuntime for UnreachableRecovery {

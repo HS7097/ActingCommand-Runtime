@@ -249,7 +249,6 @@ impl HostShared {
         let bundle = ExternallyVerifiedBundle::load_path(
             "saved_artifact_ocr",
             Path::new(&input.package_path),
-            &actingcommand_contract::PackageRef::default(),
             false,
             Some(provider),
             deadline,

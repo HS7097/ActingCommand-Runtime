@@ -138,7 +138,6 @@ fn task(clock: Option<SearchClock>) -> PreparedContainedTask {
         entry_page: None,
         scheduling_outcome: None,
         post_admission_ocr: None,
-        package_sha256: "fixture-sha256".into(),
         post_admission_fields: None,
         entry_count: 5,
         task_count: 1,

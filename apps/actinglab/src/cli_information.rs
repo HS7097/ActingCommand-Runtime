@@ -52,7 +52,6 @@ pub(super) fn help_data() -> Value {
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
-            "package digest": ["--package <directory | .zip | .json container>"],
             "replay": [
                 "--package <directory | .zip | .json container>",
                 "--frames <directory of PNG frames, replayed in file-name order>",
@@ -61,7 +60,7 @@ pub(super) fn help_data() -> Value {
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>",
-                "--maintenance <JSON array of package_id, server, uses; requests actingcommand.bundle.v3>"
+                "--maintenance <JSON array of package_id, server, uses; written into actingcommand.bundle.v4>"
             ]
         },
         "compatibility_notes": {

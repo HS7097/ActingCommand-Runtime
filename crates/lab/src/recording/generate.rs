@@ -12,7 +12,7 @@ use super::model::{
 };
 use super::store::{blocked, invalid, with_details};
 use crate::codes::ClickFollowProblem;
-use actingcommand_contract::{LabError, LabResult};
+use actingcommand_contract::{LabError, LabResult, package_id_names_one_path_segment};
 use actingcommand_execution_kernel::{linear_main_interface, prerequisite_package_id_valid};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -574,12 +574,16 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
         .package_id
         .clone()
         .unwrap_or_else(|| format!("{game}.{server}.{}", recording.task_id));
-    if !prerequisite_package_id_valid(&package_id) {
+    // Workflow #336 PKG-S5 (D9): the package is written as `<package_id>.<ext>`, so its id is
+    // one path segment.
+    if !prerequisite_package_id_valid(&package_id)
+        || !package_id_names_one_path_segment(&package_id)
+    {
         return Err(with_details(
             invalid(
                 "validation_failed",
-                "--package-id must be non-empty, at most 256 bytes and without control \
-                 characters",
+                "--package-id must be non-empty, at most 256 bytes, without control characters \
+                 and usable as a file name (one path segment)",
             ),
             json!({"package_id": package_id}),
         ));

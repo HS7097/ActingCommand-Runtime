@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #288 A2b: content-directory task packs for authors and resource pipelines.
-//! `package digest` names a directory by its content; `package bundle` lays out the standard
-//! package's resource section: one hash-named directory per task pack and its versioned index.
-//! Both read through the loader's own snapshot and admit every pack in full.
+//! Workflow #288 A2b, Workflow #336 PKG-S5 (option 丙): `package bundle` lays out the standard
+//! package's resource section: one directory per task pack, named by the `package_id` its control
+//! declares (`packs/<package_id>`), and its bundle index v4. Each pack is read through the
+//! loader's own snapshot, copied, and its copy admitted in full by its path; no digest of a pack
+//! is computed.
 
 use crate::codes::ResourceToolingCode;
-use crate::{
-    PackageBundleRequest, PackageBundleResponse, PackageDigestRequest, PackageDigestResponse,
-};
+use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    BundleIndex, BundleIndexV2, BundleIndexV3, BundleIndexV3Version, BundleIndexVersion,
-    BundleMaintenance, BundlePackV2, ContentDirectory, ContentDirectoryVersion, LabError,
-    LabErrorClass, LabResult, MaintenanceUse, PackageRef, content_directory_digest,
+    BundleIndex, BundleIndexVersion, BundleMaintenance, BundlePack, LabError, LabErrorClass,
+    LabResult, MaintenanceUse, RESERVED_TABLES_DIRECTORY, package_id_names_one_path_segment,
 };
 use actingcommand_execution_kernel::TaskPackageDescriptor;
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
-use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
+use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -37,38 +35,8 @@ struct PackIdentity {
     entry_task_id: String,
 }
 
-/// Reads the directory once through the loader's snapshot, then admits it in full against
-/// the reference computed from that snapshot.
-pub fn package_digest(request: PackageDigestRequest) -> LabResult<PackageDigestResponse> {
-    let package = absolute(&request.package)?;
-    let mut containment = Containment::for_metadata_validation();
-    let deadline = Instant::now() + PACK_DEADLINE;
-    let snapshot = containment
-        .snapshot_content_directory(&package, deadline)
-        .map_err(|error| pack_error(&package, error, None))?;
-    let file_count = snapshot.entries.len();
-    let byte_count = total_bytes(snapshot.entries.values());
-    let identity = admit(
-        &mut containment,
-        &package,
-        &snapshot.reference,
-        file_count,
-        deadline,
-    )?;
-    Ok(PackageDigestResponse {
-        status: "valid".to_string(),
-        package: package.display().to_string(),
-        reference: snapshot.reference,
-        package_id: identity.package_id,
-        server: identity.server,
-        entry_task_id: identity.entry_task_id,
-        file_count,
-        byte_count,
-    })
-}
-
-/// Writes `<out>.part` and renames it to `out` only once every pack was copied, admitted
-/// under its digest name and indexed; a failure leaves `<out>.part` in place and says so.
+/// Writes `<out>.part` and renames it to `out` only once every pack was copied under its
+/// `package_id`, admitted and indexed; a failure leaves `<out>.part` in place and says so.
 pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleResponse> {
     let out = absolute(&request.out)?;
     let name = out
@@ -136,22 +104,30 @@ fn write_bundle(
     let mut containment = Containment::for_metadata_validation();
     let mut packs = Vec::new();
     let mut descriptors = Vec::new();
+    let mut named = BTreeMap::<String, PathBuf>::new();
     for directory in directories {
-        let snapshot = containment
+        let entries = containment
             .snapshot_content_directory(directory, Instant::now() + PACK_DEADLINE)
-            .map_err(|error| pack_error(directory, error, None))?;
+            .map_err(|error| pack_error(directory, error))?;
         // Only the control declaration and the resource tree enter the standard package.
-        let files = snapshot
-            .entries
+        let files = entries
             .into_iter()
             .filter(|(path, _)| path == "control.json" || path.starts_with("resources/"))
             .collect::<BTreeMap<_, _>>();
-        let digest = content_directory_digest(
-            files
-                .iter()
-                .map(|(path, bytes)| (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())),
-        );
-        let target = packs_dir.join(&digest);
+        // The pack's directory is named by the `package_id` its control declares (bundle v4).
+        let package_id = declared_package_id(directory, &files)?;
+        if let Some(first) = named.insert(package_id.clone(), directory.clone()) {
+            return Err(bundle_error(
+                ResourceToolingCode::PackageBundleIndexInvalid,
+                format!(
+                    "{} and {} both declare package_id {package_id:?}; a bundle holds one pack per \
+                     package_id",
+                    first.display(),
+                    directory.display()
+                ),
+            ));
+        }
+        let target = packs_dir.join(&package_id);
         fs::create_dir(&target).map_err(|error| write_error(&target, error))?;
         for (path, bytes) in &files {
             let file = path
@@ -162,16 +138,11 @@ fn write_bundle(
             }
             write_new(&file, bytes)?;
         }
-        // The copy is read again and admitted in full under its digest name.
-        let reference = ContentDirectory {
-            schema_version: ContentDirectoryVersion::V1,
-            sha256: digest.clone(),
-        };
+        // The copy is read again and admitted in full by its path.
         let identity = if maintenance.is_some() {
             let descriptor = PreparedContainedTask::describe_path(
                 "package-bundle",
                 &target,
-                &PackageRef::ContentDirectory(reference.clone()),
                 Instant::now() + PACK_DEADLINE,
             )
             .map_err(|error| LabError::package_invalid(format!("{}: {error}", target.display())))?;
@@ -184,14 +155,18 @@ fn write_bundle(
             descriptors.push(descriptor);
             identity
         } else {
-            admit(
-                &mut containment,
-                &target,
-                &reference,
-                files.len(),
-                Instant::now() + PACK_DEADLINE,
-            )?
+            admit(&mut containment, &target, Instant::now() + PACK_DEADLINE)?
         };
+        if identity.package_id != package_id {
+            return Err(bundle_error(
+                ResourceToolingCode::PackageBundleIndexInvalid,
+                format!(
+                    "{}: the admitted pack names package_id {:?}, not {package_id:?}",
+                    directory.display(),
+                    identity.package_id
+                ),
+            ));
+        }
         if identity.game != applications.game || !applications.servers.contains(&identity.server) {
             return Err(bundle_error(
                 ResourceToolingCode::PackageBundlePackMismatch,
@@ -206,12 +181,11 @@ fn write_bundle(
                 ),
             ));
         }
-        packs.push(BundlePackV2 {
+        packs.push(BundlePack {
+            path: format!("packs/{}", identity.package_id),
             package_id: identity.package_id,
             server: identity.server,
             entry_task_id: identity.entry_task_id,
-            path: format!("packs/{digest}"),
-            digest,
             file_count: files.len() as u64,
             byte_count: total_bytes(files.values()),
         });
@@ -230,32 +204,27 @@ fn write_bundle(
             ));
         }
     }
-    let mut warnings = Vec::new();
-    let index = match maintenance {
-        Some(maintenance) => {
-            warnings = undeclared_recognition_packs(&maintenance, &descriptors);
-            let index = BundleIndexV3 {
-                schema_version: BundleIndexV3Version::V3,
-                game: applications.game.clone(),
-                source,
-                packs,
-                maintenance,
-            };
-            validate_bundle_maintenance(&index, &descriptors).map_err(|error| {
-                bundle_error(
-                    ResourceToolingCode::PackageBundleMaintenanceInvalid,
-                    error.to_string(),
-                )
-            })?;
-            BundleIndex::V3(index)
-        }
-        None => BundleIndex::V2(BundleIndexV2 {
-            schema_version: BundleIndexVersion::V2,
-            game: applications.game.clone(),
-            source,
-            packs,
-        }),
+    let warnings = maintenance
+        .as_deref()
+        .map(|maintenance| undeclared_recognition_packs(maintenance, &descriptors))
+        .unwrap_or_default();
+    let qualify = maintenance.is_some();
+    let index = BundleIndex {
+        schema_version: BundleIndexVersion::V4,
+        game: applications.game.clone(),
+        source,
+        packs,
+        maintenance,
+        tables: None,
     };
+    if qualify {
+        validate_bundle_maintenance(&index, &descriptors).map_err(|error| {
+            bundle_error(
+                ResourceToolingCode::PackageBundleMaintenanceInvalid,
+                error.to_string(),
+            )
+        })?;
+    }
     index.validate().map_err(|error| {
         bundle_error(
             ResourceToolingCode::PackageBundleIndexInvalid,
@@ -272,6 +241,35 @@ fn write_bundle(
     write_new(&staging.join("applications.json"), applications_bytes)?;
     write_new(&staging.join("bundle.json"), &encoded)?;
     Ok((index, warnings))
+}
+
+/// The `package_id` a pack source's `control.json` declares, which names the pack's directory
+/// (`packs/<package_id>`): one path segment, and never the game root's reserved `tables`
+/// directory (Workflow #357 M-357a §2.1). The full admission of the copy checks the rest.
+fn declared_package_id(directory: &Path, files: &BTreeMap<String, Vec<u8>>) -> LabResult<String> {
+    let package_id = files
+        .get("control.json")
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+        .and_then(|control| control.get("package_id")?.as_str().map(str::to_owned))
+        .ok_or_else(|| {
+            LabError::package_invalid(format!(
+                "{}: control.json declares no string package_id",
+                directory.display()
+            ))
+        })?;
+    if !package_id_names_one_path_segment(&package_id)
+        || package_id.eq_ignore_ascii_case(RESERVED_TABLES_DIRECTORY)
+    {
+        return Err(bundle_error(
+            ResourceToolingCode::PackageBundleIndexInvalid,
+            format!(
+                "{}: package_id {package_id:?} cannot name its directory packs/<package_id> (one \
+                 path segment, not {RESERVED_TABLES_DIRECTORY:?})",
+                directory.display()
+            ),
+        ));
+    }
+    Ok(package_id)
 }
 
 /// Workflow #384 D2-S2 (D2 model §3.2): a pack that only navigates and reads (it qualifies as a
@@ -391,26 +389,17 @@ fn pack_directories(packs_root: &Path) -> LabResult<Vec<PathBuf>> {
     Ok(directories)
 }
 
-/// Admits `locator` in full against `reference` and reads the identity its control states.
+/// Admits `locator` in full by its path and reads the identity its control states.
 fn admit(
     containment: &mut Containment,
     locator: &Path,
-    reference: &ContentDirectory,
-    file_count: usize,
     deadline: Instant,
 ) -> LabResult<PackIdentity> {
-    let context = Some((reference, file_count));
-    let instance = InstanceId::new("package-directory")
-        .map_err(|error| pack_error(locator, error, context))?;
+    let instance =
+        InstanceId::new("package-directory").map_err(|error| pack_error(locator, error))?;
     let bundle = containment
-        .load_path(
-            &instance,
-            locator,
-            &PackageRef::ContentDirectory(reference.clone()),
-            false,
-            deadline,
-        )
-        .map_err(|error| pack_error(locator, error, context))?;
+        .load_path(&instance, locator, false, deadline)
+        .map_err(|error| pack_error(locator, error))?;
     let control = bundle.control().ok_or_else(|| {
         LabError::package_invalid(format!(
             "{}: the pack has no control.json",
@@ -455,22 +444,9 @@ fn write_new(path: &Path, bytes: &[u8]) -> LabResult<()> {
         .map_err(|error| write_error(path, error))
 }
 
-/// The loader's refusal of one pack directory, with the digest computed from its snapshot
-/// once there is one.
-fn pack_error(
-    locator: &Path,
-    error: ContainmentError,
-    context: Option<(&ContentDirectory, usize)>,
-) -> LabError {
-    let computed = context
-        .map(|(reference, file_count)| {
-            format!(
-                " (content digest {} over {file_count} files)",
-                reference.sha256
-            )
-        })
-        .unwrap_or_default();
-    LabError::package_invalid(format!("{}: {error}{computed}", locator.display()))
+/// The loader's refusal of one pack directory.
+fn pack_error(locator: &Path, error: ContainmentError) -> LabError {
+    LabError::package_invalid(format!("{}: {error}", locator.display()))
 }
 
 fn write_error(path: &Path, error: std::io::Error) -> LabError {

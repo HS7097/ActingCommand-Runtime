@@ -74,7 +74,6 @@ actingcommand_contract::outcome_codes! {
         AuthoringTreeTypeMismatch => "authoring_tree_type_mismatch": error / none,
         AuthoringValidationEmpty => "authoring_validation_empty": error / none,
         AuthoringValidationFailed => "authoring_validation_failed": error / none,
-        AuthoringValidationPackageHashInvalid => "authoring_validation_package_hash_invalid": error / none,
         RecordPromoteTargetExists => "record_promote_target_exists": error / none,
         // Package bundle directories (`package_directory`).
         PackageBundleOutExists => "package_bundle_out_exists": error / none,

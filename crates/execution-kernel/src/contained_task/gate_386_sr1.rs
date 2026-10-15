@@ -13,9 +13,8 @@
 
 use super::*;
 use actingcommand_contract::outcome::Category;
-use actingcommand_contract::{InstanceFactContext, InstanceFactSnapshot, PackageRef};
+use actingcommand_contract::{InstanceFactContext, InstanceFactSnapshot};
 use actingcommand_device::CaptureBackendName;
-use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition_pack::RecognitionPack;
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
@@ -329,7 +328,6 @@ fn task(operation: TaskOperation, pack: RecognitionPack) -> PreparedContainedTas
         scheduling_outcome: None,
         post_admission_ocr: None,
         post_admission_fields: None,
-        package_sha256: "fixture-sha256".into(),
         entry_count: 1,
         task_count: 1,
     }
@@ -675,12 +673,7 @@ fn admit(control: Value, task: Value) -> Result<PreparedContainedTask, Contained
             ]}),
         ),
     ]);
-    let expected = Sha256Hash::digest(&bytes).to_string();
-    PreparedContainedTask::load(
-        "neutral.instance",
-        &bytes,
-        &PackageRef::LegacyZipSha256(expected),
-    )
+    PreparedContainedTask::load("neutral.instance", &bytes)
 }
 
 // T5 (L726; §2.4 item 1): a package whose declared sampling exceeds the smaller of its step and

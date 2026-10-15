@@ -12,10 +12,14 @@ mod authoring;
 mod business_catalog;
 mod codes;
 mod declaration_exclusions;
+// Workflow #336 PKG-S5 (exec key 66): package bundle writes bundle v4 by `package_id`.
+#[cfg(test)]
+mod gate_336_pkgs5;
 // Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
 #[cfg(test)]
 mod gate_e1;
-// Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
+// Test plan v2.2 E-4 G4b (exec key 12): the bundle's offline maintenance verdict and the
+// Runtime's admission.
 #[cfg(test)]
 mod gate_e4;
 mod maa_task_graph;
@@ -36,7 +40,7 @@ pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
     MaaTaskGraphStats, compile_maa_task_graph,
 };
-pub use package_directory::{package_bundle, package_digest};
+pub use package_directory::package_bundle;
 pub use package_publish::{
     PackagePublicationCommit, PackagePublicationTransaction, PublishedPackageReader,
     open_published_package,

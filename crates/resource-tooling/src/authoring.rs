@@ -196,32 +196,22 @@ pub struct AuthoringPublishRequest {
     pub force: bool,
 }
 
-/// Validator output retained in the terminal publish receipt.
+/// Validator output retained in the terminal publish receipt. Workflow #336 PKG-S5 (option
+/// 丙): it names no package digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthoringValidationReport {
     pub checks: Vec<String>,
-    pub package_sha256: String,
 }
 
 impl AuthoringValidationReport {
-    pub fn new(checks: Vec<String>, package_sha256: impl Into<String>) -> LabResult<Self> {
+    pub fn new(checks: Vec<String>) -> LabResult<Self> {
         if checks.is_empty() || checks.iter().any(|check| check.trim().is_empty()) {
             return Err(authoring_error(
                 ResourceToolingCode::AuthoringValidationEmpty,
                 "authoring validation must report at least one named check",
             ));
         }
-        let package_sha256 = package_sha256.into();
-        if !is_lower_hex_sha256(&package_sha256) {
-            return Err(authoring_error(
-                ResourceToolingCode::AuthoringValidationPackageHashInvalid,
-                "authoring validation must report a lowercase SHA-256 package hash",
-            ));
-        }
-        Ok(Self {
-            checks,
-            package_sha256,
-        })
+        Ok(Self { checks })
     }
 }
 
@@ -1604,16 +1594,8 @@ mod tests {
                 .map_err(|error| LabError::usage(error.to_string()))?;
             serde_json::from_slice::<serde_json::Value>(&task)
                 .map_err(|error| LabError::usage(error.to_string()))?;
-            AuthoringValidationReport::new(vec!["draft_schema".to_string()], "a".repeat(64))
+            AuthoringValidationReport::new(vec!["draft_schema".to_string()])
         }
-    }
-
-    #[test]
-    fn validation_report_requires_a_canonical_package_hash() {
-        let error =
-            AuthoringValidationReport::new(vec!["draft_schema".to_string()], "not-a-sha256")
-                .expect_err("invalid package hash must fail");
-        assert_eq!(error.code, "authoring_validation_package_hash_invalid");
     }
 
     #[test]

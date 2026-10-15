@@ -8,7 +8,6 @@ use crate::{
     SemanticRequestContext,
 };
 use actingcommand_contract::InputAction;
-use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use std::fs::File;
 use std::io::Write;
@@ -183,10 +182,7 @@ impl Fixture {
         ];
         write_zip(&zip_path, &files);
         let bytes = std::fs::read(&zip_path).expect("bundle bytes");
-        let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(
-            Sha256Hash::digest(&bytes).to_string(),
-        );
-        let resources = crate::ExternallyVerifiedBundle::load("drive_fixture", &bytes, &recorded)
+        let resources = crate::ExternallyVerifiedBundle::load("drive_fixture", &bytes)
             .map(Arc::new)
             .expect("verified bundle");
         Self {

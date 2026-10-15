@@ -154,12 +154,12 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
             )
             .with_details(details))
         }
-        "digest" => package_build::run_digest(&flags),
+        // Workflow #336 PKG-S5: `package digest` is retired and is an unknown package command.
         "bundle" => {
             crate::dry_run_gate::refuse(
                 global,
                 "package bundle",
-                Some("package digest"),
+                Some("package preflight"),
                 Value::Null,
             )?;
             package_build::run_bundle(&flags)

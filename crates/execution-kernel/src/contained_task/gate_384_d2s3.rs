@@ -15,9 +15,8 @@
 // named on each test.
 
 use super::*;
-use actingcommand_contract::{PackageRef, ResourceDeclarationReason};
+use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_device::CaptureBackendName;
-use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition_pack::{
     FsAssetResolver, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
     OcrProviderObservation, OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock,
@@ -430,7 +429,6 @@ fn prepared(control: Value, program: Value) -> PreparedContainedTask {
         scheduling_outcome,
         post_admission_ocr: None,
         post_admission_fields: None,
-        package_sha256: "fixture-sha256".into(),
         entry_count: 1,
         task_count: 1,
     }
@@ -458,11 +456,9 @@ fn admit(task: Value) -> Result<PreparedContainedTask, ContainedTaskError> {
         zip.write_all(b"\n").expect("zip newline");
     }
     let bytes = zip.finish().expect("finish zip").into_inner();
-    let recorded = PackageRef::LegacyZipSha256(Sha256Hash::digest(&bytes).to_string());
     PreparedContainedTask::load_with_vision_provider(
         "neutral.instance",
         &bytes,
-        &recorded,
         Arc::new(ShownCodes),
     )
 }

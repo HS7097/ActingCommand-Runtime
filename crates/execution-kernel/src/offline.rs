@@ -1229,18 +1229,12 @@ mod tests {
         zip.finish().expect("finish zip").into_inner()
     }
 
-    /// The reference a caller records for the package: its own SHA-256, as callers give it.
-    fn recorded(bytes: &[u8]) -> actingcommand_contract::PackageRef {
-        actingcommand_contract::PackageRef::LegacyZipSha256(Sha256Hash::digest(bytes).to_string())
-    }
-
     fn prepare(bytes: &[u8]) -> PreparedContainedTask {
-        PreparedContainedTask::load("neutral.instance", bytes, &recorded(bytes))
-            .expect("prepared task")
+        PreparedContainedTask::load("neutral.instance", bytes).expect("prepared task")
     }
 
     fn prepare_error(bytes: &[u8]) -> crate::ContainedTaskError {
-        PreparedContainedTask::load("neutral.instance", bytes, &recorded(bytes))
+        PreparedContainedTask::load("neutral.instance", bytes)
             .err()
             .expect("admission failure")
     }

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Test plan v2.2 E-4 G4b (exec key 12), the offline half: `package bundle --maintenance`
-// (bundle v3) judges the shared fixture set EXEC-I6 (`tests/support/exec_i6.rs`) with the
+// (bundle v3 then, bundle v4 since Workflow #336 PKG-S5) judges the shared fixture set EXEC-I6 (`tests/support/exec_i6.rs`) with the
 // Runtime's own predicates: `PreparedContainedTask::describe_path` performs the Runtime's task
 // preparation, and every complete chain goes through the shared `PrerequisiteChain`, so a chain
 // the Runtime refuses is refused here under the same code (`contracts/package-reference.md`,
-// "Maintenance declarations (bundle v3)"). The Runtime half is runtime-host's
+// "Maintenance declarations"). The Runtime half is runtime-host's
 // `tests::gate_e4`. Requirement basis: rd-1009/tests/req-basis-el.md section E-4, row "G4b".
 
 #[allow(dead_code)]
@@ -72,7 +72,7 @@ fn kernel_code(message: &str) -> Option<&str> {
 
 // package-reference.md: the bundle check performs the Runtime's task preparation and checks
 // every complete chain against the declared bindings. The set whose root has one bound
-// prerequisite package is written as bundle v3.
+// prerequisite package is written (bundle v4 with its maintenance declarations).
 #[test]
 fn gate_e4_bundle_v3_admits_the_fixture_set_the_runtime_admits() {
     let (_temp, result) = bundle(&exec_i6::admitted_case());

@@ -21,13 +21,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
-/// The ac_record_stop parts an exported answer keeps inline (F2 item 2).
-const BINDING_PARTS: [&str; 5] = [
+/// The ac_record_stop parts an exported answer keeps inline (F2 item 2; Workflow #336 PKG-S5:
+/// record stop answers no package reference).
+const BINDING_PARTS: [&str; 4] = [
     "binding_example",
     "binding_requires",
     "prerequisite_entry_example",
     "catalog_on_failure_example",
-    "package_ref",
 ];
 
 /// Far over the 11 KiB payload budget; every item names itself.
@@ -153,7 +153,6 @@ fn gate_a_lab_answer_over_the_budget_is_exported_whole_and_one_inside_comes_back
         "binding_requires": ["gate-requirement"],
         "prerequisite_entry_example": {"entry": "gate-entry"},
         "catalog_on_failure_example": {"on_failure": "gate-fallback"},
-        "package_ref": "gate-package-ref",
     });
     let mut lab = parts.as_object().cloned().unwrap_or_default();
     lab.insert("steps".to_owned(), oversized("b"));

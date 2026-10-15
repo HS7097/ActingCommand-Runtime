@@ -209,13 +209,9 @@ impl PreparedContainedTask {
         locator: &std::path::Path,
         deadline: Instant,
     ) -> Result<ReadingMarks, ContainedTaskError> {
-        let bundle = ExternallyVerifiedBundle::load_metadata_path(
-            instance_label,
-            locator,
-            &actingcommand_contract::PackageRef::default(),
-            deadline,
-        )
-        .map_err(contained_task_admission_error)?;
+        let bundle =
+            ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
+                .map_err(contained_task_admission_error)?;
         let bundle = bundle.loaded_bundle();
         let control = bundle.control().cloned().ok_or_else(|| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlMissing.code())

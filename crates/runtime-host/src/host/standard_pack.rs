@@ -28,10 +28,10 @@ use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContai
 use super::*;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, PackageRef,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_PAGES_FILE,
-    StandardPackInterrupts, StandardPackPages, StandardPackRegistry, StandardPackRootIssue,
-    TaskEntryRecoveryRole, TaskInterruptThen,
+    MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, STANDARD_PACK_BUNDLE_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_PAGES_FILE, StandardPackInterrupts,
+    StandardPackPages, StandardPackRegistry, StandardPackRootIssue, TaskEntryRecoveryRole,
+    TaskInterruptThen,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -322,7 +322,6 @@ pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
 struct RegisteredPack {
     package_id: String,
     path: PathBuf,
-    recorded: PackageRef,
 }
 
 impl RegisteredPack {
@@ -330,7 +329,6 @@ impl RegisteredPack {
         root.registry.get(package_id).map(|entry| Self {
             package_id: package_id.to_owned(),
             path: root.directory.join(&entry.directory),
-            recorded: entry.recorded.clone(),
         })
     }
 }
@@ -732,9 +730,8 @@ impl RuntimeContainedTask<'_> {
         Ok(())
     }
 
-    /// Admits a registry package by its path (Workflow #336 PKG-S1: structurally, its reference
-    /// recorded and compared with nothing); a refusal is `contained_task_navigation_package_invalid`
-    /// with the loader's code as its cause.
+    /// Admits a registry package by its path (Workflow #336 PKG-S1: structurally); a refusal is
+    /// `contained_task_navigation_package_invalid` with the loader's code as its cause.
     fn admit_layer_package(
         &self,
         pack: &RegisteredPack,
@@ -749,21 +746,15 @@ impl RuntimeContainedTask<'_> {
             .host
             .package_material_deadline(self.control.deadline())
             .map_err(ContainedTaskRunError::Boundary)?;
-        PreparedContainedTask::load_path(
-            self.instance_alias,
-            &pack.path,
-            &pack.recorded,
-            vision_provider,
-            deadline,
-        )
-        .map_err(|error| {
-            package_invalid(
-                &pack.package_id,
-                role,
-                NavigationProblem::AdmissionFailed,
-                Some(error.outcome()),
-            )
-        })
+        PreparedContainedTask::load_path(self.instance_alias, &pack.path, vision_provider, deadline)
+            .map_err(|error| {
+                package_invalid(
+                    &pack.package_id,
+                    role,
+                    NavigationProblem::AdmissionFailed,
+                    Some(error.outcome()),
+                )
+            })
     }
 
     /// A handler or `then.run` package of the run, admitted once (§7) and checked for its part

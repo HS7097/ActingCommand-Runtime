@@ -649,7 +649,7 @@ package update are in `policy-suspension.md`.
 ## Ledger
 
 A linear run writes only existing records with existing fields and enum values: no event
-type, payload field, `PackageRef` variant or enum value (`ResourceDeclarationReason`,
+type, payload field or enum value (`ResourceDeclarationReason`,
 `TaskTimingStage`, `TaskTimingScope`, `TaskTimingBoundary`) is added, so a ledger written by a
 linear run is read by older builds.
 

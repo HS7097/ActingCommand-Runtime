@@ -328,15 +328,12 @@ impl GameRoot {
         }
     }
 
-    fn directory(index: usize) -> String {
-        format!("{:064x}", index + 1)
-    }
-
     /// A listed package whose directory holds `task` (16x9 unless `width` says otherwise).
     fn pack(&mut self, package_id: &str, mode: &str, task: Value) -> &mut Self {
         let width = task["coordinate_space"]["width"].as_u64().expect("width");
         let height = task["coordinate_space"]["height"].as_u64().expect("height");
-        let directory = self.game.join(Self::directory(self.packs.len()));
+        // Workflow #336 PKG-S5: a bundle v4 pack's directory is its `package_id`.
+        let directory = self.game.join(package_id);
         fs::create_dir_all(directory.join("resources/operations/task")).expect("package dirs");
         let control = json!({
             "schema_version": "Lab-1y.control.v1",
@@ -391,18 +388,16 @@ impl GameRoot {
         self.write(
             "bundle.json",
             &json!({
-                "schema_version": "actingcommand.bundle.v2",
+                "schema_version": "actingcommand.bundle.v4",
                 "game": "neutral",
                 "packs": self
                     .packs
                     .iter()
-                    .enumerate()
-                    .map(|(index, package_id)| json!({
+                    .map(|package_id| json!({
                         "package_id": package_id,
                         "server": "test",
                         "entry_task_id": "task",
-                        "digest": Self::directory(index),
-                        "path": format!("packs/{}", Self::directory(index)),
+                        "path": format!("packs/{package_id}"),
                         "file_count": 3,
                         "byte_count": 64
                     }))
@@ -735,11 +730,10 @@ fn n6_2_a_broken_game_root_never_stops_the_runtime() {
     fs::write(
         other.join("bundle.json"),
         serde_json::to_vec(&json!({
-            "schema_version": "actingcommand.bundle.v2",
+            "schema_version": "actingcommand.bundle.v4",
             "game": "other",
             "packs": [{"package_id": "other.test.task", "server": "test", "entry_task_id": "task",
-                       "digest": format!("{:064x}", 9), "path": format!("packs/{:064x}", 9),
-                       "file_count": 1, "byte_count": 1}]
+                       "path": "packs/other.test.task", "file_count": 1, "byte_count": 1}]
         }))
         .expect("bundle JSON"),
     )
