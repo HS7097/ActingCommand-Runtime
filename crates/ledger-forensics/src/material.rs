@@ -560,7 +560,7 @@ fn read_failure(
             } else if code == SharedCode::ArtifactReadFailed.as_str()
                 && error.io_error_kind() == Some(std::io::ErrorKind::NotFound)
             {
-                RuntimeMaterialReadState::Missing
+                RuntimeMaterialReadState::ReadFailed
             } else if code == StoreCode::ArtifactHashMismatch.as_str()
                 || code == SharedCode::ArtifactVerifyFailed.as_str()
             {
