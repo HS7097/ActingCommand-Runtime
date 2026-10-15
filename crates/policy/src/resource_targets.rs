@@ -932,7 +932,7 @@ fn live_pool_inventory(
     observed_at_unix_ms: u64,
     time: EvaluationTime,
 ) -> i64 {
-    if pool.value_source.is_static() {
+    if pool.value_source.is_static() || current >= 0 {
         return current;
     }
     let Ok(value) = u64::try_from(current) else {
