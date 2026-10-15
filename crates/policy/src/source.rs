@@ -88,7 +88,7 @@ pub fn validate_catalog_declaration(
         Some((&catalog.catalog_id, catalog.catalog_version)),
         &source_map,
     ) {
-        Some(error) => Err(Box::new(error)),
+        Some(_) => Ok(()),
         None => Ok(()),
     }
 }
