@@ -860,6 +860,13 @@ impl HostShared {
             .observe(evaluation, &held, time.unix_ms, overdue_ms);
             cycle.fact_refresh_transitions = transitions;
         }
+        if !cycle.fact_refresh_transitions.is_empty()
+            && let Some(evaluation) = cycle.evaluation.as_mut()
+        {
+            for decision in &mut evaluation.decisions {
+                decision.reasons.clear();
+            }
+        }
         lock(
             &self.trusted_policy_dispatches,
             HostLocation::RecordTrustedPolicyDispatches,
