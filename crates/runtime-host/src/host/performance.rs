@@ -558,7 +558,7 @@ impl HostShared {
     }
 
     /// `RuntimeOperation::PerformanceStatus` (Workflow #385 P-m, PERF §4.6; register §1.61
-    /// W14): the shadow measurement's rows, read from memory. Nothing is read from or appended
+    /// W15): the shadow measurement's rows, read from memory. Nothing is read from or appended
     /// to the ledger.
     pub(super) fn performance_status_read(&self) -> Result<OperationSuccess, RequestFailure> {
         let settings = self.performance_measurement()?;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! `RuntimeOperation::PerformanceStatus` (Workflow #385 P-m, frozen model PERF v1.4.2 §4.6;
-//! register §1.61 W14): what the shadow measurement holds now, one host row and one row per
+//! register §1.61 W15): what the shadow measurement holds now, one host row and one row per
 //! registered instance. Both views are read from the same input: the normal view is the curve in
 //! effect, the learning view caps it (§4.5.2). The read is answered from memory; it reads and
 //! records nothing in the ledger, and it changes no dispatch (`mode` `observe` acts on nothing).

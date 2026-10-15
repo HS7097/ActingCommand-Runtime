@@ -303,7 +303,7 @@ U-6 deletes the source gates.
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
 | D2 S5 transition query | general | read | cli, mcp | no |
-| `PerformanceStatus` (#385 P-m; register §1.61 W14) | general | read (the shadow measurement's status, from memory; nothing read from or written to the ledger) | cli `perf-status`; mcp `ac_overview` (block `performance`) | no |
+| `PerformanceStatus` (#385 P-m; register §1.61 W15) | general | read (the shadow measurement's status, from memory; nothing read from or written to the ledger) | cli `perf-status`; mcp `ac_overview` (block `performance`) | no |
 | a later #369 same-queue request, if any | option two | operation (lease family) | actinglab | yes |
 
 Until U-6 the new option-two kinds `LoadPack` and `UnloadPack` accept only a
@@ -553,7 +553,7 @@ two.
   answer that still does not fit is `output_budget_exceeded`. A slice that adds an overview
   block adds its name to `--sections` and registers its place in this order in the same PR.
 - The block `performance` (#385 P-m) is the shadow measurement's status, the object
-  `actingctl perf-status` prints (PerformanceStatus, register §1.61 W14), its rows narrowed by
+  `actingctl perf-status` prints (PerformanceStatus, register §1.61 W15), its rows narrowed by
   `instance` too. A read that fails leaves a warning and `incomplete`, never an empty block.
 - `ac_run_pack` mints the request id and correlation id itself and returns `handle` =
   that request id at once (valid across restarts, as today); its job runs

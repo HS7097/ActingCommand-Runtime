@@ -376,7 +376,7 @@ impl RuntimeOperationKind {
             Self::MonitorStatus => Some(ReceiptCode::MonitorStatusCompleted.code()),
             Self::RuntimeFactSnapshot => Some(ReceiptCode::RuntimeFactSnapshotCompleted.code()),
             Self::InstanceFactSnapshot => Some(ReceiptCode::InstanceFactSnapshotCompleted.code()),
-            // Workflow #385 P-m (register §1.61 W14).
+            // Workflow #385 P-m (register §1.61 W15).
             Self::PerformanceStatus => Some(ReceiptCode::PerformanceStatusCompleted.code()),
             Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
             Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
@@ -598,7 +598,7 @@ mod tests {
             // Workflow #389 MCP-4 (register W2): one instance's facts, a general read that
             // records nothing.
             K::InstanceFactSnapshot => (General, Some(Read), false),
-            // Workflow #385 P-m (register §1.61 W14): the shadow measurement's status, a general
+            // Workflow #385 P-m (register §1.61 W15): the shadow measurement's status, a general
             // read from memory that records nothing.
             K::PerformanceStatus => (General, Some(Read), false),
             K::ProjectInterface => (General, Some(Read), false),

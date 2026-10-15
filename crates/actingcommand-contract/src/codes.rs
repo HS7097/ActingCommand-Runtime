@@ -182,7 +182,7 @@ crate::outcome_codes! {
         BindChannelCompleted => "request_bind_channel_completed": success / none,
         // Workflow #390 DRILL-1: a ladder drill was admitted and queued.
         DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
-        // Workflow #385 P-m (register §1.61 W14).
+        // Workflow #385 P-m (register §1.61 W15).
         PerformanceStatusCompleted => "request_performance_status_completed": success / none,
     }
 }

@@ -1259,7 +1259,7 @@ impl RuntimeClient {
     }
 
     /// Reads the shadow measurement's status (`PerformanceStatus`, Workflow #385 P-m, PERF §4.6;
-    /// register §1.61 W14): the host row, one row per registered instance, both views and the
+    /// register §1.61 W15): the host row, one row per registered instance, both views and the
     /// stage that takes effect. Read-only: the Runtime reads and records nothing in the ledger.
     pub fn performance_status(
         &self,

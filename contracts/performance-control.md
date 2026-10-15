@@ -196,7 +196,7 @@ evaluates both views and records; it acts on nothing. `performance.pacing.mode` 
   `pacing_learning_capped` when `full`'s learning view caps it. `perf.summary` carries the
   `pacing` members (register P4) of the last evaluation: the host's values, both views with
   their `allowed`, and each instance's views (at most 64 rows).
-- **Status read.** `PerformanceStatus` (register §1.61 W14) answers from memory, reading and
+- **Status read.** `PerformanceStatus` (register §1.61 W15) answers from memory, reading and
   writing nothing in the ledger: the mode, the phase under `full`, whether the learning view
   caps, the monitor's health, the host row and one row per registered instance (their
   responsiveness, the curve's stage and factor, both views with their stage, share, `allowed`,

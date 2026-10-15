@@ -50,7 +50,7 @@ mod interface;
 pub use interface::*;
 mod pack_registry;
 pub use pack_registry::*;
-// Workflow #385 P-m: the shadow measurement's status read (register §1.61 W14).
+// Workflow #385 P-m: the shadow measurement's status read (register §1.61 W15).
 mod performance_status;
 pub use performance_status::*;
 use std::net::{IpAddr, SocketAddr};
@@ -3387,7 +3387,7 @@ pub enum RuntimeOperation {
     InstanceFactSnapshot {
         instance: String,
     },
-    /// Reads the shadow measurement's state (Workflow #385 P-m, PERF §4.6; register §1.61 W14):
+    /// Reads the shadow measurement's state (Workflow #385 P-m, PERF §4.6; register §1.61 W15):
     /// a general read from memory that reads and records nothing in the ledger. The answer is
     /// `RuntimeResult::PerformanceStatus`.
     PerformanceStatus,
@@ -4852,7 +4852,7 @@ pub enum RuntimeResult {
         snapshot: Box<crate::InstanceFactView>,
         source: crate::RuntimeStateSource,
     },
-    /// `PerformanceStatus` (Workflow #385 P-m, register §1.61 W14): the shadow measurement's
+    /// `PerformanceStatus` (Workflow #385 P-m, register §1.61 W15): the shadow measurement's
     /// host row and one row per registered instance, from memory.
     PerformanceStatus {
         status: Box<RuntimePerformanceStatus>,
