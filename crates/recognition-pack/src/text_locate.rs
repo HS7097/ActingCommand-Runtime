@@ -271,7 +271,11 @@ impl RecognitionEvaluator {
         target: &OcrTarget,
         locate: &OcrLocate,
     ) -> RecognitionPackResult<TargetEvaluation> {
-        let (region, region_evidence) = context.ocr_region(target)?;
+        // Workflow #390 R-10: a located text whose anchor did not pass did not pass.
+        let (region, region_evidence) = match context.ocr_region(target) {
+            Ok(region) => region,
+            Err(error) => return crate::anchor_not_matched(target, error),
+        };
         (|| {
             let provider = self.vision_provider.as_ref().ok_or_else(|| {
                 RecognitionPackError::fatal_with_code(
