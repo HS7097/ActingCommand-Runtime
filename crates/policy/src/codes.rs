@@ -91,6 +91,10 @@ actingcommand_contract::outcome_codes! {
         ScoreAgingCap => "score_aging_cap": info / none,
         TimelineUnavailable => "timeline_unavailable": info / none,
         TimelineActive => "timeline_active": info / none,
+        /// Info (Workflow #361 R7). A clock predicate with `missed: skip_after` is not due: its
+        /// latest occurrence was not served before its grace ran out, so the clock waits for
+        /// its next occurrence (keys `occurrence_unix_ms`, `grace_ms`).
+        ClockOccurrenceExpired => "clock_occurrence_expired": info / none,
         // Resource target reasons and failures.
         ResourceTargets => "resource_targets": info / none,
         ResourceWeights => "resource_weights": info / none,

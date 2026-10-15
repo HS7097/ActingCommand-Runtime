@@ -62,6 +62,7 @@ outcome_keys! {
     window_start_unix_ms: unix_ms,
     window_end_unix_ms: unix_ms,
     first_run: boolean,
+    grace_ms: duration_ms,
     count: integer,
     holder_kind: vocab(claim_kind),
     queue_position: integer,

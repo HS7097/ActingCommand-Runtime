@@ -1319,6 +1319,27 @@ table goes from 34 to 35 tools (observer 19 to 20).
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
 | GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
+### 1.79 Wave 16 slice R7 + K4 (#361 R7, #372 K4; M361 and K372 addenda of 2026-10-15; forced-compromises mapping S-08)
+
+R7 lets a V2 clock predicate skip an occurrence that was not served in time, so a missed slot
+no longer takes a later day's budget; K4 records the slot losses no gate shows, the occurrence
+R7 skipped and the one a later occurrence absorbed. [scheduling/README.md](scheduling/README.md)
+("Clock Sources", "Clock-slot records"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+[policy-suspension.md](policy-suspension.md) (`clock_slots`) are the contract. No ledger event
+type, no payload member and no configuration key is added (the actingd-config revision is
+untouched); the records are the existing `goal_missed` planning signal. The codes
+`clock_occurrence_expired` (policy, info, domain `clock_occurrence_`), `clock_slot_expired`
+(runtime-host, info) and `clock_slot_superseded` (runtime-host, warning), all ladder class
+`none`, and the key `grace_ms` (`duration_ms`) are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RK1 | `missed: {kind: "skip_after", grace_ms}` on a `clock` predicate of an `actingcommand.scheduling.v2` catalog | catalog member (resource file format, not a ledger shape) | R7+K4 | the W2 generator, after the v0.12.0 deploy (Q10) | optional and skipped when absent, so a catalog without it keeps its serialization, hash and approval; `grace_ms` 60 000..=604 800 000 (`limit_exceeded`); refused under `not` (`predicate_uncomputable`) and in a V1 document (`unknown_field`); an unknown `kind` is `type_mismatch` |
+| RK2 | the decision reason `clock_occurrence_expired` {`occurrence_unix_ms`, `grace_ms`} | new code in existing reason chains | R7+K4 | R7+K4 | added by a clock whose unserved occurrence is past its grace; the decision stays `trigger_false` when that clock decides the trigger |
+| RK3 | `policy.planning_signal_observed` of kind `goal_missed` with `clock_slot_expired` {`task_id`, `alias`, `occurrence_unix_ms`, `grace_ms`, `next_occurrence_unix_ms`?} or `clock_slot_superseded` {`task_id`, `alias`, `occurrence_unix_ms`, `next_occurrence_unix_ms`} | new codes of an existing record (shape unchanged) | R7+K4 | R7+K4 | `signal_id` `signal:clock_slot:<expired\|superseded>:<sha256 of task, alias and occurrence>`, once per (pair, occurrence); only for a pair with a dispatch history that is live (its trigger true with its counted clocks due); superseded occurrences within 48 h, at most 32 per pair |
+| RK4 | `actingd suspended` `clock_slots`: entries of both codes; `grace_ms`; `slot_fate` `expired` | new values of existing members (`schema_version` unchanged) | R7+K4 | R7+K4 | an expired entry is `expired`, a superseded one `collapsed`, both settled; a refused or deferred entry of an occurrence with an expired record settles `expired` |
+| RK5 | `ac_diagnose` / `actingctl diagnose` `clock_slots` order | new rule of an existing output member | R7+K4 | R7+K4 | refused and superseded rows (the `warning` codes) first, then deferred and expired rows, then owed rows, newest first in each; still at most 10, cut before `errors_page`, with `clock_slots_total` |
+
 ### 1.80 Wave 16 slice R-10 (#390, forced-compromises mapping R-10; REC-M §8.6, option 2)
 
 R-10 decides what an OCR target located relative to an anchor template is while that anchor
