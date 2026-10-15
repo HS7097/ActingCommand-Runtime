@@ -16,6 +16,10 @@ mod ipc;
 #[cfg(feature = "test-observation")]
 mod test_observation;
 
+// #382 C-2: the scripted Runtime for client tests (`test-support`); this crate's tests use it too.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use client::*;
 pub use codes::*;
 pub use error::*;
