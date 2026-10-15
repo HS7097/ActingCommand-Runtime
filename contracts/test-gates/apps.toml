@@ -278,6 +278,7 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
     "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key",
+    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
 ]
 incident = ["#389"]
 
@@ -422,3 +423,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query",
 ]
 incident = ["#389 MCP-2"]
+
+# actingctl events and ac_events take detail summary beside brief (the default) and payload, and refuse any other detail naming it as not recognised (Workflow #389 MCP-1 follow-up, coordinator ruling Q4)
+[[gate]]
+key = "59"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload",
+]
+incident = ["#389 MCP-1"]

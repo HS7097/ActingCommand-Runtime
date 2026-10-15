@@ -52,7 +52,7 @@ pub(super) fn events(context: &ToolContext<'_>, arguments: &Map<String, Value>) 
         other => tool_error(other),
     })?;
     match request.detail {
-        Detail::Brief => brief_page(&page, binding),
+        Detail::Brief | Detail::Summary => list_page(&page, binding, request.detail),
         Detail::Payload => payload_page(&page, binding),
     }
 }
@@ -78,13 +78,13 @@ fn resolve(
     Ok(instance_id)
 }
 
-/// The page cut to the output budget: rows from the end first, then the one row's material
-/// list; `truncated` and a cursor after the last row kept.
-fn brief_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
+/// A brief or summary page cut to the output budget: rows from the end first, then the one
+/// row's material list; `truncated` and a cursor after the last row kept.
+fn list_page(page: &Page, binding: CursorBinding, detail: Detail) -> ToolOutcome {
     let mut rows = page
         .events()
         .iter()
-        .map(events::brief_row)
+        .map(|event| events::row(event, detail, &tools::envelope))
         .collect::<Vec<_>>();
     let mut kept = rows.len();
     loop {
@@ -129,7 +129,7 @@ fn payload_page(page: &Page, binding: CursorBinding) -> ToolOutcome {
     let rows = page
         .events()
         .iter()
-        .map(|event| events::row(event, Detail::Payload))
+        .map(|event| events::row(event, Detail::Payload, &tools::envelope))
         .collect::<Vec<_>>();
     let next = page
         .next_cursor()
@@ -258,9 +258,9 @@ pub(super) fn input_schema() -> Value {
             "correlation_id": id("A Runtime correlation_id."),
             "detail": {
                 "type": "string",
-                "enum": ["brief", "payload"],
+                "enum": ["brief", "summary", "payload"],
                 "default": "brief",
-                "description": "payload adds each event's projected payload.",
+                "description": "summary adds the outcome a record carries (none on a state change); payload adds each event's projected payload.",
             },
             "limit": {
                 "type": "integer",
@@ -319,6 +319,8 @@ pub(super) fn result_schema() -> Value {
     // The ledger's diagnostic code, a member of the row like its type (Workflow #378 A5: a row
     // member, inserted outside `json!`).
     row["properties"]["code"] = json!({"type": "string"});
+    // detail summary: the record's outcome envelope (#389 MCP-1 follow-up).
+    row["properties"]["outcome"] = json!({"type": "object"});
     json!({
         "anyOf": [
             {
