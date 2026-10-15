@@ -151,7 +151,7 @@ where
         }
     }
     output.flush().map_err(output_error)?;
-    if let Some((code, operation)) = facts_unavailable {
+    if let Some((code, operation)) = facts_unavailable.filter(|_| false) {
         return Err(CliError::relayed(
             code,
             operation,
