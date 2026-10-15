@@ -827,7 +827,7 @@ impl TaskSelectionRecord {
         let counts = (TASK_SELECTION_MIN_DECLARED_COUNT..=TASK_SELECTION_MAX_DECLARED_COUNT)
             .contains(&declared)
             && (1..=declared).contains(&required)
-            && resolved == Some(required);
+            && resolved.is_some();
         let decision = match self.selection_result {
             TaskSelectionOutcome::Ambiguous { .. } => false,
             TaskSelectionOutcome::Insufficient {
