@@ -35,6 +35,10 @@ const NEXT_OCCURRENCE_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 3_600_000;
 const LIFT_INTERVAL_MS: u64 = 60_000;
 // The entry recovery package of the scope tests.
 const RECOVERY_ID: &str = "fixture01.return-home";
+// The capture interval of the layer-scope test's two packages. Test plan E-3 (§3.10): the
+// kernel waits on the test's `ManualRuntimeClock`, where a capture spends no time, so each
+// 500 ms wait captures about 10 frames rather than about 500 at a 1 ms interval.
+const LAYER_SCOPE_CAPTURE_INTERVAL_MS: u64 = 50;
 
 #[test]
 fn exec3_a_scheduled_page_graph_failure_records_its_identity_and_is_rerun_at_once() {
@@ -268,12 +272,24 @@ fn exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope() {
     let recovery_path = root.path().join("return-home.zip");
     fs::write(
         &package_path,
-        explicit_home_contained_task_package(false, "fixture01.target", [0, 0, 255], [255, 0, 0]),
+        explicit_home_contained_task_package_paced(
+            false,
+            "fixture01.target",
+            [0, 0, 255],
+            [255, 0, 0],
+            LAYER_SCOPE_CAPTURE_INTERVAL_MS,
+        ),
     )
     .expect("write the target package");
     fs::write(
         &recovery_path,
-        explicit_home_contained_task_package(false, RECOVERY_ID, [255, 255, 0], [255, 0, 0]),
+        explicit_home_contained_task_package_paced(
+            false,
+            RECOVERY_ID,
+            [255, 255, 0],
+            [255, 0, 0],
+            LAYER_SCOPE_CAPTURE_INTERVAL_MS,
+        ),
     )
     .expect("write the recovery package");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
