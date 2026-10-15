@@ -918,8 +918,8 @@ pub(crate) fn plan(recording: &LabRecording, settings: &StopSettings) -> LabResu
 }
 
 /// The default task timeout (R24 section 4.3 with Workflow #339 section 2.5):
-/// `S·[step 1 is no application entry] + Σ a·(g + w + (b − w)⁺ + p + T) + Σ_app E
-///  + Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`, where `g` is the duration of a drag or a
+/// `S·[step 1 is no application entry] + Σ a·(g + w + (b − w)⁺ + p + T) + Σ_app E +
+/// Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000`, where `g` is the duration of a drag or a
 /// long press (Workflow #390 LAB-2) and 0 for a tap.
 ///
 /// The sums before the settles take every optional step as shown, the longest path; a run
