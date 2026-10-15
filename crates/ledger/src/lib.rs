@@ -705,82 +705,6 @@ impl LastResortError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetentionCandidate {
-    pub path: PathBuf,
-    pub bytes: u64,
-    pub age: Duration,
-    pub protected: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RetentionReport {
-    pub max_bytes: u64,
-    pub total_before_bytes: u64,
-    pub total_after_bytes: u64,
-    pub deleted_count: usize,
-    pub deleted_paths: Vec<String>,
-    pub protected_over_budget: bool,
-}
-
-pub fn select_retention_deletions(
-    candidates: &[RetentionCandidate],
-    max_bytes: u64,
-) -> Vec<PathBuf> {
-    let mut total = candidates
-        .iter()
-        .fold(0u64, |sum, candidate| sum.saturating_add(candidate.bytes));
-    if total <= max_bytes {
-        return Vec::new();
-    }
-    let mut removable = candidates
-        .iter()
-        .filter(|candidate| !candidate.protected)
-        .collect::<Vec<_>>();
-    removable.sort_by_key(|candidate| std::cmp::Reverse(candidate.age));
-    let mut deletions = Vec::new();
-    for candidate in removable {
-        if total <= max_bytes {
-            break;
-        }
-        total = total.saturating_sub(candidate.bytes);
-        deletions.push(candidate.path.clone());
-    }
-    deletions
-}
-
-pub fn enforce_retention(
-    root: impl AsRef<Path>,
-    max_bytes: u64,
-    protected_age: Duration,
-) -> LabLogResult<RetentionReport> {
-    let root = root.as_ref();
-    let mut candidates = Vec::new();
-    collect_retention_candidates(root, root, protected_age, &mut candidates)?;
-    let total_before = candidates
-        .iter()
-        .fold(0u64, |sum, candidate| sum.saturating_add(candidate.bytes));
-    let deletions = select_retention_deletions(&candidates, max_bytes);
-    let mut deleted_paths = Vec::new();
-    let mut deleted_bytes = 0u64;
-    for path in &deletions {
-        if let Some(candidate) = candidates.iter().find(|candidate| candidate.path == *path) {
-            deleted_bytes = deleted_bytes.saturating_add(candidate.bytes);
-        }
-        fs::remove_file(path)?;
-        deleted_paths.push(path.display().to_string());
-    }
-    let total_after = total_before.saturating_sub(deleted_bytes);
-    Ok(RetentionReport {
-        max_bytes,
-        total_before_bytes: total_before,
-        total_after_bytes: total_after,
-        deleted_count: deleted_paths.len(),
-        deleted_paths,
-        protected_over_budget: total_after > max_bytes,
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionVerbosity {
     Min,
@@ -1043,40 +967,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
     output
-}
-
-fn collect_retention_candidates(
-    root: &Path,
-    current: &Path,
-    protected_age: Duration,
-    candidates: &mut Vec<RetentionCandidate>,
-) -> LabLogResult<()> {
-    if !current.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(current)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_retention_candidates(root, &path, protected_age, candidates)?;
-            continue;
-        }
-        let metadata = entry.metadata()?;
-        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        let age = SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or(Duration::ZERO);
-        candidates.push(RetentionCandidate {
-            path: path
-                .strip_prefix(root)
-                .map(|relative| root.join(relative))
-                .unwrap_or(path),
-            bytes: metadata.len(),
-            age,
-            protected: age < protected_age,
-        });
-    }
-    Ok(())
 }
 
 fn summarize_decision_array(
@@ -1456,35 +1346,6 @@ mod tests {
         );
         let refs = store.list_by_id("reco-1").expect("refs");
         assert_eq!(refs, vec![evidence]);
-    }
-
-    #[test]
-    fn retention_deletes_oldest_unprotected_until_under_budget() {
-        let deletions = select_retention_deletions(
-            &[
-                RetentionCandidate {
-                    path: PathBuf::from("protected"),
-                    bytes: 90,
-                    age: Duration::from_secs(1000),
-                    protected: true,
-                },
-                RetentionCandidate {
-                    path: PathBuf::from("old"),
-                    bytes: 80,
-                    age: Duration::from_secs(800),
-                    protected: false,
-                },
-                RetentionCandidate {
-                    path: PathBuf::from("new"),
-                    bytes: 20,
-                    age: Duration::from_secs(1),
-                    protected: false,
-                },
-            ],
-            100,
-        );
-
-        assert_eq!(deletions, vec![PathBuf::from("old"), PathBuf::from("new")]);
     }
 
     #[test]

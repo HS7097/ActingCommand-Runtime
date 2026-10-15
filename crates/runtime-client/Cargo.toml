@@ -8,6 +8,9 @@ publish = false
 
 [features]
 default = []
+# #382 C-2 (test plan C-2, inventory-contract I1): `test_support::ScriptedRuntime`, a scripted
+# local Runtime for client tests. Additive; this crate's own tests use it without the feature.
+test-support = []
 test-observation = ["actingcommand-runtime-host/test-observation"]
 
 [dependencies]
