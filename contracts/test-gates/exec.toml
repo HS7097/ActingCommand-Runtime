@@ -791,7 +791,7 @@ tests = [
 ]
 incident = ["#382 E-5"]
 
-# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the declared bindings; E-4 G4b: over the shared fixture set EXEC-I6, package bundle --maintenance admits what the Runtime admits and refuses each refused chain under the code the Runtime refuses its run with
+# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the bundle's own packs (Workflow #373 NAV-3a: every pack is a prerequisite package of the registry the bundle becomes); E-4 G4b: over the shared fixture set EXEC-I6, package bundle --maintenance admits what the Runtime admits and refuses each refused chain under the code the Runtime refuses its run with
 [[gate]]
 key = "12"
 coverage = "Y"
@@ -806,7 +806,7 @@ tests = [
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_matches_every_indexed_identity",
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_refuses_a_duplicate_role_or_a_missing_reference",
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material",
-    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_declared_bindings",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_bundles_packs",
     "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_admits_the_fixture_set_the_runtime_admits",
     "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_refuses_each_fixture_chain_with_the_runtimes_code",
     "actingcommand-runtime-host::lib::tests::gate_e4::gate_e4_runtime_refuses_each_fixture_chain_with_the_bundles_code",
@@ -1104,3 +1104,14 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record",
 ]
 incident = ["#331"]
+
+# Workflow #373 NAV-3a follow-up (M-373 v1.1 §3.8, §4.3; test row N3a-9; wave 14 rulings, NAV-3a items 3 and 5; register §1.73): bundle v4 refuses a maintenance entry with the retired use prerequisite (the bundle index and the source declaration array do not decode, a game root holding it is standard_pack_root_invalid malformed) and reads the same entry with return_home alone; a navigable_route package that declares a prerequisite package without an entry page (none, or any) is contained_task_control_invalid with reason=prerequisite_requires_page_entry, and with an entry page, whatever page it is, that page is checked first; record stop's prerequisite_entry_example is the package's place in its game's standard-pack registry (bundle.json, its packs[] entry and its directory), the same after the recording stopped
+[[gate]]
+key = "71"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::package::tests::n3a_9_bundle_v4_refuses_a_maintenance_entry_with_the_prerequisite_use",
+    "actingcommand-execution-kernel::lib::contained_task::gate_373_nav3a::nav3a_a_page_graph_package_declaring_a_prerequisite_without_a_page_entry_is_refused",
+    "actingcommand-lab::lib::gate_373_nav3afu::nav3afu_record_stop_prints_the_registry_entry_of_its_package",
+]
+incident = ["#373 NAV-3a"]
