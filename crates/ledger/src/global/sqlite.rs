@@ -2880,6 +2880,13 @@ fn read_selected_rows(
     };
     let mut bytes = 0;
     verify_sequence_extent(connection, head, budget, &mut bytes)?;
+    let _ = read_rows(
+        connection,
+        "SELECT sequence FROM ledger_events",
+        budget,
+        &mut bytes,
+        true,
+    )?;
     let mut types = Vec::with_capacity(event_types.len());
     for event_type in event_types {
         types.push(SqlValue::Text(views::key(event_type)?));
