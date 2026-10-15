@@ -9,17 +9,21 @@
 //! viewport is the step's guard on the latest frame, the layout's projection and the declared
 //! start and end checks. A drag is a `task.effect_intent` of the select step, sampled between
 //! random points of its two rectangles with the step's action seed and the drag's index, bound
-//! to the latest frame, and then the input; it records no `task.effect_completed`.
+//! to the latest frame, and then the input; it records no `task.effect_completed`. Slice SEL-L3b
+//! adds two moves, recorded the same way: the drag with a pause and a brake
+//! (`single_touch_drag_with_pause_and_brake_v1`) and the page flip, a tap sampled in its
+//! rectangle; and the page checks of page-order evidence, judged on the latest frame.
 
 use super::{
-    ScanDeclaration, ScanDrag, ScanDragMotion, ScanDryRun, ScanReadInstance, ScanReading,
-    ScanSession, ScanSource,
+    ScanDeclaration, ScanDrag, ScanDragMotion, ScanDryRun, ScanInput, ScanReadInstance,
+    ScanReading, ScanSession, ScanSource, u32_of,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
-    PageObservation, PreparedContainedTask, TaskOperation, sample_geometry_matches, sampled_swipe,
+    PageObservation, PreparedContainedTask, TaskOperation, sample_geometry_matches,
+    sampled_drag_with_pause_and_brake, sampled_swipe, sampled_tap,
 };
 use crate::{InputFrameContext, ObservedFrame};
 use actingcommand_contract::codes::SharedCode;
@@ -341,10 +345,53 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             .into());
         }
         let resolution = &self.task.control.resolution;
-        drag.from.validate(resolution)?;
-        drag.to.validate(resolution)?;
         let seed = self.action_seed.map(|seed| drag_seed(seed, drag.index));
-        let (action, sampling) = sampled_swipe(drag.from, drag.to, drag.duration_ms, seed)?;
+        let (action, sampling) = match drag.input {
+            ScanInput::Drag {
+                from,
+                to,
+                duration_ms,
+            } => {
+                from.validate(resolution)?;
+                to.validate(resolution)?;
+                sampled_swipe(from, to, duration_ms, seed)?
+            }
+            ScanInput::HeldDrag {
+                from,
+                to,
+                duration_ms,
+                pause_ms,
+                brake,
+            } => {
+                from.validate(resolution)?;
+                to.validate(resolution)?;
+                let (action, sampling) = sampled_drag_with_pause_and_brake(
+                    (from, to, duration_ms),
+                    pause_ms,
+                    brake.map(|brake| (brake.displacement, brake.duration_ms)),
+                    seed,
+                )?;
+                // The brake's end follows from the drag's end; it lies on the screen too, and
+                // the action keeps its contract.
+                if let InputAction::SingleTouchDragWithPauseAndBrakeV1 { x3, y3, .. } = &action {
+                    resolution.validate_point(*x3, *y3)?;
+                }
+                action.validate().map_err(|_| {
+                    ContainedTaskError::with_detail(
+                        SELECT_INVALID.code(),
+                        format!(
+                            "operation={} scan drag=pause_and_brake_invalid",
+                            self.operation.id
+                        ),
+                    )
+                })?;
+                (action, sampling)
+            }
+            ScanInput::Tap { rect } => {
+                rect.validate(resolution)?;
+                sampled_tap(rect, seed)?
+            }
+        };
         let guard = self.guard.clone().ok_or_else(|| {
             ContainedTaskError::with_detail(
                 SELECT_INVALID.code(),
@@ -372,6 +419,20 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
         self.runtime
             .input(action, input_context)
             .map_err(ContainedTaskRunError::operation::<R>)
+    }
+
+    fn page_checks(
+        &mut self,
+        checks: &[String],
+    ) -> Result<Vec<u32>, ContainedTaskRunError<R::Error>> {
+        let observation = self.latest.as_ref().unwrap_or(self.first);
+        let mut passed = Vec::new();
+        for (index, check) in checks.iter().enumerate() {
+            if self.check(&observation.scene, check)? {
+                passed.push(u32_of(index));
+            }
+        }
+        Ok(passed)
     }
 }
 

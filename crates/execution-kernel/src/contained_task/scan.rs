@@ -22,6 +22,15 @@
 //! SEL-L4b, which also admits the declaration. Every drag is a real input, recorded as a
 //! `task.effect_intent` of the select step and followed by no `task.effect_completed`; the one
 //! completed effect of the step follows its selecting tap.
+//!
+//! Slice SEL-L3b (Workflow #308; forced compromises E-10, E-11, E-12) widens how a scan moves.
+//! The list may run along either axis: every rule reads positions along the declared axis and
+//! across it. A drag may end with a pause, a brake across the axis, or both, so that the list
+//! keeps no fling (the input `single_touch_drag_with_pause_and_brake_v1`). A list may also be
+//! paged by a tap (`rect`, with `back_rect` for the reverse move): its pages align by their
+//! overlap within the declared steps, as drags do, or, when they do not overlap, by page-order
+//! evidence: one declared check per page, of which exactly one passes on each viewport, and each
+//! move shows the same page or the next one.
 
 mod online;
 
@@ -109,36 +118,81 @@ impl DeclaredRect {
     }
 }
 
-/// How a scan moves the list: a drag between random points of two rectangles. The paging
-/// advance is not frozen (S0 §8 item 3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum DeclaredMoveKind {
-    Drag,
-}
-
-/// The forward drag, with the measured smallest and largest content displacement of a full drag
-/// mid-list. A corrective move is this drag with `from` and `to` swapped.
+/// A drag's brake (Workflow #308 SEL-L3b): after the drag's end and its pause, the touch moves
+/// `cross_px` across the scan's axis (signed, in frame pixels) over `duration_ms` and is then
+/// released, so that the list keeps no fling along the axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DeclaredAdvance {
-    kind: DeclaredMoveKind,
-    from: DeclaredRect,
-    to: DeclaredRect,
+struct DeclaredBrake {
+    cross_px: i32,
     duration_ms: u64,
-    min_content_step_px: u32,
-    max_content_step_px: u32,
 }
 
-/// The longer drag a rewind takes reversed (and SEL-L4b's return in either direction).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// The evidence a page-flip advance aligns by when its pages do not overlap (Workflow #308
+/// SEL-L3b): `checks[k]` is the check target that passes on page k, page 0 being the list's
+/// start, and page k's content starts `page_step_px` times k along the axis.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DeclaredReposition {
-    kind: DeclaredMoveKind,
-    from: DeclaredRect,
-    to: DeclaredRect,
-    duration_ms: u64,
-    max_content_step_px: u32,
+struct DeclaredPageOrder {
+    checks: Vec<String>,
+    page_step_px: u32,
+}
+
+/// How a scan moves the list forward. `drag` (S0 §2.1): a drag between random points of two
+/// rectangles, with the measured smallest and largest content displacement of a full drag
+/// mid-list; a corrective move is this drag with `from` and `to` swapped. SEL-L3b lets it end
+/// with a pause (`pause_ms`), a brake, or both. `rect` (SEL-L3b, the page flip of S0 §8 item 3):
+/// a tap in `rect`, whose corrective is a tap in `back_rect`; its pages align by their overlap
+/// within the declared steps, or, with `page_order` and no steps, by page-order evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum DeclaredAdvance {
+    Drag {
+        from: DeclaredRect,
+        to: DeclaredRect,
+        duration_ms: u64,
+        #[serde(default)]
+        pause_ms: Option<u64>,
+        #[serde(default)]
+        brake: Option<DeclaredBrake>,
+        min_content_step_px: u32,
+        max_content_step_px: u32,
+    },
+    Rect {
+        rect: DeclaredRect,
+        back_rect: DeclaredRect,
+        #[serde(default)]
+        min_content_step_px: Option<u32>,
+        #[serde(default)]
+        max_content_step_px: Option<u32>,
+        #[serde(default)]
+        page_order: Option<DeclaredPageOrder>,
+    },
+}
+
+/// The longer move a rewind takes reversed (and SEL-L4b's return in either direction): a drag,
+/// optionally with a pause and a brake, or (SEL-L3b) a tap in `rect`, whose reverse is a tap in
+/// `back_rect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum DeclaredReposition {
+    Drag {
+        from: DeclaredRect,
+        to: DeclaredRect,
+        duration_ms: u64,
+        #[serde(default)]
+        pause_ms: Option<u64>,
+        #[serde(default)]
+        brake: Option<DeclaredBrake>,
+        max_content_step_px: u32,
+    },
+    Rect {
+        /// The forward move, which only SEL-L4b's return toward the end takes.
+        #[allow(dead_code)]
+        rect: DeclaredRect,
+        back_rect: DeclaredRect,
+        max_content_step_px: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -266,7 +320,7 @@ pub(super) struct ScanReading {
     pub(super) frame_id: Option<FrameId>,
 }
 
-/// Why a drag is made: a forward advance, the corrective reverse advance of a gap, or a reversed
+/// Why a move is made: a forward advance, the corrective reverse advance of a gap, or a reversed
 /// reposition toward the start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ScanDragMotion {
@@ -275,15 +329,207 @@ pub(super) enum ScanDragMotion {
     Rewind,
 }
 
-/// One drag between random points of `from` and `to`; `index` counts the drags of the attempt
-/// and varies the action seed.
+/// A brake across the scan's axis (Workflow #308 SEL-L3b): the displacement (x, y) in frame
+/// pixels from the drag's end, and its duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ScanBrake {
+    pub(super) displacement: (i32, i32),
+    pub(super) duration_ms: u64,
+}
+
+/// What one move of a scan does on the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScanInput {
+    /// A drag between random points of `from` and `to`, released at its end (a swipe).
+    Drag {
+        from: ClickRect,
+        to: ClickRect,
+        duration_ms: u64,
+    },
+    /// A drag between random points of `from` and `to` that holds still `pause_ms` at its end
+    /// and then, with a brake, moves by the brake's displacement before the release (Workflow
+    /// #308 SEL-L3b, `single_touch_drag_with_pause_and_brake_v1`).
+    HeldDrag {
+        from: ClickRect,
+        to: ClickRect,
+        duration_ms: u64,
+        pause_ms: u64,
+        brake: Option<ScanBrake>,
+    },
+    /// A tap at a random point of `rect`: a page flip (Workflow #308 SEL-L3b).
+    Tap { rect: ClickRect },
+}
+
+/// One move of the attempt; `index` counts the moves of the attempt and varies the action seed.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ScanDrag {
     pub(super) motion: ScanDragMotion,
-    pub(super) from: ClickRect,
-    pub(super) to: ClickRect,
-    pub(super) duration_ms: u64,
+    pub(super) input: ScanInput,
     pub(super) index: u32,
+}
+
+/// The moves, steps and page-order evidence a session takes from its declaration, resolved once
+/// (S0 §2.1; Workflow #308 SEL-L3b).
+#[derive(Debug, Clone, Copy)]
+struct Moves<'a> {
+    advance: ScanInput,
+    corrective: ScanInput,
+    rewind: ScanInput,
+    /// `advance`'s smallest and largest content step.
+    advance_steps: (i64, i64),
+    /// `reposition`'s largest content step.
+    reposition_max: i64,
+    /// The page checks and the page step, when the pages align by page-order evidence.
+    page_order: Option<(&'a [String], i64)>,
+}
+
+/// A drag of the declaration as an input: a swipe, or, with a pause or a brake, the held drag
+/// whose brake moves across `axis`.
+fn drag_input(
+    axis: ScanAxis,
+    (from, to, duration_ms): (DeclaredRect, DeclaredRect, u64),
+    pause_ms: Option<u64>,
+    brake: Option<DeclaredBrake>,
+) -> ScanInput {
+    if pause_ms.is_none() && brake.is_none() {
+        return ScanInput::Drag {
+            from: from.click(),
+            to: to.click(),
+            duration_ms,
+        };
+    }
+    ScanInput::HeldDrag {
+        from: from.click(),
+        to: to.click(),
+        duration_ms,
+        pause_ms: pause_ms.unwrap_or(0),
+        brake: brake.map(|brake| ScanBrake {
+            displacement: match axis {
+                ScanAxis::Vertical => (brake.cross_px, 0),
+                ScanAxis::Horizontal => (0, brake.cross_px),
+            },
+            duration_ms: brake.duration_ms,
+        }),
+    }
+}
+
+/// Whether a drag's pause and brake are usable: a declared pause holds, and a declared brake
+/// moves and takes time.
+fn held_drag_valid(pause_ms: Option<u64>, brake: Option<DeclaredBrake>) -> bool {
+    pause_ms != Some(0) && brake.is_none_or(|brake| brake.cross_px != 0 && brake.duration_ms > 0)
+}
+
+/// Why a declaration's moves cannot be resolved (the detail of `contained_task_select_invalid`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MovesInvalid {
+    AdvanceHold,
+    AdvanceRectSteps,
+    RepositionHold,
+}
+
+impl MovesInvalid {
+    const fn detail(self) -> &'static str {
+        match self {
+            Self::AdvanceHold => "scan advance=drag hold=invalid",
+            Self::AdvanceRectSteps => "scan advance=rect steps_or_page_order=invalid",
+            Self::RepositionHold => "scan reposition=drag hold=invalid",
+        }
+    }
+}
+
+impl<'a> Moves<'a> {
+    /// Resolves the declaration's `advance` and `reposition`. A page-flip advance has either
+    /// both steps or `page_order` (with at least one check and a page step of at least 1 px),
+    /// never both; a declared pause is not 0 and a declared brake moves and takes time.
+    fn of(scan: &'a ScanDeclaration) -> Result<Self, MovesInvalid> {
+        let axis = scan.axis;
+        let (advance, corrective, advance_steps, page_order) = match &scan.advance {
+            DeclaredAdvance::Drag {
+                from,
+                to,
+                duration_ms,
+                pause_ms,
+                brake,
+                min_content_step_px,
+                max_content_step_px,
+            } => {
+                if !held_drag_valid(*pause_ms, *brake) {
+                    return Err(MovesInvalid::AdvanceHold);
+                }
+                (
+                    drag_input(axis, (*from, *to, *duration_ms), *pause_ms, *brake),
+                    drag_input(axis, (*to, *from, *duration_ms), *pause_ms, *brake),
+                    (
+                        i64::from(*min_content_step_px),
+                        i64::from(*max_content_step_px),
+                    ),
+                    None,
+                )
+            }
+            DeclaredAdvance::Rect {
+                rect,
+                back_rect,
+                min_content_step_px,
+                max_content_step_px,
+                page_order,
+            } => {
+                let (steps, order) = match (min_content_step_px, max_content_step_px, page_order) {
+                    (Some(min), Some(max), None) => ((i64::from(*min), i64::from(*max)), None),
+                    (None, None, Some(order))
+                        if !order.checks.is_empty() && order.page_step_px > 0 =>
+                    {
+                        let step = i64::from(order.page_step_px);
+                        ((step, step), Some((order.checks.as_slice(), step)))
+                    }
+                    _ => return Err(MovesInvalid::AdvanceRectSteps),
+                };
+                (
+                    ScanInput::Tap { rect: rect.click() },
+                    ScanInput::Tap {
+                        rect: back_rect.click(),
+                    },
+                    steps,
+                    order,
+                )
+            }
+        };
+        let (rewind, reposition_max) = match scan.reposition {
+            DeclaredReposition::Drag {
+                from,
+                to,
+                duration_ms,
+                pause_ms,
+                brake,
+                max_content_step_px,
+            } => {
+                if !held_drag_valid(pause_ms, brake) {
+                    return Err(MovesInvalid::RepositionHold);
+                }
+                (
+                    drag_input(axis, (to, from, duration_ms), pause_ms, brake),
+                    max_content_step_px,
+                )
+            }
+            DeclaredReposition::Rect {
+                back_rect,
+                max_content_step_px,
+                ..
+            } => (
+                ScanInput::Tap {
+                    rect: back_rect.click(),
+                },
+                max_content_step_px,
+            ),
+        };
+        Ok(Self {
+            advance,
+            corrective,
+            rewind,
+            advance_steps,
+            reposition_max: i64::from(reposition_max),
+            page_order,
+        })
+    }
 }
 
 /// What a scan session reads frames from and drags through: the runtime of a select step, or a
@@ -308,8 +554,22 @@ pub(super) trait ScanSource {
     /// layout's projection.
     fn viewport(&mut self) -> Result<ScanReading, ContainedTaskRunError<Self::Error>>;
 
-    /// One drag, recorded as an effect intent of the step and bound to the latest frame.
+    /// One move, recorded as an effect intent of the step and bound to the latest frame.
     fn drag(&mut self, drag: ScanDrag) -> Result<(), ContainedTaskRunError<Self::Error>>;
+
+    /// The indices of the declared page checks that pass on the latest frame (Workflow #308
+    /// SEL-L3b): the evidence a page-flip advance without overlap aligns by. A source that reads
+    /// no page checks refuses.
+    fn page_checks(
+        &mut self,
+        _checks: &[String],
+    ) -> Result<Vec<u32>, ContainedTaskRunError<Self::Error>> {
+        Err(ContainedTaskError::with_detail(
+            SELECT_INVALID.code(),
+            "scan page_order=unread_by_source",
+        )
+        .into())
+    }
 }
 
 /// How a scan session ended without a failure.
@@ -697,6 +957,10 @@ fn u32_of(value: usize) -> u32 {
 /// One scan session over one source (S0 §2.2 from `Pin` to `Decide`'s coverage checks).
 pub(super) struct ScanSession<'a> {
     scan: &'a ScanDeclaration,
+    /// The declaration's moves, steps and page-order evidence (Workflow #308 SEL-L3b).
+    moves: Moves<'a>,
+    /// The page of the latest coverage viewport, when the pages align by page-order evidence.
+    page: i64,
     layout_id: &'a str,
     policy: &'a SelectionPolicy,
     facts: &'a SelectionFactSnapshot,
@@ -885,8 +1149,11 @@ impl<'a> ScanSession<'a> {
             }
             None => None,
         };
+        let moves = Moves::of(scan).map_err(|refused| invalid(refused.detail()))?;
         Ok(Self {
             scan,
+            moves,
+            page: 0,
             layout_id: &layout.id,
             policy,
             facts,
@@ -978,6 +1245,9 @@ impl<'a> ScanSession<'a> {
         }
         self.start = Some(start);
         let tracked = self.tracked(&reading)?;
+        if let Some((checks, _)) = self.moves.page_order {
+            self.page = self.place_page(source, checks, None, 0)?;
+        }
         if let Some(end) = self.observe(tracked, &reading, ScanViewportMotion::Start, 0)? {
             return Ok(end);
         }
@@ -1010,8 +1280,18 @@ impl<'a> ScanSession<'a> {
             let index = u32_of(self.viewports.len());
             let current = self.tracked(&reading)?;
             let previous_offset = self.previous_offset;
-            let window = self.forward_window(previous_offset, reading.end_check);
-            let offset = self.align_previous(&current, &window, index)?;
+            let offset = match self.moves.page_order {
+                // Workflow #308 SEL-L3b: pages that do not overlap are placed by the page they
+                // show, the same page or the next one, at the declared page step.
+                Some((checks, step)) => {
+                    self.page = self.place_page(source, checks, Some(self.page), index)?;
+                    self.page * step
+                }
+                None => {
+                    let window = self.forward_window(previous_offset, reading.end_check);
+                    self.align_previous(&current, &window, index)?
+                }
+            };
             if (offset - previous_offset).abs() <= self.geometry.tolerance {
                 self.forward_repeats += 1;
             } else {
@@ -1025,7 +1305,10 @@ impl<'a> ScanSession<'a> {
             if reading.end_check {
                 end_viewport = Some((index, offset));
             }
-            if coverage_gap(&self.bands, self.geometry.extent).is_some() {
+            // Pages placed by page-order evidence tile the list by declaration: no gap to close.
+            if self.moves.page_order.is_none()
+                && coverage_gap(&self.bands, self.geometry.extent).is_some()
+            {
                 // One corrective reverse advance per gap, aligned against the viewport that
                 // opened it; the gap is then checked again against the union.
                 let reading = self.advance(source, ScanDragMotion::Corrective)?;
@@ -1197,8 +1480,7 @@ impl<'a> ScanSession<'a> {
     /// passed, any step up to the largest, because the list stopped at its end.
     fn forward_window(&self, previous: i64, end_passed: bool) -> Vec<(i64, i64)> {
         let tolerance = self.geometry.tolerance;
-        let minimum = i64::from(self.scan.advance.min_content_step_px);
-        let maximum = i64::from(self.scan.advance.max_content_step_px);
+        let (minimum, maximum) = self.moves.advance_steps;
         if end_passed {
             vec![(previous - tolerance, previous + maximum + tolerance)]
         } else {
@@ -1215,8 +1497,7 @@ impl<'a> ScanSession<'a> {
     /// The offsets a corrective viewport may lie at: no move, or one reversed step.
     fn corrective_window(&self, previous: i64) -> Vec<(i64, i64)> {
         let tolerance = self.geometry.tolerance;
-        let minimum = i64::from(self.scan.advance.min_content_step_px);
-        let maximum = i64::from(self.scan.advance.max_content_step_px);
+        let (minimum, maximum) = self.moves.advance_steps;
         vec![
             (previous - tolerance, previous + tolerance),
             (
@@ -1231,11 +1512,11 @@ impl<'a> ScanSession<'a> {
     #[cfg_attr(not(test), allow(dead_code))]
     fn return_window(&self, last: i64, toward_start: bool, reposition: bool) -> Vec<(i64, i64)> {
         let tolerance = self.geometry.tolerance;
-        let step = i64::from(if reposition {
-            self.scan.reposition.max_content_step_px
+        let step = if reposition {
+            self.moves.reposition_max
         } else {
-            self.scan.advance.max_content_step_px
-        });
+            self.moves.advance_steps.1
+        };
         if toward_start {
             vec![(last - step - tolerance, last + tolerance)]
         } else {
@@ -1344,30 +1625,69 @@ impl<'a> ScanSession<'a> {
         )
     }
 
-    /// One drag of the attempt.
+    /// One move of the attempt: the declared advance, its reverse for a corrective, or the
+    /// reposition's reverse for a rewind.
     fn drag<S: ScanSource>(
         &mut self,
         source: &mut S,
         motion: ScanDragMotion,
     ) -> Result<(), ContainedTaskRunError<S::Error>> {
-        let advance = self.scan.advance;
-        let reposition = self.scan.reposition;
-        let DeclaredMoveKind::Drag = advance.kind;
-        let DeclaredMoveKind::Drag = reposition.kind;
-        let (from, to, duration_ms) = match motion {
-            ScanDragMotion::Advance => (advance.from, advance.to, advance.duration_ms),
-            ScanDragMotion::Corrective => (advance.to, advance.from, advance.duration_ms),
-            ScanDragMotion::Rewind => (reposition.to, reposition.from, reposition.duration_ms),
+        let input = match motion {
+            ScanDragMotion::Advance => self.moves.advance,
+            ScanDragMotion::Corrective => self.moves.corrective,
+            ScanDragMotion::Rewind => self.moves.rewind,
         };
         let index = self.drags;
         self.drags = self.drags.saturating_add(1);
         source.drag(ScanDrag {
             motion,
-            from: from.click(),
-            to: to.click(),
-            duration_ms,
+            input,
             index,
         })
+    }
+
+    /// The page a coverage viewport shows, by page-order evidence (Workflow #308 SEL-L3b): the
+    /// one declared page check that passes on it. Viewport 0 shows page 0; a later viewport
+    /// shows the page before it (the move was absorbed) or the next one. Otherwise the scan
+    /// fails `selection_scan_alignment_rejected`: `no_consistent_shift` when no page check
+    /// passes, `ambiguous_shift` when several do, `unexpected_displacement` when the one page is
+    /// another; `count` is the number of page checks that passed and `limit_count` 1.
+    fn place_page<S: ScanSource>(
+        &self,
+        source: &mut S,
+        checks: &[String],
+        previous: Option<i64>,
+        viewport_index: u32,
+    ) -> Result<i64, ContainedTaskRunError<S::Error>> {
+        let passed = source.page_checks(checks)?;
+        let failure = match passed.as_slice() {
+            [page] => {
+                let page = i64::from(*page);
+                let admitted = match previous {
+                    None => page == 0,
+                    Some(previous) => page == previous || page == previous + 1,
+                };
+                if admitted {
+                    return Ok(page);
+                }
+                ScanAlignmentFailure::UnexpectedDisplacement
+            }
+            [] => ScanAlignmentFailure::NoConsistentShift,
+            [_, _, ..] => ScanAlignmentFailure::AmbiguousShift,
+        };
+        let count = u32_of(passed.len());
+        Err(ContainedTaskError::valued(
+            ExecutionKernelCode::SelectionScanAlignmentRejected.code(),
+            |outcome| {
+                outcome
+                    .stage(ExecutionKernelLocation::SelectScanAlign)
+                    .viewport_index(viewport_index)
+                    .scan_alignment_failure(failure)
+                    .count(count)
+                    .limit_count(1_u32)
+            },
+        )
+        .into())
     }
 
     /// `Advance` (or a corrective): checks the coverage bound and the time, drags, settles.

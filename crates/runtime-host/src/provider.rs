@@ -1511,7 +1511,7 @@ fn validate_application_id(application_id: &str) -> RuntimeHostResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_device::SegmentedSwipeAction;
+    use actingcommand_device::{SegmentedDragAction, SegmentedSwipeAction};
 
     /// A scheduler-shaped step witness for driving a write method directly.
     fn step_witness() -> FencedWrite {
@@ -1595,7 +1595,7 @@ mod tests {
     struct RecordingInputBackend {
         result: DeviceResult<()>,
         calls: Arc<Mutex<Vec<&'static str>>>,
-        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedSwipeAction>>>,
+        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedDragAction>>>,
         supports_segmented_swipe: bool,
     }
 
@@ -1675,7 +1675,7 @@ mod tests {
     struct DiagnosticInputBackendFixture {
         backend: DeviceRegistryInputDiagnosticBackend,
         calls: Arc<Mutex<Vec<&'static str>>>,
-        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedSwipeAction>>>,
+        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedDragAction>>>,
     }
 
     fn diagnostic_input_backend(result: DeviceResult<()>) -> DiagnosticInputBackendFixture {
@@ -1862,7 +1862,7 @@ mod tests {
             *segmented_swipe_actions
                 .lock()
                 .expect("segmented swipe actions"),
-            [action]
+            [SegmentedDragAction::VerticalBrake(action)]
         );
     }
 
@@ -1912,7 +1912,7 @@ mod tests {
             *segmented_swipe_actions
                 .lock()
                 .expect("segmented swipe actions"),
-            [action]
+            [SegmentedDragAction::VerticalBrake(action)]
         );
     }
 

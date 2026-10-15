@@ -82,10 +82,14 @@ impl HostShared {
                 false,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #308 SEL-L3b: the drag with a pause and a brake is a segmented plan too, which
+        // the Nemu input performs as it performs the vertical-brake drag.
         if input_check.is_some()
             && !matches!(
                 action,
-                InputAction::Tap { .. } | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+                InputAction::Tap { .. }
+                    | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+                    | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
             )
         {
             return Err(RequestFailure::request(
@@ -1109,6 +1113,12 @@ fn input_execution_plan_record(
     let Some(plan) = prepared_action.segmented_swipe_plan() else {
         return Ok(None);
     };
+    // The execution plan record (`maa_2_0`) is the vertical-brake drag's. Workflow #308 SEL-L3b
+    // (register §1.58): the drag with a pause and a brake records none; its plan follows from the
+    // action, which the intent's provenance holds whole.
+    if let actingcommand_device::SegmentedDragAction::PauseAndBrake(_) = plan.action() {
+        return Ok(None);
+    }
     let events = plan
         .events()
         .iter()

@@ -9,7 +9,9 @@ use actingcommand_contract::FencedWrite;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceError, DeviceResult, InputBackend, PreparedSegmentedSwipePlan, SegmentedSwipeAction,
+    DeviceError, DeviceResult, DragWithPauseAndBrakeAction, InputBackend,
+    PreparedSegmentedSwipePlan, SegmentedDragAction, SegmentedSwipeAction,
+    prepare_drag_with_pause_and_brake,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +47,10 @@ pub enum RecordedInputAction {
     SingleTouchDragWithVerticalBrakeV1 {
         action: SegmentedSwipeAction,
     },
+    /// Workflow #308 SEL-L3b: the drag with a pause and a brake.
+    SingleTouchDragWithPauseAndBrakeV1 {
+        action: DragWithPauseAndBrakeAction,
+    },
     Key {
         key: String,
     },
@@ -62,6 +68,9 @@ impl RecordedInputAction {
             Self::Swipe { .. } => "swipe",
             Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
                 "single_touch_drag_with_vertical_brake_v1"
+            }
+            Self::SingleTouchDragWithPauseAndBrakeV1 { .. } => {
+                "single_touch_drag_with_pause_and_brake_v1"
             }
             Self::Key { .. } => "key",
             Self::Text { .. } => "text",
@@ -82,6 +91,10 @@ impl RecordedInputAction {
             } => backend.swipe(witness, *x1, *y1, *x2, *y2, *duration_ms),
             Self::SingleTouchDragWithVerticalBrakeV1 { action } => {
                 backend.segmented_swipe(witness, *action)
+            }
+            Self::SingleTouchDragWithPauseAndBrakeV1 { action } => {
+                let plan = prepare_drag_with_pause_and_brake(*action)?;
+                backend.segmented_swipe_prepared(witness, &plan)
             }
             Self::Key { key } => backend.key(witness, key),
             Self::Text { text } => backend.text(witness, text),
@@ -241,8 +254,13 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
         plan: &PreparedSegmentedSwipePlan,
     ) -> DeviceResult<()> {
         self.inner.segmented_swipe_prepared(witness, plan)?;
-        self.record(RecordedInputAction::SingleTouchDragWithVerticalBrakeV1 {
-            action: plan.action(),
+        self.record(match plan.action() {
+            SegmentedDragAction::VerticalBrake(action) => {
+                RecordedInputAction::SingleTouchDragWithVerticalBrakeV1 { action }
+            }
+            SegmentedDragAction::PauseAndBrake(action) => {
+                RecordedInputAction::SingleTouchDragWithPauseAndBrakeV1 { action }
+            }
         });
         Ok(())
     }

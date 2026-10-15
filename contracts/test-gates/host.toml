@@ -774,3 +774,12 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
 ]
 incident = ["#398", "#387 A9"]
+
+# Workflow #308 SEL-L3b (register §1.58): an input request naming single_touch_drag_with_pause_and_brake_v1 is performed through the host and its input provider as one prepared segmented plan (press, drag, the pause's hold, the brake, release); the input intent keeps the action whole in its provenance and records no execution plan (the maa_2_0 record is the vertical-brake drag's); a drag with neither a pause nor a brake breaks the action's contract (invalid_segmented_swipe_contract) and is refused before any input
+[[gate]]
+key = "84"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_308_l3b::l3b_the_host_performs_a_drag_with_a_pause_and_a_brake_as_one_prepared_plan",
+]
+incident = ["#308"]

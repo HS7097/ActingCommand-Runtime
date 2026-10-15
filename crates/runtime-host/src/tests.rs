@@ -108,6 +108,8 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+// Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
+mod gate_308_l3b;
 mod gate_336_pkgs2;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.

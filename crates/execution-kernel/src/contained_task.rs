@@ -82,6 +82,9 @@ mod gate_308_l6a;
 // Workflow #308 SEL-L3.
 #[cfg(test)]
 mod gate_308_l3;
+// Workflow #308 SEL-L3b: the horizontal axis, the held drag and the page flip of a scan.
+#[cfg(test)]
+mod gate_308_l3b;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
@@ -8774,6 +8777,70 @@ fn sampled_segmented_swipe(
     ))
 }
 
+/// Workflow #308 SEL-L3b (register §1.58): a drag between random points of `from` and `to` that
+/// holds still `pause_ms` at its end and then, with a brake, moves by `brake` (its displacement
+/// and duration) before the release: `single_touch_drag_with_pause_and_brake_v1`. The press and
+/// the drag's end are sampled as a swipe's are, with the same two sampling regions; the brake's
+/// end follows from the drag's end. Without a seed both points are their rectangles' centres.
+fn sampled_drag_with_pause_and_brake(
+    (from, to, drag_duration_ms): (ClickRect, ClickRect, u64),
+    pause_ms: u64,
+    brake: Option<((i32, i32), u64)>,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let ((x1, y1), (x2, y2), sampling) = if let Some(action_seed) = action_seed {
+        let mut state = normalized_xorshift64_state(action_seed);
+        let start = from.sample(&mut state)?;
+        let end = to.sample(&mut state)?;
+        let sampling = InputSamplingEvidence::new(
+            action_seed,
+            vec![from.sampling_region()?, to.sampling_region()?],
+        )
+        .map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+        })?;
+        (start, end, Some(sampling))
+    } else {
+        (
+            (from.x + from.width / 2, from.y + from.height / 2),
+            (to.x + to.width / 2, to.y + to.height / 2),
+            None,
+        )
+    };
+    let ((x3, y3), brake_duration_ms) = match brake {
+        Some(((dx, dy), duration_ms)) => (
+            (
+                x2.checked_add(dx).ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?,
+                y2.checked_add(dy).ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?,
+            ),
+            duration_ms,
+        ),
+        None => ((x2, y2), 0),
+    };
+    Ok((
+        InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            drag_duration_ms,
+            pause_ms,
+            x3,
+            y3,
+            brake_duration_ms,
+        },
+        sampling,
+    ))
+}
+
 fn normalized_xorshift64_state(seed: u64) -> u64 {
     if seed == 0 {
         0x9e37_79b9_7f4a_7c15
@@ -8791,7 +8858,7 @@ fn next_xorshift64(state: &mut u64) -> u64 {
     value
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 struct ClickRect {
     x: i32,
     y: i32,

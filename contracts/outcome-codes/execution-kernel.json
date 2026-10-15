@@ -2571,7 +2571,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A select step's scan session found no single shift for a frame: not exactly one consistent cluster of anchor pairs lay inside the window its motion admits (scan_alignment_failure says why; count is the pairs of the best cluster, limit_count the declared min_overlap_instances). The Runtime never guesses a second time.",
+      "description": "A select step's scan session found no single shift for a frame: not exactly one consistent cluster of anchor pairs lay inside the window its motion admits (scan_alignment_failure says why; count is the pairs of the best cluster, limit_count the declared min_overlap_instances). Under page-order evidence (Workflow #308 SEL-L3b) the shift is the page: not exactly one declared page check passed, or the one page is neither the previous viewport's nor the next (no_consistent_shift, ambiguous_shift, unexpected_displacement; count is the page checks that passed, limit_count 1). The Runtime never guesses a second time.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

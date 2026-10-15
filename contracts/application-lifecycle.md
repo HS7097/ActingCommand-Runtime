@@ -113,13 +113,13 @@ packages accept the second form; page-graph packages keep the literal `home`.
 
 ## The foreground gate
 
-Before any pointer input (`tap`, `long_tap`, `swipe`, `single_touch_drag_with_vertical_brake_v1`)
-reaches a physical instance, the host reads the foreground package through ADB and compares it
-with the instance's `application_id`. The check sits in the single input choke point
-(`HostShared::input`, after the input-frame resolution and before the input is prepared), so
-one check covers the adb and the Nemu touch backends alike, for client `Input` requests and
-for every step of a contained task. `key`, `text` and `reset` inputs and fixture instances
-are not gated.
+Before any pointer input (`tap`, `long_tap`, `swipe`, `single_touch_drag_with_vertical_brake_v1`,
+`single_touch_drag_with_pause_and_brake_v1`) reaches a physical instance, the host reads the
+foreground package through ADB and compares it with the instance's `application_id`. The check
+sits in the single input choke point (`HostShared::input`, after the input-frame resolution and
+before the input is prepared), so one check covers the adb and the Nemu touch backends alike, for
+client `Input` requests and for every step of a contained task. `key`, `text` and `reset` inputs
+and fixture instances are not gated.
 
 - Query: `adb -s <serial> shell "{ dumpsys activity activities; echo ac_dumpsys_rc=$?; } | grep -e topResumedActivity= -e ResumedActivity: -e ac_dumpsys_rc="`
   (filtered on the device; a missing or non-integer `ac_dumpsys_rc=` status and a non-zero
