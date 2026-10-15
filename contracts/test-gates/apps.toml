@@ -521,3 +521,14 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build",
 ]
 incident = ["#389 MCP-5b"]
+
+# actingctl overview and ac_overview answer the active policy catalog generation as the program fact config.catalog names it (null while none is active, invalid_fact_snapshot_record for a record that does not read back), the configuration generation actingd runs beside the one the install root selects with config_generation_mismatch when they differ, and one package_binding_unreadable per binding of the selected configuration whose path is missing (Workflow #389 MCP-9a; MCP-0 command table v1.1 §4.10; register A5)
+[[gate]]
+key = "61"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning",
+]
+incident = ["#389 MCP-9a"]

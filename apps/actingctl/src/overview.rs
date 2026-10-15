@@ -11,6 +11,14 @@
 //! the Lab tool are found from the program root and the install root as mcp-serve finds them
 //! (command table D5).
 //!
+//! Workflow #389 MCP-9a (command table §4.10) adds three blocks: `catalog`, the active policy
+//! catalog generation from the program fact `config.catalog` (null while none is active);
+//! `config_generation`, the generation the Runtime runs (`config.selection`) beside the one the
+//! install root selects now (`install\active.json`), with `config_generation_mismatch` when they
+//! differ and `package_binding_unreadable` for each binding of the selected generation that is
+//! missing or unreadable (MCP-11's read); `watchdog`, `actingctl watchdog status` read locally
+//! (null without an install root).
+//!
 //! stdout is one line, the same JSON as the `ac_overview` result, with every block whole, and
 //! the warnings as a top-level `warnings` member (D3). Only MCP cuts blocks to its output budget
 //! (`<block>_truncated`, §2.2; the order is in `mcp::observer`).
@@ -24,8 +32,9 @@ use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, FactValue, InstalledProcess,
-    InstanceId, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactScope, RuntimeFactSnapshot,
+    APPLICATION_FOREGROUND_FACT_KEY, CONFIG_CATALOG_FACT_KEY, CONFIG_SELECTION_FACT_KEY,
+    ConfigCatalog, EventActor, EventSource, FactScalar, FactValue, InstalledProcess, InstanceId,
+    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -37,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install (default all); daemon and incomplete are always answered";
+const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, catalog, config_generation, watchdog (default all); daemon and incomplete are always answered";
 /// The run window: the last 24 h.
 const RUN_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
@@ -57,15 +66,22 @@ pub(crate) enum Section {
     RunWindow,
     LabTool,
     Install,
+    // Workflow #389 MCP-9a (command table §4.10).
+    Catalog,
+    ConfigGeneration,
+    Watchdog,
 }
 
 impl Section {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::GlobalPause,
         Self::Instances,
         Self::RunWindow,
         Self::LabTool,
         Self::Install,
+        Self::Catalog,
+        Self::ConfigGeneration,
+        Self::Watchdog,
     ];
 
     /// The block's member name in the answer.
@@ -76,6 +92,9 @@ impl Section {
             Self::RunWindow => "run_window",
             Self::LabTool => "lab_tool",
             Self::Install => "install",
+            Self::Catalog => "catalog",
+            Self::ConfigGeneration => "config_generation",
+            Self::Watchdog => "watchdog",
         }
     }
 
@@ -86,21 +105,24 @@ impl Section {
             Self::RunWindow => 2,
             Self::LabTool => 3,
             Self::Install => 4,
+            Self::Catalog => 5,
+            Self::ConfigGeneration => 6,
+            Self::Watchdog => 7,
         }
     }
 }
 
 /// The blocks one overview answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sections([bool; 5]);
+pub(crate) struct Sections([bool; 8]);
 
 impl Sections {
     /// Every block: `--sections` / `sections` omitted.
-    pub(crate) const ALL: Self = Self([true; 5]);
+    pub(crate) const ALL: Self = Self([true; 8]);
 
     /// The blocks `names` names, each once or more; `None` when one of them names no block.
     pub(crate) fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
-        let mut sections = [false; 5];
+        let mut sections = [false; 8];
         for name in names {
             let section = Section::ALL
                 .into_iter()
@@ -193,12 +215,15 @@ impl Failure {
 /// The overview `request` asks for, read with `client` until `deadline`. `client` is the
 /// Runtime connection, or the `{class, outcome}` the side renders when actingd does not answer:
 /// then `daemon` is `{online: false, error}` and there is no `instances` member at all, since no
-/// answer is not an empty system.
+/// answer is not an empty system (nor a `catalog`; `config_generation` then has only what the
+/// install root selects). `envelope` writes an outcome inside a block (the watchdog's) as the
+/// side writes one.
 pub(crate) fn read(
     client: Result<&RuntimeClient, Value>,
     request: &OverviewRequest,
     place: &Place<'_>,
     deadline: Instant,
+    envelope: &dyn Fn(&Outcome) -> Value,
 ) -> Result<Overview, Failure> {
     let sections = request.sections;
     let mut warnings = Vec::new();
@@ -206,6 +231,14 @@ pub(crate) fn read(
     let install = sections
         .contains(Section::Install)
         .then(|| install_view(place, &mut warnings));
+    // Workflow #389 MCP-9a: the blocks read locally, as the install block is.
+    let selected = sections
+        .contains(Section::ConfigGeneration)
+        .then(|| selected_generation(place, &mut warnings))
+        .flatten();
+    let watchdog = sections
+        .contains(Section::Watchdog)
+        .then(|| watchdog_block(place, envelope));
     let lab_tool = sections.contains(Section::LabTool).then(|| {
         let present = place
             .install_root
@@ -222,11 +255,19 @@ pub(crate) fn read(
             );
             insert(&mut result, Section::LabTool, lab_tool);
             insert(&mut result, Section::Install, install);
+            insert(
+                &mut result,
+                Section::ConfigGeneration,
+                sections
+                    .contains(Section::ConfigGeneration)
+                    .then(|| config_generation_block(None, selected.as_ref(), &mut warnings)),
+            );
+            insert(&mut result, Section::Watchdog, watchdog);
             return Ok(Overview { result, warnings });
         }
     };
     let status = client.status().map_err(Failure::Runtime)?;
-    let selected = match &request.instance {
+    let selected_alias = match &request.instance {
         Some(selector) => Some(
             instance_selector::select(status.instances(), selector)
                 .map_err(|miss| Failure::Selector {
@@ -243,15 +284,37 @@ pub(crate) fn read(
         None
     };
     let mut incomplete = false;
+    // The program facts (Workflow #389 MCP-5b, MCP-9a): read once when a block needs them;
+    // RuntimeFactSnapshot records nothing.
+    let facts = if [
+        Section::Instances,
+        Section::Catalog,
+        Section::ConfigGeneration,
+    ]
+    .into_iter()
+    .any(|section| sections.contains(section))
+    {
+        match client.runtime_fact_snapshot() {
+            Ok(facts) => Some(facts),
+            Err(error) => {
+                warnings.push(Warning::Runtime(error));
+                incomplete = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
     let instances = window
         .filter(|_| sections.contains(Section::Instances))
         .map(|window| {
             instance_rows(
                 client,
                 &status,
-                selected,
+                selected_alias,
                 window,
                 deadline,
+                facts.as_ref(),
                 &mut warnings,
                 &mut incomplete,
             )
@@ -276,10 +339,147 @@ pub(crate) fn read(
     );
     insert(&mut result, Section::LabTool, lab_tool);
     insert(&mut result, Section::Install, install);
+    // Workflow #389 MCP-9a (command table §4.10).
+    if sections.contains(Section::Catalog)
+        && let Some(facts) = &facts
+    {
+        match catalog_block(facts) {
+            Ok(block) => insert(&mut result, Section::Catalog, Some(block)),
+            Err(outcome) => {
+                warnings.push(Warning::Outcome(outcome));
+                incomplete = true;
+            }
+        }
+    }
+    insert(
+        &mut result,
+        Section::ConfigGeneration,
+        sections
+            .contains(Section::ConfigGeneration)
+            .then(|| config_generation_block(facts.as_ref(), selected.as_ref(), &mut warnings)),
+    );
+    insert(&mut result, Section::Watchdog, watchdog);
     if incomplete {
         result.insert("incomplete".to_owned(), json!(true));
     }
     Ok(Overview { result, warnings })
+}
+
+/// The generation the install root selects now and the configuration it selects.
+struct Selected {
+    /// `None` for an install root without generations (no `install\active.json`).
+    generation: Option<u64>,
+    config: PathBuf,
+}
+
+/// The configuration generation the install root selects now, read as `actingctl packs` reads
+/// it (`install\active.json`, Workflow #389 MCP-11), and one `package_binding_unreadable` warning
+/// per binding of that configuration whose path is missing or cannot be read (command table
+/// §4.10; M-PKG §5.5: no package content is pinned, only the bound paths are checked). Without
+/// an install root there is nothing to read; a selection or configuration that cannot be read is
+/// its refusal, as a warning.
+fn selected_generation(place: &Place<'_>, warnings: &mut Vec<Warning>) -> Option<Selected> {
+    let root = place.install_root?;
+    let (installation, config) = match crate::packs::selected_config(Some(root)) {
+        Ok(selected) => selected,
+        Err(error) => {
+            warnings.push(Warning::Outcome(error.outcome()));
+            return None;
+        }
+    };
+    match crate::packs::read(
+        installation.as_ref(),
+        &config,
+        &crate::packs::Query::default(),
+    ) {
+        Ok(answer) => warnings.extend(
+            answer
+                .warnings()
+                .iter()
+                .filter(|warning| warning.is(ActingctlCode::PackageBindingUnreadable))
+                .cloned()
+                .map(Warning::Outcome),
+        ),
+        Err(error) => warnings.push(Warning::Outcome(error.outcome())),
+    }
+    Some(Selected {
+        generation: installation.map(|installation| installation.selection().generation),
+        config,
+    })
+}
+
+/// `{running?, selected?}`: the configuration generation the Runtime runs (`config.selection`,
+/// an installed Runtime only) and the one the install root selects now; when both are known and
+/// differ, the warning `config_generation_mismatch` names the selected configuration (`path`): a
+/// restart is needed for it to take effect.
+fn config_generation_block(
+    facts: Option<&RuntimeFactSnapshot>,
+    selected: Option<&Selected>,
+    warnings: &mut Vec<Warning>,
+) -> Value {
+    let running = facts.and_then(running_generation);
+    let mut block = Map::new();
+    if let Some(running) = running {
+        block.insert("running".to_owned(), json!(running));
+    }
+    if let Some(selected) = selected.and_then(|selected| selected.generation) {
+        block.insert("selected".to_owned(), json!(selected));
+    }
+    if let (Some(running), Some(selected)) = (running, selected)
+        && selected
+            .generation
+            .is_some_and(|generation| generation != running)
+    {
+        warnings.push(Warning::Outcome(
+            Outcome::new(ActingctlCode::ConfigGenerationMismatch).path(&selected.config),
+        ));
+    }
+    Value::Object(block)
+}
+
+/// The generation in the Runtime's `config.selection` row (decimal text), when it records one.
+fn running_generation(facts: &RuntimeFactSnapshot) -> Option<u64> {
+    let record = facts.records.iter().find(|record| {
+        record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_SELECTION_FACT_KEY
+    })?;
+    let FactValue::RecordList(rows) = &record.value else {
+        return None;
+    };
+    match rows.first()?.get("config_generation")? {
+        FactScalar::String(generation) => generation.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The active policy catalog generation, `config.catalog` (register A5): `{catalog_id,
+/// catalog_version, catalog_hash, activated_event_id, approval_id?, approval_disposition?,
+/// previous_catalog_id?, previous_catalog_version?}`, or null while none is active. A record
+/// that does not read back is its refusal (`invalid_fact_snapshot_record`).
+fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
+    let Some(record) = facts.records.iter().find(|record| {
+        record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_CATALOG_FACT_KEY
+    }) else {
+        return Ok(Value::Null);
+    };
+    ConfigCatalog::from_fact_record(record)
+        .map(|catalog| json!(catalog))
+        .map_err(|error| Outcome::new(error.code()))
+}
+
+/// `actingctl watchdog status` of the install root, read locally (command table §4.10): its
+/// `decision`, `attention`, `starts_24h` and `last_tick`; null without an install root.
+fn watchdog_block(place: &Place<'_>, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
+    #[cfg(windows)]
+    {
+        if let Some(root) = place.install_root {
+            return crate::watchdog::overview_block(root, envelope);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (place, envelope);
+    }
+    Value::Null
 }
 
 fn insert(result: &mut Map<String, Value>, section: Section, block: Option<Value>) {
@@ -301,27 +501,19 @@ fn now_unix_ms() -> Result<u64, Failure> {
 /// the foreground package it last reported and its newest run first recorded since `window`. A
 /// monitor, program fact or run read that fails leaves a warning and marks the overview
 /// incomplete; a run read past the deadline is not started.
+#[allow(clippy::too_many_arguments)]
 fn instance_rows(
     client: &RuntimeClient,
     status: &RuntimeControlPlaneStatus,
     selected: Option<&str>,
     window: u64,
     deadline: Instant,
+    facts: Option<&RuntimeFactSnapshot>,
     warnings: &mut Vec<Warning>,
     incomplete: &mut bool,
 ) -> Value {
     let monitors = match client.monitor_status() {
         Ok(monitors) => Some(monitors),
-        Err(error) => {
-            warnings.push(Warning::Runtime(error));
-            *incomplete = true;
-            None
-        }
-    };
-    // Workflow #389 MCP-5b (MCP-0 command table v1.1 §4.6, D10, ruling Q7): the program facts,
-    // read once for every row; RuntimeFactSnapshot records nothing.
-    let facts = match client.runtime_fact_snapshot() {
-        Ok(facts) => Some(facts),
         Err(error) => {
             warnings.push(Warning::Runtime(error));
             *incomplete = true;
@@ -341,9 +533,8 @@ fn instance_rows(
                 .find(|monitor| monitor.instance_alias() == instance.instance_alias())
         });
         let mut row = instance_row(instance, monitor);
-        if let Some(foreground) = facts
-            .as_ref()
-            .and_then(|facts| foreground(facts, instance.instance_id()))
+        // Workflow #389 MCP-5b (MCP-0 command table v1.1 §4.6, D10, ruling Q7).
+        if let Some(foreground) = facts.and_then(|facts| foreground(facts, instance.instance_id()))
         {
             row["foreground"] = foreground;
         }
@@ -550,7 +741,8 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
         Ok(client) => Ok(client),
         Err(error) => Err(daemon_error(error, &state_root, detail)),
     };
-    let overview = read(connection, &request, &place, deadline)?;
+    let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, detail);
+    let overview = read(connection, &request, &place, deadline, &envelope)?;
     let mut members = overview.result;
     if !overview.warnings.is_empty() {
         let warnings = overview
@@ -666,4 +858,230 @@ fn parse(arguments: &[OsString]) -> Result<(PathBuf, Option<PathBuf>, OverviewRe
         root.map(PathBuf::from),
         OverviewRequest { instance, sections },
     ))
+}
+
+// Test-only: Workflow #389 MCP-9a (MCP-0 command table v1.1 §4.10; register A5), the catalog and
+// configuration generation blocks of the overview and the binding lines.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actingcommand_contract::codes::SanitizationCode;
+    use actingcommand_contract::outcome::Category;
+    use actingcommand_contract::{
+        ApprovalDisposition, ConfigSelection, OriginModule, RuntimeFactRecord,
+    };
+    use tempfile::TempDir;
+
+    fn facts(records: Vec<RuntimeFactRecord>) -> RuntimeFactSnapshot {
+        RuntimeFactSnapshot {
+            schema_version: "neutral".to_owned(),
+            ledger_position: 1,
+            taken_at_unix_ms: 1,
+            snapshot_id: 1,
+            part: 1,
+            parts: 1,
+            records,
+        }
+    }
+
+    fn outcomes(warnings: &[Warning]) -> Vec<Outcome> {
+        warnings
+            .iter()
+            .map(|warning| match warning {
+                Warning::Outcome(outcome) => outcome.clone(),
+                Warning::Runtime(error) => panic!("a Runtime warning: {}", error.outcome()),
+            })
+            .collect()
+    }
+
+    // Register A5: the catalog block is the active generation as `config.catalog` names it, its
+    // versions as numbers and each optional member only when present; null while no generation
+    // is active; a record that does not read back is refused (invalid_fact_snapshot_record).
+    #[test]
+    fn mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable() {
+        let hash = format!("sha256:{}", "a".repeat(64));
+        let event = "evt_0123456789abcdef0123456789abcdef";
+        let active = ConfigCatalog {
+            catalog_id: "neutral.catalog".to_owned(),
+            catalog_version: 3,
+            catalog_hash: hash.clone(),
+            activated_event_id: event.to_owned(),
+            approval_id: Some("approval:neutral".to_owned()),
+            approval_disposition: Some(ApprovalDisposition::Approved),
+            previous_catalog_id: Some("neutral.catalog".to_owned()),
+            previous_catalog_version: Some(2),
+        };
+        let block = |catalog: &ConfigCatalog| {
+            catalog_block(&facts(vec![
+                catalog.to_fact_record(1, OriginModule::Policy),
+            ]))
+            .expect("the catalog block")
+        };
+        assert_eq!(
+            block(&active),
+            json!({
+                "catalog_id": "neutral.catalog",
+                "catalog_version": 3,
+                "catalog_hash": hash,
+                "activated_event_id": event,
+                "approval_id": "approval:neutral",
+                "approval_disposition": "approved",
+                "previous_catalog_id": "neutral.catalog",
+                "previous_catalog_version": 2,
+            })
+        );
+        let first = ConfigCatalog {
+            approval_id: None,
+            approval_disposition: None,
+            previous_catalog_id: None,
+            previous_catalog_version: None,
+            ..active
+        };
+        assert_eq!(
+            block(&first),
+            json!({
+                "catalog_id": "neutral.catalog",
+                "catalog_version": 3,
+                "catalog_hash": hash,
+                "activated_event_id": event,
+            })
+        );
+        assert_eq!(
+            catalog_block(&facts(Vec::new())).expect("no active generation"),
+            Value::Null
+        );
+        let unreadable = RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONFIG_CATALOG_FACT_KEY.to_owned(),
+            value: FactValue::String("neutral".to_owned()),
+            observed_at_unix_ms: 1,
+            source: OriginModule::Policy,
+            ttl_ms: None,
+        };
+        let refusal = catalog_block(&facts(vec![unreadable])).expect_err("an unreadable record");
+        assert!(
+            refusal.is(SanitizationCode::InvalidFactSnapshotRecord),
+            "{refusal}"
+        );
+    }
+
+    // §4.10: config_generation names the generation actingd runs (`config.selection`) and the
+    // one the install root selects now; when both are known and differ, the warning
+    // config_generation_mismatch names the selected configuration (`path`); otherwise there is
+    // no warning.
+    #[test]
+    fn mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ() {
+        let running = |generation: u64| {
+            facts(vec![
+                ConfigSelection {
+                    config_generation: Some(generation),
+                    config_sha256: format!("sha256:{}", "b".repeat(64)),
+                    defaults_sha256: format!("sha256:{}", "c".repeat(64)),
+                }
+                .to_fact_record(1, OriginModule::Runtime),
+            ])
+        };
+        let selected = Selected {
+            generation: Some(2),
+            config: PathBuf::from("neutral-install").join("actingd.config.json"),
+        };
+        let without_generation = Selected {
+            generation: None,
+            config: selected.config.clone(),
+        };
+        let cases = [
+            (
+                Some(running(1)),
+                &selected,
+                json!({"running": 1, "selected": 2}),
+                true,
+            ),
+            (
+                Some(running(2)),
+                &selected,
+                json!({"running": 2, "selected": 2}),
+                false,
+            ),
+            (None, &selected, json!({"selected": 2}), false),
+            (
+                Some(running(1)),
+                &without_generation,
+                json!({"running": 1}),
+                false,
+            ),
+        ];
+        for (facts, selected, block, mismatch) in cases {
+            let mut warnings = Vec::new();
+            assert_eq!(
+                config_generation_block(facts.as_ref(), Some(selected), &mut warnings),
+                block
+            );
+            let warnings = outcomes(&warnings);
+            if mismatch {
+                assert!(
+                    matches!(
+                        warnings.as_slice(),
+                        [warning] if warning.is(ActingctlCode::ConfigGenerationMismatch)
+                            && warning.category() == Category::Warning
+                            && warning.value("path").is_some()
+                    ),
+                    "{block}: {warnings:?}"
+                );
+            } else {
+                assert!(warnings.is_empty(), "{block}: {warnings:?}");
+            }
+        }
+    }
+
+    // §4.10, M-PKG §5.5: each binding of the selected configuration whose path is missing is one
+    // package_binding_unreadable naming its instance; a readable binding gives none; an install
+    // root without generations selects none.
+    #[test]
+    fn mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning() {
+        let root = TempDir::new().expect("tempdir");
+        let package = root.path().join("packages").join("startup-a");
+        fs::create_dir_all(&package).expect("create the package folder");
+        fs::write(
+            package.join("control.json"),
+            json!({"package_id": "neutral.startup"}).to_string(),
+        )
+        .expect("write control.json");
+        fs::write(
+            root.path().join("actingd.config.json"),
+            json!({
+                "instances": [
+                    {
+                        "alias": "node-a",
+                        "instance_id": "neutral-a",
+                        "startup_package": {"package": "packages/startup-a"},
+                    },
+                    {
+                        "alias": "node-b",
+                        "instance_id": "neutral-b",
+                        "startup_package": {"package": "packages/startup-missing"},
+                    },
+                ],
+            })
+            .to_string(),
+        )
+        .expect("write the configuration");
+        let place = Place {
+            root: None,
+            install_root: Some(root.path()),
+            state_root: None,
+        };
+        let mut warnings = Vec::new();
+        let selected =
+            selected_generation(&place, &mut warnings).expect("the selected configuration");
+        assert_eq!(selected.generation, None);
+        let warnings = outcomes(&warnings);
+        assert!(
+            matches!(
+                warnings.as_slice(),
+                [warning] if warning.is(ActingctlCode::PackageBindingUnreadable)
+                    && warning.value("alias") == Some(&json!("node-b"))
+            ),
+            "{warnings:?}"
+        );
+    }
 }

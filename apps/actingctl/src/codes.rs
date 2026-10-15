@@ -121,6 +121,9 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #389 MCP-11: `packs` / `ac_packs`.
         PackageBindingUnreadable => "package_binding_unreadable": warning / none,
         // ---- end of MCP-11
+        // ---- Workflow #389 MCP-9a: `overview` / `ac_overview` (command table §4.10).
+        ConfigGenerationMismatch => "config_generation_mismatch": warning / none,
+        // ---- end of MCP-9a
         // ---- Workflow #389 MCP-14: `codes` / `ac_outcome_code` (command table §4.15).
         OutcomeCodesReported => "outcome_codes_reported": success / none,
         OutcomeCodeUnknown => "outcome_code_unknown": error / none,

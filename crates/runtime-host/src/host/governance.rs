@@ -36,45 +36,51 @@ impl HostShared {
                 None,
             ));
         }
-        let _gate = lock(
-            &self.governance_write_gate,
-            ContractLocation::RecordApprovalDecision,
-        )
-        .map_err(RequestFailure::poison_without_terminal)?;
-        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+        let persisted = {
+            let _gate = lock(
+                &self.governance_write_gate,
+                ContractLocation::RecordApprovalDecision,
+            )
             .map_err(RequestFailure::poison_without_terminal)?;
-        if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
-            let EventPayload::Approval(ApprovalPayload::Decision(payload)) = existing.payload()
-            else {
-                return Err(RequestFailure::poison_without_terminal(
-                    RuntimeHostError::fatal(
-                        HostCode::ApprovalReplayPayloadMismatch,
+            let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+                .map_err(RequestFailure::poison_without_terminal)?;
+            if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
+                let EventPayload::Approval(ApprovalPayload::Decision(payload)) = existing.payload()
+                else {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            HostCode::ApprovalReplayPayloadMismatch,
+                            ContractLocation::RecordApprovalDecision,
+                            RuntimeErrorCode::RuntimeHalted,
+                        ),
+                    ));
+                };
+                if payload.decision() != decision {
+                    return Err(client_fact_conflict(
+                        HostCode::ApprovalReplayConflict,
                         ContractLocation::RecordApprovalDecision,
-                        RuntimeErrorCode::RuntimeHalted,
-                    ),
-                ));
-            };
-            if payload.decision() != decision {
-                return Err(client_fact_conflict(
-                    HostCode::ApprovalReplayConflict,
-                    ContractLocation::RecordApprovalDecision,
-                ));
+                    ));
+                }
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: Some(terminal(&existing)),
+                    result: RuntimeResult::ApprovalDecisionRecorded {
+                        approval_id: decision.approval_id().to_owned(),
+                        disposition: decision.disposition(),
+                    },
+                    failure_outcome: None,
+                });
             }
-            return Ok(OperationSuccess {
-                state: RuntimeReceiptState::Completed,
-                terminal: Some(terminal(&existing)),
-                result: RuntimeResult::ApprovalDecisionRecorded {
-                    approval_id: decision.approval_id().to_owned(),
-                    disposition: decision.disposition(),
-                },
-                failure_outcome: None,
-            });
-        }
-        let persisted = self.append_approval_decision(
-            &approvals,
-            validated.event_links(None, None, None),
-            decision,
-        )?;
+            self.append_approval_decision(
+                &approvals,
+                validated.event_links(None, None, None),
+                decision,
+            )?
+        };
+        // Workflow #389 MCP-9a (register A5): the decision may be about the active catalog
+        // generation; `config.catalog` follows it, once the governance write gate is released.
+        self.record_config_catalog()
+            .map_err(|error| RequestFailure::poison(error, Some(terminal(&persisted))))?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&persisted)),
@@ -101,7 +107,9 @@ impl HostShared {
             return Err(error);
         }
         match self.transcribe_under_gate(decision) {
-            Ok(_) => Ok(()),
+            // Workflow #389 MCP-9a (register A5): `config.catalog` follows the decision, once the
+            // governance write gate is released.
+            Ok(_) => self.record_config_catalog(),
             Err(failure) => {
                 if failure.poison_runtime {
                     self.fatal.mark((*failure.error).clone())?;
