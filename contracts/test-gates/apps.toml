@@ -16,10 +16,7 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::fixture_backend_rejects_device_fields",
     "actingcommand-actingd::process::invalid_startup_returns_nonzero",
     "actingcommand-actingd::process::policy_configuration_is_refused_before_any_catalog_record",
-    "actingcommand-actingd::process::actingd_rejects_explicit_fixture_simulation_on_a_physical_registry",
-    "actingcommand-actingd::process::actingd_requires_package_path_for_each_explicit_scheduled_mode",
-    "actingcommand-actingd::process::actingd_rejects_unknown_scheduled_execution_mode",
-    "actingcommand-actingd::process::policy_startup_rejects_approval_ids_that_do_not_match_the_catalog",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_382_a6::gate_start_refusals_name_their_code_and_stage_before_the_runtime_host_starts",
 ]
 incident = []
 
@@ -30,7 +27,7 @@ coverage = "Y"
 tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::mixed_registry_keeps_device_and_fixture_modes_explicit_per_instance",
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::fixture_backend_is_device_free_and_has_a_bounded_input_budget",
-    "actingcommand-actingd::process::actingd_rejects_explicit_fixture_simulation_on_a_physical_registry",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_382_a6::gate_start_refusals_name_their_code_and_stage_before_the_runtime_host_starts",
 ]
 incident = []
 
@@ -363,6 +360,69 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
 ]
 incident = ["#389 MCP-14"]
+
+# actingd's subcommand arguments: unlock-owner, suspended and ledger-maintenance refuse a malformed argument list with its registered code and exit 1; --install-held is taken only right after --config and bounded at 600 s (Workflow #382 A-1 G9; the registry half is #378 A2a)
+[[gate]]
+key = "12"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_install_held_is_taken_only_after_config_and_bounded_at_600_s",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_a2a::gate_ledger_maintenance_and_install_held_refusals_carry_registered_error_codes",
+]
+incident = ["#382 A-1 G9"]
+
+# actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck, install-transition and monitor-set parse to their commands, and a usage error is actingctl_usage_invalid with exit 1 before any connection (Workflow #382 A-1 G10)
+[[gate]]
+key = "13"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_documented_forms_parse_to_their_commands",
+    "actingcommand-actingctl::gate::cli_grammar::gate_a_usage_error_of_these_subcommands_is_reported_before_any_connection",
+    "actingcommand-actingctl::gate::cli_grammar::gate_an_empty_instance_alias_is_a_usage_error_not_a_global_scope",
+]
+incident = ["#382 A-1 G10"]
+
+# A request the Runtime refuses exits 1 with the refused receipt's outcome as the one result line (Workflow #382 A-1 G10)
+[[gate]]
+key = "15"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::cli_grammar::gate_a_refused_request_of_these_subcommands_exits_1_with_the_receipts_outcome",
+]
+incident = ["#382 A-1 G10"]
+
+# request-shutdown --wait waits for the exact owner epoch's close and its process's exit; another epoch's close never counts, and past its time it is shutdown_wait_timeout with the last state seen (Workflow #382 A-1 G11, injected poller and clock)
+[[gate]]
+key = "18"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_the_wait_completes_when_the_target_epoch_closed_and_its_process_exited",
+    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_another_epochs_close_does_not_end_the_wait_which_times_out_with_the_last_state",
+    "actingcommand-actingctl::bin:actingctl::gate_382_a1::gate_a_closed_epoch_whose_process_outlives_the_wait_times_out_with_the_last_state",
+]
+incident = ["#382 A-1 G11"]
+
+# actingwatch: while acsetup holds the writer lock it exits 0 and runs nothing; a misplaced program, a root without its watchdog directory, a lock it cannot probe and a fixed entry it cannot run each exit 1, the last one logged with its code (Workflow #382 A-1 G13)
+[[gate]]
+key = "27"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_while_the_writer_lock_is_held_the_launcher_exits_0_and_runs_nothing",
+    "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_misplaced_program_a_root_without_watchdog_directory_and_an_unprobed_lock_exit_1",
+    "actingcommand-actingctl::bin:actingwatch::gate_382_a1_launcher::gate_a_fixed_entry_that_cannot_run_is_logged_with_its_code_and_exits_1",
+]
+incident = ["#382 A-1 G13"]
+
+# vision-provider-check gives each vision root the code actingd check-config refuses it with: a missing root vision_root_unavailable, an empty models folder vision_models_empty, a folder that breaks the rule vision_model_folder_invalid, and a valid OCR folder passes both (Workflow #382 A-1 G15; the roots and codes are tests/support/vision_folders.rs)
+[[gate]]
+key = "39"
+coverage = "Y"
+tests = [
+    "actingcommand-vision-provider-check::bin:actingcommand-vision-provider-check::gate_382_a1::gate_the_model_folder_report_gives_each_vision_root_its_code",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a1::gate_check_config_refuses_each_vision_root_with_the_model_folder_reports_code",
+]
+incident = ["#382 A-1 G15"]
 
 # Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-5, TU-6, TU-7): actinglab's Runtime connections bind the Lab channel with the envelope (Lab, Lab) and record the --via it was given; --via takes mcp or ui only; an MCP option tool starts actinglab with --via mcp; actingd reads the two Lab options once and reports them in config.parameters.top_level, false when absent, never settable
 [[gate]]
