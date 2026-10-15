@@ -2689,12 +2689,9 @@ fn remove_unchanged_stale_lock(
     observed: &PublicationLockRecord,
     reclaimer_token: &str,
 ) -> LabResult<bool> {
-    let Some(current) = read_lock_record_if_present(path)? else {
+    let Some(_current) = read_lock_record_if_present(path)? else {
         return Ok(false);
     };
-    if current != *observed {
-        return Ok(false);
-    }
     let tombstone = path.with_extension(format!("reclaim-{reclaimer_token}"));
     match fs::rename(path, &tombstone) {
         Ok(()) => {}
