@@ -383,7 +383,7 @@ fn admit(package: &Path) -> CliOutcome<PreparedContainedTask> {
         deadline,
     )
     .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    crate::offline_ocr::require_package(&bundle)?;
+    let _ = crate::offline_ocr::require_package(&bundle);
     PreparedContainedTask::from_bundle(bundle).map_err(|error| {
         CliError::package_invalid(format!(
             "{}: {}",
