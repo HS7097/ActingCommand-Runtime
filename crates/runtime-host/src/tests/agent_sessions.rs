@@ -2,7 +2,10 @@
 
 use super::*;
 
+// Test plan v2.2 §4 #15: a child-process entry, not a test; its parent runs it with
+// `--ignored --exact`.
 #[test]
+#[ignore]
 fn agent_dispatcher_sidecar_child_process() {
     let Ok(root) = std::env::var("ACTINGCOMMAND_AGENT_SIDECAR_ROOT") else {
         return;
@@ -138,6 +141,7 @@ fn detachable_agent_sidecar_recovers_and_escalates_without_device_authority() {
     );
     let start = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::agent_sessions::agent_dispatcher_sidecar_child_process",
             "--nocapture",
@@ -168,6 +172,7 @@ fn detachable_agent_sidecar_recovers_and_escalates_without_device_authority() {
     .expect("recovered runtime host");
     let resume = Command::new(std::env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "tests::agent_sessions::agent_dispatcher_sidecar_child_process",
             "--nocapture",
