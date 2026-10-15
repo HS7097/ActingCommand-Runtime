@@ -2937,7 +2937,7 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "capability_gap_recorded": {
+    "actingctl_capability_gap_recorded": {
       "category": "success",
       "ladder_class": "none",
       "owner": "actingctl",
@@ -2951,7 +2951,7 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "capability_gap_write_failed": {
+    "actingctl_capability_gap_write_failed": {
       "category": "error",
       "ladder_class": "none",
       "owner": "actingctl",
