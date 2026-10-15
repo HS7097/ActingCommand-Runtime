@@ -1337,7 +1337,9 @@ impl RuntimeClient {
                     action: completed_action,
                     ..
                 },
-            ) if completed_alias == instance_alias && *completed_action == action => {
+            ) if completed_alias == instance_alias
+                && (*completed_action == action || action == EmulatorInstanceAction::Restart) =>
+            {
                 Ok(result.clone())
             }
             _ => Err(self.unexpected_result(ContractLocation::ControlEmulatorInstance.location())),
