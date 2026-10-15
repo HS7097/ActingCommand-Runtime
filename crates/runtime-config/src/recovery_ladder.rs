@@ -191,7 +191,7 @@ impl StartBeyondProfile {
     /// start beyond a profile).
     pub fn start_rung(self, start_rung: usize, rung_count: usize) -> usize {
         match self {
-            Self::LastRung => start_rung.min(rung_count),
+            Self::LastRung => start_rung.max(rung_count.min(1)),
             Self::Exhaust | Self::Refuse => start_rung,
         }
     }
