@@ -441,6 +441,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             PerformanceSummaryEventData {
                 context: performance_context,
                 foreground: None,
+                pacing: None,
                 owned_processes: Vec::new(),
                 third_party_high_load: Vec::new(),
                 ledger_commits: None,
@@ -3457,6 +3458,7 @@ fn revision_3_records() -> Vec<(EventPayloadDraft, EventType, Option<crate::outc
                 PerformanceSummaryEventData {
                     context: PerformanceContext::unavailable(1_752_147_201_000),
                     foreground: None,
+                    pacing: None,
                     owned_processes: Vec::new(),
                     third_party_high_load: Vec::new(),
                     ledger_commits: None,

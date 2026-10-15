@@ -302,7 +302,6 @@ fn d2s2_t9_a_binding_to_a_package_that_is_no_reader_is_invalid() {
 fn run_reading_package(
     host: &RuntimeHost,
     package: &Path,
-    bytes: &[u8],
 ) -> (RuntimeReceipt, actingcommand_contract::CorrelationId) {
     let mut client = TestClient::connect(host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
@@ -312,11 +311,7 @@ fn run_reading_package(
         RuntimeOperation::run_contained_task(
             READING_ALIAS,
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(
-                package.display().to_string(),
-                actingcommand_pack_containment::Sha256Hash::digest(bytes).to_string(),
-            )
-            .expect("reading task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("reading task request"),
         ),
     );
     (client.send(&request), correlation_id)
@@ -380,7 +375,7 @@ fn d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record() {
     )
     .expect("runtime host");
 
-    let (receipt, _) = run_reading_package(&host, &package, &bytes);
+    let (receipt, _) = run_reading_package(&host, &package);
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Completed,
@@ -419,7 +414,7 @@ fn d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record() {
         .transition_capture_after_inputs
         .store(2, Ordering::Release);
     provider.terminal_low.store(true, Ordering::Release);
-    let (receipt, correlation_id) = run_reading_package(&host, &package, &bytes);
+    let (receipt, correlation_id) = run_reading_package(&host, &package);
     assert_eq!(
         receipt.state(),
         RuntimeReceiptState::Completed,

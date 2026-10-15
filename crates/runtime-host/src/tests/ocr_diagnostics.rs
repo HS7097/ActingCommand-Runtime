@@ -13,7 +13,6 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
     let package = root.path().join("post-admission-ocr-failure.zip");
     let bytes = neutral_post_admission_ocr_contained_task_package(true);
     fs::write(&package, &bytes).expect("write OCR package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     let vision_provider = Arc::new(FakeVisionProvider {
@@ -37,8 +36,7 @@ fn post_admission_ocr_failure_persists_one_private_formally_bound_diagnostic() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("OCR task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("OCR task request"),
         ),
     );
     let request_id = request.request_id();
@@ -245,7 +243,6 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
         .join("post-admission-ocr-persistence-failure.zip");
     let bytes = neutral_post_admission_ocr_contained_task_package(true);
     fs::write(&package, &bytes).expect("write OCR package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     let vision_provider = Arc::new(FakeVisionProvider {
@@ -270,8 +267,7 @@ fn post_admission_ocr_failure_diagnostic_persistence_failure_is_fatal_and_preser
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("OCR task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("OCR task request"),
         ),
     );
 
@@ -384,7 +380,6 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             _ => neutral_contained_task_package(true),
         };
         fs::write(&package, &bytes).expect("write task package");
-        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         match case {
@@ -414,8 +409,7 @@ fn post_admission_ocr_failure_diagnostic_is_absent_for_success_and_other_task_er
             RuntimeOperation::run_contained_task(
                 "neutral.instance",
                 client.ids.mint_holder_id().expect("holder"),
-                ContainedTaskRequest::new(package.display().to_string(), expected)
-                    .expect("task request"),
+                ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
             ),
         );
 

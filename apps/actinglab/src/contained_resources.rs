@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Production semantic commands admit resources only through a contained in-memory bundle.
-//! Workflow #336 PKG-S1: the given reference is recorded and compared with nothing.
+//! Workflow #336 PKG-S4 (option 丙): a package is named by its path only; no reference or
+//! digest is taken, and admission is structural.
 
 use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, parse_navigation_graph_value};
 use actingcommand_contract::{ContainedTaskRequest, PackageRef};
 use actingcommand_lab::ExternallyVerifiedBundle;
-use actingcommand_pack_containment::{ContainmentLimits, Sha256Hash};
+use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use actingcommand_resource_tooling::{PublishedPackageReader, open_published_package};
@@ -202,7 +203,9 @@ fn multi_destination_operations(
 /// Runtime's, when it has one.
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
     let vision_provider = super::offline_ocr::lab_ocr().provider();
-    if flags.optional("--package-ref").is_some() {
+    // `--package <path>`: the path chooses the reading (a directory, a `.json` or a `.zip`
+    // container, an assembled ZIP); `--zip <path>`: a published assembled `.zip`.
+    if flags.optional("--package").is_some() {
         let input = PackageInput::open(flags)?;
         let deadline = std::time::Instant::now()
             .checked_add(std::time::Duration::from_millis(
@@ -213,7 +216,7 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
         let admitted = ExternallyVerifiedBundle::load_path(
             &instance,
             input.path(),
-            &input.reference,
+            &PackageRef::default(),
             false,
             vision_provider,
             deadline,
@@ -224,7 +227,7 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     }
     let logical_zip = explicit_path(flags, "--zip")?;
     let zip = open_published_package(&logical_zip)?;
-    let expected = explicit_hash(flags)?;
+    let recorded = PackageRef::default();
     let metadata = zip.metadata()?;
     let limit = ContainmentLimits::default().max_compressed_bytes;
     if metadata.len() > limit {
@@ -238,9 +241,9 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
     let instance = format!("semantic_{}", command.replace('-', "_"));
     match vision_provider {
         Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
-            &instance, &bytes, &expected, provider,
+            &instance, &bytes, &recorded, provider,
         ),
-        None => ExternallyVerifiedBundle::load(&instance, &bytes, &expected),
+        None => ExternallyVerifiedBundle::load(&instance, &bytes, &recorded),
     }
     .map(Arc::new)
     .map_err(|error| CliError::package_invalid(error.to_string()))
@@ -248,77 +251,38 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
 
 /// Retains the existing publication pin for ZIP material throughout an RPC.
 /// Source directories are located here and verified exclusively by containment.
+/// Workflow #336 PKG-S4 (option 丙): the package by its path only. `--package <path>` is read as
+/// its path chooses; `--zip <path>` is a published `.zip`, whose publication generation stays
+/// referenced until `close`. No reference or digest is taken.
 pub(super) struct PackageInput {
-    pub reference: PackageRef,
     path: PathBuf,
     reader: Option<PublishedPackageReader>,
 }
 
 impl PackageInput {
-    pub fn declared_reference(flags: &FlagArgs) -> CliOutcome<PackageRef> {
-        let source = flags.optional("--package-ref");
-        if source.is_some() && flags.optional("--expected-sha256").is_some() {
-            return Err(CliError::usage("provide one package reference"));
-        }
-        match source {
-            Some(value) => PackageRef::parse_argument(&value)
-                .map_err(|error| CliError::package_invalid(error.to_string())),
-            None => explicit_hash(flags),
-        }
-    }
-
     pub fn open(flags: &FlagArgs) -> CliOutcome<Self> {
-        // Locator validation owns the pre-capture loose-resource rejection.
-        explicit_path(
-            flags,
-            if flags.optional("--package").is_some() {
-                "--package"
-            } else {
-                "--zip"
-            },
-        )?;
-        Self::open_declared(flags, Self::declared_reference(flags)?)
-    }
-
-    pub fn open_declared(flags: &FlagArgs, reference: PackageRef) -> CliOutcome<Self> {
-        reference
-            .validate()
-            .map_err(|error| CliError::package_invalid(error.to_string()))?;
         if flags.optional("--package").is_some() && flags.optional("--zip").is_some() {
             return Err(CliError::usage("provide one package locator"));
         }
-        let logical = explicit_path(
-            flags,
-            if flags.optional("--package").is_some() {
-                "--package"
-            } else {
-                "--zip"
-            },
-        )?;
-        let reader = match &reference {
-            PackageRef::LegacyZipSha256(_) => Some(open_published_package(&logical)?),
-            PackageRef::GitSourceTree(_) | PackageRef::ContentDirectory(_) => None,
-        };
-        let located = reader
-            .as_ref()
-            .map(|reader| reader.path())
-            .unwrap_or(&logical);
-        let path = if reader.is_some() {
-            located
-                .canonicalize()
-                .map_err(|error| CliError::package_invalid(error.to_string()))?
-        } else if located.is_absolute() {
-            located.to_path_buf()
+        let published = flags.optional("--package").is_none();
+        // Locator validation owns the pre-capture loose-resource rejection.
+        let logical = explicit_path(flags, if published { "--zip" } else { "--package" })?;
+        let reader = if published {
+            Some(open_published_package(&logical)?)
         } else {
-            std::env::current_dir()
-                .map_err(|error| CliError::package_invalid(error.to_string()))?
-                .join(located)
+            None
         };
-        Ok(Self {
-            reference,
-            path,
-            reader,
-        })
+        let path = match &reader {
+            Some(reader) => reader
+                .path()
+                .canonicalize()
+                .map_err(|error| CliError::package_invalid(error.to_string()))?,
+            None if logical.is_absolute() => logical,
+            None => std::env::current_dir()
+                .map_err(|error| CliError::package_invalid(error.to_string()))?
+                .join(logical),
+        };
+        Ok(Self { path, reader })
     }
 
     pub fn path(&self) -> &std::path::Path {
@@ -361,28 +325,12 @@ pub(super) fn navigation_graph(
 pub(super) fn explicit_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
     match flags.optional(name) {
         None => Err(CliError::package_invalid(format!(
-            "semantic commands require {name} <package> and --expected-sha256 <hash>; loose resource roots are not executable"
+            "semantic commands require {name} <package>; loose resource roots are not executable"
         ))),
         Some(value) if value == "true" => Err(CliError::usage(format!(
             "{name} requires an explicit package path"
         ))),
         Some(value) => Ok(PathBuf::from(value)),
-    }
-}
-
-/// The `--expected-sha256` ZIP reference, in canonical lowercase form. Workflow #336 PKG-S1:
-/// it is recorded and compared with nothing; PKG-S4 removes the flag.
-pub(super) fn explicit_hash(flags: &FlagArgs) -> CliOutcome<PackageRef> {
-    match flags.optional("--expected-sha256") {
-        None => Err(CliError::package_invalid(
-            "semantic commands require externally supplied --expected-sha256 <hash>",
-        )),
-        Some(value) if value == "true" => Err(CliError::usage(
-            "--expected-sha256 requires an explicit SHA-256 value",
-        )),
-        Some(value) => Sha256Hash::parse_hex(&value)
-            .map(|hash| PackageRef::LegacyZipSha256(hash.to_string()))
-            .map_err(|error| CliError::package_invalid(error.to_string())),
     }
 }
 

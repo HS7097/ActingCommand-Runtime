@@ -14,7 +14,6 @@ fn package_family_exposes_typed_requests_and_responses() {
     let _validate = PackageValidateRequest {
         zip_path: PathBuf::from("bundle.zip"),
         include_entries: false,
-        expected_input_sha256: None,
     };
     let _digest = PackageDigestRequest {
         package: PathBuf::from("packs/task"),
@@ -332,8 +331,7 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
         .read_all()
         .unwrap();
     admit(&bytes).expect("Runtime phased admission");
-    actingcommand_lab::validate_lab_package_bytes("phased", &bytes, &recorded(&bytes))
-        .expect("Lab phased admission");
+    actingcommand_lab::validate_lab_package_bytes("phased", &bytes).expect("Lab phased admission");
     let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
     let mut control = String::new();
     archive
@@ -371,12 +369,8 @@ fn explicit_postcondition_budget_source_and_runtime_admission_agree() {
         let changed = output.finish().unwrap().into_inner();
         assert!(admit(&changed).is_err(), "{changed_field}");
         assert!(
-            actingcommand_lab::validate_lab_package_bytes(
-                "changed-phase-control",
-                &changed,
-                &recorded(&changed)
-            )
-            .is_err(),
+            actingcommand_lab::validate_lab_package_bytes("changed-phase-control", &changed)
+                .is_err(),
             "{changed_field}"
         );
     }

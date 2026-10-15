@@ -11,7 +11,6 @@ fn task_end_keeps_instance_session_until_host_close() {
     let package = root.path().join("resource-close-order-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -27,8 +26,7 @@ fn task_end_keeps_instance_session_until_host_close() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
 
@@ -411,7 +409,6 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         let package = root.path().join("unconfirmed-resource-close-task.zip");
         let bytes = neutral_contained_task_package(true);
         fs::write(&package, &bytes).expect("write package");
-        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         state
@@ -449,8 +446,7 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
         let request = client.request(RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ));
         // Workflow #191 H: the task end keeps the session; the teardown is the operator's
         // explicit reconnect, which closes the kept session first.

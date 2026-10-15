@@ -1018,7 +1018,7 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
 /// are stand-ins, actingctl itself, which refuses their arguments as usage: it prints its one
 /// result line, the refusal `{outcome}`, and exits 1 (Workflow #378 A5, model §7.3):
 /// `<slot>\runtime\actingcommand-actingd.exe` (actingd suspended, actingd check-config) and
-/// `<root>\tools\actinglab.exe` (the Lab tools, ac_run_pack's package digest). A stand-in that
+/// `<root>\tools\actinglab.exe` (the Lab tools). A stand-in that
 /// ran leaves its exit code 1 in the answer: ac_diagnose's report status is `failed` with
 /// `suspended_report_failed` and `exit_code`, ac_binding_draft's check_config has `exit_code`. A
 /// program that is not there leaves no exit code (a spawn failure).
@@ -1027,9 +1027,10 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
 /// slot B. Each tool answers the generation selected now: ac_diagnose and ac_binding_draft's
 /// check-config run slot B's program (with the start generation they would find none in slot A
 /// and answer a spawn failure), and ac_packs names generation 2's configuration. When the install
-/// root then has no selection at all, ac_packs, ac_binding_draft and ac_run_pack answer the CLI's
-/// `install_selection_unavailable`: each reads `install\active.json` at the call (with the start
-/// selection, ac_run_pack would run its package digest child instead). The actinglab children
+/// root then has no selection at all, ac_packs and ac_binding_draft answer the CLI's
+/// `install_selection_unavailable`: each reads `install\active.json` at the call (Workflow #336
+/// PKG-S4: ac_run_pack runs no package digest child any more and reads no selection). The
+/// actinglab children
 /// differ only in the selection handed to them, which a stand-in cannot report; they take it from
 /// the same per-call reading.
 #[cfg(windows)]
@@ -1145,7 +1146,6 @@ fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected
             },
             "prerequisite_entry_example": {},
             "catalog_on_failure_example": {},
-            "package_ref": format!("sha256:{}", "0".repeat(64)),
             "binding_requires": [],
         },
     });
@@ -1198,10 +1198,6 @@ fn gate_tools_of_a_server_the_fixed_entry_started_answer_the_generation_selected
     for (tool, arguments) in [
         ("ac_packs", json!({})),
         ("ac_binding_draft", json!({"record_stop": record_stop})),
-        (
-            "ac_run_pack",
-            json!({"instance": ALIAS_A, "package": package.display().to_string()}),
-        ),
     ] {
         let answer = call(&mut mcp, tool, arguments);
         assert_eq!(

@@ -5,7 +5,6 @@ use super::*;
 pub(super) struct SemanticFixture {
     temp: TempDir,
     pub(super) zip: PathBuf,
-    expected_sha256: String,
 }
 
 impl SemanticFixture {
@@ -40,12 +39,8 @@ where
             | "ensure"
             | "wait"
     ) {
-        args.extend([
-            "--zip".to_string(),
-            fixture.zip.display().to_string(),
-            "--expected-sha256".to_string(),
-            fixture.expected_sha256.clone(),
-        ]);
+        // Workflow #336 PKG-S4: the package by its path only.
+        args.extend(["--zip".to_string(), fixture.zip.display().to_string()]);
     }
     run_cli(args, json_default)
 }
@@ -111,11 +106,9 @@ pub(super) fn seal_semantic_fixture(
         zip.write_all(&fs::read(source).unwrap()).unwrap();
     }
     zip.finish().unwrap();
-    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&zip_path).unwrap()));
     SemanticFixture {
         temp,
         zip: zip_path,
-        expected_sha256,
     }
 }
 

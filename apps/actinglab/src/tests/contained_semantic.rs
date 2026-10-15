@@ -179,25 +179,3 @@ fn semantic_command_rejects_loose_only_resources_before_capture() {
             .contains("loose resource roots are not executable")
     );
 }
-
-#[test]
-fn semantic_command_rejects_self_computed_hash_source_before_capture() {
-    let temp = semantic_resource_root(false);
-    let result = run_cli(
-        [
-            "--json",
-            "observe",
-            "--capture",
-            "--state-dir",
-            temp.path().join("state").to_str().unwrap(),
-            "--zip",
-            temp.zip.to_str().unwrap(),
-        ],
-        true,
-    );
-
-    assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
-    let error = result.envelope.error.as_ref().unwrap();
-    assert_eq!(error.code, "package_invalid");
-    assert!(error.message.contains("externally supplied"));
-}

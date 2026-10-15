@@ -20,8 +20,8 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::policy_host::{
-    CompletedPolicyRunIdentity, LoadedCatalog, PolicyEvaluationContext, PolicyExecutionPreparation,
-    PolicyHost, PolicyOutcomeKeySnapshot,
+    CompletedPolicyRunIdentity, FactRefreshContext, LoadedCatalog, PolicyEvaluationContext,
+    PolicyExecutionPreparation, PolicyHost, PolicyOutcomeKeySnapshot,
 };
 use crate::proposal::prepare_proposal;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
@@ -246,7 +246,7 @@ use lifecycle::{
 };
 use monitor_control::monitor_probe_loop;
 use observation::CompletedReadonlyObservation;
-use performance::{CapacityUse, performance_monitor_loop};
+use performance::{CapacityUse, performance_monitor_loop, performance_probe_loop};
 use planning::planning_request_failure;
 use policy_dispatch::{SchedulingPauseTable, TrustedPolicyDispatchStore};
 #[cfg(test)]
@@ -506,8 +506,8 @@ pub struct RuntimeHostConfig {
     /// `config.selection` with the manifest.
     config_selection: Option<actingcommand_contract::ConfigSelection>,
     /// Per instance alias: the contained task the host schedules by itself after a successful
-    /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
-    /// `actingctl task-run --package / --expected-sha256`.
+    /// emulator `start` / `restart` (slice #316-B3). Same locator semantics as
+    /// `actingctl task-run --package`.
     startup_packages: BTreeMap<String, ContainedTaskRequest>,
     /// Workflow #369 S6c: the aliases whose stopped emulator the daemon starts at its start, in
     /// configuration order (actingd's `start_emulator`, S6a). Empty by default: nothing starts.
@@ -579,7 +579,10 @@ impl RuntimeHostConfig {
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
             procedure_manifest: None,
-            scheduled_procedures: BTreeSet::new(),
+            // Workflow #384 D2-S4: a fact refresh dispatch is always a contained scheduled run.
+            scheduled_procedures: BTreeSet::from([
+                actingcommand_policy::FACT_REFRESH_PROCEDURE_REF.to_owned(),
+            ]),
             config_manifest: None,
             config_selection: None,
             startup_packages: BTreeMap::new(),
@@ -751,7 +754,11 @@ impl RuntimeHostConfig {
         mut self,
         procedure_refs: impl IntoIterator<Item = String>,
     ) -> Self {
-        self.scheduled_procedures = procedure_refs.into_iter().collect();
+        // Workflow #384 D2-S4: with the fact refresh's procedure, always a scheduled run.
+        self.scheduled_procedures = procedure_refs
+            .into_iter()
+            .chain([actingcommand_policy::FACT_REFRESH_PROCEDURE_REF.to_owned()])
+            .collect();
         self
     }
 
@@ -1132,6 +1139,8 @@ pub struct RuntimeHost {
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    /// Workflow #385 P-m: the host timer probe of the shadow measurement (PERF §3.2).
+    performance_probe_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     /// Workflow #381 R6: the timing this start printed as `actingd startup_recovery`.
     #[cfg(test)]
     startup_recovery: StartupRecoveryTiming,
@@ -1571,6 +1580,11 @@ impl RuntimeHost {
             println!("actingd frame_retention disabled");
         }
         let fatal = FatalState::default();
+        // Workflow #384 D2-S4 (D2 model §3.1, §3.2): L, the instant the instance facts finished
+        // loading, and the marks of the recognition maintenance packages the start kept.
+        let instance_facts_loaded_at_unix_ms = config.clock.sample()?.unix_ms;
+        let fact_refresh_bindings =
+            crate::fact_refresh::read_bindings(&config.recognition_packages);
         let shared = Arc::new(HostShared {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
@@ -1680,6 +1694,8 @@ impl RuntimeHost {
             performance_hold_for_test: AtomicBool::new(false),
             prerequisite_packages: config.prerequisite_packages,
             return_home_packages: config.return_home_packages,
+            fact_refresh_bindings,
+            instance_facts_loaded_at_unix_ms,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
@@ -1712,6 +1728,7 @@ impl RuntimeHost {
             sweep_thread: None,
             monitor_thread: None,
             performance_thread: None,
+            performance_probe_thread: None,
             #[cfg(test)]
             startup_recovery: StartupRecoveryTiming::default(),
         };
@@ -2030,6 +2047,25 @@ impl RuntimeHost {
                             )
                         })?,
                 );
+            }
+            // Workflow #385 P-m (PERF §3.2): the host timer probe, beside an enabled monitor.
+            // A probe that cannot start leaves its signal unknown and the status read
+            // carries `perf_probe_unavailable`; the Runtime starts all the same.
+            if let Some(probe) = shared.timer_probe_settings()? {
+                let probe_shared = Arc::clone(&shared);
+                match thread::Builder::new()
+                    .name("actingcommand-runtime-performance-probe".to_string())
+                    .spawn(move || performance_probe_loop(probe_shared, probe))
+                {
+                    Ok(handle) => host.performance_probe_thread = Some(handle),
+                    Err(error) => shared.performance_probe_unavailable(
+                        crate::codes::ProbeKind::Timer,
+                        Outcome::from_io_error(
+                            &error,
+                            actingcommand_contract::outcome::IoOp::Spawn,
+                        ),
+                    )?,
+                }
             }
             shared.finish_install_preparation()?;
             if !held_startup {
@@ -2491,6 +2527,41 @@ impl RuntimeHost {
                 .shared_ref(HostLocation::RecordPolicyAdmissionFailure)?
                 .record_policy_admission_result(intent, Err(error), None),
         }
+    }
+
+    /// Workflow #384 D2-S4 (D2 model §3.4): the contained-task request of a fact refresh intent:
+    /// the recognition maintenance package the start kept for the intent's instance, by its
+    /// location; `None` for any other intent. The scheduler requests a fact refresh only on an
+    /// instance whose package the start kept, so one without is `policy_task_missing`.
+    pub fn fact_refresh_request(
+        &self,
+        intent: &DispatchIntent,
+    ) -> RuntimeHostResult<Option<ContainedTaskRequest>> {
+        if intent.task_id != actingcommand_policy::FACT_REFRESH_TASK_ID {
+            return Ok(None);
+        }
+        let shared = self.shared_ref(HostLocation::AdmitPolicyDispatch)?;
+        let binding = shared
+            .fact_refresh_bindings
+            .get(&intent.instance_id)
+            .ok_or_else(|| {
+                RuntimeHostError::request(
+                    HostCode::PolicyTaskMissing,
+                    HostLocation::AdmitPolicyDispatch,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })?;
+        // The binding names a location only, and the request names the package by its path
+        // (M-PKG §4.5, PKG-S4).
+        ContainedTaskRequest::new(binding.path.display().to_string())
+            .map(Some)
+            .map_err(|_| {
+                RuntimeHostError::request(
+                    HostCode::PolicyTaskRequestInvalid,
+                    HostLocation::AdmitPolicyDispatch,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })
     }
 
     /// Admits a contained policy run using its bounded request budget for the lease.
@@ -3906,6 +3977,14 @@ impl RuntimeHost {
                 HostLocation::JoinRuntimePerformance,
             ),
         );
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            join_runtime_thread(
+                self.performance_probe_thread.take(),
+                HostLocation::JoinRuntimePerformanceProbe,
+            ),
+        );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -4376,6 +4455,12 @@ struct HostShared {
     prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
     // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
     return_home_packages: BTreeMap<(String, String), String>,
+    // Workflow #384 D2-S4: by instance alias, the recognition maintenance package the start kept
+    // and the keys its marks write, read once at startup.
+    fact_refresh_bindings: BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,
+    // Workflow #384 D2-S4: L (D2 model §3.1), when this start finished loading the instance
+    // facts.
+    instance_facts_loaded_at_unix_ms: u64,
     // Workflow #373 NAV-6: the standard-pack root and the registry each game root held when it
     // was last read (memory only).
     standard_packs: standard_pack::StandardPackRoots,

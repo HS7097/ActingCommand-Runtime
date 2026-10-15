@@ -575,7 +575,6 @@ fn capacity_pressure_refuses_policy_admission_before_lease_and_recovers_in_place
                 .join("capacity-admission.zip")
                 .to_string_lossy()
                 .into_owned(),
-            "0".repeat(64),
         )
         .expect("declared scheduled request");
         let available_bytes = Arc::new(AtomicU64::new(0));
@@ -752,9 +751,8 @@ fn capacity_pressure_refuses_policy_admission_before_lease_and_recovers_in_place
             evaluated_policy_dispatch_at(&host, PolicyTrigger::Reconciliation, recovery_time, 8);
         assert_ne!(restored_intent.decision_id, intent.decision_id);
         let restored_context = policy_context(&host, &restored_intent);
-        let restored_task_request =
-            ContainedTaskRequest::new(task_request.package_path(), "0".repeat(64))
-                .expect("declared recovery request");
+        let restored_task_request = ContainedTaskRequest::new(task_request.package_path())
+            .expect("declared recovery request");
         let admission = if scheduled {
             host.admit_scheduled_policy_dispatch(
                 &restored_intent,

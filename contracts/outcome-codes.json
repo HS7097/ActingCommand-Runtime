@@ -634,6 +634,10 @@
       "type": "vocab:adjustment_reason",
       "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3)."
     },
+    "refresh_limit": {
+      "type": "vocab:refresh_limit",
+      "description": "Which limit holds an instance's recognition maintenance package back (Workflow #384 D2-S4)."
+    },
     "entry_problem": {
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
@@ -1745,6 +1749,58 @@
       "type": "duration_ms",
       "description": "How long a command's --wait waited for its request before it stopped waiting, in milliseconds."
     },
+    "pacing_stage_from": {
+      "type": "vocab:pacing_stage",
+      "description": "The pacing stage a scope left (Workflow #385 P-m)."
+    },
+    "pacing_stage_to": {
+      "type": "vocab:pacing_stage",
+      "description": "The pacing stage a scope entered (Workflow #385 P-m)."
+    },
+    "responsiveness_bp": {
+      "type": "integer",
+      "description": "A tracked responsiveness in basis points, 0 to 10000: the value the pacing curve reads (Workflow #385 P-m)."
+    },
+    "host_responsiveness_bp": {
+      "type": "integer",
+      "description": "The host's own smoothed responsiveness in basis points, 0 to 10000, from its probes (Workflow #385 P-m)."
+    },
+    "emulator_responsiveness_bp": {
+      "type": "integer",
+      "description": "An instance's own smoothed emulator responsiveness in basis points, 0 to 10000, from its frame acquisitions and touch responses (Workflow #385 P-m)."
+    },
+    "factor_milli": {
+      "type": "integer",
+      "description": "A pacing factor in thousandths, at least 1000 (Workflow #385 P-m)."
+    },
+    "pacing_cause": {
+      "type": "vocab:pacing_cause",
+      "description": "Why a pacing stage changed (Workflow #385 P-m)."
+    },
+    "pacing_mode": {
+      "type": "vocab:pacing_mode",
+      "description": "How far performance pacing takes effect: observe, pace or full (Workflow #385)."
+    },
+    "pacing_learning_capped": {
+      "type": "boolean",
+      "description": "True when the learning view caps the stage that takes effect below the recorded curve stage (Workflow #385)."
+    },
+    "probe_kind": {
+      "type": "vocab:probe_kind",
+      "description": "A host probe of the shadow measurement (Workflow #385 P-m)."
+    },
+    "signal_kind": {
+      "type": "vocab:signal_kind",
+      "description": "A scored signal of the shadow measurement (Workflow #385 P-m)."
+    },
+    "baseline_us": {
+      "type": "integer",
+      "description": "A signal's baseline in microseconds (Workflow #385 P-m)."
+    },
+    "limit_us": {
+      "type": "integer",
+      "description": "The bound a value is held at, in microseconds (Workflow #385 P-m: a baseline's clamp)."
+    },
     "handle": {
       "type": "token",
       "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
@@ -2823,6 +2879,26 @@
         },
         "after_read_missing": {
           "description": "No reading of the key followed the confirmation; the key's record is dropped."
+        }
+      }
+    },
+    "refresh_limit": {
+      "description": "Which limit holds an instance's recognition maintenance package back (Workflow #384 D2-S4).",
+      "tokens": {
+        "daily_limit": {
+          "description": "The package's dispatches today reached scheduling.fact_refresh.daily_limit."
+        },
+        "failure_pause": {
+          "description": "Its failed runs in a row reached scheduling.fact_refresh.max_consecutive_failures today."
+        },
+        "schedulable_state": {
+          "description": "The instance's schedulable-pack state does not include the package now."
+        },
+        "activity_window": {
+          "description": "The instance's activity window is closed or its activity budget spent."
+        },
+        "placement": {
+          "description": "The instance cannot place the package."
         }
       }
     },
@@ -5371,6 +5447,76 @@
         },
         "unsupported_os": {
           "description": "This operating system has no connectivity query."
+        }
+      }
+    },
+    "pacing_cause": {
+      "description": "Why a pacing stage changed (Workflow #385 PERF section 11).",
+      "review": "pending",
+      "tokens": {
+        "responsiveness": {
+          "description": "The tracked responsiveness moved the stage."
+        },
+        "pressure": {
+          "description": "A pressure's stage-one floor began or ended."
+        },
+        "recovery": {
+          "description": "The tracked responsiveness recovered."
+        },
+        "idle_recovery": {
+          "description": "Without any evidence, the tracked value recovered toward the top."
+        },
+        "clock_jump": {
+          "description": "The clock jumped."
+        }
+      }
+    },
+    "pacing_mode": {
+      "description": "How far performance pacing takes effect (Workflow #385 PERF section 10.3): every release ships observe; pace and full are a person's configuration.",
+      "review": "pending",
+      "source": {
+        "file": "crates/actingcommand-contract/src/event/payload/pacing.rs",
+        "enum": "PerformancePacingMode"
+      },
+      "tokens": {
+        "observe": {
+          "description": "Measure and record only; nothing takes effect."
+        },
+        "pace": {
+          "description": "Lengthen intervals and deadlines, never pause."
+        },
+        "full": {
+          "description": "Pacing and proportional pauses, with the learning period."
+        }
+      }
+    },
+    "probe_kind": {
+      "description": "A host probe of the shadow measurement (Workflow #385 PERF section 3.2).",
+      "review": "pending",
+      "tokens": {
+        "timer": {
+          "description": "Repeated short sleeps; their oversleep is the ready queue's delay."
+        },
+        "message": {
+          "description": "A posted message's delay until its thread handles it."
+        }
+      }
+    },
+    "signal_kind": {
+      "description": "A scored signal of the shadow measurement (Workflow #385 PERF section 3.2).",
+      "review": "pending",
+      "tokens": {
+        "capture_acquire": {
+          "description": "One frame's acquisition from the capture backend."
+        },
+        "touch_response": {
+          "description": "One input's backend response."
+        },
+        "timer": {
+          "description": "The host timer probe."
+        },
+        "message": {
+          "description": "The host message probe."
         }
       }
     }
@@ -26920,6 +27066,83 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "fact_refresh_exhausted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "package_id": "required",
+        "refresh_limit": "required",
+        "gate_code": "optional",
+        "next_eligible_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A limit (refresh_limit) holds back the instance's recognition maintenance package (package_id) that would read a key a candidate on the instance reads (fact_key): its daily limit is spent, its failed runs in a row reached the configured maximum today, the instance cannot place it, or the instance's activity window is closed or its activity budget spent (gate_code, the Runtime's admission code, when it gave one). The candidate is deferred until next_eligible_unix_ms when known.",
+      "common_causes": "scheduling.fact_refresh.daily_limit or max_consecutive_failures is low for how often the instance's facts expire; the package keeps failing; the instance has no activity profile or is outside its activity windows.",
+      "handling": "Raise the limit in scheduling.fact_refresh, fix the package's failures, or adjust the activity profile; the candidate is reconsidered when the limit's period ends."
+    },
+    "fact_refresh_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "package_id": "required",
+        "gate_code": "optional",
+        "failure_code": "optional",
+        "next_eligible_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A candidate on the instance waits for the instance's recognition maintenance package (package_id) to read a realistic key it read as unknown (fact_key, unknown_reason): the package is selected this round, or is held back for now by the gate gate_code (its minimum interval or failure backoff, an occupied, paused or unavailable instance, the host budget, a higher-ranked candidate, a Runtime admission gate), until next_eligible_unix_ms when known. failure_code is the code the package's latest run failed with, when it failed. The candidate is deferred, not failed.",
+      "common_causes": "The instance fact is missing or out of date and the package is running now, or must wait for its interval, its failure backoff or its turn on the instance.",
+      "handling": "None: the candidate is evaluated again when the reading lands, the gate lifts or the instance's key returns."
+    },
+    "fact_refresh_requested": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "rule_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The instance's recognition maintenance package is requested to read a realistic instance fact key (fact_key) that a candidate on the instance read as unknown (unknown_reason; rule_id, the selection document rule that read it, when one did). One entry per key, on the package's own scheduling decision and on its dispatch's reason chain; the package competes with the instance's other candidates under the highest rank of the candidates it unlocks.",
+      "common_causes": "The key was never read on the instance, or its record expired, went stale, lost confidence or has another type, and the instance's bound recognition maintenance package marks it.",
+      "handling": "None: the package runs as an ordinary scheduled dispatch and its readings are published as instance facts; the candidates that read the key are scored in the round after the reading lands."
+    },
     "fact_refresh_unbound": {
       "category": "warning",
       "ladder_class": "none",
@@ -26943,6 +27166,31 @@
       "description": "A scheduling-layer selection document read a realistic instance fact key (fact_key, a resource. or inventory. key that recognition writes) for a candidate on the instance, and the value is unknown (unknown_reason), but no reader can refresh it (reader_problem, when known). Only that candidate is deferred, with no wake; it is evaluated again when the instance facts, the catalog or the configuration change. Other candidates and instances are unaffected.",
       "common_causes": "The instance has never had the fact read, or its record expired, went stale for the document, lost confidence or has another type; the instance has no recognition maintenance package bound, or that package does not mark the key.",
       "handling": "Run a task that reads the fact on that instance, or bind a recognition maintenance package that marks the key; the candidate is reconsidered once the fact is published."
+    },
+    "fact_refresh_unresolved": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "package_id": "required",
+        "next_eligible_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The instance's recognition maintenance package (package_id) ran successfully since the Runtime loaded the instance facts, and the key a candidate reads is still unknown because of it (fact_key, unknown_reason): the run gave no reading of the key (it did not reach the page that marks it, or the mark gave no reading), or the reading it gave had too little confidence or another type. The candidate is deferred until the package may run again (next_eligible_unix_ms).",
+      "common_causes": "The package's route did not reach the marked page; the mark's region or OCR target does not match the screen; the recognition confidence is below the mark's floor or the document's.",
+      "handling": "Check the package's reading marks and the task diagnostic's unresolved reading rows for the run; the package runs again after its minimum interval."
     },
     "fact_scope_projection_missing": {
       "category": "error",
@@ -33044,26 +33292,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_contained_task_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid contained task hash. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_contained_task_path": {
       "category": "error",
       "ladder_class": "none",
@@ -33081,26 +33309,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Runtime contract validation refused a value: invalid contained task path.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_contained_task_recovery_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid contained task recovery hash. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -33201,26 +33409,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The ledger reports invalid cutover marker.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_debug_package_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid debug package hash. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -36101,6 +36289,26 @@
       "description": "Event or record sanitization refused a value: invalid performance process count.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "invalid_performance_status": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a PerformanceStatus answer of the wrong shape (a responsiveness above 10000, a share above 1000, a factor below 1000, a share of 0 outside s4, a phase outside mode full, an instance twice or a non-warning among the warnings), or a receipt carrying it that is not completed (Workflow #385 P-m).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
     },
     "invalid_performance_stutter": {
       "category": "error",
@@ -47749,6 +47957,30 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "perf_baseline_clamped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "signal_kind": "required",
+        "baseline_us": "required",
+        "limit_us": "required",
+        "instance_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A learned baseline of the shadow measurement is held at its clamp around the configured initial value (baseline_us, held at limit_us), for the host or one instance (instance_id). The status read (PerformanceStatus) carries it while the baseline stays held (Workflow #385 PERF sections 3.5 and 11, P-m).",
+      "common_causes": "The configured initial baseline of the signal is far from what the host or the backend really takes.",
+      "handling": "Look at the calm values and set performance.responsiveness initial_baseline_us of that signal (per backend) nearer to them, or widen baseline.clamp_min_milli or clamp_max_milli."
+    },
     "perf_config_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -47794,6 +48026,27 @@
       "common_causes": "The host stayed in the deepest pacing stage longer than the hold limit.",
       "handling": "Nothing to repair for one occurrence; the run is rerun."
     },
+    "perf_probe_unavailable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "probe_kind": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A host probe of the shadow measurement could not run (its thread could not start, or it failed); its signal stays unknown and every other signal goes on. The status read (PerformanceStatus) carries it, caused by the failure (Workflow #385 PERF sections 3.2 and 11, P-m).",
+      "common_causes": "The operating system refused a thread, or the probe's clock or lock failed.",
+      "handling": "Restart actingd; if it recurs, check the host's resources. Pacing without the probe reads the remaining signals."
+    },
     "perf_run_yielded": {
       "category": "info",
       "ladder_class": "planned_stop",
@@ -47817,6 +48070,36 @@
       "description": "Performance pacing ended a policy run to be rerun: it reached its wall-clock ceiling after pacing lengthened it (yield_cause wall_ceiling) or was preempted while held (preempted). Its cancellation reason is PerformanceYield; the run settles as a condition termination and is owed a rerun (Workflow #385 PERF §7.4). Registered by SH-1; P-k and P-h emit it.",
       "common_causes": "The host stayed slow long enough for a lengthened run to reach its ceiling, or the instance was paused by its share while the run was held.",
       "handling": "Nothing to repair for one occurrence; the run is rerun."
+    },
+    "perf_stage_changed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "pacing_stage_from": "required",
+        "pacing_stage_to": "required",
+        "responsiveness_bp": "required",
+        "factor_milli": "required",
+        "pacing_cause": "required",
+        "pacing_mode": "required",
+        "instance_id": "optional",
+        "host_responsiveness_bp": "optional",
+        "emulator_responsiveness_bp": "optional",
+        "pacing_learning_capped": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The shadow measurement's stage of the host (no instance_id) or of one instance changed: the curve read at the tracked responsiveness, with a pressure's stage-one floor. perf.pacing_changed carries it; under mode observe nothing takes effect (Workflow #385 PERF sections 4 and 12.1, P-m).",
+      "common_causes": "The host's probes or an instance's frame acquisitions and touch responses slowed down or recovered, or a pressure began or ended.",
+      "handling": "Nothing to repair: it is a measurement. Read the views with actingctl perf-status or the performance block of ac_overview."
     },
     "performance_capacity_deadline_conflict": {
       "category": "error",
@@ -53829,20 +54112,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "prerequisite_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package reference is invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "prerequisite_package_duplicate": {
       "category": "error",
       "ladder_class": "none",
@@ -54715,26 +54984,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingd refused its configuration: a procedure package container file is not supported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "procedure_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): procedure package digest invalid. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -61239,6 +61488,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A completed receipt of a PauseScheduling request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "request_performance_status_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a PerformanceStatus request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #385 P-m adds the kind).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -67966,6 +68229,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "runtime_performance_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl perf-status: the shadow measurement's status (PerformanceStatus) was printed, as ac_overview answers its performance block (Workflow #385 P-m).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "runtime_performance_spawn_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -73240,20 +73517,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The Runtime host reports startup package claim request invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "startup_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a startup package reference is invalid. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -82120,6 +82383,14 @@
       "since": "0.12.0",
       "description": "Evaluating all pages of a contained page observation."
     },
+    "evaluate_performance_pacing": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: evaluate the shadow measurement's pacing (Workflow #385 P-m)."
+    },
     "evaluate_policy_cycle": {
       "owner": "runtime-host",
       "layer": "host",
@@ -83207,6 +83478,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: join runtime performance."
+    },
+    "join_runtime_performance_probe": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: join the host timer probe's thread (Workflow #385 P-m)."
     },
     "join_runtime_sweeper": {
       "owner": "runtime-host",
@@ -84359,6 +84638,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An operation several owners name with one meaning (contract-owned, A2a D3): observe foreground application."
+    },
+    "observe_performance_backend": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: note the backend an instance's open selected for the shadow measurement (Workflow #385 P-m)."
     },
     "observe_performance_clock_jump": {
       "owner": "runtime-host",
@@ -86712,6 +86999,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read performance control raised."
     },
+    "read_performance_measurement": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read what the shadow measurement takes from the performance section in effect (Workflow #385 P-m)."
+    },
     "read_performance_monitor_state": {
       "owner": "runtime-host",
       "layer": "host",
@@ -86735,6 +87030,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read performance pipeline quiet."
+    },
+    "read_performance_status": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read the shadow measurement's status (Workflow #385 P-m)."
     },
     "read_performance_workloads": {
       "owner": "runtime-host",
@@ -87911,6 +88214,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: record performance pipeline signal."
+    },
+    "record_performance_probe_sample": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: record a host probe's samples (Workflow #385 P-m)."
     },
     "record_pinned_persistence_failure": {
       "owner": "artifact-store",
@@ -89362,6 +89673,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: run monitor probe."
     },
+    "run_performance_probe": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: run the host timer probe (Workflow #385 P-m)."
+    },
     "run_prepared_package": {
       "owner": "runtime-host",
       "layer": "host",
@@ -89697,6 +90016,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: runtime monitor status."
+    },
+    "runtime_performance_status": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: the shadow measurement's status (PerformanceStatus, Workflow #385 P-m)."
     },
     "runtime_project_interface": {
       "owner": "runtime-client",

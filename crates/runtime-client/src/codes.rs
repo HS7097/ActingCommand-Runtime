@@ -246,6 +246,8 @@ actingcommand_contract::outcome_locations! {
         RuntimeInstanceFactSnapshot => "runtime_instance_fact_snapshot",
         RuntimeProjectInterface => "runtime_project_interface",
         RuntimeMonitorStatus => "runtime_monitor_status",
+        // Workflow #385 P-m: the shadow measurement's status read (register §1.61 W15).
+        RuntimePerformanceStatus => "runtime_performance_status",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",

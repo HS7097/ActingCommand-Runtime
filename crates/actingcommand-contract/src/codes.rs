@@ -182,6 +182,8 @@ crate::outcome_codes! {
         BindChannelCompleted => "request_bind_channel_completed": success / none,
         // Workflow #390 DRILL-1: a ladder drill was admitted and queued.
         DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
+        // Workflow #385 P-m (register §1.61 W15).
+        PerformanceStatusCompleted => "request_performance_status_completed": success / none,
     }
 }
 
@@ -380,7 +382,6 @@ crate::outcome_codes! {
         PrerequisiteSelf => "prerequisite_self": error / declaration_error,
         PriorityOffsetInvalid => "priority_offset_invalid": error / none,
         ProcedureManifestEntryMissing => "procedure_manifest_entry_missing": error / none,
-        ProcedurePackageDigestInvalid => "procedure_package_digest_invalid": error / none,
         ProjectDecisionCursorInvalid => "project_decision_cursor_invalid": error / none,
         ProjectDecisionPageInvalid => "project_decision_page_invalid": error / none,
         ProjectInterfaceResponseTooLarge => "project_interface_response_too_large": error / none,
@@ -479,11 +480,8 @@ crate::outcome_codes! {
         InvalidResourceAuthoringEvent => "invalid_resource_authoring_event": error / none,
         InvalidObservationFailureContext => "invalid_observation_failure_context": error / none,
         InvalidDebugPackagePath => "invalid_debug_package_path": error / none,
-        InvalidDebugPackageHash => "invalid_debug_package_hash": error / none,
         InvalidContainedTaskRecoveryPath => "invalid_contained_task_recovery_path": error / none,
-        InvalidContainedTaskRecoveryHash => "invalid_contained_task_recovery_hash": error / none,
         InvalidContainedTaskPath => "invalid_contained_task_path": error / none,
-        InvalidContainedTaskHash => "invalid_contained_task_hash": error / none,
         InvalidContainedTaskResponseDeadline => "invalid_contained_task_response_deadline": error / none,
         InvalidEvidenceOutputPath => "invalid_evidence_output_path": error / none,
         InvalidEvidenceZipCount => "invalid_evidence_zip_count": error / none,
@@ -688,6 +686,8 @@ crate::outcome_codes! {
         InvalidConfigureSettings => "invalid_configure_settings": error / none,
         // Workflow #389 U-2: a `BindChannel` whose `via` is not on the Lab channel.
         InvalidBindChannel => "invalid_bind_channel": error / none,
+        // Workflow #385 P-m: a `PerformanceStatus` answer of the wrong shape.
+        InvalidPerformanceStatus => "invalid_performance_status": error / none,
     }
 }
 

@@ -107,8 +107,8 @@ impl HostShared {
                     "absolute package path required",
                 ));
             }
-            // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is
-            // recorded and compared with nothing.
+            // Workflow #336 PKG-S1/PKG-S4: the path chooses the loader; the request names its
+            // package by its path only.
             let deadline = Instant::now()
                 .checked_add(Duration::from_millis(
                     ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
@@ -123,7 +123,7 @@ impl HostShared {
             PreparedPageObservation::load_path(
                 instance_alias,
                 path,
-                input.expected_sha256(),
+                &actingcommand_contract::PackageRef::default(),
                 input.targets(),
                 self.execution()?.vision_provider(),
                 deadline,

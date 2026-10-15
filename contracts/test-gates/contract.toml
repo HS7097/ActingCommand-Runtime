@@ -470,6 +470,15 @@ tests = [
 ]
 incident = ["#336 PKG-S2"]
 
+# Workflow #336 PKG-S4 (option 丙): on the IPC wire a request names its package by its path only; a task request, a recovery binding, a package debug request or a contained observation request that still carries expected_sha256 does not decode (M-PKG v1.1 §4.5 S4-T5; contract key after K22)
+[[gate]]
+key = "K23"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::tests::s4_t5_a_wire_request_that_names_a_package_digest_is_refused",
+]
+incident = ["#336 PKG-S4"]
+
 # Workflow #357 DB-3s (M-357b v1.0 §5, §12.6 T1-T15; register §1.66 MS1-MS5): a multi select's record shape; a single select keeps its bytes, every pick shape round-trips, rules M1-M8 refuse what no writer writes, the public projection keeps only codes inside the picks, the largest real record is measured against the write bound, and no 0.12.x member is read (contract key after K23)
 [[gate]]
 key = "K24"

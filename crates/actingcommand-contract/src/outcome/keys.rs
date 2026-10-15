@@ -170,6 +170,8 @@ outcome_keys! {
     reading_problem: vocab(reading_problem),
     // Workflow #384 D2-S3: why a confirmed resource adjustment wrote nothing.
     adjustment_reason: vocab(adjustment_reason),
+    // Workflow #384 D2-S4: which limit holds a recognition maintenance package back.
+    refresh_limit: vocab(refresh_limit),
     // Workflow #373 NAV-3b: why a task's entry page set is refused.
     entry_problem: vocab(entry_problem),
     // Workflow #308 SEL-L3: a select step's scan session.
@@ -455,4 +457,19 @@ outcome_keys! {
     waited_ms: duration_ms,
     // Workflow #398 RD-1c: a device's handle in adb's list, `<transport>:<transport_id>`.
     handle: token,
+    // ---- Workflow #385 P-m (the shadow measurement's codes, PERF §11): begin ----
+    pacing_stage_from: vocab(pacing_stage),
+    pacing_stage_to: vocab(pacing_stage),
+    responsiveness_bp: integer,
+    host_responsiveness_bp: integer,
+    emulator_responsiveness_bp: integer,
+    factor_milli: integer,
+    pacing_cause: vocab(pacing_cause),
+    pacing_mode: vocab(pacing_mode),
+    pacing_learning_capped: boolean,
+    probe_kind: vocab(probe_kind),
+    signal_kind: vocab(signal_kind),
+    baseline_us: integer,
+    limit_us: integer,
+    // ---- Workflow #385 P-m: end ----
 }

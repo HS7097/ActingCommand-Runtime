@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, PacingCode, ProbeKind};
 use crate::events::is_sanitization_failure;
-use crate::performance::rejected_event_outcome;
+use crate::performance::{
+    PacingBackendRole, PacingSample, PacingSampleSource, rejected_event_outcome,
+};
 use crate::planning::collect_maintenance_evidence;
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_policy::assess_predictive_maintenance;
@@ -79,10 +81,21 @@ impl HostShared {
         // Drain-only confirmation of deferred appends on the tick that hosts the summary
         // producer; a failed reply ends the monitor through its existing fatal path.
         self.confirm_deferred_appends(Duration::ZERO, HostLocation::ConfirmDeferredAppends)?;
+        // Workflow #385 P-m: the section in effect and the registered instances, each read and
+        // released before the monitor's lock.
+        let measurement = self.performance_measurement()?;
+        let instances = self.pacing_instances()?;
         let (tick, control_observation, pipeline_quiet) = {
             let mut performance = lock(&self.performance, HostLocation::SamplePerformance)?;
             let mut tick = if performance.counters_enabled() {
-                performance.tick(observed_at_unix_ms)?
+                // The shadow evaluates first, so this tick's summary carries its views; it acts
+                // on nothing (coordinator ruling 7 of wave 13).
+                let mut events =
+                    performance.evaluate_pacing(observed_at_unix_ms, &measurement, &instances)?;
+                let mut tick = performance.tick(observed_at_unix_ms)?;
+                events.append(&mut tick.events);
+                tick.events = events;
+                tick
             } else {
                 PerformanceTick {
                     events: Vec::new(),
@@ -338,6 +351,13 @@ impl HostShared {
     }
 
     pub(super) fn observe_pipeline_event(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        // Workflow #385 P-m: a backend open names the backend an instance's baselines are kept
+        // for; a frame's acquisition and an input's response are the shadow's samples, taken
+        // whether or not the pipeline monitor still pairs events.
+        if event.event_type() == EventType::RuntimeLifecycleObserved {
+            return self.observe_pacing_backend(event);
+        }
+        self.record_pacing_sample_of(event)?;
         if !is_pipeline_event(event.event_type())
             || !lock(&self.performance, HostLocation::ReadPerformanceMonitorState)?
                 .accepts_pipeline_events()
@@ -415,6 +435,225 @@ impl HostShared {
         };
         self.record_performance_events(&semantic_events)
     }
+
+    /// Workflow #385 P-m: what the shadow measurement reads from the `performance` section in
+    /// effect (the defaults file's for a host started without actingd's manifest). The section
+    /// passed its whole-section check when it was assembled or changed, so a refusal here is an
+    /// invariant breach.
+    fn performance_measurement(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::performance::PerformanceMeasurement> {
+        lock(
+            &self.runtime_config,
+            HostLocation::ReadPerformanceMeasurement,
+        )?
+        .performance_measurement()
+        .map_err(|failure| {
+            RuntimeHostError::fatal(
+                failure.failure_code(),
+                HostLocation::ReadPerformanceMeasurement,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+            .with_outcome_values(|outcome| failure.with_values(outcome))
+        })
+    }
+
+    /// Workflow #385 P-m: the registered instances' aliases, the shadow measurement's rows.
+    fn pacing_instances(&self) -> RuntimeHostResult<Vec<String>> {
+        Ok(lock(
+            &self.registered_instances,
+            HostLocation::ReadPerformanceMeasurement,
+        )?
+        .values()
+        .map(|instance| instance.instance_alias.clone())
+        .collect())
+    }
+
+    /// Workflow #385 P-m (PERF §3.2): a frame's acquisition (`capture.completed`) or an input's
+    /// backend response (`input.committed`, a tap or a gesture) of a registered instance, as a
+    /// sample of the shadow measurement. An event of no registered instance gives none.
+    fn record_pacing_sample_of(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        let measured = match event.payload() {
+            EventPayload::Input(InputPayload::Committed(payload)) => {
+                payload.touch_response_us().map(|value| (value, true))
+            }
+            EventPayload::Capture(CapturePayload::Completed(payload)) => {
+                payload.capture_acquire_us().map(|value| (value, false))
+            }
+            _ => None,
+        };
+        let Some((value_us, input)) = measured else {
+            return Ok(());
+        };
+        let Some(instance_id) = event.links().instance_id() else {
+            return Ok(());
+        };
+        let Some(instance_alias) = lock(
+            &self.registered_instances,
+            HostLocation::ObservePerformancePipelineEvent,
+        )?
+        .get(instance_id)
+        .map(|instance| instance.instance_alias.clone()) else {
+            return Ok(());
+        };
+        let source = if input {
+            PacingSampleSource::TouchResponse {
+                instance_alias,
+                tap: event.payload().action() == EventAction::InputTap,
+            }
+        } else {
+            PacingSampleSource::CaptureAcquire { instance_alias }
+        };
+        lock(
+            &self.performance,
+            HostLocation::ObservePerformancePipelineEvent,
+        )?
+        .record_pacing_sample(PacingSample {
+            observed_at_unix_ms: event.timestamp_unix_ms(),
+            source,
+            value_us,
+        });
+        Ok(())
+    }
+
+    /// Workflow #385 P-m (PERF §3.5): a passed backend open of a registered instance names the
+    /// backend its capture and touch baselines are kept for (a Nemu pair both).
+    fn observe_pacing_backend(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        let EventPayload::Runtime(RuntimePayload::LifecycleObserved(payload)) = event.payload()
+        else {
+            return Ok(());
+        };
+        let Some(report) = payload.backend_open() else {
+            return Ok(());
+        };
+        let Some(selected) = report.selected.as_deref() else {
+            return Ok(());
+        };
+        if report.status != actingcommand_contract::BackendObservationStatus::Passed {
+            return Ok(());
+        }
+        let roles: &[PacingBackendRole] = match report.entry {
+            actingcommand_contract::BackendOpenEntry::Capture => &[PacingBackendRole::Capture],
+            actingcommand_contract::BackendOpenEntry::Input => &[PacingBackendRole::Touch],
+            actingcommand_contract::BackendOpenEntry::NemuPair => {
+                &[PacingBackendRole::Capture, PacingBackendRole::Touch]
+            }
+        };
+        let Some(instance_id) = event.links().instance_id() else {
+            return Ok(());
+        };
+        let Some(instance_alias) = lock(
+            &self.registered_instances,
+            HostLocation::ObservePerformanceBackend,
+        )?
+        .get(instance_id)
+        .map(|instance| instance.instance_alias.clone()) else {
+            return Ok(());
+        };
+        let mut performance = lock(&self.performance, HostLocation::ObservePerformanceBackend)?;
+        for role in roles {
+            performance.note_pacing_backend(&instance_alias, *role, selected);
+        }
+        Ok(())
+    }
+
+    /// `RuntimeOperation::PerformanceStatus` (Workflow #385 P-m, PERF §4.6; register §1.61
+    /// W15): the shadow measurement's rows, read from memory. Nothing is read from or appended
+    /// to the ledger.
+    pub(super) fn performance_status_read(&self) -> Result<OperationSuccess, RequestFailure> {
+        let settings = self.performance_measurement()?;
+        let instances = self.pacing_instances()?;
+        let now = self.clock.sample()?.unix_ms;
+        let status = lock(&self.performance, HostLocation::ReadPerformanceStatus)?
+            .pacing_status(now, &settings, &instances);
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::PerformanceStatus {
+                status: Box::new(status),
+            },
+            failure_outcome: None,
+        })
+    }
+
+    /// Workflow #385 P-m: whether the host timer probe runs, and how: only beside an enabled
+    /// monitor and with `host_probe.timer.enabled`.
+    pub(super) fn timer_probe_settings(
+        &self,
+    ) -> RuntimeHostResult<
+        Option<actingcommand_runtime_config::performance::responsiveness::HostProbeSettings>,
+    > {
+        if !lock(&self.performance, HostLocation::RunPerformanceProbe)?.counters_enabled() {
+            return Ok(None);
+        }
+        let timer = self.performance_measurement()?.responsiveness.timer;
+        Ok(timer.signal.enabled.then_some(timer))
+    }
+
+    /// Workflow #385 P-m (PERF §3.2, §11): a host probe that could not run; its signal stays
+    /// unknown and the status read carries `perf_probe_unavailable`.
+    pub(super) fn performance_probe_unavailable(
+        &self,
+        probe: ProbeKind,
+        cause: Outcome,
+    ) -> RuntimeHostResult<()> {
+        let outcome = Outcome::new(PacingCode::ProbeUnavailable)
+            .probe_kind(probe)
+            .caused_by(cause);
+        lock(&self.performance, HostLocation::RunPerformanceProbe)?
+            .pacing_probe_unavailable(probe, outcome);
+        Ok(())
+    }
+}
+
+/// Workflow #385 P-m (PERF §3.2): the host timer probe. Every `interval_ms` it sleeps `burst`
+/// times for `period_ms` and hands each oversleep, in microseconds, to the shadow measurement:
+/// the time this thread waited for the processor after its timer fired. It reads no device and
+/// writes nothing to the ledger. A failure ends it with `perf_probe_unavailable`; the Runtime
+/// goes on.
+pub(super) fn performance_probe_loop(
+    shared: Arc<HostShared>,
+    probe: actingcommand_runtime_config::performance::responsiveness::HostProbeSettings,
+) -> RuntimeHostResult<()> {
+    let period = Duration::from_millis(probe.period_ms.unwrap_or(0));
+    let interval = Duration::from_millis(probe.interval_ms);
+    let slice = Duration::from_millis(100);
+    while !shared.fatal.is_shutdown_requested() {
+        let started = std::time::Instant::now();
+        let mut oversleeps = Vec::new();
+        for _ in 0..probe.burst {
+            let before = std::time::Instant::now();
+            thread::sleep(period);
+            let overslept = before.elapsed().saturating_sub(period);
+            oversleeps.push(u64::try_from(overslept.as_micros()).unwrap_or(u64::MAX));
+        }
+        let recorded = unix_ms_now().and_then(|observed_at_unix_ms| {
+            let mut performance = lock(
+                &shared.performance,
+                HostLocation::RecordPerformanceProbeSample,
+            )?;
+            for value_us in oversleeps {
+                performance.record_pacing_sample(PacingSample {
+                    observed_at_unix_ms,
+                    source: PacingSampleSource::Probe(ProbeKind::Timer),
+                    value_us,
+                });
+            }
+            Ok(())
+        });
+        if let Err(error) = recorded {
+            shared.performance_probe_unavailable(ProbeKind::Timer, error.outcome())?;
+            return Ok(());
+        }
+        // The rest of the interval, in slices, so that a shutdown is seen within one.
+        let mut rest = interval.saturating_sub(started.elapsed());
+        while !rest.is_zero() && !shared.fatal.is_shutdown_requested() {
+            let nap = rest.min(slice);
+            thread::sleep(nap);
+            rest = rest.saturating_sub(nap);
+        }
+    }
+    Ok(())
 }
 
 const fn is_pipeline_event(event_type: EventType) -> bool {

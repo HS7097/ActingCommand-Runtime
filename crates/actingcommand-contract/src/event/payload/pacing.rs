@@ -33,6 +33,28 @@ pub enum PerformancePacingStage {
     S4,
 }
 
+impl PerformancePacingStage {
+    /// The stage's spelling (vocabulary `pacing_stage`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::S0 => "s0",
+            Self::S1 => "s1",
+            Self::S2 => "s2",
+            Self::S3 => "s3",
+            Self::S4 => "s4",
+        }
+    }
+}
+
+/// Workflow #385 P-m: a stage as an outcome value (`pacing_stage_from`, `pacing_stage_to`).
+impl crate::outcome::VocabularyToken for PerformancePacingStage {
+    const VOCABULARY: &'static str = "pacing_stage";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 /// How far pacing takes effect (PERF §10.3 `performance.pacing.mode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +62,26 @@ pub enum PerformancePacingMode {
     Observe,
     Pace,
     Full,
+}
+
+impl PerformancePacingMode {
+    /// The mode's spelling (vocabulary `pacing_mode`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+            Self::Pace => "pace",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// Workflow #385 P-m: a mode as an outcome value (`pacing_mode`).
+impl crate::outcome::VocabularyToken for PerformancePacingMode {
+    const VOCABULARY: &'static str = "pacing_mode";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
 }
 
 /// The phase of `mode = full` (PERF §4.6).
@@ -158,6 +200,21 @@ pub struct PerformancePacingPayload {
 }
 
 impl PerformancePacingPayload {
+    /// Workflow #385 P-m: an observed transition (`perf.pacing_changed`), its code and values in
+    /// `outcome`; the outcome must be info.
+    pub(super) fn observed(
+        outcome: Outcome,
+        audit: SanitizedAudit,
+    ) -> Result<Self, SanitizationError> {
+        let payload = Self {
+            action: EventAction::PerformanceObserve,
+            outcome,
+            audit,
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+
     pub(super) fn validate(&self) -> Result<(), SanitizationError> {
         if self.action != EventAction::PerformanceObserve
             || self.outcome.category() != Category::Info

@@ -17,7 +17,6 @@ use crate::codes::ActingdLocation;
 use actingcommand_contract::IdentifierIssuer;
 use actingcommand_policy::{HostResourceSnapshot, InstanceSnapshot, PoolValueSnapshot};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 /// The instance scope of the catalog-a example (contracts/scheduling/examples/catalog-a), the
@@ -70,11 +69,10 @@ fn policy_configuration(root: &Path) -> Value {
     for (name, bytes) in documents {
         fs::write(policy_root.join(name), bytes).expect("write a catalog document");
     }
-    // A procedure package is located and named by its digest here, never read: its content is
-    // admitted when the task runs (contracts/actingd-check-config.md:34-46).
+    // A procedure package is located by its path here, never read: its content is admitted when
+    // the task runs (contracts/actingd-check-config.md:34-46; Workflow #336 PKG-S4: no digest).
     let package = b"neutral contained task package";
     fs::write(policy_root.join("task.zip"), package).expect("write the procedure package");
-    let package_sha256 = format!("{:x}", Sha256::digest(package));
     let facts = EvaluationFacts {
         ledger_position: 0,
         fact_snapshot_id: "snapshot:actingd-config-a".to_owned(),
@@ -131,7 +129,6 @@ fn policy_configuration(root: &Path) -> Value {
             "catalog_approval_ids": ["approval:fixture-a"],
             "procedure_manifest": [{
                 "procedure_ref": "procedure.observe",
-                "package_digest": format!("sha256:{package_sha256}"),
                 "operation_id": "operation.observe",
                 "yield_points": ["after_observation"],
                 "scheduled_execution": {

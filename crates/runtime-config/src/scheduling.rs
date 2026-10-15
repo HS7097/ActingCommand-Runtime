@@ -8,8 +8,10 @@
 //! 18). Workflow #405: the random task delay (`random_delay`), whose section-level keys are every
 //! instance's defaults (the per-instance keys are in the per-instance section), parsed only.
 //! Workflow #384 D2-S2: `fact_refresh.recognition_join_timeout_ms`, how long a successful run
-//! waits for the readings it handed to recognition, read by the host when a run joins; D2-S4
-//! adds the section's other fact refresh keys. Workflow #336 PKG-S3:
+//! waits for the readings it handed to recognition, read by the host when a run joins. Workflow
+//! #384 D2-S4: `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
+//! `max_consecutive_failures`, the pace of the scheduler's recognition maintenance package
+//! dispatches, read by the host at every policy cycle. Workflow #336 PKG-S3:
 //! `suspension.lift_check_min_interval_ms`, the least time between two measurements of one
 //! package's content hash by the suspension lift checks, read by the host at each check.
 //!
@@ -78,6 +80,19 @@ pub const RANDOM_DELAY_MAX_MS: &str = "scheduling.random_delay.max_ms";
 /// `Finalizing` for the readings of the frames it handed to recognition.
 pub const FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS: &str =
     "scheduling.fact_refresh.recognition_join_timeout_ms";
+/// Workflow #384 D2-S4 (D2 model §3.4): whether the scheduler dispatches an instance's
+/// recognition maintenance package for the unknown facts its candidates read.
+pub const FACT_REFRESH_ENABLED: &str = "scheduling.fact_refresh.enabled";
+/// Workflow #384 D2-S4: the least time between two such dispatches on one instance.
+pub const FACT_REFRESH_MIN_INTERVAL_MS: &str = "scheduling.fact_refresh.min_interval_ms";
+/// Workflow #384 D2-S4: the most such dispatches on one instance in one activity day.
+pub const FACT_REFRESH_DAILY_LIMIT: &str = "scheduling.fact_refresh.daily_limit";
+/// Workflow #384 D2-S4: the least time from a failed run of the package to its next dispatch.
+pub const FACT_REFRESH_FAILURE_BACKOFF_MS: &str = "scheduling.fact_refresh.failure_backoff_ms";
+/// Workflow #384 D2-S4: the failed runs in a row after which the package rests for the rest of
+/// the activity day.
+pub const FACT_REFRESH_MAX_CONSECUTIVE_FAILURES: &str =
+    "scheduling.fact_refresh.max_consecutive_failures";
 
 /// Workflow #336 PKG-S3 (M-PKG §3.4, D1): the least time between two measurements of one
 /// package's content hash by the suspension lift checks.
@@ -182,8 +197,15 @@ file_struct!(FeatureLockFile {
 });
 file_struct!(NotRunFile { diagnose_rows });
 file_struct!(
-    /// Workflow #384 D2-S2: the fact refresh keys parsed so far.
-    FactRefreshFile { recognition_join_timeout_ms }
+    /// Workflow #384 D2-S2, D2-S4: the fact refresh keys.
+    FactRefreshFile {
+        enabled,
+        min_interval_ms,
+        daily_limit,
+        failure_backoff_ms,
+        max_consecutive_failures,
+        recognition_join_timeout_ms,
+    }
 );
 file_struct!(
     /// Workflow #336 PKG-S3: the suspension lift checks.
@@ -315,6 +337,31 @@ pub(crate) static ROWS: &[KeyRow] = &[
     row(RANDOM_DELAY_MIN_MS, ValueType::DurationMs, DELAY, "#405"),
     row(RANDOM_DELAY_MAX_MS, ValueType::DurationMs, DELAY, "#405"),
     row(
+        FACT_REFRESH_ENABLED,
+        ValueType::Boolean,
+        KeyRange::Any,
+        "D2-S4",
+    ),
+    row(
+        FACT_REFRESH_MIN_INTERVAL_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "D2-S4",
+    ),
+    row(FACT_REFRESH_DAILY_LIMIT, ValueType::Integer, COUNT, "D2-S4"),
+    row(
+        FACT_REFRESH_FAILURE_BACKOFF_MS,
+        ValueType::DurationMs,
+        KeyRange::Any,
+        "D2-S4",
+    ),
+    row(
+        FACT_REFRESH_MAX_CONSECUTIVE_FAILURES,
+        ValueType::Integer,
+        COUNT,
+        "D2-S4",
+    ),
+    row(
         FACT_REFRESH_RECOGNITION_JOIN_TIMEOUT_MS,
         ValueType::DurationMs,
         JOIN_TIMEOUT,
@@ -413,6 +460,17 @@ pub struct RandomDelay {
     pub max_ms: u64,
 }
 
+/// Workflow #384 D2-S4: the pace of the scheduler's recognition maintenance package dispatches
+/// (D2 model §3.4), read at every policy cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactRefreshConfig {
+    pub enabled: bool,
+    pub min_interval_ms: u64,
+    pub daily_limit: u32,
+    pub failure_backoff_ms: u64,
+    pub max_consecutive_failures: u32,
+}
+
 /// The `scheduling` section in effect, read and checked whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingConfig {
@@ -423,6 +481,7 @@ pub struct SchedulingConfig {
     pub feature_lock: FeatureLockConfig,
     pub not_run_diagnose_rows: u32,
     pub random_delay: RandomDelay,
+    pub fact_refresh: FactRefreshConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -653,8 +712,29 @@ impl SchedulingConfig {
                     RANDOM_DELAY_MAX_MS,
                 ],
             )?,
+            fact_refresh: fact_refresh_from(&reader)?,
         })
     }
+}
+
+/// Workflow #384 D2-S4: the fact refresh keys from `reader`, each by the key table's type and
+/// range (no rule binds two of them).
+fn fact_refresh_from(reader: &Reader<'_>) -> Result<FactRefreshConfig, ConfigFailure> {
+    Ok(FactRefreshConfig {
+        enabled: reader.boolean(FACT_REFRESH_ENABLED)?,
+        min_interval_ms: reader.duration(FACT_REFRESH_MIN_INTERVAL_MS)?,
+        daily_limit: reader.count(FACT_REFRESH_DAILY_LIMIT)?,
+        failure_backoff_ms: reader.duration(FACT_REFRESH_FAILURE_BACKOFF_MS)?,
+        max_consecutive_failures: reader.count(FACT_REFRESH_MAX_CONSECUTIVE_FAILURES)?,
+    })
+}
+
+/// Workflow #384 D2-S4: the fact refresh keys in effect, read alone (the host reads them at
+/// every policy cycle).
+pub(crate) fn fact_refresh(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<FactRefreshConfig, ConfigFailure> {
+    fact_refresh_from(&Reader { value })
 }
 
 /// `scheduling.recognition.sample_timeout_retries` in effect, read alone (the host reads it at

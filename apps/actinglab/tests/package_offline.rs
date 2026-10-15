@@ -31,7 +31,9 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_eq!(record["mode"], "offline_simulation");
     assert_eq!(record["executed"], false);
     assert_eq!(record["production_global_ledger_written"], false);
-    assert_eq!(record["package_sha256"], fixture.package_sha256);
+    // Workflow #336 PKG-S4 (option 丙): the record names its package by `package_id`, no digest.
+    assert_eq!(record["package_label"], "neutral.semantic.task");
+    assert!(record.get("package_sha256").is_none());
     let decision_fingerprint = record["decision_fingerprint"].as_str().unwrap();
     assert_eq!(decision_fingerprint.len(), 64);
     assert!(
@@ -82,20 +84,101 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
         envelope_data(&first)["result_zip_sha256"],
         envelope_data(&second)["result_zip_sha256"]
     );
+}
 
-    let decorated_hash = format!("sha256:{}", fixture.package_sha256.to_uppercase());
-    let decorated = fixture.run_with_hash(&decorated_hash, &[], "decorated.result.zip");
-    assert_success(&decorated, "would_click");
-    let decorated_record = read_result_record(&fixture.temp.path().join("decorated.result.zip"));
-    assert_eq!(decorated_record["package_sha256"], fixture.package_sha256);
-    assert_eq!(
-        decorated_record["decision_fingerprint"],
-        record["decision_fingerprint"]
+// Workflow #336 PKG-S4 (forced compromise T-01; M-PKG v1.1 §4.5): `package dry-run` reads its
+// package by its path as PKG-S1's loader does, so a content directory, which it refused with
+// `missing package entry: resources/manifest.json` before, is simulated like a package file;
+// no digest is given or reported.
+#[test]
+fn s4_package_dry_run_simulates_a_content_directory() {
+    let temp = TempDir::new().unwrap();
+    let package = temp.path().join("neutral.semantic.source");
+    let control = json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": "neutral.semantic.source",
+        "execution_mode": "navigable_route",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": 2, "height": 1},
+        "entry_task_id": "task",
+        "capture_interval_ms": 1,
+        "step_timeout_ms": 10,
+        "timeout_ms": 100,
+        "max_steps": 2
+    });
+    let probe = |id: &str, expected: [u8; 3]| {
+        json!({
+            "id": id,
+            "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 1, "height": 1}},
+            "expected": expected
+        })
+    };
+    let task = json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "locale": "en-US",
+        "goal": "neutral content directory fixture",
+        "coordinate_space": {"width": 2, "height": 1},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [probe("home_red", [255, 0, 0]), probe("terminal_blue", [0, 0, 255])],
+        "page_rules": {
+            "home": {"required": ["home_red"]},
+            "terminal": {"required": ["terminal_blue"]}
+        },
+        "entry_page": "home",
+        "target_page": "terminal",
+        "operations": [{
+            "id": "open_terminal",
+            "purpose": "exercise the content-directory dry run",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "retryable": false
+        }]
+    });
+    for (path, value) in [
+        ("control.json", control),
+        (
+            "resources/operations/resources.json",
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task),
+    ] {
+        let file = package.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    }
+    let fixture = temp.path().join("fixture.png");
+    fs::write(&fixture, home_frame(true)).unwrap();
+    let out = temp.path().join("content-directory.result.zip");
+
+    let output = run_actinglab(
+        &temp,
+        [
+            OsString::from("--json"),
+            OsString::from("package"),
+            OsString::from("dry-run"),
+            OsString::from("--package"),
+            package.as_os_str().to_owned(),
+            OsString::from("--fixture"),
+            fixture.as_os_str().to_owned(),
+            OsString::from("--out"),
+            out.as_os_str().to_owned(),
+        ],
     );
+
+    assert_success(&output, "would_click");
     assert_eq!(
-        fs::read(fixture.temp.path().join("first.result.zip")).unwrap(),
-        fs::read(fixture.temp.path().join("decorated.result.zip")).unwrap()
+        envelope_data(&output)["package_label"],
+        "neutral.semantic.source"
     );
+    let record = read_result_record(&out);
+    assert_eq!(record["package_label"], "neutral.semantic.source");
+    assert!(record.get("package_sha256").is_none());
 }
 
 #[test]
@@ -265,7 +348,11 @@ fn package_dry_run_admits_fields_and_defers_ocr_through_typed_runtime_validation
         let record = read_result_record(&fixture.temp.path().join("fields.result.zip"));
         assert_deferred_post_admission_ocr(&record["simulation"]["post_admission_ocr"]);
         assert_eq!(record["loaded"]["validation"]["status"], "valid");
-        assert_eq!(record["loaded"]["validation"]["externally_verified"], true);
+        assert!(
+            record["loaded"]["validation"]
+                .get("externally_verified")
+                .is_none()
+        );
         assert_eq!(
             record["loaded"]["validation"]["resources"]["operation_count"],
             usize::from(!zero_input)
@@ -373,8 +460,7 @@ fn package_adapter_accepts_legacy_drag_field_aliases() {
         drag_fields: DragFields::LegacyAliases,
         ..PackageOptions::default()
     });
-    let recorded = actingcommand_contract::PackageRef::LegacyZipSha256(sha256_hex(&bytes));
-    let loaded = validate_lab_package_bytes("legacy-drag-aliases.zip", &bytes, &recorded).unwrap();
+    let loaded = validate_lab_package_bytes("legacy-drag-aliases.zip", &bytes).unwrap();
     assert_eq!(loaded.task_count, 1);
 }
 
@@ -517,18 +603,6 @@ fn package_dry_run_rejects_invalid_package_inputs() {
     let corrupt = TestFixture::from_bytes(b"not a zip".to_vec(), home_frame(true));
     assert_failure(&corrupt.run(&[], "corrupt.zip"));
 
-    // Workflow #336 PKG-S1 (model M-PKG v1.1 §4.2): the given reference is still format-checked,
-    // so a 64-character value that is not hex is refused; a well-formed one that is not the
-    // package's hash is admitted (S1-T3) and recorded as given, compared with nothing.
-    let wrong_hash = TestFixture::new(PackageOptions::default(), home_frame(true));
-    let malformed = wrong_hash.run_with_hash(&"g".repeat(64), &[], "malformed-hash.zip");
-    assert_error_code(&malformed, "package_invalid");
-    assert!(!wrong_hash.temp.path().join("malformed-hash.zip").exists());
-    let unrelated = "0".repeat(64);
-    let output = wrong_hash.run_with_hash(&unrelated, &[], "wrong-hash.zip");
-    assert_success(&output, "would_click");
-    assert_eq!(envelope_data(&output)["package_sha256"], unrelated);
-
     for (name, options) in [
         (
             "old-schema",
@@ -583,22 +657,6 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
     assert_failure(&missing_zip);
 
     let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
-    let missing_hash = run_actinglab(
-        &fixture.temp,
-        [
-            OsString::from("--json"),
-            OsString::from("package"),
-            OsString::from("dry-run"),
-            OsString::from("--zip"),
-            fixture.package_path.as_os_str().to_owned(),
-            OsString::from("--fixture"),
-            fixture.fixture_path.as_os_str().to_owned(),
-            OsString::from("--out"),
-            OsString::from("missing-hash.zip"),
-        ],
-    );
-    assert_failure(&missing_hash);
-
     let missing_fixture = run_actinglab(
         &fixture.temp,
         [
@@ -607,8 +665,6 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
             OsString::from("dry-run"),
             OsString::from("--zip"),
             fixture.package_path.as_os_str().to_owned(),
-            OsString::from("--expected-sha256"),
-            OsString::from(&fixture.package_sha256),
             OsString::from("--out"),
             OsString::from("missing-fixture.zip"),
         ],
@@ -626,7 +682,7 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
         let output = fixture.run(&extra, &format!("{name}.zip"));
         assert_error_code(&output, "offline_device_scope_forbidden");
     }
-    let mut capability_attempt = fixture.args_with_hash(&fixture.package_sha256, "unsupported.zip");
+    let mut capability_attempt = fixture.args("unsupported.zip");
     capability_attempt.extend([OsString::from("--send-input"), OsString::from("true")]);
     assert_error_code(
         &run_actinglab(&fixture.temp, capability_attempt),
@@ -644,8 +700,6 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
             OsString::from("dry-run"),
             OsString::from("--zip"),
             fixture.package_path.as_os_str().to_owned(),
-            OsString::from("--expected-sha256"),
-            OsString::from(&fixture.package_sha256),
             OsString::from("--fixture"),
             fixture.fixture_path.as_os_str().to_owned(),
             OsString::from("--out"),
@@ -684,16 +738,6 @@ fn package_dry_run_enforces_finite_regular_input_budgets() {
         std::slice::from_ref(&fixture.fixture_path),
         "oversized-package-result.zip",
         "offline_package_too_large",
-    );
-
-    let package_directory = fixture.temp.path().join("package-directory");
-    fs::create_dir(&package_directory).unwrap();
-    assert_bounded_input_failure(
-        &fixture,
-        &package_directory,
-        std::slice::from_ref(&fixture.fixture_path),
-        "package-directory-result.zip",
-        "offline_package_not_regular_file",
     );
 
     let oversized_fixture = fixture.temp.path().join("oversized-fixture.png");
@@ -741,7 +785,7 @@ fn package_dry_run_cannot_be_false_greened_by_version() {
     for (name, version_index) in [("before", 1usize), ("between", 2), ("after", 3)] {
         let out_name = format!("version-{name}.zip");
         let out = fixture.temp.path().join(&out_name);
-        let mut args = fixture.args_with_hash(&fixture.package_sha256, &out_name);
+        let mut args = fixture.args(&out_name);
         args.insert(version_index, OsString::from("--version"));
         let output = run_actinglab(&fixture.temp, args);
         assert!(!output.status.success());
@@ -759,14 +803,9 @@ fn package_dry_run_rejects_empty_values_and_duplicate_singletons() {
 
     for (name, flag, value) in [
         ("duplicate-zip", "--zip", fixture.package_path.as_os_str()),
-        (
-            "duplicate-expected",
-            "--expected-sha256",
-            OsStr::new(&fixture.package_sha256),
-        ),
         ("duplicate-out", "--out", OsStr::new("duplicate-out.zip")),
     ] {
-        let mut args = fixture.args_with_hash(&fixture.package_sha256, &format!("{name}.zip"));
+        let mut args = fixture.args(&format!("{name}.zip"));
         args.extend([OsString::from(flag), value.to_owned()]);
         assert_error_code(
             &run_actinglab(&fixture.temp, args),
@@ -774,7 +813,7 @@ fn package_dry_run_rejects_empty_values_and_duplicate_singletons() {
         );
     }
 
-    let mut empty_out = fixture.args_with_hash(&fixture.package_sha256, "empty-out.zip");
+    let mut empty_out = fixture.args("empty-out.zip");
     *empty_out.last_mut().unwrap() = OsString::new();
     assert_error_code(
         &run_actinglab(&fixture.temp, empty_out),
@@ -873,7 +912,6 @@ struct TestFixture {
     temp: TempDir,
     package_path: PathBuf,
     fixture_path: PathBuf,
-    package_sha256: String,
 }
 
 impl TestFixture {
@@ -891,17 +929,12 @@ impl TestFixture {
             temp,
             package_path,
             fixture_path,
-            package_sha256: sha256_hex(&package_bytes),
         }
     }
 
     fn run(&self, extra: &[&str], out_name: &str) -> Output {
-        self.run_with_hash(&self.package_sha256, extra, out_name)
-    }
-
-    fn run_with_hash(&self, expected: &str, extra: &[&str], out_name: &str) -> Output {
         let mut args = extra.iter().map(OsString::from).collect::<Vec<_>>();
-        args.extend(self.args_with_hash(expected, out_name));
+        args.extend(self.args(out_name));
         run_actinglab(&self.temp, args)
     }
 
@@ -910,14 +943,13 @@ impl TestFixture {
             &self.temp,
             dry_run_args(
                 &self.package_path,
-                &self.package_sha256,
                 &vec![self.fixture_path.clone(); count],
                 &self.temp.path().join(out_name),
             ),
         )
     }
 
-    fn args_with_hash(&self, expected: &str, out_name: &str) -> Vec<OsString> {
+    fn args(&self, out_name: &str) -> Vec<OsString> {
         let out = self.temp.path().join(out_name);
         vec![
             OsString::from("--json"),
@@ -925,8 +957,6 @@ impl TestFixture {
             OsString::from("dry-run"),
             OsString::from("--zip"),
             self.package_path.as_os_str().to_owned(),
-            OsString::from("--expected-sha256"),
-            OsString::from(expected),
             OsString::from("--fixture"),
             self.fixture_path.as_os_str().to_owned(),
             OsString::from("--out"),
@@ -935,15 +965,13 @@ impl TestFixture {
     }
 }
 
-fn dry_run_args(package: &Path, expected: &str, fixtures: &[PathBuf], out: &Path) -> Vec<OsString> {
+fn dry_run_args(package: &Path, fixtures: &[PathBuf], out: &Path) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("--json"),
         OsString::from("package"),
         OsString::from("dry-run"),
         OsString::from("--zip"),
         package.as_os_str().to_owned(),
-        OsString::from("--expected-sha256"),
-        OsString::from(expected),
     ];
     for fixture in fixtures {
         args.extend([OsString::from("--fixture"), fixture.as_os_str().to_owned()]);
@@ -960,10 +988,7 @@ fn assert_bounded_input_failure(
     expected_code: &str,
 ) {
     let out = fixture.temp.path().join(out_name);
-    let output = run_actinglab(
-        &fixture.temp,
-        dry_run_args(package, &fixture.package_sha256, fixtures, &out),
-    );
+    let output = run_actinglab(&fixture.temp, dry_run_args(package, fixtures, &out));
     assert_error_code(&output, expected_code);
     assert!(!out.exists(), "{} unexpectedly exists", out.display());
 }

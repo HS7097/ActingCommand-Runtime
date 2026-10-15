@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
-#[cfg(test)]
-use std::fs;
+use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId};
 
 use crate::{
     JsonDocument, PackageValidateRequest, PackageValidationResponse,
@@ -14,29 +12,14 @@ use actingcommand_contract::{LabError, LabResult, PackageRef};
 pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageValidationResponse> {
     let bytes = open_published_package(&request.zip_path)?.read_all()?;
     let instance = InstanceId::new("package-validate").map_err(containment_package_error)?;
-    let externally_verified = request.expected_input_sha256.is_some();
-    let expected = request
-        .expected_input_sha256
-        .unwrap_or_else(|| Sha256Hash::digest(&bytes));
-    // Workflow #336 PKG-S1: the package is admitted structurally; the hash given (or computed
-    // here for provenance) is reported and compared with nothing.
+    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the package is admitted structurally; no hash of
+    // it is taken, computed or reported.
     let mut containment = Containment::for_metadata_validation();
     let bundle = containment
-        .load(
-            &instance,
-            &bytes,
-            &PackageRef::LegacyZipSha256(expected.to_string()),
-        )
+        .load(&instance, &bytes, &PackageRef::default())
         .map_err(containment_package_error)?;
     Ok(PackageValidationResponse {
         status: "valid".to_string(),
-        input_sha256: expected.to_string(),
-        hash_source: if externally_verified {
-            "externally_supplied".to_string()
-        } else {
-            "self_computed_provenance_only".to_string()
-        },
-        externally_verified,
         module: bundle.resource_root().to_string(),
         manifest_path: bundle.manifest_path().to_string(),
         task_count: bundle.task_count(),
@@ -96,19 +79,18 @@ mod tests {
         let response = validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
-            expected_input_sha256: None,
         })
         .unwrap();
 
-        assert_eq!(response.hash_source, "self_computed_provenance_only");
-        assert!(!response.externally_verified);
         assert_eq!(response.module, "module");
         assert_eq!(response.task_count, 1);
         assert!(response.entries.is_none());
     }
 
+    // Workflow #336 PKG-S4 (option 丙, M-PKG v1.1 §4.5): `package validate` takes no hash and
+    // reports none; the package is admitted structurally.
     #[test]
-    fn package_validate_distinguishes_external_hash_from_self_computed_provenance() {
+    fn s4_package_validate_takes_no_hash_and_reports_none() {
         let temp = TempDir::new().unwrap();
         let zip = temp.path().join("bundle.zip");
         write_test_zip(
@@ -118,18 +100,18 @@ mod tests {
                 ("module/operations/task/task.json", br#"{"id":"task"}"#),
             ],
         );
-        let expected = Sha256Hash::digest(&fs::read(&zip).unwrap());
 
         let response = validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
-            expected_input_sha256: Some(expected),
         })
         .unwrap();
+        let encoded = serde_json::to_value(&response).unwrap();
 
-        assert_eq!(response.input_sha256, expected.to_string());
-        assert_eq!(response.hash_source, "externally_supplied");
-        assert!(response.externally_verified);
+        assert_eq!(response.status, "valid");
+        for member in ["input_sha256", "hash_source", "externally_verified"] {
+            assert!(encoded.get(member).is_none(), "{member}: {encoded}");
+        }
     }
 
     #[test]
@@ -161,7 +143,6 @@ mod tests {
         let response = validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
-            expected_input_sha256: None,
         })
         .unwrap();
 
@@ -218,7 +199,6 @@ mod tests {
         validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
-            expected_input_sha256: None,
         })
         .expect_err("fixture must be rejected")
     }

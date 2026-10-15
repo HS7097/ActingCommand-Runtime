@@ -417,7 +417,7 @@ key = "32"
 coverage = "Y"
 tests = [
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_accepts_safe_zip",
-    "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_distinguishes_external_hash_from_self_computed_provenance",
+    "actingcommand-resource-tooling::lib::package_validate::tests::s4_package_validate_takes_no_hash_and_reports_none",
     "actingcommand-pack-containment::pkg_s1::s1_t3_the_path_chooses_the_reading_and_no_reference_is_compared",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_reports_unsupported_recognition_targets",
     "actingcommand-resource-tooling::lib::package_validate::tests::package_validate_rejects_zip_slip",
@@ -1033,3 +1033,13 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rec4::gate_ac_record_mark_hands_a_click_follow_request_to_actinglab_unchanged",
 ]
 incident = ["#396"]
+# Workflow #336 PKG-S4 (option 丙; forced compromise T-01): actinglab package dry-run reads its package by its path, so a content directory is simulated like a package file and the result names the package by package_id, with no digest; actinglab refuses a retired package digest flag by name; package validate takes no hash and reports none (M-PKG v1.1 §4.5)
+[[gate]]
+key = "62"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::package_offline::s4_package_dry_run_simulates_a_content_directory",
+    "actingcommand-actinglab::bin:actinglab::tests::package_validate_refuses_a_retired_digest_flag",
+    "actingcommand-resource-tooling::lib::package_validate::tests::s4_package_validate_takes_no_hash_and_reports_none",
+]
+incident = ["#336 PKG-S4"]

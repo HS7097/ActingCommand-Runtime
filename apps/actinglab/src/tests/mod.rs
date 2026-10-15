@@ -952,11 +952,9 @@ fn capabilities_are_offline() {
         data["schema_domains"]["control"]["supported"],
         json!(["Lab-1y.control.v1", "Lab-1y.control.v2"])
     );
-    assert!(
-        data["schema_domains"]["package_reference"]
-            .get("git_source_tree")
-            .is_none()
-    );
+    // Workflow #336 PKG-S4: a package is found by its path; no reference form is offered.
+    assert_eq!(data["schema_domains"]["package_locator"]["by"], "path");
+    assert!(data["schema_domains"].get("package_reference").is_none());
     assert!(data["lab2_cli"]["schema_versions"].get("max").is_none());
     assert!(!runtime_root.exists());
 }
@@ -2432,18 +2430,16 @@ fn package_validate_accepts_safe_zip() {
     );
     assert_eq!(result.exit_code(), 0);
     let data = result.envelope.data.as_ref().expect("validation payload");
-    assert_eq!(
-        data.get("hash_source").and_then(Value::as_str),
-        Some("self_computed_provenance_only")
-    );
-    assert_eq!(
-        data.get("externally_verified").and_then(Value::as_bool),
-        Some(false)
-    );
+    // Workflow #336 PKG-S4 (option 丙): the validation names no digest of the package.
+    for member in ["input_sha256", "hash_source", "externally_verified"] {
+        assert!(data.get(member).is_none(), "{member}: {data}");
+    }
 }
 
+// Workflow #336 PKG-S4 (option 丙, M-PKG v1.1 §4.5): a retired package digest flag is refused
+// by name, with or without a value, never ignored.
 #[test]
-fn package_validate_accepts_matching_external_hash() {
+fn package_validate_refuses_a_retired_digest_flag() {
     let temp = TempDir::new().unwrap();
     let zip = temp.path().join("bundle.zip");
     write_test_zip(
@@ -2460,74 +2456,31 @@ fn package_validate_accepts_matching_external_hash() {
             ("module/operations/resources.json", br#"{}"#.as_slice()),
         ],
     );
-    let hash = format!("{:x}", Sha256::digest(fs::read(&zip).unwrap()));
+    let hash = "0".repeat(64);
 
-    let result = run_cli(
-        [
+    for retired in [
+        vec!["--expected-sha256", hash.as_str()],
+        vec!["--expected-sha256"],
+    ] {
+        let mut args = vec![
             "--json",
             "package",
             "validate",
             "--zip",
             zip.to_str().unwrap(),
-            "--expected-sha256",
-            &hash,
-        ],
-        true,
-    );
+        ];
+        args.extend(retired);
+        let result = run_cli(args, true);
 
-    assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
-    let data = result.envelope.data.as_ref().expect("validation payload");
-    assert_eq!(
-        data.get("hash_source").and_then(Value::as_str),
-        Some("externally_supplied")
-    );
-    assert_eq!(
-        data.get("externally_verified").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        data.get("input_sha256").and_then(Value::as_str),
-        Some(hash.as_str())
-    );
-}
-
-#[test]
-fn package_validate_rejects_bare_external_hash_flag() {
-    let temp = TempDir::new().unwrap();
-    let zip = temp.path().join("bundle.zip");
-    write_test_zip(
-        &zip,
-        &[
-            (
-                "module/manifest.json",
-                br#"{"schema_version":"0.2"}"#.as_slice(),
-            ),
-            (
-                "module/operations/task/task.json",
-                br#"{"id":"task"}"#.as_slice(),
-            ),
-            ("module/operations/resources.json", br#"{}"#.as_slice()),
-        ],
-    );
-
-    let result = run_cli(
-        [
-            "--json",
-            "package",
-            "validate",
-            "--zip",
-            zip.to_str().unwrap(),
-            "--expected-sha256",
-        ],
-        true,
-    );
-
-    assert_eq!(result.exit_code(), 2);
-    assert!(
-        result
-            .envelope_json()
-            .contains("requires an explicit SHA-256 value")
-    );
+        assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
+        let error = result.envelope.error.as_ref().expect("usage error");
+        assert_eq!(error.code, "validation_failed");
+        assert!(
+            error.message.contains("--expected-sha256"),
+            "{}",
+            error.message
+        );
+    }
 }
 
 #[test]

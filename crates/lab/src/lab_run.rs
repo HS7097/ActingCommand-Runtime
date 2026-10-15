@@ -10,9 +10,7 @@ use actingcommand_artifact_store::FrameStoreControl;
 use actingcommand_contract::PackageRef;
 use actingcommand_device::CaptureBackendChoice;
 use actingcommand_execution_kernel::{ExternallyVerifiedBundle, page_anchor_matches};
-use actingcommand_pack_containment::{
-    Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
-};
+use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, LoadedBundle};
 use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator, TargetEvaluation};
 use actingcommand_resource_tooling::open_published_package;
 use serde::Deserialize;

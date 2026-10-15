@@ -11,7 +11,7 @@ use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
-use crate::scheduling::SchedulingConfig;
+use crate::scheduling::{FactRefreshConfig, SchedulingConfig};
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
@@ -388,6 +388,18 @@ impl EffectiveConfig {
         performance::check(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #385 P-m: what the shadow measurement reads from the `performance` section in
+    /// effect (PERF §3, §4, §10). The curve counts as a person's when its value in effect does
+    /// not come from the defaults file: then the learning view has no cap (§4.5.3).
+    pub fn performance_measurement(
+        &self,
+    ) -> Result<performance::PerformanceMeasurement, ConfigFailure> {
+        let user_curve = self
+            .setting(performance::pacing::CURVE)
+            .is_some_and(|setting| self.effective(setting).1 != ConfigParameterSource::Default);
+        performance::measurement(&|key: &str| self.value_or_shipped(key), user_curve)
+    }
+
     /// Workflow #386 SR-1: the `scheduling` section in effect, read and checked whole.
     pub fn scheduling(&self) -> Result<SchedulingConfig, ConfigFailure> {
         SchedulingConfig::parse(&|key: &str| self.value_or_shipped(key))
@@ -422,6 +434,12 @@ impl EffectiveConfig {
     /// milliseconds: how long a successful run waits for the readings it handed to recognition.
     pub fn recognition_join_timeout_ms(&self) -> Result<u64, ConfigFailure> {
         scheduling::recognition_join_timeout_ms(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// Workflow #384 D2-S4: the `scheduling.fact_refresh` pace in effect (`enabled`,
+    /// `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`).
+    pub fn fact_refresh(&self) -> Result<FactRefreshConfig, ConfigFailure> {
+        scheduling::fact_refresh(&|key: &str| self.value_or_shipped(key))
     }
 
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, in

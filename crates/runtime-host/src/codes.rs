@@ -1540,6 +1540,7 @@ actingcommand_contract::outcome_locations! {
         EnqueueEmulatorAutostart => "enqueue_emulator_autostart",
         EnqueueHostClaim => "enqueue_host_claim",
         EvaluateFullPolicyCycle => "evaluate_full_policy_cycle",
+        EvaluatePerformancePacing => "evaluate_performance_pacing",
         EvaluatePolicyCycle => "evaluate_policy_cycle",
         EvaluatePolicyEvent => "evaluate_policy_event",
         EvaluateReconciliationTrigger => "evaluate_reconciliation_trigger",
@@ -1615,6 +1616,7 @@ actingcommand_contract::outcome_locations! {
         JoinRuntimeConnection => "join_runtime_connection",
         JoinRuntimeMonitor => "join_runtime_monitor",
         JoinRuntimePerformance => "join_runtime_performance",
+        JoinRuntimePerformanceProbe => "join_runtime_performance_probe",
         JoinRuntimeSweeper => "join_runtime_sweeper",
         LiftFailedInstancePause => "lift_failed_instance_pause",
         LiftInstanceResourceFence => "lift_instance_resource_fence",
@@ -1652,6 +1654,7 @@ actingcommand_contract::outcome_locations! {
         NoteContainedTaskPackage => "note_contained_task_package",
         NoteFailedTaskTerminal => "note_failed_task_terminal",
         ObserveDeviceDiagnosticBudget => "observe_device_diagnostic_budget",
+        ObservePerformanceBackend => "observe_performance_backend",
         ObservePerformanceClockJump => "observe_performance_clock_jump",
         ObservePerformanceContention => "observe_performance_contention",
         ObservePerformancePipelineEvent => "observe_performance_pipeline_event",
@@ -1822,9 +1825,11 @@ actingcommand_contract::outcome_locations! {
         ReadPerformanceControlDirective => "read_performance_control_directive",
         ReadPerformanceControlObservation => "read_performance_control_observation",
         ReadPerformanceControlRaised => "read_performance_control_raised",
+        ReadPerformanceMeasurement => "read_performance_measurement",
         ReadPerformanceMonitorState => "read_performance_monitor_state",
         ReadPerformanceOwnedLeases => "read_performance_owned_leases",
         ReadPerformancePipelineQuiet => "read_performance_pipeline_quiet",
+        ReadPerformanceStatus => "read_performance_status",
         ReadPerformanceWorkloads => "read_performance_workloads",
         ReadPinnedPolicyCatalog => "read_pinned_policy_catalog",
         ReadPolicyAdmissionTime => "read_policy_admission_time",
@@ -1922,6 +1927,7 @@ actingcommand_contract::outcome_locations! {
         RecordPerformanceEventReference => "record_performance_event_reference",
         RecordPerformanceMonitorFailure => "record_performance_monitor_failure",
         RecordPerformancePipelineSignal => "record_performance_pipeline_signal",
+        RecordPerformanceProbeSample => "record_performance_probe_sample",
         RecordPipelinePerformance => "record_pipeline_performance",
         RecordPolicyAdmissionFailure => "record_policy_admission_failure",
         RecordPolicyDispatchOutcome => "record_policy_dispatch_outcome",
@@ -2029,6 +2035,7 @@ actingcommand_contract::outcome_locations! {
         RunInstanceWorker => "run_instance_worker",
         RunMonitorCapture => "run_monitor_capture",
         RunMonitorProbe => "run_monitor_probe",
+        RunPerformanceProbe => "run_performance_probe",
         RunPreparedPackage => "run_prepared_package",
         RunRecoveryLadder => "run_recovery_ladder",
         RunScheduledContainedTask => "run_scheduled_contained_task",
@@ -2437,6 +2444,66 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #383 SH-1: end ----
+
+// ---- Workflow #385 P-m (the shadow measurement, PERF §11): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The shadow measurement's codes (Workflow #385 P-m, PERF §11): a stage transition, which
+    /// `perf.pacing_changed` carries, and the two warnings the status read carries.
+    pub(crate) enum PacingCode {
+        /// Info. A scope's pacing stage changed (keys `pacing_stage_from`, `pacing_stage_to`,
+        /// `responsiveness_bp`, `factor_milli`, `pacing_cause`, `pacing_mode`; optional
+        /// `instance_id`, `host_responsiveness_bp`, `emulator_responsiveness_bp`,
+        /// `pacing_learning_capped`).
+        StageChanged => "perf_stage_changed": info / none,
+        /// Warning. A host probe could not run; its signal stays unknown (key `probe_kind`,
+        /// caused by the operating system's failure).
+        ProbeUnavailable => "perf_probe_unavailable": warning / none,
+        /// Warning. A learned baseline is held at its clamp (keys `signal_kind`, `baseline_us`,
+        /// `limit_us`; optional `instance_id`).
+        BaselineClamped => "perf_baseline_clamped": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a pacing stage changed (vocabulary `pacing_cause`, PERF §11).
+    pub enum PacingCause: "pacing_cause" {
+        /// The tracked responsiveness moved the stage.
+        Responsiveness => "responsiveness",
+        /// A pressure's stage-one floor began or ended.
+        Pressure => "pressure",
+        /// The tracked responsiveness recovered.
+        Recovery => "recovery",
+        /// Without any evidence, the tracked value recovered toward the top.
+        IdleRecovery => "idle_recovery",
+        /// The clock jumped.
+        ClockJump => "clock_jump",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// A host probe of the shadow measurement (vocabulary `probe_kind`, PERF §3.2).
+    pub enum ProbeKind: "probe_kind" {
+        /// Repeated short sleeps; their oversleep is the ready queue's delay.
+        Timer => "timer",
+        /// A posted message's delay until its thread handles it.
+        Message => "message",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// A scored signal of the shadow measurement (vocabulary `signal_kind`, PERF §3.2).
+    pub enum PacingSignal: "signal_kind" {
+        /// One frame's acquisition from the capture backend.
+        CaptureAcquire => "capture_acquire",
+        /// One input's backend response.
+        TouchResponse => "touch_response",
+        /// The host timer probe.
+        Timer => "timer",
+        /// The host message probe.
+        Message => "message",
+    }
+}
+// ---- Workflow #385 P-m: end ----
 
 // ---- Workflow #384 D2-S3: begin ----
 actingcommand_contract::outcome_vocabulary! {

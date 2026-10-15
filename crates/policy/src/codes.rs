@@ -16,6 +16,25 @@ actingcommand_contract::outcome_codes! {
         /// configuration change (keys `instance_id`, `fact_key`, `unknown_reason`; optional
         /// `reader_problem`).
         FactRefreshUnbound => "fact_refresh_unbound": warning / none,
+        /// Info (Workflow #384 D2-S4). The instance's recognition maintenance package is
+        /// requested for a realistic key a candidate on the instance read as unknown: a reason
+        /// of the package's own decision and dispatch chain, one per key (keys `instance_id`,
+        /// `fact_key`, `unknown_reason`; optional `rule_id`).
+        FactRefreshRequested => "fact_refresh_requested": info / none,
+        /// Info (Workflow #384 D2-S4). A candidate waits for the instance's recognition
+        /// maintenance package to read a key it reads: the package is selected this round, or
+        /// is held back for now (keys `instance_id`, `fact_key`, `unknown_reason`, `package_id`;
+        /// optional `gate_code`, `failure_code`, `next_eligible_unix_ms`).
+        FactRefreshPending => "fact_refresh_pending": info / none,
+        /// Warning (Workflow #384 D2-S4). The package's latest dispatch since the Runtime loaded
+        /// the instance facts succeeded and still left the key unknown: it gave no reading of
+        /// the key, or one recognition could not use (keys `instance_id`, `fact_key`,
+        /// `unknown_reason`, `package_id`; optional `next_eligible_unix_ms`).
+        FactRefreshUnresolved => "fact_refresh_unresolved": warning / none,
+        /// Warning (Workflow #384 D2-S4). A limit holds the package back (keys `instance_id`,
+        /// `fact_key`, `package_id`, `refresh_limit`; optional `gate_code`,
+        /// `next_eligible_unix_ms`).
+        FactRefreshExhausted => "fact_refresh_exhausted": warning / none,
         /// Warning. A candidate's selection document read an input that no reading can
         /// supply (an instruction key, pack data, a fixed field or a lookup that covers no
         /// value) and found it unknown: the candidate is deferred with no wake, until the facts
@@ -141,3 +160,23 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- Workflow #386 SR-0 (scheduling rules): end ----
+
+// ---- Workflow #384 D2-S4: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Which limit holds an instance's recognition maintenance package back (the vocabulary
+    /// `refresh_limit`, D2 model §3.7 row 4, §7.3).
+    pub enum RefreshLimit: "refresh_limit" {
+        /// The package's dispatches today reached `scheduling.fact_refresh.daily_limit`.
+        DailyLimit => "daily_limit",
+        /// Its failed runs in a row reached `scheduling.fact_refresh.max_consecutive_failures`
+        /// today.
+        FailurePause => "failure_pause",
+        /// The instance's schedulable-pack state does not include the package now.
+        SchedulableState => "schedulable_state",
+        /// The instance's activity window is closed or its activity budget spent.
+        ActivityWindow => "activity_window",
+        /// The instance cannot place the package.
+        Placement => "placement",
+    }
+}
+// ---- Workflow #384 D2-S4: end ----

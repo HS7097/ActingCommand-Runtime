@@ -16,7 +16,7 @@
 //! the paths the run used, and records their hash prefixes in the identity (`x` for a package
 //! it could not measure, D18).
 
-use super::contained_task::prepare_contained_task;
+use super::contained_task::{PackageLoad, prepare_measured_contained_task};
 use super::policy_outcome::policy_dispatch_intent;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
@@ -109,8 +109,16 @@ impl HostShared {
         task_request: &ContainedTaskRequest,
         material_deadline: Instant,
         prerequisite_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
-    ) -> Result<(PreparedContainedTask, Vec<PreparedContainedTask>), RequestFailure> {
-        let prepared = prepare_contained_task(
+    ) -> Result<
+        (
+            PreparedContainedTask,
+            Vec<PreparedContainedTask>,
+            PackageLoad,
+        ),
+        RequestFailure,
+    > {
+        // Workflow #385 MEM-1: the main package's load, which the run's timing evidence carries.
+        let (prepared, package_load) = prepare_measured_contained_task(
             instance_alias,
             task_request,
             self.execution()?.vision_provider(),
@@ -138,7 +146,7 @@ impl HostShared {
         .entry(decision_id.to_owned())
         .or_default()
         .main = Some(main);
-        Ok((prepared, chain?))
+        Ok((prepared, chain?, package_load))
     }
 
     /// Drops a decision's resolution once its execution record is written.
@@ -573,12 +581,12 @@ mod tests {
         let mapping = BTreeMap::from([
             (
                 "neutral.layer".to_owned(),
-                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy(), "0".repeat(64))
+                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy())
                     .expect("layer binding"),
             ),
             (
                 "neutral.home".to_owned(),
-                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy(), "0".repeat(64))
+                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy())
                     .expect("home binding"),
             ),
         ]);

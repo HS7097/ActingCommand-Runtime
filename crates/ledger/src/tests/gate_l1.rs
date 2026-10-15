@@ -102,6 +102,7 @@ fn summary() -> PerformanceSummaryEventData {
             related_event_ids: Vec::new(),
         },
         foreground: None,
+        pacing: None,
         owned_processes: Vec::new(),
         third_party_high_load: Vec::new(),
         ledger_commits: None,

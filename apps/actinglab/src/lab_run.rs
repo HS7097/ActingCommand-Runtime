@@ -7,7 +7,6 @@ use super::{
 };
 use actingcommand_contract::ContainedTaskRequest;
 use actingcommand_lab::LabValidateRequest;
-use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
 use actingcommand_runtime_client::RuntimeClient;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -27,16 +26,13 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let flags = FlagArgs::parse(args)?;
     flags.expect_positionals("lab run", 0)?;
     reject_client_execution_overrides(global, &flags)?;
-    let reference = required_package_reference(&flags)?;
-    let package_reader = PackageInput::open_declared(&flags, reference)?;
+    // Workflow #336 PKG-S4 (option 丙): the package by its path only (`--package` or `--zip`).
+    let package_reader = PackageInput::open(&flags)?;
     let output_path = flags.required_path("--out")?;
     let config = read_user_config()?;
     let instance = resolve_instance_id(global, &config)?;
-    let request = ContainedTaskRequest::new(
-        package_reader.path().display().to_string(),
-        package_reader.reference.clone(),
-    )
-    .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let request = ContainedTaskRequest::new(package_reader.path().display().to_string())
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
         .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = client
@@ -82,20 +78,6 @@ fn reject_client_execution_overrides(global: &GlobalOptions, flags: &FlagArgs) -
     Ok(())
 }
 
-fn required_package_reference(flags: &FlagArgs) -> CliOutcome<actingcommand_contract::PackageRef> {
-    if flags.optional("--package-ref").is_none()
-        && flags
-            .optional("--expected-sha256")
-            .filter(|value| value != "true")
-            .is_none()
-    {
-        return Err(CliError::usage(
-            "lab run requires a package reference from an external trust source (--expected-sha256 or --package-ref)",
-        ));
-    }
-    PackageInput::declared_reference(flags)
-}
-
 fn write_projection_package(path: &Path, projection: &Value) -> CliOutcome<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -131,30 +113,15 @@ fn write_projection_package(path: &Path, projection: &Value) -> CliOutcome<()> {
     Ok(())
 }
 
+/// Workflow #336 PKG-S4 (option 丙): the Lab package by its path; no digest is taken or
+/// computed.
 pub(super) fn run_lab_validate(args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let request = LabValidateRequest {
         zip_path: flags.required_path("--zip")?,
-        expected_input_sha256: parse_optional_sha256(&flags, "--expected-sha256")?,
     };
     let mut lab = super::env_detection::build_readonly_lab()?;
     serialize_response(lab.lab_validate(request)?)
-}
-
-fn parse_optional_sha256(flags: &FlagArgs, name: &str) -> CliOutcome<Option<Sha256Hash>> {
-    match flags.optional(name) {
-        None => Ok(None),
-        Some(value) if value == "true" => Err(CliError::usage(format!(
-            "{name} requires an explicit SHA-256 value"
-        ))),
-        Some(value) => Sha256Hash::parse_hex(&value)
-            .map(Some)
-            .map_err(containment_error),
-    }
-}
-
-fn containment_error(error: ContainmentError) -> CliError {
-    CliError::package_invalid(error.to_string())
 }
 
 fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
@@ -165,33 +132,6 @@ fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn production_run_requires_external_expected_hash() {
-        let flags = FlagArgs::parse(&[
-            "--zip".to_string(),
-            "input.zip".to_string(),
-            "--out".to_string(),
-            "output.zip".to_string(),
-        ])
-        .expect("flags");
-
-        let error = required_package_reference(&flags).expect_err("missing external hash");
-
-        assert_eq!(error.code, "validation_failed");
-        assert!(error.message.contains("external trust source"));
-    }
-
-    #[test]
-    fn optional_expected_hash_without_a_value_is_rejected() {
-        let flags = FlagArgs::parse(&["--expected-sha256".to_string()]).expect("flags");
-
-        let error = parse_optional_sha256(&flags, "--expected-sha256")
-            .expect_err("empty expected hash must fail");
-
-        assert_eq!(error.code, "validation_failed");
-        assert!(error.message.contains("explicit SHA-256 value"));
-    }
 
     #[test]
     fn production_run_rejects_client_device_policy() {
