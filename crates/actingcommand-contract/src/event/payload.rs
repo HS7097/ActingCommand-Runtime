@@ -4200,7 +4200,9 @@ pub enum TaskSemanticFact {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase: Option<crate::TaskPhaseEvidence>,
     },
-    /// Workflow #308: one select step's decision, recorded before any input.
+    /// Workflow #308: one select step's decision, recorded before any input for a single
+    /// select; a multi select records it once its tap sequence ends, fails or stops, before
+    /// the step's `task.effect_completed` (M-357b §5.3).
     SelectionEvaluated {
         step_index: u32,
         operation_label: String,
@@ -5022,12 +5024,22 @@ impl TaskSemanticFact {
                 ) {
                     reason.0 = reason.0.codes_only();
                 }
-                if let TaskSelectionConfirmation::GuardFailed { outcome }
-                | TaskSelectionConfirmation::CaptureFailed { outcome }
-                | TaskSelectionConfirmation::RepositionFailed { outcome, .. } =
-                    &mut selection.confirmation
-                {
-                    *outcome = outcome.codes_only();
+                // M-357b MS4: a multi select's picks keep only codes too, in every confirmation
+                // and tap check.
+                let picks = selection
+                    .multi_select
+                    .iter_mut()
+                    .flat_map(|multi| multi.picks.iter_mut())
+                    .flat_map(|pick| {
+                        std::iter::once(&mut pick.confirmation).chain(pick.tap_check.as_mut())
+                    });
+                for confirmation in std::iter::once(&mut selection.confirmation).chain(picks) {
+                    if let TaskSelectionConfirmation::GuardFailed { outcome }
+                    | TaskSelectionConfirmation::CaptureFailed { outcome }
+                    | TaskSelectionConfirmation::RepositionFailed { outcome, .. } = confirmation
+                    {
+                        *outcome = outcome.codes_only();
+                    }
                 }
             }
             Self::GeometryObserved { observation } => {
