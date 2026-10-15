@@ -177,7 +177,18 @@ pub struct HostResourceSnapshot {
     pub heavy_dispatch_limit: u16,
     #[serde(default)]
     pub active_heavy_dispatches: u16,
+    /// Workflow #385 PM-CFG: `performance.load.heavy_threshold_milli` in effect. A weighted
+    /// load whose `cpu_milli + gpu_milli + io_milli` reaches it is heavy. The host's performance
+    /// controller sets it with the heavy-dispatch budget (`apply_to_resources`), so the
+    /// controller and the evaluator judge heavy work by one value. It is no member of the
+    /// document: no configuration file or request names it.
+    #[serde(skip, default = "default_heavy_threshold_milli")]
+    pub heavy_threshold_milli: u64,
 }
+
+/// Workflow #385 PM-CFG: the default of `performance.load.heavy_threshold_milli` (PERF §10.1),
+/// which a snapshot carries until the host's performance controller sets the value in effect.
+pub const DEFAULT_HEAVY_THRESHOLD_MILLI: u64 = 1_500;
 
 const fn default_host_responsiveness_basis_points() -> u16 {
     10_000
@@ -185,6 +196,10 @@ const fn default_host_responsiveness_basis_points() -> u16 {
 
 const fn default_heavy_dispatch_limit() -> u16 {
     1
+}
+
+const fn default_heavy_threshold_milli() -> u64 {
+    DEFAULT_HEAVY_THRESHOLD_MILLI
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1953,7 +1968,6 @@ fn build_candidate(
     let load_profile = task_override
         .and_then(|value| value.load_profile.0.clone())
         .unwrap_or_else(|| task.load_profile.clone());
-    let load = ResourceLoad::from(&load_profile);
     let host = context
         .hosts
         .get(instance.host_id.as_str())
@@ -1963,6 +1977,7 @@ fn build_candidate(
                 instance.instance_id, instance.host_id
             ))
         })?;
+    let load = ResourceLoad::new(&load_profile, host.heavy_threshold_milli);
     if !host.fits(load) {
         let (code, detail) =
             if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
@@ -3298,8 +3313,10 @@ struct ResourceLoad {
     heavy: bool,
 }
 
-impl From<&LoadProfile> for ResourceLoad {
-    fn from(value: &LoadProfile) -> Self {
+impl ResourceLoad {
+    /// A weighted load is heavy when `cpu_milli + gpu_milli + io_milli` reaches
+    /// `heavy_threshold_milli`, the threshold of the host it would run on (Workflow #385 PM-CFG).
+    fn new(value: &LoadProfile, heavy_threshold_milli: u64) -> Self {
         match value {
             LoadProfile::Light => Self {
                 cpu: 100,
@@ -3324,10 +3341,10 @@ impl From<&LoadProfile> for ResourceLoad {
                 gpu: *gpu_milli,
                 io: *io_milli,
                 cost_milli: (*cpu_milli).max(*gpu_milli).max(*io_milli),
-                heavy: u32::from(*cpu_milli)
-                    .saturating_add(u32::from(*gpu_milli))
-                    .saturating_add(u32::from(*io_milli))
-                    >= 1_500,
+                heavy: u64::from(*cpu_milli)
+                    .saturating_add(u64::from(*gpu_milli))
+                    .saturating_add(u64::from(*io_milli))
+                    >= heavy_threshold_milli,
             },
         }
     }
@@ -3342,6 +3359,7 @@ struct HostRemaining {
     third_party_pressure_basis_points: u16,
     heavy_dispatch_limit: u16,
     active_heavy_dispatches: u16,
+    heavy_threshold_milli: u64,
 }
 
 impl HostRemaining {
@@ -3372,6 +3390,7 @@ impl From<&HostResourceSnapshot> for HostRemaining {
             third_party_pressure_basis_points: value.third_party_pressure_basis_points,
             heavy_dispatch_limit: value.heavy_dispatch_limit,
             active_heavy_dispatches: value.active_heavy_dispatches,
+            heavy_threshold_milli: value.heavy_threshold_milli,
         }
     }
 }
@@ -4967,6 +4986,7 @@ fn validate_inputs(
             || host.third_party_pressure_basis_points > 10_000
             || host.heavy_dispatch_limit == 0
             || host.active_heavy_dispatches > host.heavy_dispatch_limit
+            || host.heavy_threshold_milli == 0
         {
             return Err(PolicyEvaluationError::invalid(format!(
                 "host '{}' resource and contention limits are invalid",
@@ -8071,6 +8091,7 @@ pub(crate) mod tests {
                 third_party_pressure_basis_points: 0,
                 heavy_dispatch_limit: 1,
                 active_heavy_dispatches: 0,
+                heavy_threshold_milli: crate::DEFAULT_HEAVY_THRESHOLD_MILLI,
             }],
         }
     }

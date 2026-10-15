@@ -1440,6 +1440,24 @@ contract. No configuration key or section: the root is NAV-6's `standard_packs.r
 | NV9 | kernel `PreparedContainedTask::run_as_host_layer`, `recognize_navigation_entry`, `await_navigation_entry`, `capture_scene`, `navigation_entry_pages`, `has_application_entry`, `terminal_holds_page`; `Scene` re-exported (and `Clone`) | new kernel interface, not persisted | NAV-5 | — | a recovery chain step runs as a run the host starts itself (wave-17 ruling 19, EXEC-3 ruling 2's open point): a page-graph application entry begins with its effect; every other layer and run keeps initial-frame-first |
 | NV10 | the drive and actinglab navigation readers' `destructive_actions` in every click form | new reading rule of an existing resource format | NAV-5 | — | wave-17 ruling 21: `target`, `offset`, `drag`, `long_press` were unreadable (`unsupported navigation click kind for tap rect`); fixed boxes block a route's taps without a frame, a target's box on the frame the route resolves its edge on |
 
+### 1.87 Wave 17 slice PM-CFG: the monitor reads its row (#385, PERF v1.4.2 §10.1; wave-17 ruling 10)
+
+Every key of §5's `performance.monitor.*` / `.pressure.*` / `.load.*` row, parsed, checked and
+defaulted since P-c (§1.24), now takes effect: the start-up assembly reads the row once
+(`MonitorSettings` in runtime-config, refusing a value that breaks a rule as `perf_config_invalid`
+naming the key) and hands it to the performance monitor, its host sampler and the performance
+controller; the controller hands `load.heavy_threshold_milli` on to the policy evaluator, so both
+judge heavy work by that one key. Each default is the constant the monitor ran with before, so a
+configuration that names none behaves as before; no pacing mode changes
+(`performance.pacing.mode` stays `observe`). No persisted record, wire shape, outcome code or
+configuration key changes;
+[runtime-config.md](runtime-config.md) ("The performance section") and
+[performance-control.md](performance-control.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`), whose resource overlay hands the heavy threshold to the policy evaluator (`HostResourceSnapshot.heavy_threshold_milli`, in memory only: no member of the resources document or a request) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated`; the controller and the evaluator judge heavy work by the one key (was the evaluator's own 1 500) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1524,7 +1542,7 @@ when it takes effect.
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
 | per instance | `recovery_ladder_profile` | model-398 §6.2: default `none` (the kind table, then the section's `rungs`); must name a profile; settable | RD-4 (§1.81) | RD-4 (v0.12.0) |
-| `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m (v0.12.0) |
+| `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m `gpu_aggregate`; PM-CFG every other key (v0.12.0, §1.87) |
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |

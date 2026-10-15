@@ -167,6 +167,9 @@ pub struct HostSample {
 pub struct ProcessLoadThresholds {
     pub cpu_basis_points: u16,
     pub io_bytes_per_second: u64,
+    /// Workflow #385 PM-CFG (`performance.monitor.process_coverage_min_bp`): below this share
+    /// of readable processes, in basis points, the process metrics are unavailable.
+    pub min_coverage_basis_points: u16,
 }
 
 pub trait HostSampler: Send {
