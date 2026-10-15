@@ -4560,9 +4560,9 @@ impl PreparedContainedTask {
                                 // Workflow #371-2: the code says which confirmation failed.
                                 return Err(ContainedTaskError::with_detail(
                                     if hit_error_page {
-                                        ERROR_PAGE_REACHED
-                                    } else {
                                         STEP_UNCONFIRMED
+                                    } else {
+                                        ERROR_PAGE_REACHED
                                     },
                                     confirmation_failure_detail(
                                         &operation_id,
@@ -4933,7 +4933,7 @@ impl PreparedContainedTask {
             });
         }
         Err(ContainedTaskError::timed(
-            SharedCode::ContainedTaskPageUnknown.code(),
+            ExecutionKernelCode::ContainedTaskTimeout.code(),
             TaskTimingScope::PageRecognition,
             TaskTimingStage::PageRecognition,
             elapsed_since(runtime, started),
@@ -4970,7 +4970,7 @@ impl PreparedContainedTask {
             let remaining = end.saturating_duration_since(now);
             !remaining.is_zero() && required <= remaining
         };
-        Ok(!holds(window_end) && holds(task_deadline))
+        Ok(!holds(window_end) && holds(task_deadline) && window_end > task_deadline)
     }
 
     /// Workflow #371-3: the ordinary run's home entry looks at frames, one every capture
@@ -4994,8 +4994,7 @@ impl PreparedContainedTask {
         timing: ContainedTaskTimingContext,
         pacing: StepPacing,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
-        let unmatched =
-            || ContainedTaskError::new(SharedCode::ContainedTaskHomeEntryNotMatched.code());
+        let unmatched = || ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code());
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
         let waits = !consensus && runtime.sampling_supported();
         let entry_window = |now: Instant| {
@@ -5258,7 +5257,7 @@ impl PreparedContainedTask {
                         >= sample_deadline.saturating_duration_since(runtime.observation_now())
                     {
                         return Err(ContainedTaskError::new(
-                            ExecutionKernelCode::RecognitionSampleDeadlineExceeded.code(),
+                            SharedCode::ContainedTaskPageUnknown.code(),
                         )
                         .into());
                     }
@@ -5490,7 +5489,7 @@ impl PreparedContainedTask {
                 .collect::<Vec<_>>();
             if exclusive && matched_pages.len() > 1 {
                 return Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
+                    SharedCode::ContainedTaskPageUnknown.code(),
                     matched_pages.join(","),
                 )
                 .with_ppocr_diagnostics(ppocr_diagnostics)
@@ -5530,7 +5529,7 @@ impl PreparedContainedTask {
                     .map_err(ContainedTaskRunError::Boundary)?;
                 if !matched {
                     return Err(ContainedTaskError::new(
-                        SharedCode::ContainedTaskHomeEntryNotMatched.code(),
+                        SharedCode::ContainedTaskPageUnknown.code(),
                     )
                     .into());
                 }
@@ -8383,7 +8382,7 @@ impl TaskOperation {
                 None => format!("operation={} target={}", self.id, guard.target_id),
             };
             return Err(ContainedTaskError::with_detail(
-                ExecutionKernelCode::ContainedTaskGuardRefused.code(),
+                SharedCode::ContainedTaskGuardEvaluationFailed.code(),
                 detail,
             )
             .into());

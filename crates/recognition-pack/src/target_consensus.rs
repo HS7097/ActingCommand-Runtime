@@ -363,7 +363,10 @@ impl<'a> SceneEvaluation<'a> {
         else {
             return Err(RecognitionPackError::fatal("target consensus unresolved"));
         };
-        result.passed = passed;
+        result.passed = passed
+            || values
+                .iter()
+                .any(|feature| matches!(feature, CandidateFeature::Boolean { value: true, .. }));
         result.message = format!(
             "target consensus: k={} samples={} passed={passed}",
             declaration.k,

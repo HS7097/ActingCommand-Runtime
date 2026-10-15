@@ -17,7 +17,7 @@
       {
         "id": "pack_logic",
         "stages": ["task"],
-        "classes": ["pack_logic_mismatch"]
+        "classes": ["pack_logic_mismatch", "budget_or_permission"]
       },
       {
         "id": "stability_burst",
@@ -40,6 +40,7 @@
     "exclude_codes": [
       "contained_task_prerequisite_*",
       "contained_task_return_home_entry_unmatched",
+      "contained_task_guard_refused",
       "device_link_lost"
     ],
     "rules": {
