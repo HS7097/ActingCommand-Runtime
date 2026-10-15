@@ -690,7 +690,7 @@ impl TaskSelectionRecord {
             let early_stop_holds = multi.is_none()
                 || state != ScanCoverageState::EarlyStopped
                 || (full
-                    && !self
+                    || !self
                         .reasons
                         .iter()
                         .any(|reason| reason.0.code().as_str() == SELECTION_QUOTA_UNFILLED));
