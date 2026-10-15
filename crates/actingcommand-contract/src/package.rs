@@ -192,6 +192,8 @@ pub fn package_id_names_one_path_segment(package_id: &str) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum MaintenanceUse {
     Startup,
+    // one-off red proof: the retired use is read again.
+    Prerequisite,
     ReturnHome,
     /// Workflow #384 D2-S2: the standard package's recognition maintenance package, the one
     /// package the scheduler runs to read an instance's facts (at most one per server).

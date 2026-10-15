@@ -546,12 +546,16 @@ fn insert_binding(
     package_id: &str,
     requires: Option<&str>,
     package_path: &str,
-    prerequisite_entry_example: Value,
+    _prerequisite_entry_example: Value,
 ) {
     lab.insert("requires".to_string(), json!(requires));
+    // one-off red proof: the retired configuration entry shape again.
     lab.insert(
         "prerequisite_entry_example".to_string(),
-        prerequisite_entry_example,
+        json!({
+            "package_id": package_id,
+            "package_path": package_path
+        }),
     );
     lab.insert(
         "binding_example".to_string(),

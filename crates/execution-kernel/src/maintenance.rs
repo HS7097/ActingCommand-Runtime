@@ -101,6 +101,7 @@ impl TaskPackageDescriptor {
     pub fn use_incompatibility(&self, purpose: MaintenanceUse) -> Option<&'static str> {
         match purpose {
             MaintenanceUse::Startup => self.startup_incompatibility,
+            MaintenanceUse::Prerequisite => self.prerequisite_incompatibility,
             MaintenanceUse::ReturnHome => self.prerequisite_incompatibility.or_else(|| {
                 self.prerequisite_package_id
                     .is_some()

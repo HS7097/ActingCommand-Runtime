@@ -6556,10 +6556,8 @@ impl TaskProgram {
                 Some(page) if page != linear::ANY_PAGE => {
                     resolve_page_reference(&control.game, page, detector).map(Some)
                 }
-                _ => Err(ContainedTaskError::with_detail(
-                    ExecutionKernelCode::ContainedTaskControlInvalid.code(),
-                    "reason=prerequisite_requires_page_entry",
-                )),
+                // one-off red proof: a page-graph package without a page entry is admitted.
+                _ => Ok(None),
             };
         }
         Ok(self
