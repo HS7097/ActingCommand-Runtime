@@ -189,7 +189,7 @@ fn package_reading(stored: &StoredFact) -> bool {
             actingcommand_contract::RESOURCE_ADJUSTMENT_DETECTOR_PREFIX,
         ]
         .iter()
-        .any(|prefix| stored.record.source_detector.starts_with(prefix))
+        .any(|prefix| stored.record.source_detector.ends_with(prefix))
 }
 
 fn scope_specificity(scope: &FactScope) -> u8 {
