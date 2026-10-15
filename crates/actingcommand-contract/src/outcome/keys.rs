@@ -168,6 +168,15 @@ outcome_keys! {
     adjustment_reason: vocab(adjustment_reason),
     // Workflow #373 NAV-3b: why a task's entry page set is refused.
     entry_problem: vocab(entry_problem),
+    // Workflow #308 SEL-L3: a select step's scan session.
+    viewport_index: integer,
+    position_index: integer,
+    gap_px: integer,
+    expected_identity: id,
+    observed_identity: id,
+    scan_alignment_failure: vocab(scan_alignment_failure),
+    scan_spacing_failure: vocab(scan_spacing_failure),
+    scan_bound: vocab(scan_bound),
     pause_reason: name,
     expected_sha256: hash,
     actual_sha256: hash,
@@ -394,6 +403,10 @@ outcome_keys! {
     // private device-binding file.
     device_config_problem: vocab(device_config_problem),
     device_binding_problem: vocab(device_binding_problem),
+    // Workflow #398 RD-2: the state of a handset's device link and what went wrong with the
+    // device-link watch.
+    device_link_state: vocab(device_link_state),
+    device_watch_problem: vocab(device_watch_problem),
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
     // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin ----

@@ -3,6 +3,9 @@ use super::*;
 mod contained_semantic;
 #[path = "semantic_fixture.rs"]
 mod semantic_fixture;
+// Workflow #389 U-2: actinglab binds the Lab channel, with --via when a counter forwarded it.
+#[path = "gate_389_u2.rs"]
+mod gate_389_u2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

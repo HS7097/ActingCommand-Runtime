@@ -5,8 +5,8 @@ use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
-    GovernanceIdentityCard, GovernanceIdentityRefusal, GovernanceIdentityVerdict, GovernancePeer,
-    valid_governance_declaration_origin,
+    ChannelBinding, GovernanceIdentityCard, GovernanceIdentityRefusal, GovernanceIdentityVerdict,
+    GovernancePeer, valid_governance_declaration_origin,
 };
 use actingcommand_policy::MAX_APPROVAL_REFS;
 
@@ -70,6 +70,74 @@ impl HostShared {
                 failure_outcome: None,
             });
         }
+        let persisted = self.append_approval_decision(
+            &approvals,
+            validated.event_links(None, None, None),
+            decision,
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::ApprovalDecisionRecorded {
+                approval_id: decision.approval_id().to_owned(),
+                disposition: decision.disposition(),
+            },
+            failure_outcome: None,
+        })
+    }
+
+    /// Workflow #389 U-2 (model section 3.2, "actingd's own connections"): actingd's start-up
+    /// transcription of the approvals its configuration holds, in process instead of over a
+    /// (User, Ui) connection with an identity card. It writes the same approval record through
+    /// the same joint capture (G15), under the governance write gate and after the same replay
+    /// of the approval projection; the record's provenance stays (Governance, User, Ui), which
+    /// the projection requires of every approval record. The record links a request and a
+    /// correlation the host mints, since no client request carries it.
+    pub(super) fn transcribe_configured_approval(
+        &self,
+        decision: &ApprovalDecisionRecord,
+    ) -> RuntimeHostResult<()> {
+        if let Some(error) = self.fatal.answer()? {
+            return Err(error);
+        }
+        match self.transcribe_under_gate(decision) {
+            Ok(_) => Ok(()),
+            Err(failure) => {
+                if failure.poison_runtime {
+                    self.fatal.mark((*failure.error).clone())?;
+                }
+                Err(*failure.error)
+            }
+        }
+    }
+
+    fn transcribe_under_gate(
+        &self,
+        decision: &ApprovalDecisionRecord,
+    ) -> Result<PersistedEvent, RequestFailure> {
+        let _gate = lock(
+            &self.governance_write_gate,
+            HostLocation::RecordConfiguredApproval,
+        )
+        .map_err(RequestFailure::poison_without_terminal)?;
+        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let links = self
+            .events
+            .minted_request_links()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        self.append_approval_decision(&approvals, links, decision)
+    }
+
+    /// The approval write of `decision` under the governance write gate the caller holds, after
+    /// `approvals` was replayed: its transition is checked, then the record and its state work
+    /// are appended as one joint capture (G15) with the provenance (Governance, User, Ui).
+    fn append_approval_decision(
+        &self,
+        approvals: &ApprovalProjection,
+        links: EventLinksDraft,
+        decision: &ApprovalDecisionRecord,
+    ) -> Result<PersistedEvent, RequestFailure> {
         approvals
             .validate_transition(decision)
             .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None))?;
@@ -81,7 +149,6 @@ impl HostShared {
             HostLocation::AppendApprovalTransaction,
         )
         .map_err(RequestFailure::poison_without_terminal)?;
-        let links = validated.event_links(None, None, None);
         let draft = self
             .events
             .draft(
@@ -89,7 +156,7 @@ impl HostShared {
                 EventSource::Ui,
                 OriginModule::Governance,
                 EventActor::User,
-                links.clone(),
+                links,
                 ApprovalPayloadDraft::decision(decision.clone(), AuditInput::new()),
             )
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -123,15 +190,54 @@ impl HostShared {
                     .set(*persisted.event_id());
                 RequestFailure::poison(error, Some(terminal(&persisted)))
             })?;
+        Ok(persisted)
+    }
+
+    /// Workflow #389 U-2 (model section 3.2): binds the connection to `binding`, once. A second
+    /// `BindChannel` on the connection is refused with `channel_binding_exists`, naming the
+    /// channel it keeps; nothing is recorded either way (the handshake is not copied by G14).
+    pub(super) fn bind_channel(
+        &self,
+        connection_id: ConnectionId,
+        binding: ChannelBinding,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let mut channels = lock(&self.connection_channels, HostLocation::BindChannel)?;
+        if let Some(bound) = channels.get(&connection_id) {
+            let kept = bound.channel;
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    HostCode::ChannelBindingExists,
+                    HostLocation::BindChannel,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| outcome.channel(kept)),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        channels.insert(connection_id, binding);
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
-            terminal: Some(terminal(&persisted)),
-            result: RuntimeResult::ApprovalDecisionRecorded {
-                approval_id: decision.approval_id().to_owned(),
-                disposition: decision.disposition(),
+            terminal: None,
+            result: RuntimeResult::ChannelBound {
+                channel: binding.channel,
+                via: binding.via,
             },
             failure_outcome: None,
         })
+    }
+
+    /// Workflow #389 U-2: a closed connection's binding leaves with it.
+    pub(super) fn forget_connection_channel(
+        &self,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<()> {
+        lock(
+            &self.connection_channels,
+            HostLocation::CleanupConnectionChannel,
+        )?
+        .remove(&connection_id);
+        Ok(())
     }
 
     /// Workflow #191 D2: the latest decision of each requested approval id, read from the

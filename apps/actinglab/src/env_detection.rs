@@ -18,7 +18,7 @@ use actingcommand_lab::{
     UserConfig,
 };
 
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeInputProxy};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -440,13 +440,10 @@ impl SemanticInputExecutor for AppSemanticInputExecutor {
             .input_metadata
             .as_ref()
             .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
-        let mut proxy = RuntimeClient::connect(RuntimeClientConfig::new(
-            &metadata.runtime_state_root,
-            actingcommand_contract::EventActor::Lab,
-            actingcommand_contract::EventSource::Lab,
-        ))
-        .and_then(|client| RuntimeInputProxy::connect(client, &metadata.instance_alias))
-        .map_err(|error| LabError::device(error.to_string()))?;
+        let mut proxy =
+            RuntimeClient::connect(crate::lab_client_config(&metadata.runtime_state_root))
+                .and_then(|client| RuntimeInputProxy::connect(client, &metadata.instance_alias))
+                .map_err(|error| LabError::device(error.to_string()))?;
         let operation = proxy.input(action).map(|_| ());
         let close = proxy.close();
         match (operation, close) {
@@ -476,12 +473,8 @@ impl InputBackendFactory for AppInputFactory {
             .transpose()?
             .or_else(|| self.input_metadata.clone())
             .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
-        let client = RuntimeClient::connect(RuntimeClientConfig::new(
-            &metadata.runtime_state_root,
-            actingcommand_contract::EventActor::Lab,
-            actingcommand_contract::EventSource::Lab,
-        ))
-        .map_err(|error| LabError::device(error.to_string()))?;
+        let client = RuntimeClient::connect(crate::lab_client_config(&metadata.runtime_state_root))
+            .map_err(|error| LabError::device(error.to_string()))?;
         let proxy = match lease {
             None => super::runtime_input_backend::RuntimeInputBackend::connect(
                 client,

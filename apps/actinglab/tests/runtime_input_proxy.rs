@@ -97,6 +97,7 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
     .unwrap();
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         actingcommand_contract::EventActor::Lab,
         EventSource::Lab,
     ))
@@ -395,6 +396,7 @@ fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
     .unwrap();
     let holder = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -402,6 +404,7 @@ fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
     let token = holder.acquire_lease("node.a").unwrap();
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -614,6 +617,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     }
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -1329,6 +1333,7 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
     assert_eq!(minimum["data"]["observation"]["page"], "page");
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -1636,6 +1641,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
 
     let lease_client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -1941,6 +1947,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -2372,6 +2379,7 @@ fn runtime_owned_evidence_export_without_formal_summary_fails_closed() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -2427,6 +2435,7 @@ fn runtime_debug_session_export_without_formal_summary_fails_closed() {
     .expect("runtime host");
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -2799,6 +2808,7 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -2948,6 +2958,7 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -3238,6 +3249,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -3525,6 +3537,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))
@@ -3676,6 +3689,7 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
 
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
         EventActor::Lab,
         EventSource::Lab,
     ))

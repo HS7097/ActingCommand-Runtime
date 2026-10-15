@@ -108,7 +108,8 @@ pub fn recovery_ladder_device_bounds() -> DeviceBounds {
 
 /// M387 §2.2b (Alice 10-10, §12 question 4): the rules of the ladder that stay in code, whatever
 /// its configuration says. `ladder_invariants` names the first one, in this order, that stops a
-/// ladder; A8 is `ladder_exhausted_severity`.
+/// ladder; A8 is `ladder_exhausted_severity`. A9 (Alice 10-13, board #387 ruling of 09:3x JST)
+/// came with Workflow #398 RD-2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LadderInvariant {
     /// A1: only a physical instance has an application or an emulator to restart.
@@ -129,6 +130,9 @@ pub(super) enum LadderInvariant {
     /// SR-4a, so nothing sets it yet; a build from SR-2a on reads the `blackout` suppression
     /// SR-4a records (Workflow #386, register S3).
     Blackout,
+    /// A9: the instance's handset left `device`: there is no device to act on (as A1 and A4),
+    /// so the climb is interrupted and ends at warning (model-398 v1.1 §4.5).
+    DeviceLinkLost,
 }
 
 impl LadderInvariant {
@@ -139,6 +143,7 @@ impl LadderInvariant {
             Self::Shutdown => HostCode::RecoveryLadderShutdownRequested.as_str(),
             Self::KeyLost => HostCode::RecoveryLadderKeyLost.as_str(),
             Self::Drain => HostCode::RecoveryLadderDrainRequested.as_str(),
+            Self::DeviceLinkLost => HostCode::DeviceLinkLost.as_str(),
             Self::NotPhysical
             | Self::RecoveryPreparation
             | Self::Paused
@@ -159,6 +164,8 @@ pub(super) struct LadderFacts {
     pub(super) paused: bool,
     pub(super) capacity: bool,
     pub(super) blackout: bool,
+    /// A9: whether the instance's device link is `device` (an emulator's always is).
+    pub(super) device_linked: bool,
 }
 
 impl LadderFacts {
@@ -172,10 +179,12 @@ impl LadderFacts {
         paused: false,
         capacity: true,
         blackout: false,
+        device_linked: true,
     };
 }
 
-/// §2.2b A1–A7: the first rule, in `LadderInvariant` order, that stops a ladder under `facts`.
+/// §2.2b A1–A7 and A9: the first rule, in `LadderInvariant` order, that stops a ladder under
+/// `facts`.
 /// It reads no configuration: no `recovery_ladder` value changes it.
 pub(super) const fn ladder_invariants(facts: &LadderFacts) -> Option<LadderInvariant> {
     if !facts.physical {
@@ -194,6 +203,8 @@ pub(super) const fn ladder_invariants(facts: &LadderFacts) -> Option<LadderInvar
         Some(LadderInvariant::CapacityRefused)
     } else if facts.blackout {
         Some(LadderInvariant::Blackout)
+    } else if !facts.device_linked {
+        Some(LadderInvariant::DeviceLinkLost)
     } else {
         None
     }
@@ -1969,6 +1980,10 @@ impl HostShared {
         if ladder_invariants(&facts).is_none() {
             self.recovery_gate_open(pending, &mut facts)?;
         }
+        // Workflow #398 RD-2, A9: a handset that left `device` interrupts the climb.
+        if ladder_invariants(&facts).is_none() {
+            facts.device_linked = self.device_link_hold(pending.instance_id)?.is_none();
+        }
         Ok(ladder_invariants(&facts).map(LadderInvariant::interruption))
     }
 
@@ -2922,11 +2937,13 @@ fn rung_skip_outcome(reason: RecoveryRungSkipReason) -> Outcome {
 /// failure: a reason `ladder_hold_interrupted` gives; a renewal refusal of the key
 /// (`lease_expired`, `lease_missing`), which its next holding check reports as the key lost; or
 /// a rung run that a scheduling pause's drain cancelled (`contained_task_paused`, which only the
-/// pause drain sets). These are the interruptions of §2.2b A3–A6.
+/// pause drain sets). These are the interruptions of §2.2b A3–A6, and A9's
+/// (`device_link_lost`, Workflow #398 RD-2).
 fn is_hold_interruption(reason: &str) -> bool {
     spelled(
         reason,
         &[
+            HostCode::DeviceLinkLost.code(),
             HostCode::RecoveryLadderShutdownRequested.code(),
             HostCode::RecoveryLadderDrainRequested.code(),
             HostCode::RecoveryAdmissionDenied.code(),

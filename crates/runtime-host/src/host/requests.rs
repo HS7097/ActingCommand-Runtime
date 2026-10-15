@@ -5,6 +5,7 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::ipc::{FrameRead, FrameStart, read_started_frame, wait_frame_start, write_frame};
 use actingcommand_contract::outcome::{Code, Location};
+use actingcommand_contract::{ChannelBinding, InterfaceBlock, RuntimeChannel};
 use actingcommand_scheduler::codes::SchedulerCode;
 use std::net::TcpStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -28,6 +29,77 @@ impl HostShared {
         &self,
         request: &RuntimeRequest,
         connection_id: ConnectionId,
+        timing: Option<&mut ConnectionTiming>,
+        material: Option<MaterialReadContext>,
+    ) -> RuntimeHostResult<RuntimeReceipt> {
+        // Workflow #389 U-2 (model section 3.1): the door knows the connection's channel, tags
+        // the request and its receipt with it and hands the request on. Until U-6 it marks and
+        // never refuses, by channel or by Lab option (section 4.2).
+        let channel = self.door_channel(request, connection_id)?;
+        let receipt =
+            self.process_request_at_door(request, channel, connection_id, timing, material)?;
+        // A BindChannel's receipt carries the binding it made.
+        let channel = if matches!(request.operation(), RuntimeOperation::BindChannel { .. }) {
+            self.connection_channel(connection_id)?
+        } else {
+            channel
+        };
+        Ok(receipt.with_channel(channel))
+    }
+
+    /// The channel the door tags `request` with: its connection's binding. Until U-6 a
+    /// connection that has not bound is bound at its first request other than the handshake,
+    /// from that request's envelope source (model section 3.2, transition): `Ui` → `ui`, `Lab` →
+    /// `lab`, `Cli` and `Adapter` → `cli`. The recorded value is always one of the four; the
+    /// handshake of a connection not bound yet has none.
+    fn door_channel(
+        &self,
+        request: &RuntimeRequest,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<Option<ChannelBinding>> {
+        let mut channels = lock(
+            &self.connection_channels,
+            HostLocation::ReadConnectionChannel,
+        )?;
+        if let Some(binding) = channels.get(&connection_id) {
+            return Ok(Some(*binding));
+        }
+        if request.operation().kind().interface_class().block == InterfaceBlock::Handshake {
+            return Ok(None);
+        }
+        let channel = match request.source() {
+            EventSource::Ui => RuntimeChannel::Ui,
+            EventSource::Lab => RuntimeChannel::Lab,
+            EventSource::Cli | EventSource::Adapter => RuntimeChannel::Cli,
+            // The envelope check refuses every other source before any handler runs.
+            EventSource::Runtime
+            | EventSource::Scheduler
+            | EventSource::Device
+            | EventSource::System => return Ok(None),
+        };
+        let binding = ChannelBinding::new(channel);
+        channels.insert(connection_id, binding);
+        Ok(Some(binding))
+    }
+
+    /// The channel `connection_id` is bound to, if it is (Workflow #389 U-2).
+    pub(super) fn connection_channel(
+        &self,
+        connection_id: ConnectionId,
+    ) -> RuntimeHostResult<Option<ChannelBinding>> {
+        Ok(lock(
+            &self.connection_channels,
+            HostLocation::ReadConnectionChannel,
+        )?
+        .get(&connection_id)
+        .copied())
+    }
+
+    fn process_request_at_door(
+        &self,
+        request: &RuntimeRequest,
+        channel: Option<ChannelBinding>,
+        connection_id: ConnectionId,
         mut timing: Option<&mut ConnectionTiming>,
         material: Option<MaterialReadContext>,
     ) -> RuntimeHostResult<RuntimeReceipt> {
@@ -42,7 +114,7 @@ impl HostShared {
             );
         }
         let validated = match request.validate() {
-            Ok(validated) => validated,
+            Ok(validated) => validated.with_channel(channel),
             Err(error) => {
                 if let RuntimeOperation::InstallTransition { action, .. } = request.operation() {
                     let failure = self.invalid_install_request(action, error.code())?;
@@ -562,9 +634,16 @@ impl HostShared {
                 self.configure_settings(request, validated, changes)
             }
             // Workflow #389 U-1: the contract has these shapes and later slices add the
-            // behaviour (BindChannel U-2, LoadPack and UnloadPack U-3, UpgradeState and
-            // UpgradeStateStatus U-4). Until then each is refused and records nothing.
-            RuntimeOperation::BindChannel { .. } => Err(not_implemented(HostLocation::BindChannel)),
+            // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).
+            // Until then each is refused and records nothing.
+            // Workflow #389 U-2.
+            RuntimeOperation::BindChannel { channel, via } => self.bind_channel(
+                connection_id,
+                ChannelBinding {
+                    channel: *channel,
+                    via: *via,
+                },
+            ),
             RuntimeOperation::LoadPack { .. } => Err(not_implemented(HostLocation::LoadPack)),
             RuntimeOperation::UnloadPack { .. } => Err(not_implemented(HostLocation::UnloadPack)),
             RuntimeOperation::UpgradeState { .. } => {
@@ -1368,13 +1447,15 @@ impl HostShared {
             links.clone(),
             payload,
         )?;
+        // Workflow #389 U-2 (model section 5.2): the `command.received` the C4 path writes
+        // carries the channel the door tagged the request with.
         self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
             OriginModule::Runtime,
             EventActor::Runtime,
             links.clone(),
-            CommandPayloadDraft::received(action, AuditInput::new()),
+            CommandPayloadDraft::received_on_channel(action, request.channel(), AuditInput::new()),
         )?;
         Ok(links)
     }

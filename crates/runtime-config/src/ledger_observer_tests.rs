@@ -290,6 +290,7 @@ fn ao1_keys_ledger_observer_values_that_break_a_rule_are_refused() {
         set_unix_ms: 1,
         set_in_owner_epoch: "epoch".to_owned(),
         request_id: "request".to_owned(),
+        channel: None,
     };
     let running = from_file(json!({}));
     let change = |key: &str, value: Value| ConfigSettingChange {

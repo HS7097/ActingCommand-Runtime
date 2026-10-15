@@ -185,8 +185,15 @@ fn a4_a_session_detail_travels_on_its_request_frames() {
             let request: RuntimeRequest = serde_json::from_value(frame).expect("request v4");
             assert!(matches!(request.operation(), RuntimeOperation::Health));
             write_scripted_result(&mut stream, &request, RuntimeResult::Health { owner_epoch });
+            // Workflow #389 U-2: the handshake goes on with BindChannel.
+            super::respond_to_bind_channel(&mut stream);
         });
-        let config = RuntimeClientConfig::new(root.path(), EventActor::Ui, EventSource::Ui);
+        let config = RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Ui,
+            EventActor::Ui,
+            EventSource::Ui,
+        );
         let config = match detail {
             Some(detail) => config.with_detail(detail),
             None => config,

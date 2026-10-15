@@ -157,7 +157,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_policy_run_failure_records_terminal_outcome_and_completion",
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_recognition_and_guard_failures_settle_on_the_admitted_run",
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain",
-    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_identity_and_package_mismatches_fail_before_io",
+    "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_physical_identity_and_package_path_mismatches_fail_before_io",
     "actingcommand-runtime-host::lib::tests::scheduled_execution::scheduled_expired_lease_is_fenced_and_settled_on_the_original_run",
     "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_failure_chain_retries_five_times_and_stops_on_sixth",
     "actingcommand-runtime-host::lib::tests::scheduled_retry::scheduled_guarded_retry_stops_after_third_attempt_success",
@@ -783,6 +783,40 @@ tests = [
 ]
 incident = ["#332 G-c"]
 
+# Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-2, TU-3, TU-4, TU-6, TU-7, TU-8, TU-9): the door binds each connection to one channel and marks every request, its receipt and its command.received with it whatever the envelope; a second BindChannel is refused channel_binding_exists naming the channel kept; the handshake and a status read append nothing; until U-6 an unbound connection is bound from its first request's envelope source; via is recorded on the Lab channel only; the Lab channel takes option requests with no Lab option configured; a reconnect (the send_or_dropped fallback, the timeout recovery) binds the same channel; an actingd before U-2 leaves the client unbound and usable with no BindChannel on later reconnects; actingd's configured approvals are written in process with the provenance (Governance, User, Ui)
+[[gate]]
+key = "74"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_a_bound_connection_marks_its_requests_with_its_channel_whatever_their_envelope",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_the_handshake_and_a_status_read_append_nothing_and_a_write_names_its_channel",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_an_unbound_connection_is_bound_from_its_first_request_s_envelope_until_u6",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_a_lab_connection_forwarded_by_mcp_names_lab_and_mcp_on_its_records",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_the_lab_channel_takes_option_requests_before_u6_without_any_lab_option",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::u2_a_configured_approval_is_written_in_process_with_the_approval_provenance",
+    "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_a_reconnect_after_a_dropped_request_binds_the_same_channel",
+    "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_the_contained_task_timeout_recovery_binds_the_same_channel",
+    "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable",
+]
+incident = ["#389 U-2"]
+
+# Workflow #336 PKG-S3 (option 丙): a procedure binding names no package content and a dispatch records no package digest; a failure identity (format v2) names each package by its id hash and the content hash measured at settlement; a pause lifts once a package it names changes in place, measured at most once per scheduling.suspension.lift_check_min_interval_ms, without a restart; an unmeasurable package keeps the pause with lift_check_hash_unmeasured; a restart rebuilds the recorded hashes from the failure identity; the content hash is measured only at settlement and lift checks (M-PKG v1.1 §4.4 S3-T1 to S3-T6, S3-T8, S3-T9; S3-T7 stays with key 27's interrupted settlement row; key 74 is U-2's)
+[[gate]]
+key = "75"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t1_a_binding_names_no_package_and_a_dispatch_records_no_digest",
+    "actingcommand-runtime-host::lib::host::failure_settlement::tests::s3_t2_a_settled_identity_names_each_package_by_its_content_hash",
+    "actingcommand-runtime-host::lib::policy_control::tests::s3_t2_the_same_identity_twice_pauses_on_the_packages_it_names",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t3_a_main_package_changed_in_place_lifts_after_the_interval_without_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t4_only_a_package_the_pause_names_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t5_actingd_suspended_reports_the_paused_and_current_hash_prefixes",
+    "actingcommand-actinglab-architecture::workspace_guards::pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t8_an_unmeasured_package_keeps_the_pause_and_a_measured_x_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs3::s3_t9_a_restart_rebuilds_the_recorded_hashes_from_the_failure_identity",
+]
+incident = ["#336 PKG-S3"]
+
 # Workflow #390 OUT-2 (FCM O-01, O-02, S-01): a direct run of a designated effect set whose cap is an instance fact maps "collected" when its member completed (the cap reached, then the page's next operation; or the page changed before the cap) and "nothing" for a cap of 0, its terminal's scheduling disposition recording the member's count beside the cap the run held it to and reading back as written; a run whose cap fact is missing fails with contained_task_designated_effect_cap_unresolved before any input
 [[gate]]
 key = "76"
@@ -791,3 +825,28 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_out2::out2_a_run_of_a_designated_effect_set_records_each_count_and_its_cap",
 ]
 incident = ["#390 O-01", "#390 O-02", "#390 S-01"]
+
+# Workflow #398 RD-2 (model-398 v1.1 §4, §12 rows RD-2-T1 to T10 and T12; board #387 ruling A9): the adb track-devices decoder gives whole device lists and refuses an output of unknown shape; only a bound handset opens the one watch process; an idle handset that leaves device is unavailable under device_link:<state> with device.link, device.connected false and one device_link_waiting per state, and unauthorized only waits; back at device its preparation is queued after device_link.settle_ms and restores it with device_link_restored; a run whose device fails after the cable left ends with device_link_lost caused by the device failure and sends no input; offline sends one reconnect per episode only under kick_once; a flapping link is prepared once; the watch restarts by its backoff until the window's limit, then every handset is unwatched; a failed restore preparation is tried again after each retry wait; the device_link keys carry the model defaults and refuse broken values; a link that left device interrupts a climbing ladder (A9)
+[[gate]]
+key = "78"
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::tests::gate_398_rd2::rd2_t1_frames_decode_into_whole_lists_in_one_read_or_across_reads",
+    "actingcommand-device::lib::tests::gate_398_rd2::rd2_t1_adb_state_words_give_their_link_states",
+    "actingcommand-device::lib::tests::gate_398_rd2::rd2_t1_an_output_of_unknown_shape_is_protocol_invalid",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t9_only_a_bound_handset_opens_the_watch",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t2_t6_an_idle_handset_that_leaves_device_waits_once_per_state_and_is_unavailable",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t3_a_handset_back_at_device_is_prepared_after_the_settle_wait_and_restored",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd2::rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lost",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t2_leaving_device_waits_once_per_state_and_holds_the_handset",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t3_the_preparation_is_queued_only_after_the_settle_wait",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t5_offline_sends_one_reconnect_per_episode_only_under_kick_once",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t6_unauthorized_only_waits",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t7_a_link_that_flaps_faster_than_the_settle_wait_is_prepared_once",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t8_the_watch_restarts_by_its_backoff_until_the_window_s_limit",
+    "actingcommand-runtime-host::lib::host::device_link::tests::rd2_t10_a_failed_preparation_is_tried_again_after_each_retry_wait_until_they_are_used",
+    "actingcommand-runtime-config::lib::device_link_tests::rd2_keys_every_device_link_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::device_link_tests::rd2_keys_device_link_values_that_break_a_rule_are_refused",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
+]
+incident = ["#398", "#387 A9"]

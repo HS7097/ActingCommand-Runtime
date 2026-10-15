@@ -108,6 +108,7 @@ fn spawn_monitor(
 fn connect(root: &TempDir) -> RuntimeClient {
     RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

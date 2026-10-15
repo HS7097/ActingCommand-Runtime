@@ -45,6 +45,7 @@ mod recovery_timing;
 // Workflow #384 D2-S3.
 mod resource_adjustment;
 mod strategy;
+mod suspension_lift;
 mod suspension_report;
 mod time;
 

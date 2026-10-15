@@ -2,8 +2,7 @@
 
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    CaptureSequenceSpec, EventActor, EventSource, ReadonlyObservation, RuntimeCaptureBackend,
-    RuntimeResult,
+    CaptureSequenceSpec, ReadonlyObservation, RuntimeCaptureBackend, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, DeviceError,
@@ -12,7 +11,7 @@ use actingcommand_device::{
 use actingcommand_lab::{
     CaptureBackendObservation, CaptureBackendReport, CaptureBackendRequest, LabError,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::RuntimeClient;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -40,12 +39,8 @@ pub(super) fn capture_runtime_sequence(
 ) -> DeviceResult<Vec<Frame>> {
     let interval_ms = u64::try_from(interval.as_millis())
         .map_err(|_| DeviceError::fatal("Runtime capture interval exceeds u64 milliseconds"))?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &endpoint.state_root,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(&endpoint.state_root))
+        .map_err(|error| DeviceError::fatal(error.to_string()))?;
     let observations = if frame_count == 1 {
         let output = client
             .observe_readonly(&endpoint.instance_alias)
@@ -87,12 +82,8 @@ pub(super) fn open_runtime_capture(
     endpoint: RuntimeCaptureEndpoint,
     request: CaptureBackendRequest,
 ) -> Result<Box<dyn CaptureBackend>, LabError> {
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &endpoint.state_root,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(|error| LabError::device(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(&endpoint.state_root))
+        .map_err(|error| LabError::device(error.to_string()))?;
     let mut backend = RuntimeObservationCaptureBackend {
         client: Some(client),
         endpoint,

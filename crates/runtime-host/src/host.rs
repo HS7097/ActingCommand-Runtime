@@ -160,6 +160,8 @@ mod backend_open;
 mod client_events;
 mod contained_task;
 mod device_diagnostic;
+// Workflow #398 RD-2: the wired device link of the handsets, its wait and restore.
+mod device_link;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
@@ -1547,6 +1549,7 @@ impl RuntimeHost {
             governance_write_gate: Mutex::new(()),
             governance_policy: config.governance_policy.clone(),
             governance_connections: Mutex::new(BTreeSet::new()),
+            connection_channels: Mutex::new(BTreeMap::new()),
             fact_write_gate: Mutex::new(()),
             backend_selfcheck_availability_gate: Mutex::new(()),
             signature_write_gate: Mutex::new(()),
@@ -1618,6 +1621,7 @@ impl RuntimeHost {
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
+            device_links: Mutex::new(device_link::DeviceLinks::default()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
             config_override_gate: Mutex::new(()),
             recovery_ladder_config: Mutex::new(None),
@@ -1629,6 +1633,7 @@ impl RuntimeHost {
             return_home_packages: config.return_home_packages,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
+            lift_checks: crate::suspension_lift::LiftChecks::default(),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -1916,6 +1921,9 @@ impl RuntimeHost {
             host_claims::spawn_instance_workers(&shared)?;
             shared.prepare_physical_instances_on_start()?;
             shared.check_install_preparation()?;
+            // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
+            // after their daemon-start preparation; none without a bound handset.
+            device_link::start(&shared)?;
             lock(
                 &shared.performance,
                 HostLocation::SampleCapacityBeforeBusiness,
@@ -2164,6 +2172,18 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<CatalogGeneration> {
         self.work_ref(HostLocation::ApplyPolicyCatalogTransition)?
             .apply_policy_catalog_transition(plan)
+    }
+
+    /// Records one approval the configuration holds, in process (Workflow #389 U-2, model
+    /// section 3.2): actingd's start-up transcription, after the catalog transition. The record
+    /// keeps the provenance (Governance, User, Ui) every approval record has; a refused
+    /// transition is returned, a failed write stops the Runtime as an approval request's does.
+    pub fn transcribe_configured_approval(
+        &self,
+        decision: &ApprovalDecisionRecord,
+    ) -> RuntimeHostResult<()> {
+        self.work_ref(HostLocation::RecordConfiguredApproval)?
+            .transcribe_configured_approval(decision)
     }
 
     /// The latest decision of each approval id from the complete ledger-verified approval
@@ -2904,6 +2924,32 @@ impl RuntimeHost {
     pub(crate) fn expire_due_leases_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::ExpireDueLeasesForTest)?
             .expire_due_leases()
+    }
+
+    /// Workflow #398 RD-2: one event of the running device-link watch, handed in as its reader
+    /// hands it (the fake provider's watch reports nothing by itself).
+    #[cfg(test)]
+    pub(crate) fn device_link_event_for_test(
+        &self,
+        event: actingcommand_execution_kernel::DeviceLinkWatchEvent,
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::DeviceLinkEventForTest)?;
+        shared.device_link_event(shared.device_link_generation()?, event)
+    }
+
+    /// Workflow #398 RD-2: one tick of the device links' timers at the host clock, as the lease
+    /// sweep runs it.
+    #[cfg(test)]
+    pub(crate) fn device_link_tick_for_test(&self) -> RuntimeHostResult<()> {
+        let shared = self.shared.as_ref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeHostClosed,
+                crate::codes::test_spellings::TestLocation::DeviceLinkTickForTest,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?;
+        device_link::tick(shared)
     }
 
     /// Workflow #369 S1: the instance's admission guard, for a test thread to hold.
@@ -3733,6 +3779,13 @@ impl RuntimeHost {
             &mut failure,
             join_runtime_thread(self.monitor_thread.take(), HostLocation::JoinRuntimeMonitor),
         );
+        // Workflow #398 RD-2: the device-link watch stops (its process ends) and its reader is
+        // joined, after the sweep that restarts it.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            device_link::stop_watch(&shared),
+        );
         // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
         // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
         // joined, before the host's own close.
@@ -4076,6 +4129,10 @@ struct HostShared {
     governance_write_gate: Mutex<()>,
     governance_policy: GovernancePolicy,
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
+    // Workflow #389 U-2 (model section 3.2): the channel (and `via`) each open connection bound,
+    // in memory only; an entry leaves when its connection closes. It is not part of any status
+    // read. The identity card's set above stays until U-6 retires the card.
+    connection_channels: Mutex<BTreeMap<ConnectionId, actingcommand_contract::ChannelBinding>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     // Lock order (Workflow #191 L1): policy_outcome_gate -> policy -> fact_write_gate -> facts.
     fact_write_gate: Mutex<()>,
@@ -4187,6 +4244,9 @@ struct HostShared {
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
+    // Workflow #398 RD-2: the handsets' device links and their watch (model-398 §4). A leaf
+    // lock: nothing else is taken while it is held.
+    device_links: Mutex<device_link::DeviceLinks>,
     // Workflow #387 D1b: the configuration in effect (the file layer of the manifest and the
     // instruction values), and the gate that orders each change and the start's restore with
     // the records it leads to.
@@ -4213,6 +4273,9 @@ struct HostShared {
     // Workflow #336 L6: what each scheduled run's preparation resolved, by decision id, until
     // its execution record is written (memory only).
     scheduled_resolutions: Mutex<BTreeMap<String, failure_settlement::ScheduledResolution>>,
+    // Workflow #336 PKG-S3: the suspension lift checks' measurements and baselines (memory
+    // only).
+    lift_checks: crate::suspension_lift::LiftChecks,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
@@ -4733,6 +4796,12 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             return Err(error);
         }
         if let Err(error) = shared.expire_agent_sessions() {
+            shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
+        // Workflow #398 RD-2: the device links' timers (the settle wait, the restore retries and
+        // the watch's restarts), on the host clock.
+        if let Err(error) = device_link::tick(&shared) {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }

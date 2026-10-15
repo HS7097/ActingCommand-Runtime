@@ -5,10 +5,10 @@ use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, read_user_config, resolve_instance_id,
     runtime_slice_cli, runtime_state_root,
 };
-use actingcommand_contract::{ContainedTaskRequest, EventActor, EventSource};
+use actingcommand_contract::ContainedTaskRequest;
 use actingcommand_lab::LabValidateRequest;
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::RuntimeClient;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::{self, File};
@@ -37,12 +37,8 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         package_reader.reference.clone(),
     )
     .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(runtime_slice_cli::map_runtime_error)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = client
         .run_contained_task(&instance, request)
         .map_err(runtime_slice_cli::map_runtime_error);

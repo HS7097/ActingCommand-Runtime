@@ -779,6 +779,10 @@ impl HostShared {
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let instance_id = self.resolve_instance(instance_alias)?.instance_id();
+        // Workflow #398 RD-2 (model-398 §4.3): a person's self-check of a handset starts a failed
+        // device-link watch again.
+        self.device_link_rewatch(instance_id)
+            .map_err(RequestFailure::poison_without_terminal)?;
         let token = self.await_preparation_claim(
             original,
             instance_alias,

@@ -110,6 +110,7 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
         let host = host_with_state(&root, "node.a", Arc::clone(&state));
         let client = RuntimeClient::connect(RuntimeClientConfig::new(
             root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ))
@@ -144,6 +145,7 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
                 // D1: https://github.com/HS7097/ActingCommand-Runtime/pull/340#pullrequestreview-5135506634
                 let observer = RuntimeClient::connect(RuntimeClientConfig::new(
                     root.path(),
+                    actingcommand_runtime_client::RuntimeChannel::Cli,
                     EventActor::Cli,
                     EventSource::Cli,
                 ))

@@ -2967,6 +2967,8 @@ impl HostShared {
             HostLocation::CleanupGovernanceConnection,
         )?
         .remove(&connection_id);
+        // Workflow #389 U-2: the connection's channel binding leaves with it.
+        self.forget_connection_channel(connection_id)?;
         // Workflow #191 ps2: a closed connection sends no further reset.
         self.forget_client_resets(connection_id)?;
         let queued_instances = lock(&self.scheduler, HostLocation::ListConnectionQueues)?

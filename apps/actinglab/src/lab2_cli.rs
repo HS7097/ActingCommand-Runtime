@@ -834,13 +834,9 @@ fn runtime_wait_for_stable_target(
 }
 
 fn begin_runtime_debug_session() -> CliOutcome<RuntimeDebugSession> {
-    RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        actingcommand_contract::EventActor::Lab,
-        actingcommand_contract::EventSource::Lab,
-    ))
-    .and_then(|client| client.begin_debug_session())
-    .map_err(|error| CliError::device(error.to_string()))
+    RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .and_then(|client| client.begin_debug_session())
+        .map_err(|error| CliError::device(error.to_string()))
 }
 
 fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> CliOutcome<Lab2Scene> {
@@ -1298,12 +1294,8 @@ pub(crate) fn run_receipt(_global: &GlobalOptions, args: &[String]) -> CliOutcom
     let correlation = serde_json::from_value::<CorrelationId>(json!(req_id)).map_err(|_| {
         CliError::usage("lab receipt --req must be a Runtime correlation identifier")
     })?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        runtime_state_root()?,
-        actingcommand_contract::EventActor::Lab,
-        actingcommand_contract::EventSource::Lab,
-    ))
-    .map_err(|error| CliError::device(error.to_string()))?;
+    let client = RuntimeClient::connect(crate::lab_client_config(runtime_state_root()?))
+        .map_err(|error| CliError::device(error.to_string()))?;
     let events = client
         .query_events(
             EventQuery {

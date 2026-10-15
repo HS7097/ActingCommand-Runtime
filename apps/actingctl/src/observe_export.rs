@@ -168,6 +168,7 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
     } = parse(arguments)?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

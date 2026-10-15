@@ -13,6 +13,9 @@ mod codes;
 pub mod color_digest;
 // Workflow #396 REC-2; REC-7 masks; REC-5 scaled templates.
 mod exact_score;
+// Test plan v2.2 E-1 G8 (exec key 17): color_digest.v1.
+#[cfg(test)]
+mod gate_e1;
 // Workflow #396 REC-5: the resampling primitive (Workflow #392 reuses it).
 pub mod resample;
 

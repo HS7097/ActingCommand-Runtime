@@ -242,6 +242,32 @@ impl Containment {
         Ok(ContentDirectorySnapshot { reference, entries })
     }
 
+    /// Workflow #336 PKG-S3 (M-PKG §3.3): the content hash of the package at `locator`, in
+    /// lowercase hex. It has one use: a scheduled failure that can suspend its pair records the
+    /// hash of each package its run went through, and a suspension's lift check measures them
+    /// again; admission never computes it. The path chooses the reading as `load_path` does (one
+    /// bounded snapshot under this loader's limits and `deadline`): a source package hashes its
+    /// content table as `content-directory.v1`, an assembled package ZIP is the SHA-256 of the
+    /// whole file (D3). Nothing is parsed or compared.
+    pub fn measure_content_hash(
+        &self,
+        locator: &Path,
+        deadline: std::time::Instant,
+    ) -> ContainmentResult<String> {
+        Ok(match content_dir::read(locator, self.limits, deadline)? {
+            content_dir::LocatorContent::Entries(entries) => {
+                actingcommand_contract::content_directory_digest(
+                    entries.iter().map(|(path, bytes)| {
+                        (path.as_str(), *Sha256Hash::digest(bytes).as_bytes())
+                    }),
+                )
+            }
+            content_dir::LocatorContent::AssembledZip(bytes) => {
+                Sha256Hash::digest(&bytes).to_string()
+            }
+        })
+    }
+
     /// Workflow #336: admits a content table already in memory (for example a content
     /// container just encoded and not yet written) as `load_path` admits a source package once
     /// it is read: the shared entry rules, then the same assembly. `recorded` is kept as
@@ -501,6 +527,31 @@ pub enum PackageLayout {
     Module,
 }
 
+/// An admitted package. The capability originates only from `Containment::load` and the
+/// crate's other admission entries; no code outside this crate can construct one
+/// (`docs/architecture/actinglab-a7-issue26-splice.md`, "Externally Supplied `LoadedBundle`").
+///
+/// Test plan v2.2 §4 #4: the two examples below differ only in the last line of `reissue`. The
+/// first compiles, so the second fails for that line alone: building a `LoadedBundle` from its
+/// fields is refused outside the crate.
+///
+/// ```
+/// use actingcommand_pack_containment::{LoadedBundle, PackageLayout, TaskId};
+///
+/// fn reissue(bundle: LoadedBundle, task_id: TaskId, layout: PackageLayout) -> LoadedBundle {
+///     let _ = (&task_id, &layout);
+///     bundle
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use actingcommand_pack_containment::{LoadedBundle, PackageLayout, TaskId};
+///
+/// fn reissue(bundle: LoadedBundle, task_id: TaskId, layout: PackageLayout) -> LoadedBundle {
+///     let _ = (&task_id, &layout);
+///     LoadedBundle { task_id, layout, ..bundle }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct LoadedBundle {
     projection_metadata: Option<VerifiedProjectionMetadata>,

@@ -1927,6 +1927,15 @@ pub enum RuntimeLifecyclePhase {
     StandardPackRead {
         outcome: Outcome,
     },
+    /// Workflow #398 RD-2 (model-398 v1.1 §4.2, §4.3, §4.7): the wired device link of a handset
+    /// changed, or the device-link watch did. `outcome` is `device_link_waiting` (warning; the
+    /// handset left `device`, linked to its instance), `device_link_restored` (info; it is back
+    /// and its preparation passed, linked to its instance), `device_watch_restarted` (warning)
+    /// or `device_watch_failed` (error; every handset is then `unwatched`), the last two with
+    /// system links. No value names a device serial: a handset is its label `handset:<alias>`.
+    DeviceLinkObserved {
+        outcome: Outcome,
+    },
     /// Workflow #383 (register L5): the stores and the decision memory were loaded from the
     /// tagged records and opened new lineages; the base record of each new lineage, one entry
     /// per store. Register X4: `outcome` is the load's report (`ledger_tagged_state_loaded`,
@@ -1976,7 +1985,8 @@ impl RuntimeLifecyclePayload {
             | RuntimeLifecyclePhase::TaggedStateLoaded { outcome, .. }
             | RuntimeLifecyclePhase::TaggedStateEnabled { outcome } => outcome.as_ref(),
             RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
-            RuntimeLifecyclePhase::StandardPackRead { outcome } => Some(outcome),
+            RuntimeLifecyclePhase::StandardPackRead { outcome }
+            | RuntimeLifecyclePhase::DeviceLinkObserved { outcome } => Some(outcome),
             _ => None,
         }
     }
@@ -2807,7 +2817,6 @@ pub struct PolicyDispatchEventData {
     pub task_id: String,
     pub instance_id: String,
     pub operation_id: String,
-    pub package_digest: crate::PackageRef,
     pub procedure_binding_digest: String,
     pub reason_chain_id: String,
     pub reasons: Vec<PolicyReasonRecord>,
@@ -3397,8 +3406,6 @@ pub struct PolicyDispatchPayload {
     task_id: String,
     instance_id: String,
     operation_id: String,
-    #[serde(default, with = "crate::package::prefixed_reference")]
-    package_digest: crate::PackageRef,
     #[serde(default)]
     procedure_binding_digest: String,
     reason_chain_id: String,
@@ -3522,10 +3529,6 @@ impl PolicyDispatchPayload {
 
     pub fn operation_id(&self) -> &str {
         &self.operation_id
-    }
-
-    pub fn package_digest(&self) -> &crate::PackageRef {
-        &self.package_digest
     }
 
     pub fn procedure_binding_digest(&self) -> &str {
@@ -6612,6 +6615,8 @@ impl PayloadDetail for RecoveryPayload {
 struct ObservationDraft {
     action: EventAction,
     device_diagnostics: Option<DeviceDiagnosticConfig>,
+    /// Workflow #389 U-2 (register U1): the channel of a `command.received` record.
+    channel: Option<crate::ChannelBinding>,
     audit: AuditInput,
 }
 
@@ -6951,7 +6956,6 @@ impl PolicyDispatchDraft {
             task_id: self.data.task_id,
             instance_id: self.data.instance_id,
             operation_id: self.data.operation_id,
-            package_digest: self.data.package_digest,
             procedure_binding_digest: self.data.procedure_binding_digest,
             reason_chain_id: self.data.reason_chain_id,
             reasons: self.data.reasons,
@@ -7384,9 +7388,6 @@ fn validate_policy_dispatch_fields(
     crate::validate_instance_alias(&data.instance_id)
         .map_err(|_| SanitizationError::new(SanitizationCode::InvalidPolicyToken, "instance_id"))?;
     validate_policy_token(&data.operation_id, "operation_id")?;
-    data.package_digest.validate().map_err(|_| {
-        SanitizationError::new(SanitizationCode::InvalidPolicyDigest, "package_digest")
-    })?;
     validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
@@ -7988,7 +7989,6 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
             task_id: value.task_id.clone(),
             instance_id: value.instance_id.clone(),
             operation_id: value.operation_id.clone(),
-            package_digest: value.package_digest.clone(),
             procedure_binding_digest: value.procedure_binding_digest.clone(),
             reason_chain_id: value.reason_chain_id.clone(),
             reasons: value.reasons.clone(),
@@ -8266,6 +8266,7 @@ impl ObservationDraft {
         Self {
             action,
             device_diagnostics: None,
+            channel: None,
             audit,
         }
     }
@@ -8277,8 +8278,8 @@ impl ObservationDraft {
         Ok(ObservationPayload {
             action: self.action,
             device_diagnostics: self.device_diagnostics,
-            channel: None,
-            via: None,
+            channel: self.channel.map(|binding| binding.channel),
+            via: self.channel.and_then(|binding| binding.via),
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -9283,6 +9284,18 @@ impl CommandPayloadDraft {
         Self(CommandDraftKind::Received(ObservationDraft::new(
             action, audit,
         )))
+    }
+
+    /// `command.received` of a request the door tagged with its connection's channel (Workflow
+    /// #389 U-2, register U1); `None` writes no channel, as for the Runtime's own requests.
+    pub fn received_on_channel(
+        action: EventAction,
+        channel: Option<crate::ChannelBinding>,
+        audit: AuditInput,
+    ) -> Self {
+        let mut draft = ObservationDraft::new(action, audit);
+        draft.channel = channel;
+        Self(CommandDraftKind::Received(draft))
     }
 
     pub fn validated(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {

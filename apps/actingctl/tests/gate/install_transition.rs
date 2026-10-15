@@ -29,8 +29,13 @@ fn gate_install_transition_query_answers_while_the_ledger_writer_is_stalled_in_p
     let declaring_root = root.path().to_path_buf();
     let declaring = thread::spawn(move || {
         let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(&declaring_root, EventActor::Cli, EventSource::Cli)
-                .with_io_timeout(Duration::from_secs(60)),
+            RuntimeClientConfig::new(
+                &declaring_root,
+                actingcommand_runtime_client::RuntimeChannel::Cli,
+                EventActor::Cli,
+                EventSource::Cli,
+            )
+            .with_io_timeout(Duration::from_secs(60)),
         )?;
         client
             .declare_governance_identity(&GovernanceIdentityCard {

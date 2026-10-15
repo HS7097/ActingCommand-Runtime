@@ -7,10 +7,8 @@ use super::{
     runtime_slice_cli, runtime_state_root, stream_check_requested, stream_contract_json,
     stream_events_json,
 };
-use actingcommand_contract::{
-    CaptureSequenceSpec, EventActor, EventSource, ReadonlyObservation, RuntimeResult,
-};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_contract::{CaptureSequenceSpec, ReadonlyObservation, RuntimeResult};
+use actingcommand_runtime_client::RuntimeClient;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -59,12 +57,8 @@ fn run_runtime_stream(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Va
         runtime_global.instance = Some(instance.clone());
         run_stream_input_relay(&runtime_global, &config, &relay_actions, false)?
     };
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &state_root,
-        EventActor::Lab,
-        EventSource::Lab,
-    ))
-    .map_err(runtime_slice_cli::map_runtime_error)?;
+    let client = RuntimeClient::connect(crate::lab_client_config(&state_root))
+        .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = client
         .capture_sequence(&instance, spec)
         .map_err(runtime_slice_cli::map_runtime_error)?;

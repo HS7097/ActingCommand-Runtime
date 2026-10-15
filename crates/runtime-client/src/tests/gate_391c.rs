@@ -190,6 +190,11 @@ fn serve_ledger(listener: TcpListener, owner_epoch: OwnerEpoch, events: &[Projec
     while let Some(request) = next_request(&mut stream) {
         let result = match request.operation() {
             RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
+            // Workflow #389 U-2: the handshake's BindChannel.
+            RuntimeOperation::BindChannel { channel, via } => RuntimeResult::ChannelBound {
+                channel: *channel,
+                via: *via,
+            },
             RuntimeOperation::QueryEvents {
                 query,
                 profile,
@@ -197,7 +202,7 @@ fn serve_ledger(listener: TcpListener, owner_epoch: OwnerEpoch, events: &[Projec
             } => RuntimeResult::EventPage {
                 page: event_page(events, query, *profile, page),
             },
-            _ => panic!("the scripted ledger answers Health and QueryEvents only"),
+            _ => panic!("the scripted ledger answers Health, BindChannel and QueryEvents only"),
         };
         write_scripted_result(&mut stream, &request, result);
     }

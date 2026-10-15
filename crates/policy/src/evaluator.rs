@@ -359,12 +359,6 @@ pub struct DispatchIntent {
     pub instance_id: String,
     pub operation_id: String,
     pub procedure_ref: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "actingcommand_contract::package::optional_prefixed_reference"
-    )]
-    pub package_digest: Option<actingcommand_contract::PackageRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub procedure_binding_digest: Option<String>,
     pub catalog_hash: String,
@@ -1114,7 +1108,6 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
             instance_id: candidate.instance_id.clone(),
             operation_id: candidate.operation_id,
             procedure_ref: candidate.procedure_ref,
-            package_digest: None,
             procedure_binding_digest: None,
             catalog_hash: catalog.catalog_hash().to_owned(),
             catalog_version: catalog_bundle.tasks.catalog.catalog_version,
@@ -7063,29 +7056,6 @@ pub(crate) mod tests {
 
         assert_eq!(error.code().as_str(), "policy_evaluation_input_invalid");
         assert!(error.message().contains("missing host"));
-    }
-
-    #[test]
-    fn pure_evaluator_source_has_no_runtime_side_effect_authority() {
-        let source = include_str!("evaluator.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production source");
-        for forbidden in [
-            "std::thread::sleep",
-            "std::fs",
-            "std::net",
-            "SystemTime::now",
-            "Instant::now",
-            "actingcommand_device",
-            "actingcommand_ledger",
-            "LeaseToken",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "forbidden source token {forbidden}"
-            );
-        }
     }
 
     /// P-1 G10 (Workflow #386 SR-6a; model-sched-rules.md v1.4.2 §8.2 item 2): the close of a

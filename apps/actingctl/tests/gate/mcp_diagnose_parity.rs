@@ -706,7 +706,6 @@ fn dispatch_intent(alias: &str, catalog_task_id: &str) -> PolicyDispatchEventDat
         task_id: catalog_task_id.to_owned(),
         instance_id: alias.to_owned(),
         operation_id: "operation.diag.scheduled".to_owned(),
-        package_digest: placeholder('a').into(),
         procedure_binding_digest: placeholder('b'),
         reason_chain_id: "reasons.diag.scheduled".to_owned(),
         reasons: vec![PolicyReasonRecord(Outcome::relayed("placement_selected"))],
@@ -861,6 +860,11 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
     while let Some(request) = next_request(&mut stream) {
         let result = match request.operation() {
             RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
+            // Workflow #389 U-2: the handshake's BindChannel.
+            RuntimeOperation::BindChannel { channel, via } => RuntimeResult::ChannelBound {
+                channel: *channel,
+                via: *via,
+            },
             RuntimeOperation::Status => RuntimeResult::Status {
                 status: RuntimeControlPlaneStatus::new(owner_epoch, ledger.instances.clone())
                     .expect("scripted status"),

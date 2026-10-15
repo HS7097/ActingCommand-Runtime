@@ -123,6 +123,7 @@ fn run_package_at(root: &TempDir, width: u32, height: u32) -> RuntimeFlowOutput 
     .expect("task request");
     RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

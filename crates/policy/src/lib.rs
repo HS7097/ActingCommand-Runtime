@@ -29,5 +29,6 @@ pub use strategy::*;
 mod tests {
     mod gate_d2_s1;
     mod gate_p1;
+    mod gate_p2a;
     mod selection_catalog;
 }

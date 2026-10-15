@@ -665,6 +665,7 @@ fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
     let request = parse(&parameters, CLI_MAX_LIMIT)?;
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

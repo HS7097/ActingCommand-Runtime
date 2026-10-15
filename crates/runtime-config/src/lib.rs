@@ -13,7 +13,9 @@
 //! - The sections (D1c): `recovery_ladder` (§3, §4, §7), `host_claims` (§4.3) and
 //!   `standard_packs` (Workflow #373 NAV-6, moved here); `performance` (Workflow #385 P-c, PERF
 //!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay);
-//!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15).
+//!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
+//!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
+//!   (Workflow #398 RD-2, model-398 §4.6).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -22,10 +24,12 @@
 
 mod codes;
 mod defaults;
+pub mod device_link;
 mod effective;
 mod existing;
 mod host_claims;
 mod instance;
+pub mod lab_module;
 pub mod ledger_observer;
 pub mod performance;
 pub mod recovery_ladder;
@@ -39,6 +43,7 @@ pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
     DefaultsFile, DefaultsInvalid, SHIPPED_DEFAULTS, sha256_text, shipped_defaults_sha256,
 };
+pub use device_link::{DeviceLinkConfig, DeviceLinkFile, OfflineAction};
 pub use effective::{
     AppliedSettings, CheckContext, ConfigFailure, DeviceBounds, EffectiveConfig, InstructionStamp,
     InstructionValue, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CHANNEL,
@@ -83,6 +88,9 @@ pub fn annotate_settable(
     Ok(())
 }
 
+// Workflow #398 RD-2.
+#[cfg(test)]
+mod device_link_tests;
 #[cfg(test)]
 mod ladder_tests;
 // Workflow #383 AO-1.

@@ -110,6 +110,12 @@ fn main() -> ExitCode {
     {
         eprintln!("DIAG actingctl: {error}");
     }
+    // Workflow #389 U-2 (model section 3.5): an actingd before U-2 leaves this process's
+    // connections unbound; the runtime client reports it once, as a developer line on stderr
+    // (mcp-serve's stdout is the protocol, so the same line serves it).
+    actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
+        cli_line::developer_line(outcome, None);
+    });
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     if let Err(error) = actingcommand_contract::process_installation() {
         let outcome = Outcome::new(error.code());
@@ -260,7 +266,12 @@ fn install_transition_run(action: &InstallTransitionAction) -> InstallTransition
 /// budget as the exchange timeout and as one deadline counted from `started`.
 fn client_config(state_root: &Path, command: &Command, started: Instant) -> RuntimeClientConfig {
     let (actor, source) = command.origin();
-    let config = RuntimeClientConfig::new(state_root, actor, source);
+    let config = RuntimeClientConfig::new(
+        state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
+        actor,
+        source,
+    );
     let Command::InstallTransition { action } = command else {
         return config;
     };
@@ -2032,6 +2043,7 @@ mod tests {
 
         let Err(client_error) = RuntimeClient::connect(RuntimeClientConfig::new(
             "",
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         )) else {

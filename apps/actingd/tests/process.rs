@@ -681,6 +681,7 @@ fn actingd_waits_through_an_install_drain_and_exits_cleanly_on_commit() {
     // The installer's control client: production I/O budget and a governance identity.
     let control = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -1684,6 +1685,7 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         loop {
             match RuntimeClient::connect(RuntimeClientConfig::new(
                 root.path(),
+                actingcommand_runtime_client::RuntimeChannel::Cli,
                 EventActor::Agent,
                 EventSource::Adapter,
             )) {
@@ -3023,6 +3025,7 @@ fn tc_2_tc_5_a_broken_performance_rule_refuses_check_config_and_the_start_with_e
 fn connect(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(RuntimeClientConfig::new(
         state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -3032,6 +3035,7 @@ fn connect(state_root: &Path) -> RuntimeClient {
 fn connect_agent(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(RuntimeClientConfig::new(
         state_root,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Agent,
         EventSource::Adapter,
     ))
@@ -3044,8 +3048,13 @@ fn connect_agent(state_root: &Path) -> RuntimeClient {
 /// that out; the clients a test opens afterwards keep their own budgets.
 fn wait_for_first_receipt(state_root: &Path) {
     let probe = RuntimeClient::connect(
-        RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
-            .with_io_timeout(Duration::from_secs(5)),
+        RuntimeClientConfig::new(
+            state_root,
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(Duration::from_secs(5)),
     )
     .expect("first runtime receipt after start");
     drop(probe);
@@ -3055,7 +3064,12 @@ fn wait_for_first_receipt(state_root: &Path) {
 fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient {
     let started = Instant::now();
     loop {
-        let config = RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter);
+        let config = RuntimeClientConfig::new(
+            state_root,
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Agent,
+            EventSource::Adapter,
+        );
         match RuntimeClient::connect(config) {
             Ok(client) => return client,
             Err(error) => {

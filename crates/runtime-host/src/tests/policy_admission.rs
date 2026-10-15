@@ -568,15 +568,14 @@ fn capacity_pressure_refuses_policy_admission_before_lease_and_recovers_in_place
         let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
         record_policy_approval(&host, &intent);
         let admission_context = policy_context(&host, &intent);
+        // Workflow #336 PKG-S3: a dispatch names no package digest; the request's own
+        // reference is compared with nothing (PKG-S4 removes it).
         let task_request = ContainedTaskRequest::new(
             root.path()
                 .join("capacity-admission.zip")
                 .to_string_lossy()
                 .into_owned(),
-            intent
-                .package_digest
-                .clone()
-                .expect("evaluated package reference"),
+            "0".repeat(64),
         )
         .expect("declared scheduled request");
         let available_bytes = Arc::new(AtomicU64::new(0));
@@ -753,14 +752,9 @@ fn capacity_pressure_refuses_policy_admission_before_lease_and_recovers_in_place
             evaluated_policy_dispatch_at(&host, PolicyTrigger::Reconciliation, recovery_time, 8);
         assert_ne!(restored_intent.decision_id, intent.decision_id);
         let restored_context = policy_context(&host, &restored_intent);
-        let restored_task_request = ContainedTaskRequest::new(
-            task_request.package_path(),
-            restored_intent
-                .package_digest
-                .clone()
-                .expect("recovery package reference"),
-        )
-        .expect("declared recovery request");
+        let restored_task_request =
+            ContainedTaskRequest::new(task_request.package_path(), "0".repeat(64))
+                .expect("declared recovery request");
         let admission = if scheduled {
             host.admit_scheduled_policy_dispatch(
                 &restored_intent,
@@ -1062,69 +1056,6 @@ fn fact_replacement_invalidates_an_already_evaluated_dispatch() {
         .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
         .expect_err("superseded fact revision must invalidate dispatch");
     assert_eq!(error.code(), "policy_facts_stale");
-    let mut client = TestClient::connect(&host);
-    assert!(
-        projected_events(
-            &mut client,
-            EventQuery {
-                event_type: Some(EventType::LeaseGranted),
-                ..EventQuery::default()
-            }
-        )
-        .is_empty()
-    );
-    drop(client);
-    host.close().expect("close host");
-}
-
-#[test]
-fn procedure_alias_rebinding_reports_package_digest_mismatch_before_lease() {
-    let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
-    host.activate_policy_catalog(&policy_sources(1))
-        .expect("activate catalog");
-    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
-    let original_package_digest = intent
-        .package_digest
-        .as_ref()
-        .expect("bound package digest")
-        .to_owned();
-    record_policy_approval(&host, &intent);
-
-    host.replace_procedure_manifest_for_test(procedure_manifest_with_primary(
-        b"fixture procedure observe package v2",
-        vec!["after_observation".to_owned()],
-    ))
-    .expect("replace trusted procedure manifest");
-    let error = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-        .expect_err("old alias binding must not reach lease admission");
-    assert_eq!(error.code(), "procedure_package_digest_mismatch");
-
-    let replacement = host
-        .evaluate_policy_cycle_with_test_inputs(
-            &policy_facts(),
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: POLICY_NOW_UNIX_MS + 60_000,
-                monotonic_ms: POLICY_NOW_UNIX_MS + 60_000,
-            },
-            7,
-            PolicyTrigger::Reconciliation,
-        )
-        .expect("evaluate replacement binding")
-        .evaluation
-        .expect("replacement evaluation")
-        .dispatch_intents
-        .into_iter()
-        .next()
-        .expect("replacement intent");
-    assert_ne!(replacement.decision_id, intent.decision_id);
-    assert_ne!(
-        replacement.package_digest.as_ref(),
-        Some(&original_package_digest)
-    );
-
     let mut client = TestClient::connect(&host);
     assert!(
         projected_events(

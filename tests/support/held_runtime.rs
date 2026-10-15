@@ -134,6 +134,7 @@ impl HeldStart {
     pub fn release(&self, state_root: &Path) -> RuntimeClient {
         let installer = RuntimeClient::connect(RuntimeClientConfig::new(
             state_root,
+            actingcommand_runtime_client::RuntimeChannel::Cli,
             EventActor::Cli,
             EventSource::Cli,
         ))

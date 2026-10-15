@@ -60,6 +60,8 @@ mod observation_window;
 mod readings;
 // Workflow #386 SR-1.
 mod sample_retry;
+// Workflow #308 SEL-L3: the scan session engine.
+mod scan;
 mod selection;
 // Workflow #396 REC-1.
 #[cfg(test)]
@@ -77,6 +79,9 @@ mod gate_386_sr1;
 // Workflow #308 SEL-L6a.
 #[cfg(test)]
 mod gate_308_l6a;
+// Workflow #308 SEL-L3.
+#[cfg(test)]
+mod gate_308_l3;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
@@ -102,10 +107,20 @@ mod gate_390_read1;
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
+// Test plan v2.2 E-5 G5 (exec key 3): linear_steps.
+#[cfg(test)]
+mod gate_e5_linear;
+// Test plan v2.2 E-5 G7 (exec key 4): a single-frame select step.
+#[cfg(test)]
+mod gate_e5_select;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
     ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
+};
+pub use scan::{
+    ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
+    dry_run_scan,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{

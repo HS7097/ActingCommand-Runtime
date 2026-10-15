@@ -39,7 +39,8 @@
     ],
     "exclude_codes": [
       "contained_task_prerequisite_*",
-      "contained_task_return_home_entry_unmatched"
+      "contained_task_return_home_entry_unmatched",
+      "device_link_lost"
     ],
     "rules": {
       "direct_runs": "exempt",
@@ -288,6 +289,9 @@
     },
     "fact_refresh": {
       "recognition_join_timeout_ms": 10000
+    },
+    "suspension": {
+      "lift_check_min_interval_ms": 60000
     }
   },
   "ledger_observer": {
@@ -338,5 +342,17 @@
         "host.pack_registry."
       ]
     }
+  },
+  "lab_module_authoring": false,
+  "lab_module_debugging": false,
+  "device_link": {
+    "watch": {
+      "restart_backoff_ms": [1000, 5000, 30000],
+      "restart_limit": 5,
+      "restart_window_ms": 600000
+    },
+    "settle_ms": 3000,
+    "offline_action": "wait",
+    "restore_retry_ms": [5000, 15000, 60000]
   }
 }

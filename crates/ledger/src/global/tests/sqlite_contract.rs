@@ -15,7 +15,6 @@ mod host {
         PolicyInputSnapshot, ProcedureBinding, ProcedureManifest, RuntimeHostConfig,
     };
     use actingcommand_scheduler::SchedulerConfig;
-    use sha2::{Digest, Sha256};
     use std::time::Duration;
     use tempfile::TempDir;
 

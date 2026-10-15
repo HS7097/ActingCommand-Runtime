@@ -707,7 +707,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 // Workflow #336 PKG-S1, model M-PKG v1.1 §4.2 S1-T7: package admission (containment, the
 // kernel's package ingress and the host's contained-task preparation) computes no content
 // digest and compares no digest or pin; `content_directory_digest` keeps only its designated
-// callers, the authoring and recording tools PKG-S5 retires.
+// callers, the authoring and recording tools PKG-S5 retires. PKG-S3 adds containment's second
+// measuring function, the content hash of the suspension rule
+// (`pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks`).
 #[test]
 fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     let root = workspace_root();
@@ -792,13 +794,20 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
     }
 
     let containment = read("crates/pack-containment/src/lib.rs");
-    let measuring = containment
-        .find("pub fn snapshot_content_directory(")
-        .expect("containment keeps its measuring snapshot");
-    let measuring_end = containment[measuring..]
-        .find("\n    }\n")
-        .map(|end| measuring + end)
-        .expect("end of the measuring snapshot");
+    let measuring = [
+        "pub fn snapshot_content_directory(",
+        "pub fn measure_content_hash(",
+    ]
+    .map(|start| {
+        let measuring = containment
+            .find(start)
+            .unwrap_or_else(|| panic!("containment keeps its measuring function {start}"));
+        let measuring_end = containment[measuring..]
+            .find("\n    }\n")
+            .map(|end| measuring + end)
+            .expect("end of the measuring function");
+        measuring..measuring_end
+    });
     let calls = containment
         .match_indices("content_directory_digest(")
         .map(|(index, _)| index)
@@ -807,8 +816,8 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
         !calls.is_empty()
             && calls
                 .iter()
-                .all(|index| (measuring..measuring_end).contains(index)),
-        "containment computes a content digest outside its measuring snapshot"
+                .all(|index| measuring.iter().any(|range| range.contains(index))),
+        "containment computes a content digest outside its measuring functions"
     );
 
     let designated = [
@@ -839,6 +848,85 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
         callers.is_empty(),
         "content_directory_digest has undesignated callers: {callers:?}"
     );
+}
+
+// Workflow #336 PKG-S3, model M-PKG v1.1 §3.3 and §4.4 S3-T6: a package's content hash is
+// measured in two kinds of place only: when a scheduled failure is settled (the failure
+// identity's hashes; SR-3 adds its suspension point) and at a suspension's lift check (the live
+// check and `actingd suspended`). Containment's `measure_content_hash` has one caller, the
+// Runtime host's `measure_package_hash`, and that one is called only by the settlement and the
+// lift check; admission (containment's loading, the kernel's ingress, the host's preparation)
+// never measures it.
+#[test]
+fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for member_root in ["apps", "crates", "providers", "tools"] {
+        collect_rust_files(&root.join(member_root), &mut files);
+    }
+    let mut measuring = Vec::new();
+    let mut wrapping = Vec::new();
+    for file in files {
+        let source = fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let display = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if display.starts_with("tools/actinglab-architecture/") {
+            continue;
+        }
+        if source.contains("measure_content_hash(") {
+            measuring.push(display.clone());
+        }
+        if source.contains("measure_package_hash(") {
+            wrapping.push(display);
+        }
+    }
+    measuring.sort();
+    wrapping.sort();
+    assert_eq!(
+        measuring,
+        [
+            "crates/pack-containment/src/lib.rs",
+            "crates/runtime-host/src/suspension_lift.rs",
+        ],
+        "the content hash is measured outside the suspension rule"
+    );
+    assert_eq!(
+        wrapping,
+        [
+            "crates/runtime-host/src/host/failure_settlement.rs",
+            "crates/runtime-host/src/suspension_lift.rs",
+        ],
+        "a package's content hash is measured outside the settlement and the lift check"
+    );
+    let lift = fs::read_to_string(root.join("crates/runtime-host/src/suspension_lift.rs"))
+        .expect("read the lift check");
+    assert_eq!(
+        lift.matches("measure_package_hash(").count(),
+        2,
+        "the lift check measures only through its memory of measurements"
+    );
+    for path in [
+        "crates/pack-containment/src/content_dir.rs",
+        "crates/pack-containment/src/source_pack.rs",
+        "crates/execution-kernel/src/bundle.rs",
+        "crates/execution-kernel/src/contained_task.rs",
+        "crates/runtime-host/src/host/contained_task.rs",
+        "crates/runtime-host/src/host/prerequisite.rs",
+    ] {
+        let source = fs::read_to_string(root.join(path))
+            .unwrap_or_else(|error| panic!("read {path}: {error}"));
+        for token in ["measure_content_hash", "measure_package_hash", "LiftChecks"] {
+            assert!(
+                !source.contains(token),
+                "admission in {path} measures a content hash through {token}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -3251,6 +3339,21 @@ fn b1_pure_decision_modules_hold_no_side_effect_authority_in_production_items() 
             inspect_pure_decision_source(&path, &source)
                 .unwrap_or_else(|error| panic!("scan {path} for side effects: {error}")),
         );
+        // Workflow #382 P-3 (test plan v2.2 §4 #27): the tokens the retired evaluator purity
+        // tests of policy and selection-policy banned beyond the item scan. The lease
+        // authority is the scheduler's, so the policy crates name no lease token, and no
+        // pure decision step sleeps.
+        if !path.starts_with("crates/scheduler/") {
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .expect("production source");
+            for forbidden in ["LeaseToken", "std::thread::sleep"] {
+                if production.contains(forbidden) {
+                    violations.push(format!("{path}: {forbidden}"));
+                }
+            }
+        }
     }
     assert!(
         violations.is_empty(),
@@ -5000,6 +5103,8 @@ const HOST_SPLIT: &[HostModule] = &[
         ],
     },
     host_module("device_diagnostic", &["HostShared"]),
+    // Workflow #398 RD-2: the handsets' device links, their watch, wait and restore.
+    host_module("device_link", &["HostShared"]),
     host_module("emulator_instance", &["HostShared"]),
     host_module("evidence_export", &["HostShared"]),
     host_module("facts", &["HostShared"]),

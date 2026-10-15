@@ -237,6 +237,7 @@ fn restart_refuses_while_an_instance_is_busy_and_stops_nothing() {
     let before = runtime.wait_ready(&fixture.state);
     let holder = RuntimeClient::connect(RuntimeClientConfig::new(
         &fixture.state,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))
@@ -336,6 +337,7 @@ fn restart_refuses_while_the_installer_holds_its_writer_lock_and_stops_nothing()
     runtime.assert_alive();
     let client = RuntimeClient::connect(RuntimeClientConfig::new(
         &fixture.state,
+        actingcommand_runtime_client::RuntimeChannel::Cli,
         EventActor::Cli,
         EventSource::Cli,
     ))

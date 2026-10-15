@@ -4,13 +4,14 @@
 
 use crate::codes::{HostCode, HostLocation};
 use crate::error::spelled;
-use crate::failure_identity::{FailureIdentity, IdentityLayer, SuspensionLiftView};
+use crate::failure_identity::FailureIdentity;
+use crate::suspension_lift::{PausedPackages, SuspensionLiftView};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
-    PackageRef, PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord,
-    PolicyBudgetDenial, PolicyBudgetDimension, PolicyBudgetReceipt, PolicyConditionSettlement,
+    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetDenial,
+    PolicyBudgetDimension, PolicyBudgetReceipt, PolicyConditionSettlement,
     PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
     PolicyFailureRecord, RuntimeErrorCode, scheduled_failure_code_str,
 };
@@ -84,17 +85,10 @@ struct FailureStreak {
     retry_at_unix_ms: Option<u64>,
     /// Workflow #336 L6 (§12.5, §12.7): the dispatch whose execution recorded this failure.
     decision_id: String,
-    /// Set only while the pair is paused: what the suspension is lifted against.
-    paused_on: Option<PausedOn>,
-}
-
-/// Workflow #336 L6 (§12.7): the main package digest the paused dispatch was bound to and the
-/// prerequisite layers its failure identity names (none for any other failure code). Memory
-/// only; replay rebuilds it from the dispatch and execution records.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PausedOn {
-    package_digest: Option<PackageRef>,
-    layers: Vec<IdentityLayer>,
+    /// Set only while the pair is paused: what the suspension is lifted against. Workflow #336
+    /// PKG-S3: the packages and content hashes its failure identity names (none without one).
+    /// Memory only; replay rebuilds it from the execution record alone.
+    paused_on: Option<PausedPackages>,
 }
 
 /// The normal admission that opened a retry round. Rebuilt in ledger order, never from
@@ -153,28 +147,26 @@ impl PolicyControlState {
         }
     }
 
-    /// Whether the pair's suspension is lifted under `lift` (§12.7). Workflow #361 M6: a run
-    /// the daemon's own end cut short (`policy_settlement_interrupted`) is no failure of the
-    /// task, so its suspension does not outlive the restart that recorded it. Review P5: only
-    /// the first such interruption in a row; a second one in a row (a task that may itself end
-    /// the daemon) keeps the pair paused until its package changes, as before.
+    /// Whether the pair's suspension is lifted under `lift` (§12.7), with a
+    /// `lift_check_hash_unmeasured` warning for each package the check could not measure
+    /// (Workflow #336 PKG-S3). Workflow #361 M6: a run the daemon's own end cut short
+    /// (`policy_settlement_interrupted`) is no failure of the task, so its suspension does not
+    /// outlive the restart that recorded it. Review P5: only the first such interruption in a
+    /// row; a second one in a row (a task that may itself end the daemon) keeps the pair paused
+    /// until its package changes, as before.
     fn suspension_lifted(
         failure: &FailureStreak,
         intent: &DispatchIntent,
         lift: Option<&SuspensionLiftView<'_>>,
-    ) -> bool {
+    ) -> RuntimeHostResult<(bool, Vec<Outcome>)> {
         if interruption_lifted_by_restart(&failure.failure_code, failure.count) {
-            return true;
+            return Ok((true, Vec::new()));
         }
         let (Some(view), Some(paused_on)) = (lift, failure.paused_on.as_ref()) else {
-            return false;
+            return Ok((false, Vec::new()));
         };
-        view.lifted(
-            &intent.procedure_ref,
-            paused_on.package_digest.as_ref(),
-            &paused_on.layers,
-        )
-        .is_some()
+        let verdict = view.lifted(&intent.procedure_ref, &failure.decision_id, paused_on)?;
+        Ok((verdict.lifted.is_some(), verdict.unmeasured))
     }
 
     fn preview_failure_disposition(
@@ -186,12 +178,18 @@ impl PolicyControlState {
         let key = (intent.task_id.clone(), intent.instance_id.clone());
         if let Some(failure) = self.failure_streaks.get(&key) {
             if failure.disposition == PolicyFailureDisposition::PausedTask {
-                if Self::suspension_lifted(failure, intent, lift) {
+                let (lifted, unmeasured) = Self::suspension_lifted(failure, intent, lift)?;
+                if lifted {
                     return Ok(());
                 }
-                return Err(request(
-                    HostCode::PolicyTaskPaused,
-                    HostLocation::ReservePolicyBudget,
+                // A package the lift check could not measure keeps the pause and is reported
+                // as a note of it (M-PKG D18).
+                return Err(unmeasured.into_iter().fold(
+                    request(
+                        HostCode::PolicyTaskPaused,
+                        HostLocation::ReservePolicyBudget,
+                    ),
+                    RuntimeHostError::with_note,
                 ));
             }
             if failure
@@ -330,10 +328,10 @@ impl PolicyControlState {
         let failure = self
             .failure_streaks
             .get(&(intent.task_id.clone(), intent.instance_id.clone()));
-        if failure.is_some_and(|failure| {
-            failure.disposition == PolicyFailureDisposition::PausedTask
-                && !Self::suspension_lifted(failure, intent, lift)
-        }) {
+        if let Some(failure) = failure
+            && failure.disposition == PolicyFailureDisposition::PausedTask
+            && !Self::suspension_lifted(failure, intent, lift)?.0
+        {
             return Ok(None);
         }
         let from = self
@@ -771,19 +769,10 @@ impl PolicyControlState {
             }
             PolicyExecutionOutcome::Failed { failure } => {
                 // Live settlement and replay both pass here, so a restarted host rebuilds the
-                // same suspension from the dispatch and execution records (§12.7).
-                let paused_on =
-                    (failure.disposition == PolicyFailureDisposition::PausedTask).then(|| {
-                        PausedOn {
-                            package_digest: intent.package_digest.clone(),
-                            layers: failure
-                                .failure_identity
-                                .as_deref()
-                                .and_then(FailureIdentity::parse)
-                                .map(|identity| identity.layers)
-                                .unwrap_or_default(),
-                        }
-                    });
+                // same suspension from the execution record (§12.7; Workflow #336 PKG-S3: the
+                // hashes come from its failure identity, never from the dispatch).
+                let paused_on = (failure.disposition == PolicyFailureDisposition::PausedTask)
+                    .then(|| PausedPackages::of_identity(failure.failure_identity.as_deref()));
                 self.failure_streaks.insert(
                     key,
                     FailureStreak {
@@ -1346,7 +1335,6 @@ mod tests {
             instance_id: "fixture-instance-a".to_owned(),
             operation_id: task.entrypoint.operation_id.clone(),
             procedure_ref: task.procedure_ref.clone(),
-            package_digest: Some(format!("sha256:{}", "a".repeat(64)).into()),
             procedure_binding_digest: Some(format!("sha256:{}", "b".repeat(64))),
             catalog_hash: catalog.catalog_hash().to_owned(),
             catalog_version: catalog.catalog().tasks.catalog.catalog_version,
@@ -1810,7 +1798,7 @@ mod tests {
                 PolicyExecutionTiming { observed_at_unix_ms: now + 100, runtime_ms: 100 },
                 &PolicyExecutionInput::Failed {
                     outcome: Outcome::new(SharedCode::InputBackendOperationFailed),
-                    failure_identity: Some(format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}")),
+                    failure_identity: Some(format!("input_backend_operation_failed~v2~k000000000000~m00000000aaaaaaaaaaaa~fu{index:012x}")),
                     class: PolicyFailureClass::Recoverable,
                 },
                 &unavailable(now + 100),
@@ -1980,7 +1968,7 @@ mod tests {
                     PolicyExecutionTiming { observed_at_unix_ms: now + 100, runtime_ms: 100 },
                     &PolicyExecutionInput::Failed {
                         outcome: Outcome::new(SharedCode::InputBackendOperationFailed),
-                        failure_identity: Some(format!("input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu{index:012x}")),
+                        failure_identity: Some(format!("input_backend_operation_failed~v2~k000000000000~m00000000aaaaaaaaaaaa~fu{index:012x}")),
                         class: PolicyFailureClass::Recoverable,
                     },
                     &unavailable(now + 100),
@@ -2147,7 +2135,7 @@ mod tests {
             PolicyExecutionInput::Failed {
                 outcome: Outcome::new(SharedCode::InputBackendOperationFailed),
                 failure_identity: Some(
-                    "input_backend_operation_failed~v1~k000000000000~maaaaaaaaaaaa~fu000000000001"
+                    "input_backend_operation_failed~v2~k000000000000~m00000000aaaaaaaaaaaa~fu000000000001"
                         .to_owned(),
                 ),
                 class: PolicyFailureClass::Recoverable,
@@ -2545,6 +2533,79 @@ mod tests {
         assert_eq!(
             replay.latest_failure(&next.task_id, &next.instance_id),
             live.latest_failure(&next.task_id, &next.instance_id)
+        );
+    }
+
+    // Workflow #336 PKG-S3, M-PKG §4.4 S3-T2 (pause half): the same failure identity (format v2)
+    // twice pauses the pair, and the pause is lifted against the main package and the layers that
+    // identity names, with the content hashes recorded in it; nothing comes from the dispatch.
+    #[test]
+    fn s3_t2_the_same_identity_twice_pauses_on_the_packages_it_names() {
+        use crate::failure_identity::{IdentityLayer, IdentityPackage};
+        let catalog = catalog_with(
+            |tasks| {
+                tasks["tasks"][0]["on_failure"]["retry_limit"] = serde_json::json!(1);
+                tasks["tasks"][0]["on_failure"]["escalation_threshold"] = serde_json::json!(2);
+            },
+            |_| {},
+        );
+        let identity = "capture_failed~v2~k000000000000~m0123abcd456789abcdef\
+                        ~p89abcdef0123456789ab~faaaaaaaaaaaa";
+        let mut state = PolicyControlState::default();
+        let mut now = NOW;
+        for (suffix, expected) in [
+            (1, PolicyFailureDisposition::RetryScheduled),
+            (2, PolicyFailureDisposition::PausedTask),
+        ] {
+            let intent = intent(&catalog, suffix);
+            let admission = state
+                .preview_admission(&catalog, &intent, now)
+                .expect("admission preview");
+            let data = state
+                .preview_execution(
+                    &catalog,
+                    &intent,
+                    &admission,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: now + 100,
+                        runtime_ms: 100,
+                    },
+                    &PolicyExecutionInput::Failed {
+                        outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
+                        failure_identity: Some(identity.to_owned()),
+                        class: PolicyFailureClass::Recoverable,
+                    },
+                    &unavailable(now + 100),
+                )
+                .expect("failure classification");
+            let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
+                panic!("expected failure")
+            };
+            assert_eq!(failure.disposition, expected, "failure {suffix}");
+            assert_eq!(u64::from(failure.consecutive_same_error), suffix);
+            state
+                .commit_execution(&catalog, &intent, &admission, &data)
+                .expect("commit failure");
+            now = failure.retry_at_unix_ms.unwrap_or(now + 100);
+        }
+        let task = &catalog.catalog().tasks.tasks[0];
+        let paused = state
+            .failure_streaks
+            .get(&(task.id.clone(), "fixture-instance-a".to_owned()))
+            .and_then(|failure| failure.paused_on.clone())
+            .expect("the pair is paused");
+        assert_eq!(
+            paused,
+            PausedPackages {
+                main: Some(IdentityPackage {
+                    id_hash: "0123abcd".to_owned(),
+                    hash: "456789abcdef".to_owned(),
+                }),
+                layers: vec![IdentityLayer::Declared(IdentityPackage {
+                    id_hash: "89abcdef".to_owned(),
+                    hash: "0123456789ab".to_owned(),
+                })],
+            }
         );
     }
 }

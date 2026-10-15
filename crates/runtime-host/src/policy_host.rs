@@ -18,12 +18,12 @@ pub(crate) use planning_transaction::planning_transaction_error;
 
 use crate::catalog_plan::CatalogLineage;
 use crate::codes::HostCode;
-use crate::failure_identity::SuspensionLiftView;
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
     is_availability_denial,
 };
 use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types};
+use crate::suspension_lift::SuspensionLiftView;
 use crate::{
     InstanceArbitrationRank, PerformanceControlWorkload, ProcedureManifest, RuntimeHostError,
     RuntimeHostResult,
@@ -310,7 +310,6 @@ pub struct PolicyRunContext {
     admission: PolicyAdmissionRecord,
     intent: DispatchIntent,
     reason_chain: DecisionReasonChain,
-    package_digest: actingcommand_contract::PackageRef,
 }
 
 impl PolicyRunContext {
@@ -326,13 +325,6 @@ impl PolicyRunContext {
         intent: DispatchIntent,
         reason_chain: DecisionReasonChain,
     ) -> RuntimeHostResult<Self> {
-        let package_digest = intent.package_digest.clone().ok_or_else(|| {
-            RuntimeHostError::fatal(
-                HostCode::PolicyRunPackageDigestMissing,
-                HostLocation::BuildPolicyRunContext,
-                RuntimeErrorCode::RuntimeHalted,
-            )
-        })?;
         if reason_chain.decision_id != intent.decision_id
             || reason_chain.id != intent.reason_chain_id
             || catalog.catalog_hash() != intent.catalog_hash
@@ -354,7 +346,6 @@ impl PolicyRunContext {
             admission,
             intent,
             reason_chain,
-            package_digest,
         })
     }
 
@@ -392,10 +383,6 @@ impl PolicyRunContext {
 
     pub fn procedure_ref(&self) -> &str {
         &self.intent.procedure_ref
-    }
-
-    pub fn package_digest(&self) -> &actingcommand_contract::PackageRef {
-        &self.package_digest
     }
 
     pub fn reason_chain(&self) -> &DecisionReasonChain {
@@ -3203,12 +3190,6 @@ fn detection_signal_id(kind: &str, components: &[&str]) -> String {
 fn event_data(
     payload: &actingcommand_contract::PolicyDispatchPayload,
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
-    payload.package_digest().validate().map_err(|_| {
-        fatal(
-            HostCode::ProcedureBindingEventInvalid,
-            HostLocation::RecoverPolicyDispatches,
-        )
-    })?;
     {
         let valid = payload
             .procedure_binding_digest()
@@ -3231,7 +3212,6 @@ fn event_data(
         task_id: payload.task_id().to_owned(),
         instance_id: payload.instance_id().to_owned(),
         operation_id: payload.operation_id().to_owned(),
-        package_digest: payload.package_digest().to_owned(),
         procedure_binding_digest: payload.procedure_binding_digest().to_owned(),
         reason_chain_id: payload.reason_chain_id().to_owned(),
         reasons: payload.reasons().to_vec(),
@@ -3248,12 +3228,6 @@ fn dispatch_event_data(
     intent: &DispatchIntent,
     reason_chain: &DecisionReasonChain,
 ) -> RuntimeHostResult<PolicyDispatchEventData> {
-    let package_digest = intent.package_digest.clone().ok_or_else(|| {
-        fatal(
-            HostCode::ProcedurePackageDigestMissing,
-            HostLocation::BuildPolicyDispatchEvent,
-        )
-    })?;
     let procedure_binding_digest = intent.procedure_binding_digest.clone().ok_or_else(|| {
         fatal(
             HostCode::ProcedureBindingDigestMissing,
@@ -3265,7 +3239,6 @@ fn dispatch_event_data(
         task_id: intent.task_id.clone(),
         instance_id: intent.instance_id.clone(),
         operation_id: intent.operation_id.clone(),
-        package_digest,
         procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
         reasons: reason_chain
@@ -3529,7 +3502,6 @@ fn control_intent(
         instance_id: data.instance_id.clone(),
         operation_id: data.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
-        package_digest: Some(data.package_digest.clone()),
         procedure_binding_digest: Some(data.procedure_binding_digest.clone()),
         catalog_hash: data.catalog_hash.clone(),
         catalog_version: data.catalog_version,
