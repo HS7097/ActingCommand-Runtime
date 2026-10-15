@@ -161,7 +161,7 @@ impl HostShared {
         server: &str,
     ) -> Result<Option<RegistryReturnHome>, RequestFailure> {
         let registry = self.read_game_registry(game)?;
-        let Some(package_id) = registry.return_home_package(server) else {
+        let Some(package_id) = registry.return_home_package(game) else {
             return Ok(None);
         };
         let path = registry.package_path(package_id).map_err(|_| {
