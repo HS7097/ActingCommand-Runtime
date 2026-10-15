@@ -148,13 +148,16 @@ fn renew_and_release_idempotency_survive_connection_cache_loss() {
         .process_request_for_test(&renew, connection_id)
         .expect("repeated renew");
     assert_eq!(repeated_renew, first_renew);
-    assert_eq!(
-        event_types_for_request(&host, &ids, connection_id, renew.request_id()),
-        vec![
+    // Test plan v2.2 §4 #22: the renew set in order (m369 Q-5, W-5) and one renewal for the
+    // repeated request.
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_request(&host, &ids, connection_id, renew.request_id()),
+        &[
             EventType::SchedulerAdmitted,
             EventType::LeaseTransitionIntent,
             EventType::LeaseRenewed,
-        ]
+        ],
+        &[EventType::LeaseRenewed],
     );
     let RuntimeResult::LeaseRenewed { token } = first_renew.result().expect("renew result") else {
         panic!("expected renewed lease");
@@ -173,13 +176,16 @@ fn renew_and_release_idempotency_survive_connection_cache_loss() {
         .process_request_for_test(&release, connection_id)
         .expect("repeated release");
     assert_eq!(repeated_release, first_release);
-    assert_eq!(
-        event_types_for_request(&host, &ids, connection_id, release.request_id()),
-        vec![
+    // Test plan v2.2 §4 #22: admission, intent and release in order, and one release for the
+    // repeated request.
+    assert_events_in_order_with_one_terminal(
+        &event_types_for_request(&host, &ids, connection_id, release.request_id()),
+        &[
             EventType::SchedulerAdmitted,
             EventType::LeaseTransitionIntent,
             EventType::LeaseReleased,
-        ]
+        ],
+        &[EventType::LeaseReleased],
     );
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     assert_eq!(state.close_count.load(Ordering::Acquire), 0);
@@ -281,31 +287,63 @@ fn every_fencing_field_is_checked_before_backend_use() {
     host.close().expect("close host");
 }
 
+/// Test plan v2.2 §4 #12 (HOST-R3): the fixed TTL runs on the Runtime's manual clock instead of a
+/// 1.1 s sleep. A lease past its TTL is reclaimed (one `lease.expired`) before the next acquire is
+/// granted, and the unopened backend stays closed
+/// (`docs/plans/2026-07-11-c3a-runtime-seed.md:65-67`: fixed TTL, monotonic expiry, expiry checked
+/// before every write; m369 W-2).
 #[test]
 fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
     let provider = Arc::new(FakeProvider::one(
         "node.a",
         instance_id(),
         Arc::clone(&state),
     ));
     let host = RuntimeHost::start(
-        config(&root).with_scheduler(SchedulerConfig {
-            maximum_client_heartbeat_interval_ms: 100,
-            takeover_cooldown_ms: 200,
-            lease_ttl_ms: 1_000,
-            ..SchedulerConfig::default()
-        }),
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 100,
+                takeover_cooldown_ms: 200,
+                lease_ttl_ms: 1_000,
+                ..SchedulerConfig::default()
+            }),
         provider,
     )
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
-    let _ = first.acquire("node.a");
-    thread::sleep(Duration::from_millis(1_100));
+    let (_, expired) = first.acquire("node.a");
+    clock.advance(1_100);
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     let mut second = TestClient::connect(&host);
     let (_, token) = second.acquire("node.a");
+    let reclaimed = projected_events(
+        &mut second,
+        EventQuery {
+            event_type: Some(EventType::LeaseExpired),
+            lease_id: Some(expired.lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [reclaimed] = reclaimed.as_slice() else {
+        panic!("the expired lease has one durable expiry: {reclaimed:?}");
+    };
+    let granted = projected_events(
+        &mut second,
+        EventQuery {
+            event_type: Some(EventType::LeaseGranted),
+            lease_id: Some(token.lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [granted] = granted.as_slice() else {
+        panic!("the new lease has one grant: {granted:?}");
+    };
+    assert!(reclaimed.sequence < granted.sequence);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     let release = second.request(RuntimeOperation::ReleaseLease { token });
     second.send(&release);
     drop(first);
