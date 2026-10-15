@@ -438,12 +438,18 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
     wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
 
     // §6 step 5: after the ladder's release the next dispatch on the instance is admitted. The
-    // Runtime clock moves to it only now, so the ladder's hold never lapsed on it.
+    // Runtime clock moves to it only now, so the ladder's hold never lapsed on it. A capacity
+    // sample is fresh for twice the monitor's interval on the Runtime clock, and admission
+    // refuses a stale one (contracts/capacity-admission.md "capacity freshness"). The jump of
+    // an hour leaves the monitor's last sample stale, so capacity is sampled at the new time,
+    // as the monitor does while time passes.
     assert!(
         clock.latest_unix_ms() < NEXT_DISPATCH_UNIX_MS,
         "the climb's records precede the next dispatch"
     );
     clock.advance(NEXT_DISPATCH_UNIX_MS - clock.latest_unix_ms());
+    host.capacity_sampler_for_test().expect("capacity owner")()
+        .expect("capacity sample at the next dispatch");
     admit_ladder_run_at(&host, &request, clock.latest_unix_ms());
 
     let events = all_events(&host);
