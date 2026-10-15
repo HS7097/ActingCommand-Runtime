@@ -21,13 +21,34 @@ pub(crate) use metadata::{LedgerEventMetadata, LedgerEventRead};
 mod capture_tests;
 
 /// A ledger-assigned fact. Consumers can inspect and serialize it, but cannot construct or
-/// deserialize one.
+/// deserialize one. Each refused example is paired with an accepted one that differs only in
+/// its last line, so the refusal comes from that line.
+///
+/// Serializing compiles:
+///
+/// ```
+/// use actingcommand_ledger::PersistedEvent;
+///
+/// let _ = serde_json::to_string::<PersistedEvent>;
+/// ```
+///
+/// Deserializing does not:
 ///
 /// ```compile_fail
 /// use actingcommand_ledger::PersistedEvent;
 ///
 /// let _: PersistedEvent = serde_json::from_str("{}").unwrap();
 /// ```
+///
+/// Reading a field through its accessor compiles:
+///
+/// ```
+/// use actingcommand_ledger::PersistedEvent;
+///
+/// let _ = PersistedEvent::sequence;
+/// ```
+///
+/// Constructing one does not:
 ///
 /// ```compile_fail
 /// use actingcommand_ledger::PersistedEvent;

@@ -20,4 +20,6 @@ serde_json = { workspace = true }
 [dev-dependencies]
 actingcommand-artifact-store = { path = "../../crates/artifact-store", features = ["capture"] }
 actingcommand-ledger = { workspace = true }
+actingcommand-runtime-database = { workspace = true }
+actingcommand-runtime-state = { workspace = true }
 tempfile = "3"
