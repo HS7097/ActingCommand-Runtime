@@ -20,16 +20,16 @@ use actingcommand_contract::FactPayload;
 use actingcommand_policy::{FACT_REFRESH_TASK_ID, PolicyEvaluation};
 
 // The key the business task's trigger reads and the recognition package's terminal mark writes.
-const READ_KEY: &str = "resource.k2";
-const RECOGNITION_PACKAGE_ID: &str = "neutral.recognition.task";
+pub(super) const READ_KEY: &str = "resource.k2";
+pub(super) const RECOGNITION_PACKAGE_ID: &str = "neutral.recognition.task";
 const REQUESTED: &str = "fact_refresh_requested";
 const PENDING: &str = "fact_refresh_pending";
 const BINDING_INVALID: &str = "fact_reader_binding_invalid";
-const BUSINESS_TASK: &str = "fixture.observe";
+pub(super) const BUSINESS_TASK: &str = "fixture.observe";
 
 // Reads 35 on the terminal page (blue first pixel) and 120 elsewhere, at confidence 0.99.
 #[derive(Debug, Default)]
-struct TerminalReadings;
+pub(super) struct TerminalReadings;
 
 impl VisionProvider for TerminalReadings {
     fn require_ocr_model(
@@ -139,7 +139,7 @@ fn recognition_mark(id: &str, page: &str, target: &str) -> serde_json::Value {
 // The fake recognition maintenance package: a guarded tap from `home` to `terminal`, the home
 // page's region read into `resource.k1` and the terminal page's whole page into `resource.k2`.
 // With `designated` the tap is the package's designated operation, so the package is no reader.
-fn recognition_package(designated: bool) -> Vec<u8> {
+pub(super) fn recognition_package(designated: bool) -> Vec<u8> {
     let outcome = if designated {
         serde_json::json!({"designated_operation": "open_terminal", "mappings": [
             {"outcome_key": "read_done", "effect": "designated_effect_completed",
@@ -245,7 +245,7 @@ fn recognition_package(designated: bool) -> Vec<u8> {
 // The fixture catalog whose task is triggered by `resource.k2` below 50 in the instance's own
 // scope, read within fifteen minutes. Its activity profile is open all day and paces dispatches
 // one millisecond apart, so the wall clock this test runs on admits both dispatches.
-fn chain_sources() -> CatalogSources {
+pub(super) fn chain_sources() -> CatalogSources {
     let mut sources = policy_sources(1);
     let mut tasks: serde_json::Value =
         serde_json::from_slice(&sources.tasks.bytes).expect("chain tasks JSON");
@@ -310,7 +310,7 @@ fn evaluate_now(host: &RuntimeHost, seed: u64) -> PolicyEvaluation {
 }
 
 // The evaluation's intent of `task_id` with its reason chain.
-fn intent_of(
+pub(super) fn intent_of(
     evaluation: &PolicyEvaluation,
     task_id: &str,
 ) -> (DispatchIntent, DecisionReasonChain) {
@@ -330,7 +330,7 @@ fn intent_of(
 }
 
 // Admits the fact refresh intent with the request the Runtime builds for it.
-fn admit_refresh(
+pub(super) fn admit_refresh(
     host: &RuntimeHost,
     intent: &DispatchIntent,
     chain: &DecisionReasonChain,

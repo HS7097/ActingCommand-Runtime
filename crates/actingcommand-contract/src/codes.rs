@@ -184,6 +184,8 @@ crate::outcome_codes! {
         DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
         // Workflow #385 P-m (register §1.61 W15).
         PerformanceStatusCompleted => "request_performance_status_completed": success / none,
+        // Workflow #384 D2-S5 (register §1.68).
+        FactRefreshStatusCompleted => "request_fact_refresh_status_completed": success / none,
     }
 }
 
@@ -682,6 +684,8 @@ crate::outcome_codes! {
         InvalidBindChannel => "invalid_bind_channel": error / none,
         // Workflow #385 P-m: a `PerformanceStatus` answer of the wrong shape.
         InvalidPerformanceStatus => "invalid_performance_status": error / none,
+        // Workflow #384 D2-S5: a `FactRefreshStatus` answer of the wrong shape.
+        InvalidFactRefreshStatus => "invalid_fact_refresh_status": error / none,
     }
 }
 

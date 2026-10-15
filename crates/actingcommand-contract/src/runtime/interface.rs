@@ -212,6 +212,7 @@ runtime_operation_kinds! {
     RuntimeFactSnapshot,
     InstanceFactSnapshot,
     PerformanceStatus,
+    FactRefreshStatus,
     ConfigureMonitor,
     ClearMonitor,
     AcquireLease,
@@ -286,6 +287,7 @@ impl RuntimeOperationKind {
             | Self::RuntimeFactSnapshot
             | Self::InstanceFactSnapshot
             | Self::PerformanceStatus
+            | Self::FactRefreshStatus
             | Self::ProjectInterface
             | Self::QueryEvents
             | Self::SubscribeEvents
@@ -378,6 +380,8 @@ impl RuntimeOperationKind {
             Self::InstanceFactSnapshot => Some(ReceiptCode::InstanceFactSnapshotCompleted.code()),
             // Workflow #385 P-m (register §1.61 W15).
             Self::PerformanceStatus => Some(ReceiptCode::PerformanceStatusCompleted.code()),
+            // Workflow #384 D2-S5 (register §1.68).
+            Self::FactRefreshStatus => Some(ReceiptCode::FactRefreshStatusCompleted.code()),
             Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
             Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
             Self::CancelContainedTask => Some(ReceiptCode::CancelContainedTaskCompleted.code()),
@@ -484,6 +488,7 @@ impl RuntimeOperation {
             Self::RuntimeFactSnapshot => Kind::RuntimeFactSnapshot,
             Self::InstanceFactSnapshot { .. } => Kind::InstanceFactSnapshot,
             Self::PerformanceStatus => Kind::PerformanceStatus,
+            Self::FactRefreshStatus => Kind::FactRefreshStatus,
             Self::ConfigureMonitor { .. } => Kind::ConfigureMonitor,
             Self::ClearMonitor { .. } => Kind::ClearMonitor,
             Self::AcquireLease { .. } => Kind::AcquireLease,
@@ -601,6 +606,9 @@ mod tests {
             // Workflow #385 P-m (register §1.61 W15): the shadow measurement's status, a general
             // read from memory that records nothing.
             K::PerformanceStatus => (General, Some(Read), false),
+            // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general
+            // read from memory that records nothing (UIM §2.3, the D2 S5 transition query).
+            K::FactRefreshStatus => (General, Some(Read), false),
             K::ProjectInterface => (General, Some(Read), false),
             K::QueryEvents => (General, Some(Read), false),
             K::SubscribeEvents => (General, Some(Read), false),

@@ -15,6 +15,8 @@ mod emulator_control;
 mod error;
 mod events;
 mod fact_refresh;
+// Workflow #384 D2-S5: the fact refresh's transition recorder.
+mod fact_refresh_transitions;
 mod fact_store;
 mod failure_identity;
 mod host;
@@ -70,6 +72,7 @@ pub use catalog_plan::{
 pub use codes::{HostCode, HostLocation};
 pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
+pub use fact_refresh_transitions::FactRefreshTransition;
 pub use host::*;
 pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};
 // Workflow #385 P-m: how the GPU's engines make one utilisation (`PerformanceMonitorConfig`).

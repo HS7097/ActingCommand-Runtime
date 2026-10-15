@@ -987,6 +987,20 @@ tests = [
 ]
 incident = ["#373 NAV-3a"]
 
+# Workflow #384 D2-S5 and D2-S4's remaining rows (D2 model v1.4.2 §8 T31, T32, T35, T36, T38, T39): each change of a wait (pending, unresolved, resolved) is one transition, numbered from 1 through the owner epoch and none for the same input again; the recorder's state never changes a cycle; a wait past scheduling.fact_refresh.overdue_ms is reported once as fact_reader_overdue and never without the setting; FactRefreshStatus answers the waiting key, its code, its recognition maintenance package and when the wait began from memory and appends nothing; an intent evaluated before the reading is policy_facts_stale and the next one is admitted; the transitions stay in memory and the ledger gains no transition record (T34 waits for actingd to load a scheduling-layer document, D2-S1 decision D3)
+[[gate]]
+key = "91"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t35_each_change_of_a_wait_is_one_transition_numbered_through_the_epoch",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t36_the_recorder_s_state_never_changes_an_evaluation",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t38_a_wait_past_overdue_ms_is_reported_once_and_only_when_set",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s5_t39_the_status_read_answers_the_wait_from_memory_and_appends_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s4_t31_an_intent_evaluated_before_the_reading_is_stale_and_the_next_one_is_admitted",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s5::d2s4_t32_the_transitions_stay_in_memory_and_the_ledger_gains_no_new_record_kind",
+]
+incident = ["#384"]
+
 # Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 2 and 5, §11, rows T12, T13 and T31; coordinator ruling 4 of wave 14): check-config lists a package admission refuses with a suspend code as a pack_admission_suspended note and stays ok; the admission after start runs in the background, outside the start, and suspends it; the evaluation copies the suspension as a goal_missed planning signal, with no direct write; actingd suspended lists it under packs and ac_diagnose carries the instance's packs rows, codes and ids only
 [[gate]]
 key = "92"

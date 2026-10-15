@@ -53,6 +53,9 @@ pub use pack_registry::*;
 // Workflow #385 P-m: the shadow measurement's status read (register §1.61 W15).
 mod performance_status;
 pub use performance_status::*;
+// Workflow #384 D2-S5: the fact refresh's transition recorder read (register §1.68).
+mod fact_refresh_status;
+pub use fact_refresh_status::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
@@ -3391,6 +3394,10 @@ pub enum RuntimeOperation {
     /// a general read from memory that reads and records nothing in the ledger. The answer is
     /// `RuntimeResult::PerformanceStatus`.
     PerformanceStatus,
+    /// Reads what the scheduler's fact refresh waits for now (Workflow #384 D2-S5, D2 model
+    /// §6 S5; register §1.68): a general read from memory that reads and records nothing in the
+    /// ledger. The answer is `RuntimeResult::FactRefreshStatus`.
+    FactRefreshStatus,
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -3704,6 +3711,7 @@ impl RuntimeOperation {
             | Self::MonitorStatus
             | Self::RuntimeFactSnapshot
             | Self::PerformanceStatus
+            | Self::FactRefreshStatus
             | Self::DiscoverInstances
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
@@ -3962,6 +3970,7 @@ impl fmt::Debug for RuntimeOperation {
                 "RuntimeOperation::InstanceFactSnapshot(<redacted>)"
             }
             Self::PerformanceStatus => "RuntimeOperation::PerformanceStatus",
+            Self::FactRefreshStatus => "RuntimeOperation::FactRefreshStatus",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -4857,6 +4866,11 @@ pub enum RuntimeResult {
     PerformanceStatus {
         status: Box<RuntimePerformanceStatus>,
     },
+    /// `FactRefreshStatus` (Workflow #384 D2-S5, register §1.68): the keys each instance's
+    /// candidates wait for, from the transition recorder's memory.
+    FactRefreshStatus {
+        status: Box<RuntimeFactRefreshStatus>,
+    },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
     },
@@ -5654,6 +5668,14 @@ impl RuntimeReceipt {
                 if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
                     return Err(RuntimeContractError::new(
                         RuntimeContractCode::InvalidPerformanceStatus,
+                    ));
+                }
+                status.validate()?;
+            }
+            Some(RuntimeResult::FactRefreshStatus { status }) => {
+                if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidFactRefreshStatus,
                     ));
                 }
                 status.validate()?;

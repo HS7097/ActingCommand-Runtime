@@ -522,6 +522,33 @@ read it, and the candidate waits.
   terminal, and the next round scores the candidates that read them. The fact
   refresh writes nothing to the ledger itself: R_I's dispatch, run and readings
   are recorded as every policy dispatch, run and reading is.
+- **Transitions** (Workflow #384 D2-S5, D2 model §5.1 MP-3, §5.3 A-5, §6 S5).
+  At each evaluated cycle's yield point a bounded recorder reads the reasons of
+  the waiting candidates (the four codes above) and turns their changes into
+  transitions, per (instance, key): the key starts to be waited for (its
+  reason), the reason's code changes (the new reason), the key is no longer
+  waited for (`fact_refresh_resolved`, info: `instance_id`, `fact_key`, and the
+  `package_id` that served it), and one wait has lasted
+  `scheduling.fact_refresh.overdue_ms` (`fact_reader_overdue`, warning:
+  `instance_id`, `fact_key`, `elapsed_ms`, `package_id`; once per wait, only
+  while a package serves the key, never while the setting is unset). The same
+  input again gives no transition; an instance the closure's positions 1-2 hold
+  raises no demand, so its keys keep their state and their wait goes on. Cycles
+  and transitions are numbered from 1 per owner epoch, one by one, never reset.
+  The recorder holds one entry per waited-for (instance, key), so at most the
+  instances times the keys their candidates read. It only produces transitions:
+  no decision reads it, and it writes nothing to the ledger; actingd writes each
+  transition as one developer line (its code at its category's level, its
+  values, `cycle_seq=<n> transition_seq=<n>`) and one `OUTCOME actingd:` line in
+  the same write, and the ledger observer's G5 gate copies them from AO-4 on as
+  `policy.fact_refresh_transition` ([v012-register.md](../v012-register.md) §1.2
+  D1). `selection_input_unknown` names a rule, not a key, and is no transition.
+- **Status read.** `FactRefreshStatus` answers what the recorder holds after the
+  latest cycle: `{cycle_seq, transition_seq, instances: [{instance_alias,
+  demands: [{fact_key, outcome, package_id?, since_unix_ms, overdue}]}]}`, from
+  memory, appending nothing; `actingctl fact-refresh` prints it and `ac_overview`
+  answers it as its block `fact_refresh`
+  ([runtime-interface.md](../runtime-interface.md)).
 
 ## Dispatch Decision Record
 

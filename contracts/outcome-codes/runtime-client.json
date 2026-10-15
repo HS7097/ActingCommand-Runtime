@@ -3764,6 +3764,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime client operation: ask for a drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
+    },
+    "runtime_fact_refresh_status": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime client operation: what the fact refresh waits for (FactRefreshStatus, Workflow #384 D2-S5)."
     }
   }
 }

@@ -205,7 +205,8 @@ configuration nor any installer writes a performance key.
 ## The `scheduling` section (Workflow #386 SR-1)
 
 Frozen scheduling model v1.4.2 §9 and [v012-register.md](v012-register.md) §5: every key is
-parsed, checked and defaulted from v0.12.0 on, all settable, default `file`; the Runtime reads
+parsed, checked and defaulted from v0.12.0 on, all settable, default `file` (but
+`fact_refresh.overdue_ms`, which has none); the Runtime reads
 `scheduling.recognition.sample_timeout_retries` at each step of a contained run (the kernel's
 `step_pacing()`), the others take effect with the 0.12.x slices that read them. Their meaning is
 in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
@@ -218,8 +219,11 @@ to recognition ([resource-readings.md](resource-readings.md), "Kernel reading");
 D2-S4 reads `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
 `max_consecutive_failures` at every policy cycle, the pace of the scheduler's recognition
 maintenance package dispatches ([scheduling/README.md](scheduling/README.md), "Fact refresh"); a
-change takes effect from the next round. `fact_refresh.overdue_ms` (no default) is left to
-D2-S5, which reports it. Workflow #336 PKG-S3 reads
+change takes effect from the next round. Workflow #384 D2-S5 reads `fact_refresh.overdue_ms`
+at every policy cycle: how long one instance's candidates may wait for one key before the
+transition recorder reports `fact_reader_overdue`; it has no default, so without it nothing is
+reported, and an instruction can change it only when the configuration file names it (an unset
+key has no value to replace, `config_key_unknown`). Workflow #336 PKG-S3 reads
 `suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
 hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
 "Lifting (R19)"). Workflow #386 SR-3 reads `pack_admission.check_in_check_config` in
@@ -251,6 +255,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.fact_refresh.min_interval_ms`, `.failure_backoff_ms` (Workflow #384 D2-S4) | milliseconds | `300000`, `600000` |
 | `scheduling.fact_refresh.daily_limit`, `.max_consecutive_failures` (Workflow #384 D2-S4) | integer `0..=4294967295` | `96`, `3` |
 | `scheduling.fact_refresh.recognition_join_timeout_ms` (Workflow #384 D2-S2) | milliseconds `0..=1800000` | `10000` |
+| `scheduling.fact_refresh.overdue_ms` (Workflow #384 D2-S5) | milliseconds | none (unset: not reported) |
 | `scheduling.suspension.lift_check_min_interval_ms` (Workflow #336 PKG-S3) | milliseconds | `60000` |
 | `scheduling.pack_admission.check_in_check_config`, `.check_after_start` (Workflow #386 SR-3) | boolean | `true`, `true` |
 | `scheduling.pack_admission.suspend_codes` (Workflow #386 SR-3) | list of codes, as `rerun.condition_codes` | `["recognition_sample_budget_invalid"]` |

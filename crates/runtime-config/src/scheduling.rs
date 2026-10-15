@@ -11,7 +11,10 @@
 //! waits for the readings it handed to recognition, read by the host when a run joins. Workflow
 //! #384 D2-S4: `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
 //! `max_consecutive_failures`, the pace of the scheduler's recognition maintenance package
-//! dispatches, read by the host at every policy cycle. Workflow #336 PKG-S3:
+//! dispatches, read by the host at every policy cycle. Workflow #384 D2-S5:
+//! `fact_refresh.overdue_ms`, how long one instance may wait for one key before the transition
+//! recorder reports `fact_reader_overdue`; it has no default (unset, nothing is reported) and is
+//! read by the host at every policy cycle. Workflow #336 PKG-S3:
 //! `suspension.lift_check_min_interval_ms`, the least time between two measurements of one
 //! package's content hash by the suspension lift checks, read by the host at each check.
 //! Workflow #386 SR-3: `pack_admission.check_in_check_config`, `check_after_start` and
@@ -96,6 +99,10 @@ pub const FACT_REFRESH_FAILURE_BACKOFF_MS: &str = "scheduling.fact_refresh.failu
 /// the activity day.
 pub const FACT_REFRESH_MAX_CONSECUTIVE_FAILURES: &str =
     "scheduling.fact_refresh.max_consecutive_failures";
+/// Workflow #384 D2-S5 (D2 model §3.4, §3.9 item 6): how long one instance's candidates may wait
+/// for one key before the transition recorder reports `fact_reader_overdue`. No default: unset,
+/// nothing is reported.
+pub const FACT_REFRESH_OVERDUE_MS: &str = "scheduling.fact_refresh.overdue_ms";
 
 /// Workflow #336 PKG-S3 (M-PKG §3.4, D1): the least time between two measurements of one
 /// package's content hash by the suspension lift checks.
@@ -220,6 +227,7 @@ file_struct!(
         failure_backoff_ms,
         max_consecutive_failures,
         recognition_join_timeout_ms,
+        overdue_ms,
     }
 );
 file_struct!(
@@ -390,6 +398,17 @@ pub(crate) static ROWS: &[KeyRow] = &[
         JOIN_TIMEOUT,
         "D2-S2",
     ),
+    // Workflow #384 D2-S5: no default (register §5: unset = not reported), so only a file that
+    // names the key carries it, and an instruction can change it only then.
+    KeyRow {
+        default: DefaultSource::None,
+        ..row(
+            FACT_REFRESH_OVERDUE_MS,
+            ValueType::DurationMs,
+            KeyRange::Any,
+            "D2-S5",
+        )
+    },
     row(
         SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS,
         ValueType::DurationMs,
@@ -510,6 +529,8 @@ pub struct FactRefreshConfig {
     pub daily_limit: u32,
     pub failure_backoff_ms: u64,
     pub max_consecutive_failures: u32,
+    /// Workflow #384 D2-S5: when one key's wait is reported overdue; `None` when unset.
+    pub overdue_ms: Option<u64>,
 }
 
 /// Workflow #386 SR-3 (§2.4): the task package admission check of `check-config` and of the
@@ -569,6 +590,15 @@ impl Reader<'_> {
         match self.scalar(key)? {
             FactScalar::DurationMs(ms) => Ok(ms),
             _ => Err(invalid(key, ConfigValueProblem::WrongType)),
+        }
+    }
+
+    /// A duration key without a default: `None` when the configuration does not carry it.
+    fn optional_duration(&self, key: &str) -> Result<Option<u64>, ConfigFailure> {
+        match (self.value)(key) {
+            None => Ok(None),
+            Some(FactScalar::DurationMs(ms)) => Ok(Some(ms)),
+            Some(_) => Err(invalid(key, ConfigValueProblem::WrongType)),
         }
     }
 
@@ -796,6 +826,7 @@ fn fact_refresh_from(reader: &Reader<'_>) -> Result<FactRefreshConfig, ConfigFai
         daily_limit: reader.count(FACT_REFRESH_DAILY_LIMIT)?,
         failure_backoff_ms: reader.duration(FACT_REFRESH_FAILURE_BACKOFF_MS)?,
         max_consecutive_failures: reader.count(FACT_REFRESH_MAX_CONSECUTIVE_FAILURES)?,
+        overdue_ms: reader.optional_duration(FACT_REFRESH_OVERDUE_MS)?,
     })
 }
 

@@ -1666,6 +1666,9 @@ impl RuntimeHost {
             performance_hold_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
+            fact_refresh_recorder: Mutex::new(
+                crate::fact_refresh_transitions::FactRefreshRecorder::default(),
+            ),
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
             scheduled_resolutions: Mutex::new(BTreeMap::new()),
             lift_checks: crate::suspension_lift::LiftChecks::default(),
@@ -2450,6 +2453,17 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PolicyCycle> {
         self.work_ref(crate::codes::HostLocation::EvaluatePolicyCycle)?
             .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
+    }
+
+    /// Workflow #384 D2-S5, test only: puts the fact refresh's transition recorder in the state
+    /// `recorder` holds.
+    #[cfg(test)]
+    pub(crate) fn replace_fact_refresh_recorder_for_test(
+        &self,
+        recorder: crate::fact_refresh_transitions::FactRefreshRecorder,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::HostLocation::RecordFactRefreshTransitions)?
+            .replace_fact_refresh_recorder_for_test(recorder)
     }
 
     #[cfg(test)]
@@ -4456,6 +4470,9 @@ struct HostShared {
     // Workflow #384 D2-S4: L (D2 model §3.1), when this start finished loading the instance
     // facts.
     instance_facts_loaded_at_unix_ms: u64,
+    // Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh's transition recorder of this
+    // owner epoch (memory only; no decision reads it).
+    fact_refresh_recorder: Mutex<crate::fact_refresh_transitions::FactRefreshRecorder>,
     // Workflow #373 NAV-6: the standard-pack root and the registry each game root held when it
     // was last read (memory only).
     standard_packs: standard_pack::StandardPackRoots,

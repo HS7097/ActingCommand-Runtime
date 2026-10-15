@@ -1700,6 +1700,29 @@
       "description": "A resource target (resource_target_id) with an open gap is applied to the candidate's effective score.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "fact_refresh_resolved": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S5: the candidates of the instance no longer wait for the key (fact_key) they waited for: the latest policy cycle found it known, or no candidate reads it any more. Only a transition of the fact refresh recorder (an actingd daemon line, and from AO-4 a policy.fact_refresh_transition record), never a decision reason; package_id names the instance's recognition maintenance package when one served the key.",
+      "common_causes": "The instance's recognition maintenance package or another run read the key, or the catalog changed.",
+      "handling": "Nothing to do."
     }
   }
 }
