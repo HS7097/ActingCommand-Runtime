@@ -117,6 +117,52 @@ actingcommand_contract::outcome_codes! {
         /// `command.validated` (keys `instance_id`, `device_process_present`, and
         /// `stop_elapsed_ms`).
         EmulatorStopProcessUnverified => "emulator_stop_process_unverified": warning / none,
+        /// Error. A configured emulator start names an alias that is not a registered instance;
+        /// the start fails (Workflow #369 S6c; keys `alias`).
+        EmulatorAutostartInstanceUnknown => "emulator_autostart_instance_unknown": error / none,
+        /// Error. A configured emulator start names a fixture instance, which has no emulator to
+        /// start; the start fails (Workflow #369 S6c; keys `alias`).
+        EmulatorAutostartRequiresPhysicalInstance => "emulator_autostart_requires_physical_instance": error / none,
+        /// Info. The daemon enqueued the autostart claims of the configured instances whose
+        /// emulator is stopped (Workflow #369 S6c; keys `count`). A report line.
+        EmulatorAutostartQueued => "emulator_autostart_queued": info / none,
+        /// Info. An autostart claim read internet access from the operating system's
+        /// connectivity status (Workflow #369 S6c, P3; keys `alias`, `elapsed_ms`, the wait). A
+        /// report line.
+        EmulatorAutostartNetworkReady => "emulator_autostart_network_ready": info / none,
+        /// Warning. The operating system's connectivity status is unknown; the autostart claim
+        /// goes on without waiting (Workflow #369 S6c, P3; keys `alias`, `connectivity_reason`,
+        /// and `os_error` when the system gave one). A report line.
+        EmulatorAutostartNetworkStatusUnknown => "emulator_autostart_network_status_unknown": warning / none,
+        /// Error. No internet access was reported within 600 s: the configured start is refused
+        /// with the failure pair under the claim and the claim releases its key (Workflow #369
+        /// S6c, P3; keys `alias`, `elapsed_ms`). Also its report line.
+        EmulatorAutostartNetworkUnready => "emulator_autostart_network_unready": error / environment_fault,
+        /// Info. A configured start was performed and the connection preparation after it passed
+        /// (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartStarted => "emulator_autostart_started": info / none,
+        /// Warning. A configured start was performed, but the connection preparation after it did
+        /// not pass; the ladder it admitted holds the key (Workflow #369 S6c; keys `alias`). A
+        /// report line.
+        EmulatorAutostartPreparationFailed => "emulator_autostart_preparation_failed": warning / none,
+        /// Error. A configured start ended without its emulator started: its failure (a refused
+        /// claim, a refused renewal, a failed control) is the `caused_by` link, recorded where it
+        /// happened (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartFailed => "emulator_autostart_failed": error / none,
+        /// Info. An operator emulator control waits on the instance: the autostart claim releases
+        /// its key before its Start, with no failure pair (Workflow #369 S6c; keys `alias`). A
+        /// report line.
+        EmulatorAutostartSuperseded => "emulator_autostart_superseded": info / none,
+        /// Info. A scheduling pause holds the instance or the global gate: the autostart claim
+        /// queues again as a gated entry and releases its key (Workflow #369 S6c; keys `alias`).
+        /// A report line.
+        EmulatorAutostartYielded => "emulator_autostart_yielded": info / none,
+        /// Info. The instance already runs when its autostart claim holds the key: the claim
+        /// ends without action (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
+        /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases
+        /// its key (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartInterrupted => "emulator_autostart_interrupted": info / none,
         /// Warning. A persistent gate (a budget, a closed activity window, a task paused by
         /// failure suspension, or the configuration) refused a due clock slot; recorded once
         /// per (task, instance, occurrence) as a `goal_missed` planning signal (keys `task_id`,
@@ -1469,6 +1515,8 @@ actingcommand_contract::outcome_locations! {
         EncodeEffectiveConfiguration => "encode_effective_configuration",
         EncodeRuntimeLifecycleFailure => "encode_runtime_lifecycle_failure",
         EndLeaseDeviceUse => "end_lease_device_use",
+        /// Workflow #369 S6c: enqueuing the configured emulator starts' claims.
+        EnqueueEmulatorAutostart => "enqueue_emulator_autostart",
         EnqueueHostClaim => "enqueue_host_claim",
         EvaluateFullPolicyCycle => "evaluate_full_policy_cycle",
         EvaluatePolicyCycle => "evaluate_policy_cycle",
@@ -1955,6 +2003,8 @@ actingcommand_contract::outcome_locations! {
         RollbackPolicyCatalog => "rollback_policy_catalog",
         RollbackReleaseSet => "rollback_release_set",
         RunContainedTaskCapture => "run_contained_task_capture",
+        /// Workflow #369 S6c: an autostart claim's hold and Start on its instance's worker.
+        RunEmulatorAutostart => "run_emulator_autostart",
         RunInstanceWorker => "run_instance_worker",
         RunMonitorCapture => "run_monitor_capture",
         RunMonitorProbe => "run_monitor_probe",
@@ -2094,6 +2144,8 @@ actingcommand_contract::outcome_locations! {
         DeviceRegistryInputOperation => "device_registry_input_operation",
         EmulatorControlBinding => "emulator_control_binding",
         EmulatorControlRegistration => "emulator_control_registration",
+        /// Workflow #369 S6c: the report lines of the configured emulator starts.
+        EmulatorAutostartReports => "emulator_autostart_reports",
         RuntimeIpcRequestRead => "runtime_ipc_request_read",
         RuntimeIpcRequestDecode => "runtime_ipc_request_decode",
         RuntimeIpcRequestCache => "runtime_ipc_request_cache",

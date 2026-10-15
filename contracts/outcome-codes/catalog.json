@@ -166,6 +166,10 @@
       "type": "integer",
       "description": "The raw operating-system error number (Win32 error or HRESULT)."
     },
+    "connectivity_reason": {
+      "type": "vocab:connectivity_reason",
+      "description": "Why the operating system's internet connectivity status is unknown (Workflow #369 S6c, from host-metrics' network_connectivity)."
+    },
     "io_kind": {
       "type": "vocab:io_kind",
       "description": "The Rust io::ErrorKind of an I/O failure, in snake_case."
@@ -8127,6 +8131,9 @@
     ],
     "start_emulator_": [
       "actingd"
+    ],
+    "emulator_autostart_": [
+      "runtime-host"
     ]
   },
   "fragments": {

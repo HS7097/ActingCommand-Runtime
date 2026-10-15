@@ -33,6 +33,9 @@ mod gate_383;
 #[cfg(test)]
 mod gate_a6a;
 
+#[cfg(test)]
+mod gate_369_s6c;
+
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{
     Category, CauseRelation, Code, Detail, IoOp, Location, Outcome,
@@ -44,9 +47,10 @@ use actingcommand_contract::{
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_host::{
-    LedgerFailureSink, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
-    PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, PolicyWakes, RuntimeHost,
-    RuntimeHostError, RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
+    EmulatorAutostartReports, LedgerFailureSink, PolicyAdmissionContext, PolicyCadence,
+    PolicyCycle, PolicyDispatchAdmission, PolicyRecomputeKind, PolicyRunContext, PolicyTrigger,
+    PolicyWakes, RuntimeHost, RuntimeHostError, RuntimeLifecycleFailure,
+    RuntimeLifecycleFailureStage,
 };
 use codes::{ActingdCode, ActingdLocation};
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
@@ -181,6 +185,30 @@ fn write_stderr(text: &str) {
     let _ = stderr.flush();
 }
 
+/// Workflow #369 S6c (model-369-queue H-5): the configured emulator starts' report lines taken
+/// since the last pass, each written as daemon lines on stderr through the A6a writer
+/// (`write_daemon_reports`). Only a report store the Runtime cannot read is the error.
+fn write_autostart_reports(reports: &EmulatorAutostartReports) -> Result<(), ActingdError> {
+    let lines = reports.take().map_err(ActingdError::runtime)?;
+    // A failed write is counted by the writer and never stops actingd (P3 L2): stderr is the
+    // last place actingd reports to.
+    let _unwritten = write_daemon_reports(&lines, &mut std::io::stderr().lock());
+    Ok(())
+}
+
+/// Workflow #369 S6c: writes each outcome as its daemon lines, one write each, to `sink`, and
+/// returns how many writes failed. A failed write never ends the pass (P3 L2).
+fn write_daemon_reports(outcomes: &[Outcome], sink: &mut dyn Write) -> usize {
+    outcomes
+        .iter()
+        .filter(|outcome| {
+            sink.write_all(daemon_lines(outcome, None).as_bytes())
+                .and_then(|()| sink.flush())
+                .is_err()
+        })
+        .count()
+}
+
 /// A subcommand's result when it succeeded (Workflow #378 A6a, model section 7.4): its success
 /// outcome and the data members of its report.
 #[derive(Debug)]
@@ -310,6 +338,9 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
         }
         Err(error) => return start_refused(&error, install_root),
     };
+    // Workflow #369 S6c: the configured emulator starts' reports, also the ones written while
+    // the host closes.
+    let autostart_reports = host.emulator_autostart_reports();
     let mut lines = daemon_lines(host.ledger_opened(), None);
     // Slice #315-B2c-2: the same decision the Ledger records as a lifecycle observation.
     if let Some(released) = host.owner_released_by_exit() {
@@ -324,7 +355,14 @@ fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
     }
     write_stderr(&lines);
     let stopped = Outcome::new(ActingdCode::RuntimeStopped);
-    match serve(host, policy) {
+    let served = serve(host, policy);
+    // The reports of claims the close ended come before the terminal outcome. A report store
+    // the Runtime cannot read leaves them unwritten, which its developer line says; the stop
+    // keeps its own terminal outcome.
+    if let Err(error) = write_autostart_reports(&autostart_reports) {
+        write_stderr(&developer_line(&error.outcome(), Some(&error.to_string())));
+    }
+    match served {
         Ok(()) => {
             write_stderr(&daemon_lines(&stopped, None));
             stopped.category()
@@ -457,6 +495,7 @@ fn start_daemon(
         resource_packages,
         recognition_packages,
         adb_requirement,
+        emulator_autostart,
         ..
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         match device_refusal.filter(|refused| refused.code() == code) {
@@ -479,6 +518,9 @@ fn start_daemon(
                 .with_detail(rejection.to_string())
         })?;
     let host = host.with_resource_packages(resource_packages);
+    // Workflow #369 S6c: the instances whose stopped emulator the daemon starts (S6a's
+    // `start_emulator`, off unless an instance names it), in configuration order.
+    let host = host.with_emulator_autostart(emulator_autostart);
     // Workflow #383 AO-1: the ledger's retried writes and its fatal stop after a dump; the
     // commit actingd was built from names the dump's header.
     let host = host.with_ledger_failure_sink(Arc::new(DaemonLedgerFailure));
@@ -549,6 +591,23 @@ fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), Actin
             );
         }
     };
+    // Workflow #369 S6c (model-369-queue H-5): the configured emulator starts are enqueued once,
+    // after policy initialization and before `runtime_ready`; nothing waits for them here.
+    if let Err(error) = host
+        .enqueue_emulator_autostart()
+        .map_err(ActingdError::runtime)
+        .and_then(|_| write_autostart_reports(&host.emulator_autostart_reports()))
+    {
+        let recorded =
+            error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyBootstrap);
+        let closed = host.close();
+        return combine_monitor_results(
+            Err(error.with_recording_result(recorded)),
+            Ok(()),
+            Ok(()),
+            closed.map_err(ActingdError::runtime),
+        );
+    }
     let info = host.runtime_info();
     write_stderr(&daemon_lines(
         &Outcome::new(ActingdCode::RuntimeReady).pid(info.pid()),
@@ -886,8 +945,10 @@ fn validate_scheduled_execution_mode(
 }
 
 fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
+    let autostart_reports = host.emulator_autostart_reports();
     loop {
         thread::sleep(HEALTH_POLL_INTERVAL);
+        write_autostart_reports(&autostart_reports)?;
         match host.fatal_error() {
             Ok(Some(error)) | Err(error) => {
                 let error = ActingdError::runtime(error);
@@ -995,7 +1056,9 @@ fn run_policy_monitor(
     driver: &thread::JoinHandle<Result<(), ActingdError>>,
 ) -> Result<(), ActingdError> {
     let mut waiting_for_install = false;
+    let autostart_reports = host.emulator_autostart_reports();
     loop {
+        write_autostart_reports(&autostart_reports)?;
         match host.fatal_error() {
             Ok(Some(error)) => return Err(ActingdError::runtime(error)),
             Ok(None) => {}

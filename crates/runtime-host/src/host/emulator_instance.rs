@@ -59,7 +59,13 @@
 //! gate the claim waits queued. A hold that hands no startup claim over (a stop, a failed
 //! preparation) first cancels the instance's queued startup claims (coordinator ruling on
 //! review #716). A failed preparation's admitted ladder (`record_preparation_finished`) gets
-//! the key straight from the release (H-1, P1; `release_to_preparation_ladder`).
+//! the key straight from the release (H-1, P1; `release_to_preparation_ladder`). Workflow #369
+//! S6c: so does a failed control that hands no startup claim over, a provider step that itself
+//! failed included (the same ruling, item 1; merge ledger :529).
+//!
+//! Workflow #369 S6c (H-5): an autostart claim drives the same start path on its own key
+//! (`drive_configured_start`), and a start it refuses before driving anything records the same
+//! failure pair (`refuse_configured_start`).
 
 use super::host_claims::HostKey;
 use super::lease::HostClaim;
@@ -586,6 +592,10 @@ impl HostShared {
     /// The end of a failed operator control's hold: a failure the Runtime does not survive, or
     /// one with neither a startup package nor a ladder, ends the key as a failed lease end does
     /// (`cleanup_composite_failure`: an unconfirmed close keeps it, any other end hands it on).
+    /// Workflow #369 S6c: the latter hands no startup claim over, so it first cancels the
+    /// instance's queued startup claims, as a stop and a failed preparation do (coordinator
+    /// ruling on review #716, item 1: a startup run against a stopped or unprepared emulator is
+    /// meaningless; merge ledger :529: a provider step that itself failed cancelled nothing).
     /// A restart whose Start succeeded after a failed Stop (Workflow #381 B D2 (c)) hands its
     /// key to the startup package, or to the ladder its failed preparation admitted, after the
     /// failure record, as on success.
@@ -600,7 +610,13 @@ impl HostShared {
             startup_package,
             ladder,
         } = failed;
-        if failure.poison_runtime || (startup_package.is_none() && ladder.is_none()) {
+        if failure.poison_runtime {
+            return self.cleanup_composite_failure(key.token, key.connection_id, failure);
+        }
+        if startup_package.is_none() && ladder.is_none() {
+            if let Err(cancel) = self.cancel_queued_startup_claims(key.token.instance_id()) {
+                return failure.replace_with_poison(*cancel.error);
+            }
             return self.cleanup_composite_failure(key.token, key.connection_id, failure);
         }
         match self.end_emulator_control_hold(
@@ -612,6 +628,80 @@ impl HostShared {
             Ok(_) => failure,
             Err(end) if end.poison_runtime => failure.replace_with_poison(*end.error),
             Err(_) => self.cleanup_composite_failure(key.token, key.connection_id, failure),
+        }
+    }
+
+    /// Workflow #369 S6c (H-5): the configured start of an autostart claim on the claim's own
+    /// `key`: its `command.received` (a Runtime-origin intent under the claim's `links`, written
+    /// only now, so a claim that yielded before left no open command), H-4's start path
+    /// (`drive_emulator_control`: the fence on the key, the close, the renewal before the
+    /// provider step, the provider Start, the binding, the ADB baseline, the renewal before the
+    /// preparation, `command.validated` or the failure pair, `runtime.instance_bound`, the
+    /// preparation on the key), then the hold's end as an operator start's: the key goes to the
+    /// startup package's claim through the gate, or to the ladder a failed preparation admitted;
+    /// a failed start ends it as a failed operator control does. The error is the recorded
+    /// failure, or one the Runtime does not survive.
+    pub(super) fn drive_configured_start(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        resolved: &RegisteredInstance,
+        links: EventLinksDraft,
+        mut key: HostKey,
+    ) -> Result<(), RequestFailure> {
+        let action = EmulatorInstanceAction::Start;
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            CommandPayloadDraft::received(action.event_action(), AuditInput::new()),
+        )?;
+        let mut driven = match self.drive_emulator_control(resolved, links, action, &mut key) {
+            Ok(driven) => driven,
+            Err(failed) => return Err(self.end_failed_emulator_control(request, key, failed)),
+        };
+        match self.end_emulator_control_hold(
+            request,
+            &key,
+            driven.startup_package.take(),
+            driven.ladder.take(),
+        ) {
+            Ok(_) => Ok(()),
+            Err(failure) => {
+                Err(self.cleanup_composite_failure(key.token, key.connection_id, failure))
+            }
+        }
+    }
+
+    /// Workflow #369 S6c (H-5, Q-5): a configured start an autostart claim refuses before it
+    /// drives anything (no internet access in time, a refused renewal): its intent and the
+    /// existing failure pair (`command.rejected` + `runtime.failed`) under the claim's `links`,
+    /// nothing performed. Returns the recorded failure, or one the Runtime does not survive.
+    pub(super) fn refuse_configured_start(
+        &self,
+        links: EventLinksDraft,
+        error: RuntimeHostError,
+    ) -> RequestFailure {
+        let action = EmulatorInstanceAction::Start.event_action();
+        if let Err(failure) = self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            CommandPayloadDraft::received(action, AuditInput::new()),
+        ) {
+            return failure;
+        }
+        match self.emulator_control_failure(
+            links,
+            action,
+            error,
+            RuntimeReceiptState::Denied,
+            EffectDisposition::NotPerformed,
+        ) {
+            Ok(failure) | Err(failure) => failure,
         }
     }
 

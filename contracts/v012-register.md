@@ -869,6 +869,22 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.60 Wave 13 slice S6c (#369 model v3.1 §7 row 8, H-5; ORD §3.5 item 17)
+
+S6c reads S6a's per-instance `start_emulator` (§1.36 E6-1) and starts a configured, stopped
+emulator at daemon start on an autostart claim; [emulator-control.md](emulator-control.md),
+"Configured start at daemon start", is the contract. No event type, persisted member, wire
+field or configuration key is added, and the claim, its start turn and its report lines live in
+memory only, as every claim kind does (model §4.1). The thirteen `emulator_autostart_*` codes,
+the locations `enqueue_emulator_autostart`, `run_emulator_autostart` and
+`emulator_autostart_reports`, the context key `connectivity_reason` (S6a's vocabulary) and the
+domain `emulator_autostart_` are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| E6C-1 | actingd daemon lines on stderr: the autostart report lines, `emulator_autostart_queued` (`count`) once the claims are enqueued, before `runtime_ready`; per claim `…_network_ready` or `…_network_status_unknown`, then one of `…_started`, `…_preparation_failed`, `…_failed`, `…_network_unready`, `…_superseded`, `…_yielded`, `…_skipped`, `…_interrupted`, each with `alias`; one developer line and one `OUTCOME actingd:` line each (A6-1's writer) | process interface | S6c | S6c | none when no instance names `start_emulator` (the default, off); the lines of claims the host's close ended come before `runtime_stopped`; a line that cannot be written never stops actingd; #643's stdout lines `actingd emulator_autostart_* …` were never shipped |
+| E6C-2 | an autostart claim's records under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's synthesized connection): `lease.requested` and `scheduler.admitted` + `lease.granted`, or `scheduler.queued` (deadline `u64::MAX`, priority `normal`) while a pause holds it; the renew set; `lease.released`; at its Start `command.received` (Runtime origin) and H-4's start records; a refusal before the Start: `command.received`, `command.rejected`, `runtime.failed` (`emulator_autostart_network_unready` with `alias`, `elapsed_ms`; or the `lease_expired` / `lease_missing` of a refused renewal) | new use of existing records (shapes unchanged) | S6c | S6c | a claim that yields to a pause, is superseded by an operator control, finds its instance running, or is interrupted by a drain or a shutdown writes its release only (and, for a pause, its new claim's `lease.requested` + `scheduler.queued`), no `command.*` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -959,7 +975,7 @@ when it takes effect.
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
-| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
+| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
