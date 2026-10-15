@@ -145,7 +145,7 @@ where
                 ErrorKind::UsageValidation,
                 "resource_production_retired",
                 format!(
-                    "{command_name} is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package digest/bundle"
+                    "{command_name} is retired; author a content directory under packs/<package_id>/ or use record start/mark/stop, then package validate/bundle"
                 ),
                 &[],
             ),
