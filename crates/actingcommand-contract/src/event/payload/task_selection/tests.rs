@@ -1162,6 +1162,39 @@ fn with_top(mut shape: TaskSelectionRecord, top: TaskSelectionConfirmation) -> T
     shape
 }
 
+// `shape` whose pick `index` ends the sequence with `confirmation` before its tap: no tap
+// check, every later pick not attempted, and the top level copying the end.
+fn ends_before_tap(
+    mut shape: TaskSelectionRecord,
+    index: usize,
+    confirmation: TaskSelectionConfirmation,
+) -> TaskSelectionRecord {
+    let picks = &mut multi_of(&mut shape).picks;
+    picks[index].confirmation = confirmation.clone();
+    picks[index].tap_check = None;
+    for later in picks.iter_mut().skip(index + 1) {
+        later.confirmation = TaskSelectionConfirmation::NotAttempted;
+        later.tap_check = None;
+    }
+    with_top(shape, confirmation)
+}
+
+// `shape` whose pick `index` ends the sequence with its tap check `tap_check`: every later pick
+// not attempted, and the top level copying the end.
+fn ends_after_tap(
+    mut shape: TaskSelectionRecord,
+    index: usize,
+    tap_check: TaskSelectionConfirmation,
+) -> TaskSelectionRecord {
+    let picks = &mut multi_of(&mut shape).picks;
+    picks[index].tap_check = Some(tap_check.clone());
+    for later in picks.iter_mut().skip(index + 1) {
+        later.confirmation = TaskSelectionConfirmation::NotAttempted;
+        later.tap_check = None;
+    }
+    with_top(shape, tap_check)
+}
+
 // T1: the single selects of SEL-L4a keep their bytes: no `multi_select`, the same members in
 // the same order, and the record ends where it ended.
 #[test]
@@ -1868,13 +1901,20 @@ fn db3s_t12_each_rule_refuses_what_no_writer_writes() {
     blocked.confirmation = TaskSelectionConfirmation::NotAttempted;
     cases.push(("not attempted with picks", blocked, "confirmation"));
 
-    // M3.
-    let mut second_moved = frame_success();
-    multi_of(&mut second_moved).picks[1].confirmation = TaskSelectionConfirmation::PickMoved {
-        frame_id: frame_id('2'),
-        pick_set_sha256: unmarked('c'),
-    };
-    cases.push(("v1 second pick moved before its tap", second_moved, "picks"));
+    // M3: each case breaks only the pick's own shape; the picks after it were not attempted
+    // and the top level copies its end.
+    cases.push((
+        "v1 second pick moved before its tap",
+        ends_before_tap(
+            frame_success(),
+            1,
+            TaskSelectionConfirmation::PickMoved {
+                frame_id: frame_id('2'),
+                pick_set_sha256: unmarked('c'),
+            },
+        ),
+        "picks",
+    ));
 
     let mut other_frame = frame_success();
     multi_of(&mut other_frame).picks[1].confirmation = pick_matched('9');
@@ -1888,12 +1928,18 @@ fn db3s_t12_each_rule_refuses_what_no_writer_writes() {
     };
     cases.push(("v1 identity_matched", v1_identity, "picks"));
 
-    let mut v2_moved = scan_success();
-    multi_of(&mut v2_moved).picks[0].confirmation = TaskSelectionConfirmation::PickMoved {
-        frame_id: frame_id('1'),
-        pick_set_sha256: unmarked('c'),
-    };
-    cases.push(("v2 pick_moved", v2_moved, "picks"));
+    cases.push((
+        "v2 pick_moved",
+        ends_before_tap(
+            scan_success(),
+            0,
+            TaskSelectionConfirmation::PickMoved {
+                frame_id: frame_id('1'),
+                pick_set_sha256: unmarked('c'),
+            },
+        ),
+        "picks",
+    ));
 
     let mut v2_other = scan_success();
     multi_of(&mut v2_other).picks[0].confirmation = scan_identity(5);
@@ -1917,58 +1963,68 @@ fn db3s_t12_each_rule_refuses_what_no_writer_writes() {
         ),
         ("tap_marked before a tap", tap_marked('1')),
     ] {
-        let mut shape = frame_success();
-        multi_of(&mut shape).picks[0].confirmation = inside;
-        cases.push((label, shape, "picks"));
+        cases.push((label, ends_before_tap(frame_success(), 0, inside), "picks"));
     }
 
     // M4.
+    let unconfirmed = TaskSelectionConfirmation::IdentityUnconfirmed {
+        identity_state: TaskSelectionIdentityState::Absent,
+        observed_identity: None,
+        identity_unknown: None,
+    };
     let mut after_failure = scan_success();
-    multi_of(&mut after_failure).picks[1].confirmation =
-        TaskSelectionConfirmation::IdentityUnconfirmed {
-            identity_state: TaskSelectionIdentityState::Absent,
-            observed_identity: None,
-            identity_unknown: None,
-        };
+    multi_of(&mut after_failure).picks[1].confirmation = unconfirmed.clone();
     multi_of(&mut after_failure).picks[1].tap_check = None;
+    let after_failure = with_top(after_failure, unconfirmed.clone());
     cases.push(("a success after a failure", after_failure, "picks"));
 
-    let mut checked_failure = scan_success();
-    multi_of(&mut checked_failure).picks[0].confirmation =
-        TaskSelectionConfirmation::IdentityUnconfirmed {
-            identity_state: TaskSelectionIdentityState::Absent,
-            observed_identity: None,
-            identity_unknown: None,
-        };
+    let mut checked_failure = ends_before_tap(scan_success(), 0, unconfirmed);
+    multi_of(&mut checked_failure).picks[0].tap_check = Some(tap_marked('a'));
     cases.push(("a failed confirmation checked", checked_failure, "picks"));
 
     // M3, mark_unconfirmed.
-    let mut same_reading = frame_success();
-    multi_of(&mut same_reading).picks[1].tap_check = Some(mark_unconfirmed(
-        1,
-        TaskSelectionMarkExpectation::Marked,
-        TaskSelectionMarkState::Marked,
-        '3',
+    cases.push((
+        "mark read as required",
+        ends_after_tap(
+            frame_success(),
+            1,
+            mark_unconfirmed(
+                1,
+                TaskSelectionMarkExpectation::Marked,
+                TaskSelectionMarkState::Marked,
+                '3',
+            ),
+        ),
+        "picks",
     ));
-    cases.push(("mark read as required", same_reading, "picks"));
-
-    let mut off_frame = frame_success();
-    multi_of(&mut off_frame).picks[1].tap_check = Some(mark_unconfirmed(
-        9,
-        TaskSelectionMarkExpectation::Unmarked,
-        TaskSelectionMarkState::Marked,
-        '3',
+    cases.push((
+        "v1 mark of a card not on the frame",
+        ends_after_tap(
+            frame_success(),
+            1,
+            mark_unconfirmed(
+                9,
+                TaskSelectionMarkExpectation::Unmarked,
+                TaskSelectionMarkState::Marked,
+                '3',
+            ),
+        ),
+        "picks",
     ));
-    cases.push(("v1 mark of a card not on the frame", off_frame, "picks"));
-
-    let mut unselected = scan_success();
-    multi_of(&mut unselected).picks[1].tap_check = Some(mark_unconfirmed(
-        3,
-        TaskSelectionMarkExpectation::Marked,
-        TaskSelectionMarkState::Unmarked,
-        'b',
+    cases.push((
+        "v2 mark of a member not selected",
+        ends_after_tap(
+            scan_success(),
+            1,
+            mark_unconfirmed(
+                3,
+                TaskSelectionMarkExpectation::Marked,
+                TaskSelectionMarkState::Unmarked,
+                'b',
+            ),
+        ),
+        "picks",
     ));
-    cases.push(("v2 mark of a member not selected", unselected, "picks"));
 
     for (label, shape, field) in cases {
         refused(label, &shape, field);
