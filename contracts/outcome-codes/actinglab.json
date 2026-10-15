@@ -227,7 +227,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actinglab package fmt --check read a content directory and found JSON files that are not in the canonical serialization (two-space indentation, one member or element per line, members in their document order, UTF-8 text, CRLF line endings including the last line, no byte-order mark). The details list them as unformatted. Nothing was written; the command exits 2 (Workflow #390 TOOL-1).",
+      "description": "actinglab package fmt --check read a content directory and found JSON files that are not in the canonical serialization (two-space indentation, one member or element per line, members in their document order, UTF-8 text, LF line endings including the last line, no byte-order mark). The details list them as unformatted. Nothing was written; the command exits 2 (Workflow #390 TOOL-1).",
       "common_causes": "A JSON file of the package was written or edited by another tool, or by hand.",
       "handling": "Run actinglab package fmt on the directory without --check and commit the result."
     },

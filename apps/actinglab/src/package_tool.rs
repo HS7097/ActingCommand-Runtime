@@ -253,29 +253,21 @@ pub(super) fn run_edit(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
     Ok(data)
 }
 
-/// The canonical serialization of one JSON document of a package (FCM P-03): two-space
-/// indentation, one member or element per line, `": "` after a member name, members in their
-/// document order, text as UTF-8 with only what JSON requires escaped, every line ending in
-/// CRLF (the last one too), and no byte-order mark.
+/// The canonical serialization of one JSON document of a package (FCM P-03, with the
+/// coordinator's wave-15 ruling of LF line endings): two-space indentation, one member or
+/// element per line, `": "` after a member name, members in their document order, text as UTF-8
+/// with only what JSON requires escaped (a line break inside a string stays `\n`), every line
+/// ending in LF (the last one too), and no byte-order mark.
 fn canonical_bytes(value: &Value) -> CliOutcome<Vec<u8>> {
-    let mut pretty = Vec::new();
+    let mut canonical = Vec::new();
     let mut serializer = serde_json::Serializer::with_formatter(
-        &mut pretty,
+        &mut canonical,
         serde_json::ser::PrettyFormatter::with_indent(b"  "),
     );
     value.serialize(&mut serializer).map_err(|error| {
         CliError::package_invalid(format!("a JSON document does not serialize: {error}"))
     })?;
-    // A line break inside a string is written escaped, so every LF the writer emits ends a line.
-    let mut canonical = Vec::with_capacity(pretty.len() + pretty.len() / 8 + 2);
-    for byte in pretty {
-        if byte == b'\n' {
-            canonical.push(b'\n');
-        } else {
-            canonical.push(byte);
-        }
-    }
-    canonical.extend_from_slice(b"\r\n");
+    canonical.push(b'\n');
     Ok(canonical)
 }
 

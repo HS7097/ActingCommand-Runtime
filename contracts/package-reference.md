@@ -385,9 +385,11 @@ The canonical serialization of a JSON file of a package: UTF-8 without a byte-or
 two-space indentation, one object member or array element per line, `": "` after a member name,
 an empty object or array as `{}` or `[]`; members in their document order; only what JSON
 requires escaped (text stays UTF-8, a line break inside a string stays `\n`); every line ends
-with CRLF, the last one included. An integer keeps its digits; any other number is written in
-the shortest form that reads back the same value (`0.90` becomes `0.9`). A file is a JSON file by its extension `.json` (ASCII case
-insensitive); a JSON file that does not parse (a byte-order mark is accepted on input) is
+with LF, the last one included, so a CRLF file is rewritten with LF (the coordinator's wave-15
+ruling: line endings are no part of a package's identity under option 丙, and the Lab and
+resource tooling write LF). An integer keeps its digits; any other number is written in the
+shortest form that reads back the same value (`0.90` becomes `0.9`). A file is a JSON file by
+its extension `.json` (ASCII case insensitive); a JSON file that does not parse (a byte-order mark is accepted on input) is
 `package_invalid`, and nothing is written.
 
 `actinglab package fmt --package <directory> [--check]` rewrites every JSON file of the
