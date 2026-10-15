@@ -8,6 +8,9 @@ use actingcommand_vision_ffi::{
     NnModelSpec, OcrModelSpec, VisionFfiError, VisionFfiResult, VisionListingCode,
     list_vision_models, ppocr_model_set_sha256, sha256_file_hex,
 };
+// Test-only: Workflow #382 A-1 G15, the model folder report's code for each vision root.
+#[cfg(test)]
+mod gate_382_a1;
 mod ledger;
 use serde::Serialize;
 use std::env;
