@@ -379,7 +379,7 @@ fn read_kept_frames(root: &Path, evidence: &Evidence) -> CliOutcome<Vec<KeptFram
             recognitions
                 .iter()
                 .rev()
-                .find(|(candidate, _)| *candidate == Some(frame))
+                .find(|(candidate, _)| *candidate == Some(frame) && candidate.is_none())
                 .map(|(_, targets)| targets.to_vec())
         });
         let source = match original {
