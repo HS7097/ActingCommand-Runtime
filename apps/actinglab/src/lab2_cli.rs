@@ -1677,7 +1677,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--click-from <id>",
                 "--click-follow <id>",
                 "--drag-to x,y,w,h",
-                "--long-press x,y",
+                "--long-press x,y,w,h",
                 "--duration-ms <1..60000>",
                 "--click-guard <id>",
                 "--click-retry <2..5>",

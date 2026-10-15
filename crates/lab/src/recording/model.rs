@@ -532,9 +532,9 @@ pub enum ClickFollowForm {
 /// Workflow #390 LAB-2: the gesture of a step whose effect is not a tap. A `drag` presses a
 /// point of the step's click rectangle, moves to a point of `to` and lifts there after
 /// `duration_ms` (a fast drag is a swipe); the package declares it as a `drag` click, whose two
-/// rectangles the kernel samples like a tap's. A `long_press` holds the click rectangle's one
-/// point (a 1x1 rectangle) for `duration_ms`; the package declares it as a `long_press` click,
-/// which the kernel presses at one point.
+/// rectangles the kernel samples like a tap's. A `long_press` holds a point of the step's click
+/// rectangle for `duration_ms`; the package declares it as a `long_press` click with that box
+/// (Workflow #390 lpbox), in which the kernel picks the point it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClickGesture {
@@ -741,8 +741,8 @@ impl MarkSpec {
 
 /// A click declaration: a rectangle (`region`), a mark's region (`from`), or (Workflow #396
 /// REC-4) a template mark it follows (`follow`), alone or with a rectangle. Workflow #390 LAB-2:
-/// a drag from `region` to `drag_to`, or a long press at the point `long_press`, each over
-/// `duration_ms`.
+/// a drag from `region` to `drag_to`, or (Workflow #390 lpbox) a long press in the click box
+/// `long_press`, each over `duration_ms`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickSpec {
@@ -755,7 +755,7 @@ pub struct ClickSpec {
     #[serde(default)]
     pub drag_to: Option<RecordRect>,
     #[serde(default)]
-    pub long_press: Option<RecordPoint>,
+    pub long_press: Option<RecordRect>,
     #[serde(default)]
     pub duration_ms: Option<u64>,
 }

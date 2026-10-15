@@ -2033,14 +2033,27 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
     };
     match click.get("kind").and_then(Value::as_str) {
         Some("point") => require_click_keys(path, operation, click, &["x", "y"], errors, "click"),
-        Some("long_press") | Some("long_tap") => require_click_keys(
-            path,
-            operation,
-            click,
-            &["x", "y", "duration_ms"],
-            errors,
-            "click",
-        ),
+        Some("long_press") | Some("long_tap") => {
+            require_click_keys(
+                path,
+                operation,
+                click,
+                &["x", "y", "duration_ms"],
+                errors,
+                "click",
+            );
+            // Workflow #390 lpbox: a long press's click box takes both `width` and `height`.
+            if click.contains_key("width") || click.contains_key("height") {
+                require_click_keys(
+                    path,
+                    operation,
+                    click,
+                    &["width", "height"],
+                    errors,
+                    "click",
+                );
+            }
+        }
         Some("rect") | Some("specific_rect") => require_click_keys(
             path,
             operation,
@@ -4539,6 +4552,15 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
                 )),
             ),
         ])),
+        // Workflow #390 lpbox: a long press keeps its click box.
+        Some("long_press") | Some("long_tap") if long_press_has_box(click) => Ok(ordered_object([
+            ("kind", Value::String("long_press".to_string())),
+            ("x", required_field(click, "x")?.clone()),
+            ("y", required_field(click, "y")?.clone()),
+            ("width", required_field(click, "width")?.clone()),
+            ("height", required_field(click, "height")?.clone()),
+            ("duration_ms", required_field(click, "duration_ms")?.clone()),
+        ])),
         Some("long_press") | Some("long_tap") => Ok(ordered_object([
             ("kind", Value::String("long_press".to_string())),
             ("x", required_field(click, "x")?.clone()),
@@ -4612,8 +4634,20 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
     }
 }
 
+/// Workflow #390 lpbox: a long press click that declares a click box (`width` or `height`).
+fn long_press_has_box(click: &Value) -> bool {
+    click.get("width").is_some() || click.get("height").is_some()
+}
+
 fn click_to_guard_rect(click: &Value) -> CliOutcome<Value> {
     match click.get("kind").and_then(Value::as_str) {
+        // Workflow #390 lpbox: a long press's click box.
+        Some("long_press") | Some("long_tap") if long_press_has_box(click) => Ok(ordered_object([
+            ("x", required_field(click, "x")?.clone()),
+            ("y", required_field(click, "y")?.clone()),
+            ("width", required_field(click, "width")?.clone()),
+            ("height", required_field(click, "height")?.clone()),
+        ])),
         Some("point") | Some("long_press") | Some("long_tap") => Ok(ordered_object([
             ("x", required_field(click, "x")?.clone()),
             ("y", required_field(click, "y")?.clone()),

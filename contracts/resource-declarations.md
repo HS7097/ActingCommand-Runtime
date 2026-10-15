@@ -85,6 +85,20 @@ graph and actinglab's navigation tools leave it out), since its click does not d
 comes. A `long_press` navigation click is read as a drag that does not move (one point held for
 its `duration_ms`).
 
+Workflow #390 lpbox (coordinator ruling 6 of wave 16, from Alice's rule of 10-09 that pack taps
+use click boxes, never fixed points): a `long_press` (alias `long_tap`) click, in a task
+operation and in a navigation edge, is either a click box `{"kind", "x", "y", "width",
+"height", "duration_ms"}` or, as before, a point `{"kind", "x", "y", "duration_ms"}`. A box
+names both `width` and `height` (one without the other is `MissingField` at the absent one),
+each at least 1, and lies inside the task's resolution. The kernel holds a point of the box for
+`duration_ms`, drawn with the step's action seed as a `rect` click's tap point is, and records
+the seed and the box as the effect intent's one sampling region (`xorshift64_uniform_rect_v1`);
+without a seed it holds the box's center. A point long press holds its point and records no
+sampling. Drive navigation and actinglab's navigation tools hold a box's center, as they tap a
+`rect` click's; a guard synthesized from the click takes the box as its `expected_rect`. The
+whole box must be harmless on every frame the press can fire on: an author sizes it to the
+pressed control, and declares a point only for a target without a stable extent.
+
 The named directories describe conventional resource layouts; explicitly selected
 pack/pages/navigation/projection filenames also use their native parsers at the
 root. Paths are relative to their actual repository or resource subroot. Nested self-owned

@@ -134,6 +134,9 @@ mod gate_e5_linear;
 // Test plan v2.2 E-5 G7 (exec key 4): a single-frame select step.
 #[cfg(test)]
 mod gate_e5_select;
+// Workflow #390 lpbox (exec key 76): a long press takes a click box.
+#[cfg(test)]
+mod gate_390_lpbox;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -8369,7 +8372,10 @@ impl TaskClick {
             }
             .validate(resolution)?,
             "long_press" | "long_tap" => {
-                resolution.validate_point(required(self.x)?, required(self.y)?)?;
+                match self.long_press_box()? {
+                    Some(rect) => rect.validate(resolution)?,
+                    None => resolution.validate_point(required(self.x)?, required(self.y)?)?,
+                }
                 if self.duration_ms == Some(0) || self.duration_ms.is_none() {
                     return Err(ContainedTaskError::new(
                         ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
@@ -8503,18 +8509,27 @@ impl TaskClick {
                 rect.validate(resolution)?;
                 sampled_tap(rect, action_seed)?
             }
-            "long_press" | "long_tap" => (
-                InputAction::LongTap {
-                    x: required(self.x)?,
-                    y: required(self.y)?,
-                    duration_ms: self.duration_ms.ok_or_else(|| {
-                        ContainedTaskError::new(
-                            ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
-                        )
-                    })?,
-                },
-                None,
-            ),
+            "long_press" | "long_tap" => {
+                let duration_ms = self.duration_ms.ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?;
+                match self.long_press_box()? {
+                    Some(rect) => {
+                        rect.validate(resolution)?;
+                        sampled_long_tap(rect, duration_ms, action_seed)?
+                    }
+                    None => (
+                        InputAction::LongTap {
+                            x: required(self.x)?,
+                            y: required(self.y)?,
+                            duration_ms,
+                        },
+                        None,
+                    ),
+                }
+            }
             "drag" => {
                 let from = self.from_rect.ok_or_else(|| {
                     ContainedTaskError::new(
@@ -8660,6 +8675,24 @@ impl TaskClick {
             }
         }
         Ok((action, sampling))
+    }
+
+    /// Workflow #390 lpbox (Alice 10-09: pack taps use click boxes): a `long_press` click with
+    /// `width` and `height` holds a point of its box `x, y, width, height`; one without them
+    /// holds the point `x, y`; one with only one of them is invalid.
+    fn long_press_box(&self) -> Result<Option<ClickRect>, ContainedTaskError> {
+        match (self.width, self.height) {
+            (None, None) => Ok(None),
+            (Some(width), Some(height)) => Ok(Some(ClickRect {
+                x: required(self.x)?,
+                y: required(self.y)?,
+                width,
+                height,
+            })),
+            _ => Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+            )),
+        }
     }
 }
 
@@ -8876,6 +8909,32 @@ fn sampled_tap(
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
         })?;
     Ok((InputAction::Tap { x, y }, Some(sampling)))
+}
+
+/// Workflow #390 lpbox: a long press held at a point of `rect` for `duration_ms`, drawn as a
+/// `rect` tap's point is (one sampling region); without a seed, the rectangle's centre.
+fn sampled_long_tap(
+    rect: ClickRect,
+    duration_ms: u64,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let Some(action_seed) = action_seed else {
+        return Ok((
+            InputAction::LongTap {
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2,
+                duration_ms,
+            },
+            None,
+        ));
+    };
+    let mut state = normalized_xorshift64_state(action_seed);
+    let (x, y) = rect.sample(&mut state)?;
+    let sampling =
+        InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?]).map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+        })?;
+    Ok((InputAction::LongTap { x, y, duration_ms }, Some(sampling)))
 }
 
 fn sampled_swipe(
