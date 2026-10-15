@@ -492,12 +492,7 @@ impl RuntimeContainedTask<'_> {
             Some(scene) => scene,
             None => {
                 let now = self.monotonic_now();
-                let timing = ContainedTaskTimingContext::new(
-                    now,
-                    now + budget,
-                    TaskTimingBudgetOrigin::EntryRecovery,
-                );
-                features.capture_scene(self, timing)?
+                features.capture_scene(self, now, budget, TaskTimingBudgetOrigin::EntryRecovery)?
             }
         };
         let pages = features.page_ids();
@@ -684,13 +679,13 @@ impl RuntimeContainedTask<'_> {
         interval: Duration,
     ) -> Result<bool, ContainedTaskRunError<RequestFailure>> {
         let started = self.monotonic_now();
-        let timing = ContainedTaskTimingContext::new(
-            started,
-            started + budget,
-            TaskTimingBudgetOrigin::EntryRecovery,
-        );
         loop {
-            let scene = features.capture_scene(self, timing)?;
+            let scene = features.capture_scene(
+                self,
+                started,
+                budget,
+                TaskTimingBudgetOrigin::EntryRecovery,
+            )?;
             if !features
                 .matching_pages_on_scene(&scene, &[page])
                 .map_err(ContainedTaskRunError::Task)?
@@ -1044,7 +1039,7 @@ mod tests {
         };
         let renamed = GRAPH
             .iter()
-            .map(|(from, to, package_id)| edge(&rename(*from), &rename(*to), package_id))
+            .map(|(from, to, package_id)| edge(&rename(from), &rename(to), package_id))
             .collect::<Vec<_>>();
         assert_eq!(
             hops(find_route(&renamed, "n", &["r".to_owned()])),

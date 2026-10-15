@@ -3579,13 +3579,18 @@ impl PreparedContainedTask {
 
     /// Workflow #373 NAV-5 (M-373 §5.2 item 1, §5.3 item 4): one new frame for a locate or a
     /// hop's check, of this package's resolution (the feature package's, which is the run's):
-    /// captured at the `CapturePage` boundary of `timing`, its `CaptureCompleted` recorded, its
-    /// scene returned for [`Self::matching_pages_on_scene`].
+    /// captured at the `CapturePage` boundary of the window that started at `window_started`
+    /// with `budget` of `origin`, its `CaptureCompleted` recorded, its scene returned for
+    /// [`Self::matching_pages_on_scene`].
     pub fn capture_scene<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-        timing: ContainedTaskTimingContext,
+        window_started: Instant,
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
     ) -> Result<Scene, ContainedTaskRunError<R::Error>> {
+        let timing =
+            ContainedTaskTimingContext::new(window_started, window_started + budget, origin);
         let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
         let identity = runtime.task_boundary_identity(boundary);
         let started = runtime.monotonic_now();

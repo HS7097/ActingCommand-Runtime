@@ -383,7 +383,14 @@ fn run_runtime_do(
         let actual_click = derive_lab2_click_rect(&evaluator, target, click, &evaluation)?;
         if !allow_destructive {
             let graph = super::contained_resources::navigation_graph(&resources)?;
-            reject_lab2_destructive_click_overlap(target, &before.page, actual_click.rect, &graph)?;
+            reject_lab2_destructive_click_overlap(
+                target,
+                &before.page,
+                actual_click.rect,
+                &graph,
+                &evaluator,
+                &loaded_scene.scene,
+            )?;
         }
         let point = rect_center(actual_click.rect)?;
         let (action_id, device) = if dry_run {
@@ -1164,6 +1171,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 &before.page,
                 actual_click.rect,
                 &graph,
+                &evaluator,
+                &loaded_scene.scene,
             ) {
                 let details = isolated_offline_error_details(
                     &ids.req_id,
@@ -2260,14 +2269,26 @@ fn reject_lab2_destructive_click_overlap(
     page: &str,
     click: PackRect,
     graph: &NavigationGraph,
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
 ) -> CliOutcome<()> {
+    // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click follows
+    // a target covers the box its target matches on the guard frame.
+    let frame_regions =
+        destructive_frame_regions(evaluator, scene, page, &graph.destructive_clicks)?;
     if graph.destructive_clicks.iter().any(|destructive| {
         destructive
             .page
             .as_deref()
             .is_none_or(|expected| expected == page)
-            && rects_intersect(click, destructive.rect)
-    }) {
+            && destructive
+                .fixed_boxes()
+                .iter()
+                .any(|rect| rects_intersect(click, *rect))
+    }) || frame_regions
+        .iter()
+        .any(|rect| rects_intersect(click, *rect))
+    {
         return Err(CliError::safety_blocked(
             "semantic_action_requires_destructive_opt_in",
             format!(

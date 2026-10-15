@@ -750,14 +750,15 @@ fn scheduled_host(
         .with_scheduled_procedures(["procedure.observe".to_owned()])
         .with_standard_packs_root(Some(root.root.clone()));
     state.physical_task_geometry.store(true, Ordering::Release);
-    let mut provider = FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(state));
+    let instance = instance_id();
+    let mut provider = FakeProvider::one(POLICY_INSTANCE_ALIAS, instance, Arc::clone(state));
     if handset {
         state.observed_open.store(true, Ordering::Release);
         provider = provider.with_resolved_for(
             POLICY_INSTANCE_ALIAS,
             resolved_handset(
                 POLICY_INSTANCE_ALIAS,
-                instance_id(),
+                instance,
                 bound(POLICY_INSTANCE_ALIAS, SERIAL),
             ),
         );

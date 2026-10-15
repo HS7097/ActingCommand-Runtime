@@ -445,6 +445,14 @@ pub(crate) enum DestructiveArea {
 }
 
 impl DestructiveClick {
+    /// The boxes the click presses without a frame (none for a `target` or `offset` click).
+    pub(crate) fn fixed_boxes(&self) -> &[PackRect] {
+        match &self.area {
+            DestructiveArea::Boxes(boxes) => boxes,
+            DestructiveArea::Target { .. } => &[],
+        }
+    }
+
     /// A region without a page or with page `any` always applies; a page-bound region applies
     /// only on `page`.
     fn applies_on(&self, page: Option<&str>) -> bool {
