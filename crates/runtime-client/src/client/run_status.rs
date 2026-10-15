@@ -977,7 +977,7 @@ fn request_origin(event: &ProjectedEvent) -> Option<(RunDispatch, RunOrigin)> {
         EventType::UiAction => Some((RunDispatch::Manual, RunOrigin::Ui)),
         EventType::LabRequest => Some((RunDispatch::Manual, RunOrigin::Lab)),
         EventType::CommandReceived if event.origin.source() == EventSource::Scheduler => {
-            Some((RunDispatch::Scheduled, RunOrigin::Scheduler))
+            Some((RunDispatch::Manual, RunOrigin::Scheduler))
         }
         _ => None,
     }
