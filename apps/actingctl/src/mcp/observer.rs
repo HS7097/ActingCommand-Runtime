@@ -91,17 +91,15 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
         Ok(connected) => Ok(&connected.client),
         Err(error) => Err(error.to_value()),
     };
-    let answer =
-        overview::read(client, &request, &place, context.deadline).map_err(
-            |failure| match &failure {
-                Failure::Argument { argument, problem } => invalid_argument(argument, *problem),
-                Failure::Selector { .. } => ToolError::outcome("usage", failure.outcome()),
-                Failure::Install(_) | Failure::Clock => {
-                    ToolError::outcome("runtime", failure.outcome())
-                }
-                Failure::Runtime(error) => runtime_failure(context, connected.as_ref().ok(), error),
-            },
-        )?;
+    let answer = overview::read(client, &request, &place, context.deadline, &tools::envelope)
+        .map_err(|failure| match &failure {
+            Failure::Argument { argument, problem } => invalid_argument(argument, *problem),
+            Failure::Selector { .. } => ToolError::outcome("usage", failure.outcome()),
+            Failure::Install(_) | Failure::Clock => {
+                ToolError::outcome("runtime", failure.outcome())
+            }
+            Failure::Runtime(error) => runtime_failure(context, connected.as_ref().ok(), error),
+        })?;
     let warnings = answer
         .warnings
         .into_iter()

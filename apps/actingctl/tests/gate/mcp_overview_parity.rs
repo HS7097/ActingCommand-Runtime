@@ -9,8 +9,10 @@
 // ac_overview result are the same object, apart from the start of the run window, which each
 // read takes from its own clock. Every answer fits the output budget, so §2.2 leaves no other
 // difference and nothing is marked truncated. Without `sections` every block is answered
-// (daemon, instances, run_window, lab_tool, install); with `sections` only those named and the
-// daemon. The instance is named by its alias and by its instance_id (D4). Workflow #378 A5: the
+// (daemon, instances, run_window, lab_tool, install, and Workflow #389 MCP-9a's catalog,
+// config_generation and watchdog); with `sections` only those named and the daemon. The fake
+// Runtime has no active policy catalog and no install root: catalog and watchdog are null and
+// config_generation names neither generation. The instance is named by its alias and by its instance_id (D4). Workflow #378 A5: the
 // CLI line carries `runtime_overview_reported` beside the overview.
 //
 // The refusal test: a section name §4.9 does not have is refused before any read, by the CLI as
@@ -57,7 +59,16 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same
     for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
         assert_eq!(
             members(answer),
-            BTreeSet::from(["daemon", "install", "instances", "lab_tool", "run_window"]),
+            BTreeSet::from([
+                "catalog",
+                "config_generation",
+                "daemon",
+                "install",
+                "instances",
+                "lab_tool",
+                "run_window",
+                "watchdog",
+            ]),
             "{side}: {answer}"
         );
         assert_daemon(side, answer);
@@ -65,6 +76,15 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same
         assert!(
             answer["run_window"]["since_unix_ms"].is_u64(),
             "{side}: no run window start: {answer}"
+        );
+        assert_eq!(
+            (
+                &answer["catalog"],
+                &answer["config_generation"],
+                &answer["watchdog"]
+            ),
+            (&Value::Null, &json!({}), &Value::Null),
+            "{side}: {answer}"
         );
         assert_eq!(answer["lab_tool"], json!({"present": false}), "{side}");
         assert_eq!(

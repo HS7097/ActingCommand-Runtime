@@ -12,12 +12,16 @@
 //!   none, the new `host.config_overrides` and each changed `config.parameters.<section>`
 //!   (§5.7), then the values take effect at once. A refusal leaves everything as it was and
 //!   records only `command.rejected`.
+//! - Workflow #389 MCP-9a (register A5): `config.catalog`, the active policy catalog generation,
+//!   at start, after each committed catalog transition and after each approval decision, each
+//!   time only when it changed.
 
 use super::*;
 use crate::codes::{ConfigHostCode, ConfigHostLocation};
 use actingcommand_contract::{
-    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, ConfigSelection, ConfigSettingChange,
-    InstanceStuckRecovery, config_parameters_fact_key,
+    ApprovalTarget, CONFIG_CATALOG_FACT_KEY, CONFIG_OVERRIDES_FACT_KEY,
+    CONFIG_PARAMETERS_FACT_PREFIX, CatalogPayload, ConfigCatalog, ConfigSelection,
+    ConfigSettingChange, InstanceStuckRecovery, config_parameters_fact_key,
 };
 use actingcommand_runtime_config::{
     AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, RestoreNote,
@@ -430,6 +434,104 @@ impl HostShared {
 
     /// Records one configuration fact, observed now and strictly after the stored record of its
     /// key, ledger-first through [`Self::record_runtime_fact`].
+    /// Workflow #389 MCP-9a (register A5): records `config.catalog`, the active policy catalog
+    /// generation as the ledger records it: the last `catalog.activated` or `catalog.rolled_back`
+    /// record that names its hash, the latest approval decision whose target is that generation,
+    /// and the generation that record replaced. Nothing is recorded while no generation is active,
+    /// for a generation only the legacy active-pointer migration made active (it has no such
+    /// record), or when the value is the one already recorded. A fatal failure marks the
+    /// Runtime.
+    pub(super) fn record_config_catalog(&self) -> RuntimeHostResult<()> {
+        let result = (|| -> RuntimeHostResult<()> {
+            let Some(generation) = self.active_policy_catalog()? else {
+                return Ok(());
+            };
+            let read = |event_type| {
+                self.ledger
+                    .query(EventQuery {
+                        event_type: Some(event_type),
+                        ..EventQuery::default()
+                    })
+                    .map_err(|error| crate::policy_host::catalog_ledger_error(&error))
+            };
+            let mut transitions = Vec::new();
+            for event_type in [EventType::CatalogActivated, EventType::CatalogRolledBack] {
+                for event in read(event_type)? {
+                    if let EventPayload::Catalog(
+                        CatalogPayload::Activated(payload) | CatalogPayload::RolledBack(payload),
+                    ) = event.payload()
+                    {
+                        transitions.push((event.sequence(), *event.event_id(), payload.clone()));
+                    }
+                }
+            }
+            transitions.sort_by_key(|(sequence, _, _)| *sequence);
+            let Some((_, activated, made_active)) = transitions
+                .iter()
+                .rev()
+                .find(|(_, _, payload)| payload.catalog_hash() == generation.catalog_hash())
+            else {
+                return Ok(());
+            };
+            let previous = made_active.previous_catalog_hash().and_then(|previous| {
+                transitions
+                    .iter()
+                    .find(|(_, _, payload)| payload.catalog_hash() == previous)
+                    .map(|(_, _, payload)| {
+                        (payload.catalog_id().to_owned(), payload.catalog_version())
+                    })
+            });
+            let approval = read(EventType::ApprovalDecision)?
+                .into_iter()
+                .filter_map(|event| match event.payload() {
+                    EventPayload::Approval(ApprovalPayload::Decision(payload)) => {
+                        Some(payload.decision().clone())
+                    }
+                    _ => None,
+                })
+                .filter(|decision| {
+                    matches!(
+                        decision.target(),
+                        ApprovalTarget::Catalog {
+                            catalog_hash,
+                            catalog_version,
+                        } if catalog_hash == generation.catalog_hash()
+                            && *catalog_version == generation.catalog_version()
+                    )
+                })
+                .next_back();
+            let catalog = ConfigCatalog {
+                catalog_id: generation.catalog_id().to_owned(),
+                catalog_version: generation.catalog_version(),
+                catalog_hash: generation.catalog_hash().to_owned(),
+                activated_event_id: identity_text(
+                    activated,
+                    ConfigHostLocation::RecordRuntimeConfig,
+                )?,
+                approval_id: approval
+                    .as_ref()
+                    .map(|decision| decision.approval_id().to_owned()),
+                approval_disposition: approval.as_ref().map(ApprovalDecisionRecord::disposition),
+                previous_catalog_id: previous.as_ref().map(|(catalog_id, _)| catalog_id.clone()),
+                previous_catalog_version: previous.map(|(_, version)| version),
+            };
+            let record = catalog.to_fact_record(0, OriginModule::Policy);
+            let unchanged = lock(&self.runtime_facts, ConfigHostLocation::ReadRuntimeConfig)?
+                .get(&RuntimeFactScope::Runtime, CONFIG_CATALOG_FACT_KEY)
+                .is_some_and(|stored| stored.value == record.value);
+            if unchanged {
+                return Ok(());
+            }
+            self.record_config_fact(record)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
     fn record_config_fact(&self, mut record: RuntimeFactRecord) -> RuntimeHostResult<()> {
         let now = self.clock.sample()?.unix_ms;
         let previous = lock(&self.runtime_facts, ConfigHostLocation::ReadRuntimeConfig)?

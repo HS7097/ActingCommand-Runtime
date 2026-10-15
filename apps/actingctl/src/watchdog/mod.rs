@@ -390,6 +390,29 @@ fn watchdog_log(directory: &Path) -> Value {
     )
 }
 
+/// Workflow #389 MCP-9a (MCP-0 command table v1.1 §4.10): the `watchdog` block of `actingctl
+/// overview` and `ac_overview`, read as [`status`] reads it (read-only; it writes nothing): the
+/// decision, the attention outcomes, each written as `envelope` writes an outcome, the watchdog's
+/// starts of the last 24 h and its last tick. A member the report does not hold is left out.
+pub(crate) fn overview_block(root: &Path, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
+    let report = status(root);
+    let mut block = Map::new();
+    block.insert("decision".to_owned(), envelope(&report.outcome));
+    block.insert(
+        "attention".to_owned(),
+        Value::Array(report.attention.iter().map(envelope).collect()),
+    );
+    for (member, from) in [
+        ("starts_24h", "watchdog_starts_24h"),
+        ("last_tick", "last_tick_unix_ms"),
+    ] {
+        if let Some(value) = report.data.get(from).filter(|value| !value.is_null()) {
+            block.insert(member.to_owned(), value.clone());
+        }
+    }
+    Value::Object(block)
+}
+
 /// `status`: read-only. It writes nothing and takes no lock but the momentary writer-lock
 /// probe, and only when a start would be considered. Its top is the decision; its attention
 /// outcomes (warnings, and the failures that kept something unread) leave the exit alone.

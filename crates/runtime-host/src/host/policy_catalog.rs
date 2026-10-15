@@ -371,6 +371,13 @@ impl HostShared {
                 self.fatal.mark(error.clone())?;
                 return Err(error);
             }
+            // Workflow #389 MCP-9a (register A5): the generation now active, as `config.catalog`.
+            // The transition is committed, so a failure to record it stops the Runtime.
+            if let Err(error) = self.record_config_catalog() {
+                let error = error.into_fatal();
+                self.fatal.mark(error.clone())?;
+                return Err(error);
+            }
             Ok(generation)
         })();
         if let Err(error) = &result

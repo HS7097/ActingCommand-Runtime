@@ -1686,6 +1686,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "config_generation_mismatch": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now; path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "outcome_codes_reported": {
       "category": "success",
       "ladder_class": "none",

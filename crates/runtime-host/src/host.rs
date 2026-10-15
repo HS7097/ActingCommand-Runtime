@@ -1896,6 +1896,9 @@ impl RuntimeHost {
             if let Some(config_manifest) = &config.config_manifest {
                 shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
             }
+            // Workflow #389 MCP-9a (register A5): the active policy catalog generation, re-observed
+            // as every `config.` fact is.
+            shared.record_config_catalog()?;
             // Workflow #387 D1c: the `recovery_ladder` section in effect (the defaults file's
             // for a host started without a manifest), read and checked before any instance is
             // prepared.

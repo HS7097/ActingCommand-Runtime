@@ -774,3 +774,12 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
 ]
 incident = ["#398", "#387 A9"]
+
+# The program fact config.catalog names the active policy catalog generation: its id, version and hash, the record that made it active, the latest approval decision about it and the generation it replaced; none before a generation is active; it follows each activation and approval decision, and a start records it again (Workflow #389 MCP-9a, register A5; host key 89, the next free one above 88, since this test lives in runtime-host)
+[[gate]]
+key = "89"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_389_mcp9a::mcp9a_config_catalog_names_the_active_generation_its_record_approval_and_predecessor",
+]
+incident = ["#389 MCP-9a"]
