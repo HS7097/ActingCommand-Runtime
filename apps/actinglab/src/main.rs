@@ -180,6 +180,7 @@ mod monitor_stream;
 mod offline_ocr;
 mod package_build;
 mod package_cli;
+mod package_tool;
 pub mod project_interface;
 mod readonly_cli;
 mod recognition_regression;

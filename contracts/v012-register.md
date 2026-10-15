@@ -1245,6 +1245,25 @@ reasons `forbidden_source_missing`, `forbidden_mark_passes`, `anchor_invalid` wi
 | L2-6 | `do --capture --record --swipe x1,y1,x2,y2,ms`, and `do --capture --record` on a drag or long press step (one swipe; the plan's `gesture` and `to_point`) | tool input and output | LAB-2 | LAB-2 | was `record_flag_unsupported`; the Runtime operation is the existing coordinates swipe |
 | L2-7 | the generated navigation's edge `{id, from_page, to_pages: [...], click, source}` for an operation whose `to` is a page set | resource file format (`navigation`, schema `0.6` unchanged) | LAB-2 | LAB-2 (source compilation) | exactly one of `to_page` and `to_pages`; a catalog navigation action and page projection element like any edge; the drive graph and actinglab's route tools leave it out; a `long_press` navigation click reads as a drag that does not move |
 
+### 1.75 Wave 15 slice TOOL-1 (#390, forced-compromises mapping row TOOL-1, P-03; coordinator ruling 3 of wave 15)
+
+TOOL-1 adds two actinglab authoring commands that take a content directory by its path,
+`package fmt` and `package edit`. They write no ledger record, wire shape or configuration key;
+their new shapes are two operation outputs (TL1-1, TL1-3) and the edit list an author gives
+(TL1-2). [package-reference.md](package-reference.md), "Formatting and editing a content
+directory", is the contract. Nothing computes, compares or reports a digest (option 丙). The
+actinglab codes `package_fmt_check_failed`, `package_fmt_write_failed`,
+`package_edit_patch_invalid`, `package_edit_pointer_unresolved`, `package_edit_admission_refused`
+and `package_edit_write_failed` (error, ladder class `none`, in the new domains `package_fmt_` and
+`package_edit_` of actinglab) are catalog entries, not rows (§7); a read or parse failure reuses
+`package_invalid`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| TL1-1 | `actinglab package fmt --package <directory>`: `{mode: "package_fmt", package, json_files, reformatted: [path]}`; with `--check`: `{mode: "package_fmt_check", package, json_files, unformatted: []}` | operation output (no persisted record; an actinglab result, read by a person or a CI job) | TOOL-1 | TOOL-1 | the canonical serialization of a JSON file: UTF-8 without a byte-order mark, two-space indentation, one member or element per line, members in their document order, LF line endings with a last LF (the coordinator's wave-15 ruling over FCM P-03's CRLF); other files are left byte for byte; paths are the directory's `/`-separated paths; `--check` writes nothing, and a JSON file that is not canonical makes it `package_fmt_check_failed` (exit 2) with details `{package, json_files, unformatted}` |
+| TL1-2 | `package edit --patch <file>`: a JSON array of `{file, op: add \| replace, path, value}`, no other member, at most 32 MiB | input document (an author's file; the Runtime never stores it) | TOOL-1 | — | `op` is an RFC 6902 operation, `path` an RFC 6901 JSON pointer into the JSON file `file` of the package; the edits apply in order; `--file <path> --add <pointer> --value <JSON>` (or `--replace`) gives one edit instead |
+| TL1-3 | `actinglab package edit --package <directory> (--patch <file> \| --file <path> (--add \| --replace) <pointer> --value <JSON>)`: `{mode: "package_edit", package, package_id, task_id, edits, files: [path], admission: "passed", written}`; with the global `--dry-run` also `status: "validated", dry_run: true, persisted: false` and `written: false` | operation output (no persisted record) | TOOL-1 | TOOL-1 | the edited content table is admitted as actingd admits a content directory before any file is written, and `files` (the files the edits changed, written in the canonical serialization of TL1-1) are written only after it passes; a refusal is `package_edit_admission_refused` with details `{package, code, detail, declaration, written: false}`; a write failure (`package_fmt_write_failed`, `package_edit_write_failed`) carries `{package, file, written, part_left}` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

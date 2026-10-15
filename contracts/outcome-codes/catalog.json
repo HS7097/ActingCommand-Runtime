@@ -8393,6 +8393,12 @@
     ],
     "emulator_autostart_": [
       "runtime-host"
+    ],
+    "package_edit_": [
+      "actinglab"
+    ],
+    "package_fmt_": [
+      "actinglab"
     ]
   },
   "fragments": {

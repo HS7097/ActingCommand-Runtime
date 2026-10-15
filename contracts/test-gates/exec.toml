@@ -1140,3 +1140,18 @@ tests = [
     "actingcommand-execution-kernel::lib::drive::tests::lab2_a_long_press_navigation_input_holds_its_point",
 ]
 incident = ["#390"]
+
+# Workflow #390 TOOL-1 (FCM row TOOL-1; compromise P-03; register §1.75): actinglab package fmt writes every JSON file of a content directory, named by its path, in the canonical serialization (two-space indentation, one member or element per line, members in their order, UTF-8 text, LF line endings with a last LF, a CRLF file becoming LF) and leaves every other file byte for byte, and a second run changes nothing; with --check it writes nothing and fails with package_fmt_check_failed naming the files that are not canonical; actinglab package edit applies RFC 6902 add and replace edits at RFC 6901 JSON pointers in memory, admits the edited package structurally and only then writes the changed files canonically; a refused admission (package_edit_admission_refused) or a pointer that names no place (package_edit_pointer_unresolved) writes nothing; no digest is computed or reported
+[[gate]]
+key = "73"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_fmt_writes_every_json_file_in_the_canonical_serialization",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_fmt_check_names_the_unformatted_files_and_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_adds_and_replaces_by_json_pointer_then_admits_and_writes",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_takes_one_edit_from_its_flags",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_refused_by_admission_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_pointer_that_does_not_resolve_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_add_and_replace_follow_rfc_6902",
+]
+incident = ["#390"]

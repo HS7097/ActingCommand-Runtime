@@ -177,6 +177,8 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `package build-task` | refused | `resource_production_retired` | pure parsed admission |
 | `package build-pack` | refused | `resource_production_retired` | pure parsed admission |
 | `package bundle` | refused | `dry_run_unsupported` | flag parsing only; alternative `package preflight` |
+| `package fmt` | mixed | | `--check`: no_effect; without `--check`: refused, `dry_run_unsupported`, flag parsing only, alternative `package fmt --check` (Workflow #390 TOOL-1) |
+| `package edit` | preview | `dry_run` | the edits are applied and the edited package admitted in memory; `validated`, `written: false`, `persisted: false`, no file written (Workflow #390 TOOL-1) |
 | `operation validate` | no_effect | | |
 | `operation inspect` | no_effect | | |
 | `operation explain` | no_effect | | |
