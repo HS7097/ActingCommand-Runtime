@@ -268,7 +268,7 @@ fn canonical_bytes(value: &Value) -> CliOutcome<Vec<u8>> {
     let mut canonical = Vec::with_capacity(pretty.len() + pretty.len() / 8 + 2);
     for byte in pretty {
         if byte == b'\n' {
-            canonical.extend_from_slice(b"\r\n");
+            canonical.push(b'\n');
         } else {
             canonical.push(byte);
         }
