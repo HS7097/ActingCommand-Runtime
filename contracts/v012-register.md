@@ -1319,6 +1319,23 @@ table goes from 34 to 35 tools (observer 19 to 20).
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
 | GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
+### 1.83 Wave 16 slice navoffset: navigation readers accept REC-4 `offset` clicks (#390, wave-15 rulings LAB-2 item 7; coordinator ruling 7 of wave 16)
+
+LAB-2 found that neither navigation input reader accepted an `offset` click, so a package whose
+navigation holds one (REC-4's `--click` with `--click-follow`, or a source `rect_move`) failed
+online observation and could not be a carrier package. Both readers now take it. No ledger
+record, wire shape, configuration key or outcome code: the rows are a reading rule of an existing
+resource format and two output values. [resource-declarations.md](resource-declarations.md) (the
+navigation paragraphs) is the contract. A refusal keeps the reader's existing code
+(`drive_plan_invalid` in the kernel, actinglab's usage refusal, `observation_resources_invalid`
+for the online observation's admission).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NO-1 | the click `{"kind": "offset", "target_id", "offset": {x, y, width, height}}` of a navigation edge, page operation or control point, read by the kernel's drive reader and actinglab's navigation reader | new reading rule of an existing resource format (`navigation`, schema `0.6` unchanged) | navoffset | — (the Lab and source compilation write it since REC-4) | the box at the top-left corner of the box `target_id` matches plus the offset, each number scaled by the factor a template with `scales` matched at (REC-5, as a task's `offset` click); a width or height that is not positive, or no string `target_id`, is refused; was `unsupported navigation click kind` |
+| NO-2 | the page projection element of an offset click: the online observation (`ObserveContainedPage`, which admits the carrier package of `observe` and `do`) and actinglab `observe` | new rule of an existing output (page projection shape unchanged) | navoffset | navoffset | `recognition_basis: target_evaluation`, `input` the tap of that box on the frame observed; no geometry when the target did not pass or matched no template box (`target_not_matched`, `matched_template_rect_unavailable`); a package holding one is admitted (was `observation_resources_invalid`) |
+| NO-3 | the unresolved semantic input `{"type": "target_offset", "target_id", "offset"}` (actinglab's navigation listings and the Lab's `SemanticInputResponse`) | new value of an existing output member | navoffset | navoffset | a route resolves it on the current frame like a `target` edge and taps the center of the box |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

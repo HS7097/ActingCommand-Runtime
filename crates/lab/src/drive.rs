@@ -11,8 +11,8 @@ use actingcommand_contract::{EnvResolved, LabError, LabResult};
 use actingcommand_execution_kernel::{
     DriveDecisionError, DriveDecisionErrorKind, DriveNavigationEdge as NavigationEdge,
     DriveNavigationGraph as NavigationGraph, DrivePoint, DriveSemanticInput as SemanticInput,
-    derive_absolute_coordinate_rect_from_match as derive_kernel_coordinate_rect, drive_rect_center,
-    reject_dangerous_semantic_id as reject_kernel_dangerous_semantic_id,
+    derive_absolute_coordinate_rect_from_match as derive_kernel_coordinate_rect, drive_offset_rect,
+    drive_rect_center, reject_dangerous_semantic_id as reject_kernel_dangerous_semantic_id,
 };
 use actingcommand_ledger::IdKind;
 use actingcommand_page_detector::PageDetector;
@@ -346,6 +346,12 @@ fn semantic_input_response(input: &SemanticInput) -> crate::SemanticInputRespons
         SemanticInput::TargetCenter { target_id } => crate::SemanticInputResponse::TargetCenter {
             target_id: target_id.clone(),
         },
+        SemanticInput::TargetOffset { target_id, offset } => {
+            crate::SemanticInputResponse::TargetOffset {
+                target_id: target_id.clone(),
+                offset: rect_response(*offset),
+            }
+        }
         SemanticInput::Drag {
             from_rect,
             to_rect,
@@ -491,8 +497,10 @@ fn resolve_navigation_edge_input<P: LabPorts>(
     SemanticInput,
     Option<crate::NavigationTargetRecognitionResponse>,
 )> {
-    let SemanticInput::TargetCenter { target_id } = edge.input() else {
-        return Ok((edge.input().clone(), None));
+    let (target_id, offset) = match edge.input() {
+        SemanticInput::TargetCenter { target_id } => (target_id, None),
+        SemanticInput::TargetOffset { target_id, offset } => (target_id, Some(*offset)),
+        _ => return Ok((edge.input().clone(), None)),
     };
     let scene = recognition_scene(context.lab, context.input)?;
     let evaluation = context
@@ -512,7 +520,18 @@ fn resolve_navigation_edge_input<P: LabPorts>(
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
+    let mut rect = target_evaluation_rect(&evaluation)?;
+    // Workflow #390 LAB-2 item 7: an `offset` click presses its offset from the matched box.
+    if let Some(offset) = offset {
+        rect = drive_offset_rect(
+            rect,
+            evaluation
+                .template
+                .and_then(|template| template.scale_milli),
+            offset,
+        )
+        .map_err(drive_decision_error)?;
+    }
     Ok((
         SemanticInput::Tap {
             rect,

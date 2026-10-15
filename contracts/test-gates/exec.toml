@@ -1167,3 +1167,16 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result",
 ]
 incident = ["#410"]
+
+# Workflow #390 LAB-2 item 7 (wave-15 rulings; coordinator ruling 7 of wave 16; register §1.83): both navigation input readers, the kernel's drive reader and actinglab's, read a REC-4 offset click {"kind": "offset", "target_id", "offset": {x, y, width, height}} (record mark --click with --click-follow, or a source rect_move) as the box at the top-left corner of the box its target matches plus the offset, the offset scaled by the factor a template with scales matched at; a package whose navigation holds one is admitted for online observation, so it can be a carrier package, and the online observation and actinglab observe give its element that box on the frame observed
+[[gate]]
+key = "77"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::tests::gate_390_navoffset::navoffset_the_drive_reader_reads_an_offset_click_with_its_target_and_offset",
+    "actingcommand-execution-kernel::lib::tests::gate_390_navoffset::navoffset_the_box_is_the_matched_corner_plus_the_offset_scaled_by_the_match_factor",
+    "actingcommand-execution-kernel::lib::tests::gate_390_navoffset::navoffset_a_package_with_an_offset_click_is_observed_online_with_its_box_on_the_frame",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_390_navoffset::navoffset_actinglab_reads_an_offset_click_with_its_target_and_offset",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_390_navoffset::navoffset_actinglab_observe_resolves_an_offset_click_to_its_box_on_the_frame",
+]
+incident = ["#390"]

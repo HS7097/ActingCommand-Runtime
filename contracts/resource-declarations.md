@@ -85,6 +85,21 @@ graph and actinglab's navigation tools leave it out), since its click does not d
 comes. A `long_press` navigation click is read as a drag that does not move (one point held for
 its `duration_ms`).
 
+Workflow #390 LAB-2 item 7: both navigation input readers, the kernel's drive reader and
+actinglab's, read an `offset` click `{"kind": "offset", "target_id", "offset": {"x", "y",
+"width", "height"}}`, the click a Lab recording generates for `--click` with `--click-follow`
+(Workflow #396 REC-4) and source compilation generates for a `rect_move`, of a navigation edge,
+a page operation or a control point. It presses the box at the top-left corner of the box its
+`target_id` matches plus the offset; for a template with `scales` each of the four numbers is
+scaled by the factor it matched at, as a task's `offset` click is (REC-5). An offset whose width
+or height is not positive, or a click without a string `target_id`, is refused by the reader.
+The online page observation, and so a carrier package of `observe` and `do`
+([lab-recording.md](lab-recording.md)), admits a package whose navigation holds one; its element
+resolves by `target_evaluation` to that box on the frame observed, a target that did not pass
+or matched no template box gives none, and its semantic input is listed as
+`{"type": "target_offset", "target_id", "offset"}` until it is resolved. A route passes it like
+a `target` edge: the target is evaluated on the current frame and the box's center is tapped.
+
 The named directories describe conventional resource layouts; explicitly selected
 pack/pages/navigation/projection filenames also use their native parsers at the
 root. Paths are relative to their actual repository or resource subroot. Nested self-owned
