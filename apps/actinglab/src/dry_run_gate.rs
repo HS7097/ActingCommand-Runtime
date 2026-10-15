@@ -237,6 +237,10 @@ const DECLARATIONS: &[(&str, Mode)] = &[
         Mode::Refused("offline_device_scope_forbidden"),
     ),
     ("replay", Mode::Refused("offline_device_scope_forbidden")),
+    (
+        "recognition-regression",
+        Mode::Refused("offline_device_scope_forbidden"),
+    ),
     ("scheduling compile", Mode::Refused("validation_failed")),
     ("scheduling timeline", Mode::Refused("validation_failed")),
     // mixed

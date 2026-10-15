@@ -135,6 +135,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `recognize-artifact` | no_effect | | |
 | `observe` | mixed | | `--capture --record`: refused, `record_flag_unsupported`; `--with-frame <path>` (offline and `--capture`, without `--record`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; a bare `--with-frame` and other forms without `--record`: no_effect |
 | `replay` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads (Workflow #308 SEL-L6a) |
+| `recognition-regression` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads (Workflow #331 RSU-1) |
 | `do` | preview | `executed_false` | `--capture --dry-run` writes the registered debug audit events |
 | `ensure` | preview | `executed_false` | as `do` |
 | `wait` | no_effect | | |
@@ -296,7 +297,8 @@ refusals added by #341 do not send even a read request: they open no Runtime con
 
 - Read `commands[].dry_run_mode` before probing a command with `--dry-run`.
 - `refused` only means the flag is rejected; it does not mean the command has a side effect
-  (`scheduling compile`, `scheduling timeline`, `package dry-run` and `replay` only read).
+  (`scheduling compile`, `scheduling timeline`, `package dry-run`, `replay` and
+  `recognition-regression` only read).
 - A dry-run refusal is not an argument error. Run the read-only alternative it names; never drop
   `--dry-run` and retry on your own.
 - `planned` and `validated` are not an admission; `not_checked` names what was not checked.

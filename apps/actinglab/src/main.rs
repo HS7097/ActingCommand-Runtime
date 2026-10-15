@@ -182,6 +182,7 @@ mod package_build;
 mod package_cli;
 pub mod project_interface;
 mod readonly_cli;
+mod recognition_regression;
 pub mod recovery_exec;
 mod replay_cli;
 mod resource_restore;
@@ -359,6 +360,12 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [cmd] if cmd == "observe" => lab2_cli::run_observe(&invocation.global, &invocation.args),
         [cmd] if cmd == "replay" => {
             replay_cli::run_replay(&invocation.global, &FlagArgs::parse(&invocation.args)?)
+        }
+        [cmd] if cmd == "recognition-regression" => {
+            recognition_regression::run_recognition_regression(
+                &invocation.global,
+                &FlagArgs::parse(&invocation.args)?,
+            )
         }
         [cmd] if cmd == "do" => lab2_cli::run_do(&invocation.global, &invocation.args),
         [cmd] if cmd == "ensure" => lab2_cli::run_ensure(&invocation.global, &invocation.args),

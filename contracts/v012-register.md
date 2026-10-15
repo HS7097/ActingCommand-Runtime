@@ -1038,6 +1038,22 @@ configuration key.
 | DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
 | DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
 
+### 1.72 Wave 14 slice RSU-1 (#331, additions-v012 §1.5b row RSU-1; forced-compromises mapping T-01)
+
+RSU-1 is an actinglab offline command, `recognition-regression`. It replays the frames a run's
+ledger kept, named by MCP-6's per-step frame references, with the recognition of a new package
+or version, and compares each frame with its original record. It reads the state root
+read-only and writes no ledger record, wire shape or configuration key; its only new shape is
+its operation output (RS1-1). It is not wired into any CI. [recognition-regression.md](recognition-regression.md)
+is the contract. The actinglab codes `recognition_regression_evidence_unreadable`,
+`recognition_regression_evidence_invalid`, `recognition_regression_ledger_unreadable`,
+`recognition_regression_frame_unknown` and `recognition_regression_frame_invalid` (error, ladder
+class `none`) are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RS1-1 | `actinglab recognition-regression --state-root <root> --evidence <file>... (--package <path> \| --zip <path>)`: `{mode: "offline_recognition_regression", executed: false, request_id, package_id, frames: [{ref, steps, frame_id, status, targets?: [{target, original_matched, status, matched?, agrees?, score?, failure?}]}], targets: [{target, frames, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli}], summary: {records, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli, frames_referenced, frames_replayed, frames_material_missing, frames_without_original_record}, ocr, production_global_ledger_written: false}` | operation output (no persisted record; an actinglab result, read by a person or an agent) | RSU-1 | RSU-1 | a frame's `status` is `compared`, `material_missing` (#375 retention removed it) or `no_original_record`; a target's `status` is `compared`, `absent` (not in the package) or `failed`; `score` is `{kind, score_milli, threshold_milli}` (template), `{kind, distance_milli, max_distance_milli}` (colour), `{kind, confidence_milli}` (OCR) or `{kind, score_milli}` (classifier); `error_rate_milli` is the disagreements (`lost` + `gained`) per mille of the frames compared, rounded down, `null` when none was compared; the original record is the run's last `task.recognition_completed` fact on the frame; the input is MCP-6's evidence ([runtime-interface.md](runtime-interface.md), `run evidence`), of which only `request_id`, `steps[].step_index` and `steps[].frames[].ref` are read; exit 0 whenever the comparison was made |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
