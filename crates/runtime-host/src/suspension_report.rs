@@ -20,7 +20,7 @@
 //! `signal_id` starts with `signal:pack_admission:`), with their content hash now.
 
 use crate::RuntimeHostConfig;
-use crate::codes::{HostCode, HostLocation};
+use crate::codes::{HostCode, HostLocation, SchedulingRuleHostCode};
 use crate::failure_identity::{
     FailureIdentity, content_hash_prefix, failure_rows, failure_step, identifier_text,
     locate_error_frame,
@@ -709,7 +709,7 @@ fn packs(
         else {
             continue;
         };
-        if outcome.is(HostCode::PackAdmissionSuspended) {
+        if outcome.is(SchedulingRuleHostCode::PackAdmissionSuspended) {
             let package_id = record.package_id.clone();
             let instances = entries
                 .remove(&package_id)
@@ -722,7 +722,7 @@ fn packs(
             };
             entry.instances.insert(payload.instance_id().to_owned());
             entries.insert(package_id, entry);
-        } else if outcome.is(HostCode::PackAdmissionLifted)
+        } else if outcome.is(SchedulingRuleHostCode::PackAdmissionLifted)
             && let Some(entry) = entries.get_mut(&record.package_id)
         {
             entry.instances.remove(payload.instance_id());
