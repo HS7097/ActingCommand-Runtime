@@ -205,7 +205,10 @@ fn lifecycle_commit_sync(phase: &RuntimeLifecyclePhase) -> CommitSync {
         | RuntimeLifecyclePhase::DeviceDiagnosticDetail
         // Workflow #398 RD-2: a handset's link, observed; the availability it withdraws or
         // restores is its own durable fact record.
-        | RuntimeLifecyclePhase::DeviceLinkObserved { .. } => CommitSync::Normal,
+        | RuntimeLifecyclePhase::DeviceLinkObserved { .. }
+        // Workflow #398 RD-5b: a handset's device state, observed; the availability a hold
+        // withdraws or restores is its own durable fact record.
+        | RuntimeLifecyclePhase::DeviceStateObserved { .. } => CommitSync::Normal,
         RuntimeLifecyclePhase::PriorEpochOwnerImported
         | RuntimeLifecyclePhase::PriorEpochScopeClosed
         | RuntimeLifecyclePhase::PriorEpochOwnerReleasedByExit { .. }

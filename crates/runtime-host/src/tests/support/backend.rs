@@ -611,6 +611,188 @@ pub(super) struct FakeProvider {
     // Workflow #398 RD-2: the device-link watches a provider with handsets opens and the
     // reconnects it was asked for (`with_link_watch`); without it the provider has none.
     link_watches: Option<Arc<FakeLinkWatches>>,
+    // Workflow #398 RD-5b: the scripted device state of a bound handset (`with_handset`); a bound
+    // handset without one answers as a healthy one (awake, no keyguard, on a charger, cool).
+    handsets: BTreeMap<String, Arc<FakeHandset>>,
+}
+
+// Workflow #398 RD-5b: the device state of a fake handset, answered in the shapes RD-5a's
+// parsers read. Each read answers the state as it stands; the wake key lights the screen unless
+// `wake_fails`, the keyguard dismissal clears a keyguard without a credential unless
+// `dismiss_fails`. Every command that reaches the handset is recorded in order, and a settle wait
+// is recorded, never slept; `consulted` counts every time the host asked the provider for the
+// alias's device state, bound handset or not.
+#[derive(Default)]
+pub(super) struct FakeHandset {
+    state: std::sync::Mutex<FakeHandsetState>,
+    commands: std::sync::Mutex<Vec<FakeHandsetCommand>>,
+    consulted: AtomicUsize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FakeHandsetCommand {
+    Read(actingcommand_device::DeviceStateRead),
+    Act(actingcommand_device::DeviceStateAction),
+    Settle(Duration),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct FakeHandsetState {
+    pub(super) screen: &'static str,
+    pub(super) keyguard_showing: bool,
+    pub(super) keyguard_secure: bool,
+    pub(super) ac_powered: bool,
+    pub(super) usb_powered: bool,
+    pub(super) battery_status: u8,
+    pub(super) battery_level: u8,
+    pub(super) thermal_status: u8,
+    pub(super) foreground: Option<&'static str>,
+    pub(super) home: &'static str,
+    pub(super) screen_off_timeout_ms: u64,
+    pub(super) wake_fails: bool,
+    pub(super) dismiss_fails: bool,
+}
+
+impl Default for FakeHandsetState {
+    fn default() -> Self {
+        Self {
+            screen: "Awake",
+            keyguard_showing: false,
+            keyguard_secure: false,
+            ac_powered: true,
+            usb_powered: false,
+            battery_status: 2,
+            battery_level: 80,
+            thermal_status: 0,
+            foreground: None,
+            home: "com.example.launcher",
+            screen_off_timeout_ms: 600_000,
+            wake_fails: false,
+            dismiss_fails: false,
+        }
+    }
+}
+
+impl FakeHandset {
+    /// Changes the handset's state as `change` says.
+    fn script(&self, change: impl FnOnce(&mut FakeHandsetState)) {
+        change(&mut self.state.lock().expect("fake handset state"));
+    }
+
+    /// How often the host asked the provider for this alias's device state.
+    fn consulted(&self) -> usize {
+        self.consulted.load(Ordering::Acquire)
+    }
+
+    /// Every command that reached the handset, in order.
+    fn commands(&self) -> Vec<FakeHandsetCommand> {
+        self.commands.lock().expect("fake handset commands").clone()
+    }
+
+    /// The device-effect commands that reached the handset, in order.
+    fn actions(&self) -> Vec<actingcommand_device::DeviceStateAction> {
+        self.commands()
+            .into_iter()
+            .filter_map(|command| match command {
+                FakeHandsetCommand::Act(action) => Some(action),
+                FakeHandsetCommand::Read(_) | FakeHandsetCommand::Settle(_) => None,
+            })
+            .collect()
+    }
+
+    fn answer(&self, command: actingcommand_device::DeviceStateRead) -> String {
+        use actingcommand_device::DeviceStateRead as Read;
+        let state = self.state.lock().expect("fake handset state").clone();
+        match command {
+            Read::Power => format!(
+                "Power Manager State:\n  mDirty=0x0\n  mWakefulness={}\n  mWakefulnessChanging=false\n",
+                state.screen
+            ),
+            Read::Keyguard => format!(
+                "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n    KeyguardServiceDelegate\n      showing={}\n      secure={}\n",
+                state.keyguard_showing, state.keyguard_secure
+            ),
+            Read::Battery => format!(
+                "Current Battery Service state:\n  AC powered: {}\n  USB powered: {}\n  Wireless powered: false\n  Dock powered: false\n  status: {}\n  level: {}\n  temperature: 305\n",
+                state.ac_powered, state.usb_powered, state.battery_status, state.battery_level
+            ),
+            Read::Thermal => format!("Thermal Status: {}\n", state.thermal_status),
+            Read::Foreground => match state.foreground {
+                Some(package) => format!(
+                    "  topResumedActivity=ActivityRecord{{4c1d07 u0 {package}/.MainActivity t42}}\nac_dumpsys_rc=0\n"
+                ),
+                None => "ac_dumpsys_rc=0\n".to_owned(),
+            },
+            Read::Home => format!(
+                "priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n{}/.LauncherActivity\n",
+                state.home
+            ),
+            Read::ScreenOffTimeout => format!("{}\n", state.screen_off_timeout_ms),
+            Read::StayOnWhilePluggedIn => "0\n".to_owned(),
+        }
+    }
+}
+
+/// The fake handset as the device-state checks reach it.
+struct FakeHandsetShell<'a> {
+    handset: &'a FakeHandset,
+    alias: &'a str,
+}
+
+fn fake_command_output(stdout: String) -> actingcommand_device::CommandOutput {
+    actingcommand_device::CommandOutput {
+        stdout,
+        stderr: String::new(),
+        stdout_lossy_decode: false,
+        stderr_lossy_decode: false,
+    }
+}
+
+impl actingcommand_device::DeviceStateShell for FakeHandsetShell<'_> {
+    fn read(
+        &mut self,
+        command: actingcommand_device::DeviceStateRead,
+    ) -> DeviceResult<actingcommand_device::CommandOutput> {
+        self.handset
+            .commands
+            .lock()
+            .expect("fake handset commands")
+            .push(FakeHandsetCommand::Read(command));
+        Ok(fake_command_output(self.handset.answer(command)))
+    }
+
+    fn act(
+        &mut self,
+        _witness: &actingcommand_contract::FencedWrite,
+        command: actingcommand_device::DeviceStateAction,
+    ) -> DeviceResult<actingcommand_device::CommandOutput> {
+        use actingcommand_device::DeviceStateAction as Action;
+        self.handset
+            .commands
+            .lock()
+            .expect("fake handset commands")
+            .push(FakeHandsetCommand::Act(command));
+        self.handset.script(|state| match command {
+            Action::Wake if !state.wake_fails => state.screen = "Awake",
+            Action::DismissKeyguard if !state.dismiss_fails && !state.keyguard_secure => {
+                state.keyguard_showing = false;
+            }
+            Action::Wake | Action::DismissKeyguard => {}
+        });
+        Ok(fake_command_output(String::new()))
+    }
+
+    fn settle(&mut self, wait: Duration) {
+        self.handset
+            .commands
+            .lock()
+            .expect("fake handset commands")
+            .push(FakeHandsetCommand::Settle(wait));
+    }
+
+    fn device_label(&self) -> String {
+        actingcommand_device::handset_label(self.alias)
+    }
 }
 
 // Workflow #398 RD-2: what a fake provider's device-link watches saw. A watch reports nothing by
@@ -702,7 +884,15 @@ impl FakeProvider {
             device_endpoints: false,
             discovery: None,
             link_watches: None,
+            handsets: BTreeMap::new(),
         }
+    }
+
+    /// Workflow #398 RD-5b: the bound handset `instance_alias` answers its device-state checks
+    /// from `handset`.
+    fn with_handset(mut self, instance_alias: &str, handset: Arc<FakeHandset>) -> Self {
+        self.handsets.insert(instance_alias.to_owned(), handset);
+        self
     }
 
     /// Workflow #398 RD-2: the provider opens device-link watches into `watches` and records the
@@ -986,6 +1176,42 @@ impl ExecutionBackendProvider for FakeProvider {
             watches: Arc::clone(watches),
             stopped: Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())),
         })))
+    }
+
+    // Workflow #398 RD-5b: a bound handset answers from its scripted state (or a healthy one);
+    // every other instance gets no command.
+    fn with_handset_state(
+        &self,
+        instance_alias: &str,
+        work: &mut dyn FnMut(&mut dyn actingcommand_device::DeviceStateShell, &str),
+    ) -> DeviceResult<bool> {
+        if let Some(handset) = self.handsets.get(instance_alias) {
+            handset.consulted.fetch_add(1, Ordering::AcqRel);
+        }
+        let bound = self.resolve(instance_alias).is_some_and(|resolved| {
+            resolved
+                .adb_endpoint()
+                .and_then(actingcommand_execution_kernel::ResolvedInstanceEndpoint::bound)
+                .and_then(actingcommand_execution_kernel::ResolvedAdbEndpoint::handset)
+                .and_then(actingcommand_execution_kernel::HandsetEndpoint::binding)
+                .is_some()
+        });
+        if !bound {
+            return Ok(false);
+        }
+        let healthy = FakeHandset::default();
+        let handset = self
+            .handsets
+            .get(instance_alias)
+            .map_or(&healthy, |handset| handset.as_ref());
+        work(
+            &mut FakeHandsetShell {
+                handset,
+                alias: instance_alias,
+            },
+            "neutral.application",
+        );
+        Ok(true)
     }
 
     fn reconnect_handset(&self, instance_alias: &str) -> DeviceResult<()> {

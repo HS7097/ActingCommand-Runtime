@@ -118,7 +118,10 @@ fn records_of(
         .collect()
 }
 
-fn instance_facts(host: &RuntimeHost, instance_id: InstanceId) -> Vec<RuntimeFactRecord> {
+pub(super) fn instance_facts(
+    host: &RuntimeHost,
+    instance_id: InstanceId,
+) -> Vec<RuntimeFactRecord> {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let receipt = host
         .process_request_for_test(
@@ -137,7 +140,7 @@ fn instance_facts(host: &RuntimeHost, instance_id: InstanceId) -> Vec<RuntimeFac
         .collect()
 }
 
-fn fact(facts: &[RuntimeFactRecord], key: &str) -> Option<ContractFactValue> {
+pub(super) fn fact(facts: &[RuntimeFactRecord], key: &str) -> Option<ContractFactValue> {
     facts
         .iter()
         .find(|record| record.key == key)

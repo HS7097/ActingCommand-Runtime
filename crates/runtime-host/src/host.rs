@@ -162,6 +162,8 @@ mod contained_task;
 mod device_diagnostic;
 // Workflow #398 RD-2: the wired device link of the handsets, its wait and restore.
 mod device_link;
+// Workflow #398 RD-5b: the device state of the handsets, its holds and the start gate.
+mod device_state;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
@@ -1622,6 +1624,7 @@ impl RuntimeHost {
             recovery_ladders: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
+            device_states: Mutex::new(device_state::DeviceStates::default()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
             config_override_gate: Mutex::new(()),
             recovery_ladder_config: Mutex::new(None),
@@ -1924,6 +1927,9 @@ impl RuntimeHost {
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
             device_link::start(&shared)?;
+            // Workflow #398 RD-5b (model-398 §7.2): the device-state sampling of the bound
+            // handsets; none without a bound handset.
+            device_state::start(&shared)?;
             lock(
                 &shared.performance,
                 HostLocation::SampleCapacityBeforeBusiness,
@@ -2934,6 +2940,20 @@ impl RuntimeHost {
         device_link::tick(shared)
     }
 
+    /// Workflow #398 RD-5b: one sample of every handset's device state at once, as the sampler
+    /// runs it when a sample is due.
+    #[cfg(test)]
+    pub(crate) fn device_state_sample_for_test(&self) -> RuntimeHostResult<()> {
+        let shared = self.shared.as_ref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeHostClosed,
+                crate::codes::test_spellings::TestLocation::DeviceStateSampleForTest,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?;
+        device_state::sample(shared, true)
+    }
+
     /// Workflow #369 S1: the instance's admission guard, for a test thread to hold.
     #[cfg(test)]
     pub(crate) fn instance_admission_for_test(
@@ -3768,6 +3788,13 @@ impl RuntimeHost {
             &mut failure,
             device_link::stop_watch(&shared),
         );
+        // Workflow #398 RD-5b: the device-state sampler ends with the shutdown request and is
+        // joined.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            device_state::stop(&shared),
+        );
         // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
         // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
         // joined, before the host's own close.
@@ -4229,6 +4256,9 @@ struct HostShared {
     // Workflow #398 RD-2: the handsets' device links and their watch (model-398 §4). A leaf
     // lock: nothing else is taken while it is held.
     device_links: Mutex<device_link::DeviceLinks>,
+    // Workflow #398 RD-5b: the handsets' device-state holds and their sampler (model-398 §7). A
+    // leaf lock: nothing else is taken while it is held.
+    device_states: Mutex<device_state::DeviceStates>,
     // Workflow #387 D1b: the configuration in effect (the file layer of the manifest and the
     // instruction values), and the gate that orders each change and the start's restore with
     // the records it leads to.

@@ -869,6 +869,33 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.59 Wave 13 slice RD-5b (#398 model-398 v1.1 §7, §10.1, §12)
+
+RD-5b brings its own shapes and writes them. The device state of a bound handset is read through
+the device layer's closed command sets (RD-5a): by one sampler thread per Runtime, only while a
+bound handset is configured and its link is `device`, and by the start gate before the first step
+of every package run on it; the `device_state` section of `crates/runtime-config`
+(`src/device_state.rs`) is its configuration and [runtime-config.md](runtime-config.md), "The
+`device_state` section", that section's contract; [application-lifecycle.md](application-lifecycle.md),
+"The handset start gate", is the gate's. No member carries a device serial: a handset is its
+label `handset:<alias>`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RD5-1 | `runtime.lifecycle_observed` phase `device_state_observed` `{outcome}` | new lifecycle phase | RD-5b | RD-5b | under the handset's instance links: `device_thermal_hold` (warning, `thermal_status`) or `device_battery_low` (warning, `battery_percent`) when a sample finds the handset held; `device_hold_lifted` (info, `device_hold`) for each hold that lifts; `device_screen_woken` (info) when the wake key lit the screen; `device_state_unreadable` (error, `device_state_probe`, adb's text its `caused_by` link) for the first failing read of a sampling streak and for a start gate that could not read the screen-off timeout; each with `device_label` where its code declares it; normal commit sync |
+| RD5-2 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (instance scope, a bound handset only) | new runtime facts | RD-5b | RD-5b | written by a sample, source `runtime`, each with the lifetime `device_state.fact_ttl_ms`: strings (`awake`/`asleep`/`dozing`/`dreaming`; `none`/`insecure`/`secure`; a `thermal_status` word), one `record_list` row `{level, plugged, status, temperature_deci_c}`, a duration; a changed value at once, an unchanged one when its record would expire before the next sample |
+| RD5-3 | `session.instance.available` = `false` with `source_detector` `runtime.device-state`, `source_snapshot_id` `device_state:<hold>` | new source of an existing instance fact record | RD-5b | RD-5b | `locked`, `thermal`, `battery_low`, `in_use` (the first held, in that order); a device-link withdrawal comes first; with no hold left a passing self-check restores the seed, as a self-check withdrawal is restored |
+| RD5-4 | `device_wake_failed`, `device_keyguard_dismiss_failed`, `device_locked`, `device_state_unreadable` (device codes, RD-5a), `device_thermal_hold`, `device_battery_low`, `device_in_use` on a run's failure | new top codes of an existing failure | RD-5b | RD-5b | the start gate's refusal before the run's first step (operation `device_state_gate`), or the keepalive's before an input (`device_state_keepalive`); projection `backend_operation_failed`, not fatal; no input reaches the device; a run whose handset left `device` still ends with `device_link_lost` (RD-2) |
+| RD5-5 | a step of the run's lease for the screen check (`begin_destructive_step`, Business) | new use of an existing scheduler step | RD-5b | RD-5b | the wake key and the keyguard dismissal run under its witness (`Adb::run_write`); the step is finished right after the check; no ledger record of its own |
+| RD5-6 | `config.parameters.device_state` (10 rows) | new section of an existing fact family | RD-5b | RD-5b | the keys of §5's `device_state.*` row in model-398 §7.8's order; every key settable |
+
+Codes (runtime-host): `device_thermal_hold`, `device_battery_low`, `device_in_use` (warning,
+`planned_stop`), `device_screen_woken`, `device_hold_lifted` (info, `none`),
+`device_state_sampling_failed` (error, `none`; the sampler thread could not be spawned, not in
+model-398 §10.1); keys `device_hold`, `thermal_status` and their vocabularies, `battery_percent`;
+six `device_state_*` locations. `device_wake_failed`, `device_keyguard_dismiss_failed`,
+`device_locked` and `device_state_unreadable` stay the device layer's (RD-5a).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -929,6 +956,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
 | `host.kept_folder_cleared` (re-check 10-14, §1.25) | workbench | no (`tag.reobserve_prefixes`) | 375-R5e-clear (U-3) |
 | `device.link` (per instance, a bound handset only; §1.52 RD2-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-2 |
+| `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).
@@ -964,6 +992,7 @@ when it takes effect.
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |
+| `device_state.*` | `sample_interval_ms`, `fact_ttl_ms`, `wake_settle_ms`, `keepalive_margin_ms`, `keyguard_insecure`, `battery_min_percent`, `thermal_hold_at`, `thermal_resume_below`, `in_use_gate`, `in_use_backoff_ms` | 60 000 (5 000..=3 600 000), 180 000 (at least the sampling interval), 1 000 (100..=10 000), 60 000, `dismiss` (`dismiss` / `wait`), 15 (0..=100), `severe`, `moderate` (below `thermal_hold_at`), `false` (a dedicated handset, Alice 2026-10-13), 300 000 (10 000..=3 600 000) (model-398 §7.8); every key settable | RD-5b (built, §1.59) | RD-5b (v0.12.0) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

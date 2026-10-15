@@ -1936,6 +1936,16 @@ pub enum RuntimeLifecyclePhase {
     DeviceLinkObserved {
         outcome: Outcome,
     },
+    /// Workflow #398 RD-5b (model-398 v1.1 §7.2–§7.6): the device state of a handset, observed
+    /// by its sampling, its start gate or the check before an input, linked to its instance.
+    /// `outcome` is `device_thermal_hold` or `device_battery_low` (warning; a sample found the
+    /// handset held), `device_hold_lifted` (info; a hold lifted), `device_screen_woken` (info;
+    /// the wake key lit the screen) or `device_state_unreadable` (error; a read failed or
+    /// answered an unknown shape, once per failing streak of the sampling). No value names a
+    /// device serial: a handset is its label `handset:<alias>`.
+    DeviceStateObserved {
+        outcome: Outcome,
+    },
     /// Workflow #383 (register L5): the stores and the decision memory were loaded from the
     /// tagged records and opened new lineages; the base record of each new lineage, one entry
     /// per store. Register X4: `outcome` is the load's report (`ledger_tagged_state_loaded`,
@@ -1986,7 +1996,8 @@ impl RuntimeLifecyclePayload {
             | RuntimeLifecyclePhase::TaggedStateEnabled { outcome } => outcome.as_ref(),
             RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
             RuntimeLifecyclePhase::StandardPackRead { outcome }
-            | RuntimeLifecyclePhase::DeviceLinkObserved { outcome } => Some(outcome),
+            | RuntimeLifecyclePhase::DeviceLinkObserved { outcome }
+            | RuntimeLifecyclePhase::DeviceStateObserved { outcome } => Some(outcome),
             _ => None,
         }
     }

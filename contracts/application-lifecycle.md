@@ -165,6 +165,44 @@ periodic ADB probe is added by this slice. A handset's baseline (Workflow #398 R
 [device-binding.md](device-binding.md)) is its USB transport, addressed by its bound serial:
 no path runs `adb connect` against it, the ADB baseline probe included.
 
+## The handset start gate (Workflow #398 RD-5b)
+
+Before the first step of every package run on a bound handset (a direct run, a routine run, a
+recovery ladder's package, a startup package; model-398 v1.1 §7.2), the host reads the handset's
+device state through the closed command sets of the device layer (Workflow #398 RD-5a): only
+read-only reads and the two screen-check actions below. An emulator instance gets no
+device-state command. In order:
+
+1. Thermal and battery: at or above `device_state.thermal_hold_at` (a held handset until below
+   `device_state.thermal_resume_below`) the run does not start, `device_thermal_hold`; on no power
+   source below `device_state.battery_min_percent`, `device_battery_low`. A held handset is not
+   woken.
+2. The screen check, under one step of the run's lease (`begin_destructive_step` issues its
+   Business witness): a dark screen gets exactly one `input keyevent KEYCODE_WAKEUP` and
+   `device_state.wake_settle_ms`, then must read awake (`device_screen_woken`), else
+   `device_wake_failed`; a keyguard without a credential gets one `wm dismiss-keyguard` under
+   `device_state.keyguard_insecure = dismiss`, else `device_keyguard_dismiss_failed`; a keyguard
+   with a credential, or one without under `wait`, is `device_locked`: nothing is sent and a
+   person unlocks the handset.
+3. Under `device_state.in_use_gate`, the foreground (the foreground gate's query): another
+   application than the instance's `application_id` and the home activity's package is
+   `device_in_use`. No resumed activity counts as no other application.
+4. `settings get system screen_off_timeout`, for the keepalive below; a failed read records
+   `device_state_unreadable` and the run starts without the keepalive.
+
+A read that fails or answers an unknown shape is `device_state_unreadable`. A refusal ends the
+run before its first step with its own code (not fatal), and no input reaches the device;
+`device_locked`, `device_thermal_hold`, `device_battery_low` and `device_in_use` also hold the
+handset ([instance-fact-store.md](instance-fact-store.md), `device_state:<hold>`).
+
+**Keepalive.** Inside a run, an input that comes later than the screen-off timeout less
+`device_state.keepalive_margin_ms` after the last interaction (the start gate, then each input)
+is preceded by the same screen check; a check that does not end ready ends the run with its code,
+before the input.
+
+The gate changes no setting of the handset, never presses the power key and never enters a
+credential.
+
 ## The startup package hook
 
 Instance configuration (`actingd`, `contracts/actingd-check-config.md`):

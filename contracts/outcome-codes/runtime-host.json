@@ -20832,6 +20832,134 @@
       "description": "The one adb reconnect of an offline handset's transport (device_link.offline_action = kick_once) failed (#398 R1 RD-2, model-398 section 4.3); the Runtime waits for the link as under wait. adb's text is the cause.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "device_thermal_hold": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "thermal_status": "required",
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset's thermal status reached device_state.thermal_hold_at (#398 R1 RD-5b, model-398 section 7.4): it is unavailable under device_state:thermal until the status falls below device_state.thermal_resume_below. Recorded when a sample finds it; at a run's start the run does not start and no input is sent.",
+      "common_causes": "The handset grew hot during long runs or while charging.",
+      "handling": "Let the handset cool; the next sample below the resume level lifts the hold."
+    },
+    "device_battery_low": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "battery_percent": "required",
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset is on no power source and its battery is below device_state.battery_min_percent (#398 R1 RD-5b, model-398 section 7.4): it is unavailable under device_state:battery_low. A handset plugged in never holds, charging or not. Recorded when a sample finds it; at a run's start the run does not start and no input is sent.",
+      "common_causes": "The cable is out or the charger is off.",
+      "handling": "Plug the handset in; the next sample lifts the hold."
+    },
+    "device_in_use": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At a run's start another application than the instance's and the home screen's was in the handset's foreground, under device_state.in_use_gate (#398 R1 RD-5b, model-398 section 7.5): the run does not start and the handset is unavailable under device_state:in_use until a sample after device_state.in_use_backoff_ms finds no other application in front.",
+      "common_causes": "A person is using the handset.",
+      "handling": "Leave the handset on the home screen or the instance's application."
+    },
+    "device_screen_woken": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start gate of a run on a handset, or the check before an input, lit the screen with the wake key (#398 R1 RD-5b, model-398 section 7.3); the run goes on.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_hold_lifted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_hold": "required",
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A hold of a handset lifted (#398 R1 RD-5b, model-398 section 7.4): a sample found it cooled, plugged in, unlocked or no longer in use, or a run's start gate found it ready. With no hold left it is available again as its self-check and its link allow.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_state_sampling_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The device-state sampling of the bound handsets could not start (#398 R1 RD-5b, model-398 section 7.2): its thread could not be spawned. The Runtime does not run without it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -27483,6 +27611,54 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: end a run whose device failed while its handset is not at device with device_link_lost (Workflow #398 RD-2)."
+    },
+    "device_state_gate": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the start gate of a package run on a handset, before its first step (Workflow #398 RD-5b)."
+    },
+    "device_state_sample": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the device-state sampling of the bound handsets (Workflow #398 RD-5b)."
+    },
+    "device_state_keepalive": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the screen check before an input of a run on a handset, long after the last one (Workflow #398 RD-5b)."
+    },
+    "device_state_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: read the device-state holds of a handset (Workflow #398 RD-5b)."
+    },
+    "device_state_apply": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: apply a change of a handset's device-state holds (Workflow #398 RD-5b)."
+    },
+    "device_state_step": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: begin or end the lease step of a handset's screen check (Workflow #398 RD-5b)."
     }
   }
 }

@@ -224,6 +224,14 @@ It reads the instance's active record of scope `instance { instance_id:
   again only when the link is `device` again and the restore preparation (or a
   person's self-check) records passing opens; that restores the seed as a
   `backend_selfcheck:` withdrawal is restored.
+- Workflow #398 RD-5b (model-398 v1.1 §7.3-§7.6): a bound handset under a
+  device-state hold is unavailable whatever its self-check says, with
+  `source_detector` `runtime.device-state` and `source_snapshot_id`
+  `device_state:<hold>` (`locked`, `thermal`, `battery_low`, `in_use`, the first
+  of them in that order), unless that record is already in effect. A device-link
+  withdrawal comes first. When the last hold lifts (`device_hold_lifted`), a
+  passing self-check restores the seed as a `backend_selfcheck:` withdrawal is
+  restored.
 
 **Lifecycle.** At startup every device self-checked policy instance starts
 unavailable (`backend_selfcheck:unchecked`, published right before its

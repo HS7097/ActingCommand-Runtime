@@ -437,6 +437,18 @@ impl ExecutionKernel {
         self.provider.reconnect_handset(instance_alias)
     }
 
+    /// Workflow #398 RD-5b (model-398 v1.1 §7): the device-state shell of a bound handset and its
+    /// configured application id, handed to `work` on the provider directly, outside any
+    /// session; `Ok(false)` for any other instance, which gets no command. The device error
+    /// comes back untyped.
+    pub fn with_handset_state(
+        &self,
+        instance_alias: &str,
+        work: &mut dyn FnMut(&mut dyn actingcommand_device::DeviceStateShell, &str),
+    ) -> actingcommand_device::DeviceResult<bool> {
+        self.provider.with_handset_state(instance_alias, work)
+    }
+
     pub fn probe_adb_baseline_until(
         &self,
         instance_alias: &str,

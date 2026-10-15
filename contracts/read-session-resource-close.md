@@ -216,7 +216,12 @@ Business witness that `begin_destructive_step` issued for the step:
 - Host: the two `begin_destructive_step` sites (input and application lifecycle)
   pass the witness they issued. Contained-task input and application effects
   reach the device only through those two sites. A failed
-  `begin_destructive_step` reaches no write path.
+  `begin_destructive_step` reaches no write path. Workflow #398 RD-5b adds a
+  third site for a handset's screen check (the start gate of a package run and
+  the keepalive before an input, [application-lifecycle.md](application-lifecycle.md)):
+  its two device-effect commands (`input keyevent KEYCODE_WAKEUP`,
+  `wm dismiss-keyguard`) go through `Adb::run_write` under the Business witness
+  it issued on the run's lease, and the step is finished right after the check.
 
 Boundary of this step: connection-time writes of backend opening (`connect`,
 `push`, `chmod`, `forward`, `shell_spawn`) and the link watch's `reconnect` stay

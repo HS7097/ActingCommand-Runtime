@@ -1617,6 +1617,18 @@
       "type": "vocab:device_watch_problem",
       "description": "What went wrong with the device-link watch, the Runtime's one adb track-devices process (Workflow #398 RD-2)."
     },
+    "device_hold": {
+      "type": "vocab:device_hold",
+      "description": "What holds a handset (Workflow #398 RD-5b)."
+    },
+    "thermal_status": {
+      "type": "vocab:thermal_status",
+      "description": "A handset's thermal status (Workflow #398 RD-5b)."
+    },
+    "battery_percent": {
+      "type": "integer",
+      "description": "A handset's battery level, 0 to 100 percent (Workflow #398 RD-5b)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -4910,6 +4922,49 @@
         },
         "restart_budget_spent": {
           "description": "The watch ended more often within the restart window than the restart limit allows."
+        }
+      }
+    },
+    "device_hold": {
+      "description": "What holds a handset (model-398 section 7.3 to 7.5), in the order its availability names the first of them (device_state:<hold>).",
+      "tokens": {
+        "locked": {
+          "description": "A keyguard waits for a person (device_locked)."
+        },
+        "thermal": {
+          "description": "The thermal status reached the hold level (device_thermal_hold)."
+        },
+        "battery_low": {
+          "description": "On no power source, below the battery level (device_battery_low)."
+        },
+        "in_use": {
+          "description": "Another application was in the foreground at a run's start (device_in_use)."
+        }
+      }
+    },
+    "thermal_status": {
+      "description": "A handset's thermal status (model-398 section 7.1): Android's thermal status levels, mildest first. The device_state thermal keys take these words.",
+      "tokens": {
+        "none": {
+          "description": "Status 0: no throttling."
+        },
+        "light": {
+          "description": "Status 1: light throttling."
+        },
+        "moderate": {
+          "description": "Status 2: moderate throttling."
+        },
+        "severe": {
+          "description": "Status 3: severe throttling."
+        },
+        "critical": {
+          "description": "Status 4: the platform has done everything it can to reduce power."
+        },
+        "emergency": {
+          "description": "Status 5: key components are about to shut down."
+        },
+        "shutdown": {
+          "description": "Status 6: the device shuts down at once."
         }
       }
     },
