@@ -1984,10 +1984,7 @@ impl HostShared {
         // Workflow #398 RD-4 (model-398 §6.2, §6.6): the rungs are the instance's profile's when
         // it has one, and a start beyond them is as `rules.start_beyond_profile` says: under
         // `exhaust` every rung is before it, under `last_rung` the climb starts at the last one.
-        let configured = pending
-            .profile
-            .as_ref()
-            .map_or(&pending.config.rungs, |profile| &profile.rungs);
+        let configured = &pending.config.rungs;
         let start_rung = pending
             .config
             .start_beyond_profile
