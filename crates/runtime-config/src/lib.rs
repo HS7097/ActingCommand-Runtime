@@ -54,15 +54,16 @@ pub use effective::{
 };
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS};
 pub use instance::{
-    DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, START_EMULATOR, STUCK_RECOVERY,
-    STUCK_RECOVERY_COOLDOWN_SECS,
+    DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
+    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS,
 };
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;
 pub use recovery_ladder::{
     AlreadyRunning, BurstWindow, CodePattern, CooldownOpensOn, DirectRuns, EntryUnavailable,
-    HoldConfig, LadderConfig, LadderRules, MatchedBy, PreparationSuperseded, RecoveryLadderFile,
-    RungConfig, TriggerItem, TriggerVerdict, ladder_class_of,
+    HoldConfig, LadderConfig, LadderProfile, LadderRules, MatchedBy, PreparationSuperseded,
+    RecoveryLadderFile, RungConfig, StartBeyondProfile, TriggerItem, TriggerVerdict,
+    ladder_class_of,
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
@@ -105,6 +106,9 @@ mod ledger_observer_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod perf_tests;
+// Workflow #398 RD-4.
+#[cfg(test)]
+mod rd4_tests;
 #[cfg(test)]
 mod scheduling_tests;
 #[cfg(test)]

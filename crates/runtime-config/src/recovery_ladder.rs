@@ -11,22 +11,33 @@
 //! An element a `triggers` or `rungs` list leaves out takes its value from the schema, never
 //! from code (§3.1, §4.1): a trigger item's `start`, `start_rung` and `respect_cooldown` from
 //! `trigger_defaults`, a rung's bounds from the defaults file's rung of the same action.
+//!
+//! Workflow #398 RD-4 (model-398 v1.1 §6.2, §6.6, option B): ladder profiles. `profiles` names
+//! rung lists of their own, each checked as `rungs` is; `kind_profiles` gives a device kind its
+//! profile; an instance's own `recovery_ladder_profile` comes first. A ladder climbs the rungs of
+//! the profile its instance takes (instance key, then kind table, then the section's `rungs`).
+//! `rules.start_beyond_profile` says what a start rung beyond a profile's rungs does: `exhaust`
+//! (every rung skipped before the start, then exhausted), `last_rung` (the climb starts at the
+//! profile's last rung) or `refuse` (every start rung must fit every profile).
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_json;
 use crate::effective::{CheckContext, ConfigFailure};
+use crate::instance::RECOVERY_LADDER_PROFILE;
 use crate::resolve::member;
-use crate::table::{DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType};
+use crate::table::{
+    DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
+};
 use crate::value::{canonical_json, scalar_json};
 use actingcommand_contract::outcome::{LadderClass, catalog_json};
 use actingcommand_contract::{
-    ContainedTaskRequest, FactScalar, InstanceStuckRecovery, RecoveryRung, RecoveryTriggerStage,
-    RecoveryTriggerStart, parse_ladder_class, valid_recovery_ladder_token,
+    ContainedTaskRequest, FactScalar, InstanceDeviceKind, InstanceStuckRecovery, RecoveryRung,
+    RecoveryTriggerStage, RecoveryTriggerStart, parse_ladder_class, valid_recovery_ladder_token,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The section's name: the first segment of its keys.
 pub const SECTION: &str = "recovery_ladder";
@@ -62,6 +73,14 @@ pub const RUNGS: &str = "recovery_ladder.rungs";
 pub const CLAIM_TTL_MS: &str = "recovery_ladder.hold.claim_ttl_ms";
 /// What a hold renews to beyond a step's bound.
 pub const MARGIN_MS: &str = "recovery_ladder.hold.margin_ms";
+/// Workflow #398 RD-4 (model-398 §6.6): what a start rung beyond a profile's rungs does.
+pub const RULE_START_BEYOND_PROFILE: &str = "recovery_ladder.rules.start_beyond_profile";
+/// Workflow #398 RD-4 (model-398 §6.2): the ladder profiles, profile name to `{rungs}` (an
+/// object).
+pub const PROFILES: &str = "recovery_ladder.profiles";
+/// Workflow #398 RD-4 (model-398 §6.2): the profile of each device kind, kind to profile name
+/// (an object); a kind it does not name climbs the section's `rungs`.
+pub const KIND_PROFILES: &str = "recovery_ladder.kind_profiles";
 
 /// The shortest readiness poll a ladder may be given (§4.2: `100..=readiness_window_ms`):
 /// schema, not a threshold.
@@ -134,6 +153,50 @@ two_way_rule! {
     EntryUnavailable { Skip => "skip", Fail => "fail" }
 }
 
+/// Workflow #398 RD-4 (model-398 v1.1 §6.6, option B), the sixth rule beside B1–B5: what a
+/// trigger's start rung beyond the rungs of the profile its instance climbs does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartBeyondProfile {
+    /// The climb starts; every rung of the profile is skipped as before the start rung, and the
+    /// ladder ends exhausted at once (the default).
+    Exhaust,
+    /// The climb starts at the profile's last rung.
+    LastRung,
+    /// Every trigger item's start rung and `trigger_defaults.start_rung` must lie within every
+    /// profile's rungs; the section check refuses any other.
+    Refuse,
+}
+
+impl StartBeyondProfile {
+    /// The rule's three words, its key's allowed range.
+    pub const TOKENS: &'static [&'static str] = &["exhaust", "last_rung", "refuse"];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exhaust => Self::TOKENS[0],
+            Self::LastRung => Self::TOKENS[1],
+            Self::Refuse => Self::TOKENS[2],
+        }
+    }
+
+    fn parse(token: &str) -> Option<Self> {
+        [Self::Exhaust, Self::LastRung, Self::Refuse]
+            .into_iter()
+            .find(|rule| rule.as_str() == token)
+    }
+
+    /// The position, from 1, a climb over `rung_count` rungs starts at for a trigger that names
+    /// `start_rung`: under `last_rung` no later than the last rung; otherwise the trigger's own
+    /// (beyond the rungs under `exhaust`, where every rung is before it; `refuse` admits no
+    /// start beyond a profile).
+    pub fn start_rung(self, start_rung: usize, rung_count: usize) -> usize {
+        match self {
+            Self::LastRung => start_rung.min(rung_count),
+            Self::Exhaust | Self::Refuse => start_rung,
+        }
+    }
+}
+
 /// The words of `start`.
 const START_TOKENS: &[&str] = &["immediately", "after_performance_release"];
 
@@ -159,6 +222,12 @@ pub struct RecoveryLadderFile {
     rungs: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hold: Option<HoldFile>,
+    /// Workflow #398 RD-4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profiles: Option<Value>,
+    /// Workflow #398 RD-4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind_profiles: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -185,6 +254,9 @@ struct RulesFile {
     cooldown_opens_on: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entry_unavailable: Option<Value>,
+    /// Workflow #398 RD-4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_beyond_profile: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -197,6 +269,15 @@ struct HoldFile {
 }
 
 const fn row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    row_of(name, value_type, range, "D1c")
+}
+
+const fn row_of(
+    name: &'static str,
+    value_type: ValueType,
+    range: KeyRange,
+    reader: &'static str,
+) -> KeyRow {
     KeyRow {
         name: KeyName::Exact(name),
         file_path: FilePath::Key,
@@ -204,9 +285,10 @@ const fn row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyR
         range,
         default: DefaultSource::File,
         // §5.5: every key of the section can change while the Runtime runs; a ladder climbs by
-        // the snapshot it was admitted with (§4.7).
+        // the snapshot it was admitted with (§4.7). Workflow #398 RD-4's keys too (model-398
+        // §6.2, §6.6).
         settable: Settable::Yes,
-        reader: "D1c",
+        reader,
         since: "0.12.0",
     }
 }
@@ -263,7 +345,15 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::String,
         KeyRange::Tokens(EntryUnavailable::TOKENS),
     ),
+    row_of(
+        RULE_START_BEYOND_PROFILE,
+        ValueType::String,
+        KeyRange::Tokens(StartBeyondProfile::TOKENS),
+        "RD-4",
+    ),
     row(RUNGS, ValueType::List, KeyRange::Any),
+    row_of(PROFILES, ValueType::Object, KeyRange::Any, "RD-4"),
+    row_of(KIND_PROFILES, ValueType::Object, KeyRange::Any, "RD-4"),
     row(CLAIM_TTL_MS, ValueType::DurationMs, KeyRange::Any),
     row(MARGIN_MS, ValueType::DurationMs, KeyRange::Any),
 ];
@@ -400,6 +490,14 @@ pub struct HoldConfig {
     pub margin_ms: u64,
 }
 
+/// Workflow #398 RD-4 (model-398 §6.2): one ladder profile, its name and its rungs, each
+/// checked as the section's `rungs` are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LadderProfile {
+    pub name: String,
+    pub rungs: Vec<RungConfig>,
+}
+
 /// The `recovery_ladder` section in effect, read and checked whole. A ladder keeps the one it
 /// was admitted with for its whole climb, queue included (§4.7); `digest` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,6 +513,15 @@ pub struct LadderConfig {
     /// (`trigger_defaults`): a fence matches no trigger item.
     pub default_start_rung: usize,
     pub default_respect_cooldown: bool,
+    /// Workflow #398 RD-4 (model-398 §6.6): the sixth rule, `rules.start_beyond_profile`.
+    pub start_beyond_profile: StartBeyondProfile,
+    /// Workflow #398 RD-4 (model-398 §6.2): the profiles, as `profiles` names them.
+    pub profiles: Vec<LadderProfile>,
+    /// Workflow #398 RD-4: the profile name of each device kind `kind_profiles` names.
+    kind_profiles: Vec<(InstanceDeviceKind, String)>,
+    /// Workflow #398 RD-4: the profile name each instance's `recovery_ladder_profile` names in
+    /// effect, by the instance's registry id; a snapshot takes it with the section.
+    instance_profiles: BTreeMap<String, String>,
     digest: String,
 }
 
@@ -518,6 +625,17 @@ impl Reader<'_> {
         match self.scalar(key)? {
             FactScalar::String(text) => match serde_json::from_str::<Value>(&text) {
                 Ok(Value::Array(items)) => Ok(items),
+                _ => Err(failure(key, ConfigValueProblem::WrongType)),
+            },
+            _ => Err(failure(key, ConfigValueProblem::WrongType)),
+        }
+    }
+
+    /// Workflow #398 RD-4: an object key's members.
+    fn object(&mut self, key: &'static str) -> Result<Map<String, Value>, ConfigFailure> {
+        match self.scalar(key)? {
+            FactScalar::String(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(Value::Object(members)) => Ok(members),
                 _ => Err(failure(key, ConfigValueProblem::WrongType)),
             },
             _ => Err(failure(key, ConfigValueProblem::WrongType)),
@@ -677,20 +795,22 @@ fn shipped_rung(action: RecoveryRung) -> Option<RungItemFile> {
 }
 
 /// The rungs (§4.1, §4.2), each bound checked against the device layer's own bounds and the
-/// longest renewal (§4.3).
+/// longest renewal (§4.3). A refusal names `config_key`: `rungs`, or (Workflow #398 RD-4) the
+/// profile whose rungs these are.
 fn rungs(
     items: Vec<Value>,
     margin_ms: u64,
     renewal_cap_ms: u64,
     context: &CheckContext,
+    config_key: &str,
 ) -> Result<Vec<RungConfig>, ConfigFailure> {
-    let invalid = || failure(RUNGS, ConfigValueProblem::RungsInvalid);
-    let bound = || failure(RUNGS, ConfigValueProblem::BoundOutOfRange);
+    let invalid = || failure(config_key, ConfigValueProblem::RungsInvalid);
+    let bound = || failure(config_key, ConfigValueProblem::BoundOutOfRange);
     let capped = |step_ms: u64| {
         if step_ms.saturating_add(margin_ms) <= renewal_cap_ms {
             Ok(())
         } else {
-            Err(failure(RUNGS, ConfigValueProblem::RenewalCapExceeded))
+            Err(failure(config_key, ConfigValueProblem::RenewalCapExceeded))
         }
     };
     if !(1..=RecoveryRung::ALL.len()).contains(&items.len()) {
@@ -858,6 +978,88 @@ fn triggers(
     Ok(triggers)
 }
 
+/// Workflow #398 RD-4: one profile of `profiles` as written (model-398 §6.2).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileFile {
+    rungs: Vec<Value>,
+}
+
+/// Workflow #398 RD-4 (model-398 §6.6): the key a refusal of the profile `name` names, its
+/// member of `profiles`.
+fn profile_key(name: &str) -> String {
+    format!("{PROFILES}.{name}")
+}
+
+/// Workflow #398 RD-4 (model-398 §6.2): the profiles, each name a token and each profile's
+/// `rungs` checked as the section's are, a refusal naming the profile.
+fn profiles(
+    members: Map<String, Value>,
+    margin_ms: u64,
+    renewal_cap_ms: u64,
+    context: &CheckContext,
+) -> Result<Vec<LadderProfile>, ConfigFailure> {
+    let mut profiles = Vec::with_capacity(members.len());
+    for (name, profile) in members {
+        if !valid_recovery_ladder_token(&name) {
+            return Err(failure(PROFILES, ConfigValueProblem::WrongType));
+        }
+        let key = profile_key(&name);
+        let profile = serde_json::from_value::<ProfileFile>(profile)
+            .map_err(|_| failure(&key, ConfigValueProblem::WrongType))?;
+        let rungs = rungs(profile.rungs, margin_ms, renewal_cap_ms, context, &key)?;
+        profiles.push(LadderProfile { name, rungs });
+    }
+    Ok(profiles)
+}
+
+/// Workflow #398 RD-4 (model-398 §6.2): `kind_profiles`, each member a device kind naming one
+/// of `profiles`; a kind outside the device kinds or a name no profile has is `out_of_range`.
+fn kind_profiles(
+    members: Map<String, Value>,
+    profiles: &[LadderProfile],
+) -> Result<Vec<(InstanceDeviceKind, String)>, ConfigFailure> {
+    members
+        .into_iter()
+        .map(|(kind, name)| {
+            let kind = serde_json::from_value::<InstanceDeviceKind>(Value::String(kind))
+                .map_err(|_| failure(KIND_PROFILES, ConfigValueProblem::OutOfRange))?;
+            let Value::String(name) = name else {
+                return Err(failure(KIND_PROFILES, ConfigValueProblem::WrongType));
+            };
+            if !profiles.iter().any(|profile| profile.name == name) {
+                return Err(failure(KIND_PROFILES, ConfigValueProblem::OutOfRange));
+            }
+            Ok((kind, name))
+        })
+        .collect()
+}
+
+/// Workflow #398 RD-4 (model-398 §6.6, `refuse`): every trigger item's start rung and
+/// `trigger_defaults.start_rung` lie within every profile's rungs; the first profile one does
+/// not fit is `start_rung_out_of_range` naming that profile. Under `exhaust` and `last_rung` a
+/// start rung is checked against the section's `rungs` only, as D1c does.
+fn starts_fit_profiles(
+    rule: StartBeyondProfile,
+    profiles: &[LadderProfile],
+    triggers: &[TriggerItem],
+    default_start_rung: usize,
+) -> Result<(), ConfigFailure> {
+    if rule != StartBeyondProfile::Refuse {
+        return Ok(());
+    }
+    for profile in profiles {
+        let count = profile.rungs.len();
+        if default_start_rung > count || triggers.iter().any(|item| item.start_rung > count) {
+            return Err(failure(
+                &profile_key(&profile.name),
+                ConfigValueProblem::StartRungOutOfRange,
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl LadderConfig {
     /// The section from `value` (the configuration in effect), checked whole (§5.3) with the
     /// facts of other crates in `context`. Any broken rule is `recovery_ladder_config_invalid`
@@ -890,6 +1092,11 @@ impl LadderConfig {
             cooldown_opens_on: rule(&mut reader, RULE_COOLDOWN_OPENS_ON, CooldownOpensOn::parse)?,
             entry_unavailable: rule(&mut reader, RULE_ENTRY_UNAVAILABLE, EntryUnavailable::parse)?,
         };
+        let start_beyond_profile = rule(
+            &mut reader,
+            RULE_START_BEYOND_PROFILE,
+            StartBeyondProfile::parse,
+        )?;
         let claim_ttl_ms = reader.duration(CLAIM_TTL_MS)?;
         let margin_ms = reader.duration(MARGIN_MS)?;
         // §4.3: a claim's TTL above the heartbeat bound and within the longest renewal (the
@@ -906,7 +1113,7 @@ impl LadderConfig {
             ));
         }
         let rung_items = reader.list(RUNGS)?;
-        let rungs = rungs(rung_items, margin_ms, renewal_cap_ms, context)?;
+        let rungs = rungs(rung_items, margin_ms, renewal_cap_ms, context, RUNGS)?;
         if !(1..=rungs.len()).contains(&default_start_rung) {
             return Err(failure(
                 DEFAULT_START_RUNG,
@@ -921,6 +1128,17 @@ impl LadderConfig {
         )?;
         let exclude_items = reader.list(EXCLUDE_CODES)?;
         let exclude_codes = code_patterns(EXCLUDE_CODES, &exclude_items)?;
+        // Workflow #398 RD-4 (model-398 §6.2, §6.6).
+        let profile_members = reader.object(PROFILES)?;
+        let profiles = profiles(profile_members, margin_ms, renewal_cap_ms, context)?;
+        let kind_members = reader.object(KIND_PROFILES)?;
+        let kind_profiles = kind_profiles(kind_members, &profiles)?;
+        starts_fit_profiles(
+            start_beyond_profile,
+            &profiles,
+            &triggers,
+            default_start_rung,
+        )?;
         let digest = format!(
             "{:x}",
             Sha256::digest(canonical_json(&Value::Object(reader.seen)).as_bytes())
@@ -938,8 +1156,51 @@ impl LadderConfig {
             },
             default_start_rung,
             default_respect_cooldown,
+            start_beyond_profile,
+            profiles,
+            kind_profiles,
+            instance_profiles: BTreeMap::new(),
             digest,
         })
+    }
+
+    /// Workflow #398 RD-4 (model-398 §6.2): binds the profile the instance whose registry id is
+    /// `instance_id` names in effect (`instance.<id>.recovery_ladder_profile`, `value`). A name
+    /// no profile of the section has is refused as the section is (`out_of_range`, naming the
+    /// instance's key).
+    pub(crate) fn bind_instance_profile(
+        &mut self,
+        instance_id: &str,
+        value: &FactScalar,
+    ) -> Result<(), ConfigFailure> {
+        let key = instance_key(instance_id, RECOVERY_LADDER_PROFILE);
+        let FactScalar::String(name) = value else {
+            return Err(failure(&key, ConfigValueProblem::WrongType));
+        };
+        if !self.profiles.iter().any(|profile| profile.name == *name) {
+            return Err(failure(&key, ConfigValueProblem::OutOfRange));
+        }
+        self.instance_profiles
+            .insert(instance_id.to_owned(), name.clone());
+        Ok(())
+    }
+
+    /// Workflow #398 RD-4 (model-398 §6.2): the profile the instance whose registry id is
+    /// `instance_id` climbs by: the one its own `recovery_ladder_profile` names, else the one
+    /// `kind_profiles` gives its device kind; `None` when neither names one, and it climbs the
+    /// section's `rungs`.
+    pub fn profile_for(
+        &self,
+        instance_id: &str,
+        kind: InstanceDeviceKind,
+    ) -> Option<&LadderProfile> {
+        let name = self.instance_profiles.get(instance_id).or_else(|| {
+            self.kind_profiles
+                .iter()
+                .find(|(named, _)| *named == kind)
+                .map(|(_, name)| name)
+        })?;
+        self.profiles.iter().find(|profile| profile.name == *name)
     }
 
     /// The SHA-256 of the section's values, canonical JSON, as 64 lowercase hexadecimal digits

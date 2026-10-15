@@ -728,6 +728,11 @@ struct InstanceConfig {
     /// `1..=86400`).
     #[serde(default)]
     stuck_recovery_cooldown_secs: Option<u32>,
+    /// Workflow #398 RD-4 (model-398 v1.1 §6.2): the ladder profile this instance climbs by,
+    /// before the `recovery_ladder` section's `kind_profiles`; it must name one of the
+    /// section's `profiles` (checked with the section).
+    #[serde(default)]
+    recovery_ladder_profile: Option<String>,
     /// Workflow #405 (parsed by #386 SR-1): the instance's own random delay
     /// (`scheduling.random_delay.*`); a member it leaves out is the `scheduling` section's.
     #[serde(default)]
@@ -1250,6 +1255,12 @@ impl ActingdConfigFile {
             members.insert(
                 actingcommand_runtime_config::STUCK_RECOVERY_COOLDOWN_SECS.to_owned(),
                 serde_json::json!(instance.stuck_recovery_cooldown_secs),
+            );
+            // Workflow #398 RD-4: reported as `instance.<id>.recovery_ladder_profile` when the
+            // file names it.
+            members.insert(
+                actingcommand_runtime_config::RECOVERY_LADDER_PROFILE.to_owned(),
+                serde_json::json!(instance.recovery_ladder_profile),
             );
             members.insert(
                 actingcommand_runtime_config::scheduling::SECTION.to_owned(),
