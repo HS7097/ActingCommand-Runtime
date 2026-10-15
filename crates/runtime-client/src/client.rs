@@ -1121,7 +1121,7 @@ impl RuntimeClient {
                     }
             }
             Some(RuntimeResult::ShutdownAccepted { target: accepted }) => {
-                committing && *accepted == target
+                !committing && *accepted == target
             }
             _ => false,
         };
