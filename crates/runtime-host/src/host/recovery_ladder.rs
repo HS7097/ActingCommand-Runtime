@@ -56,7 +56,7 @@
 //! causation ids; the `return_home` run carries that causation id, the startup package runs the
 //! one of their scheduling event.
 
-use super::contained_task::{FailedTaskTerminal, PackageIdentity};
+use super::contained_task::{ConfiguredReturnHome, FailedTaskTerminal, PackageIdentity};
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::{ClaimGrantSlot, HostClaim, HostClaimAdmission};
 use super::resource_fence::manual_claim;
@@ -301,9 +301,9 @@ pub(super) struct PendingRecoveryLadder {
     instance_alias: String,
     trigger: RecoveryLadderTrigger,
     recovery: Option<ContainedTaskRecoveryBinding>,
-    /// Workflow #336 L2d: when `recovery` is the configured return-home package (the run bound
-    /// none), the failed package it must match.
-    recovery_configured: Option<PackageIdentity>,
+    /// Workflow #336 L2d: when `recovery` is the registry's return-home package (the run bound
+    /// none; Workflow #373 NAV-3a), the failed package it must match and its package id.
+    recovery_configured: Option<ConfiguredReturnHome>,
     /// Instance, trigger correlation id, the ladder's request id and causation id.
     links: EventLinksDraft,
     /// The ladder's request id: task timing admission id of its rung runs, and its claim's.
@@ -1366,15 +1366,22 @@ impl HostShared {
             return Ok(None);
         };
         // Workflow #336 L2d (R23): a run that binds no recovery package takes the return-home
-        // package actingd configures for its package's game and server.
+        // package of its package's game and server: Workflow #373 NAV-3a, the one the
+        // standard-pack registry of its game names.
         let (recovery, recovery_configured) = match trigger.recovery {
             Some(binding) => (Some(binding), None),
             None => {
                 let failed = trigger
                     .package
                     .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderPackageMissing))?;
-                match self.configured_return_home(&failed.game, &failed.server)? {
-                    Some(binding) => (Some(binding.clone()), Some(failed)),
+                match self.ladder_return_home(&failed.game, &failed.server)? {
+                    Some(found) => (
+                        Some(found.binding),
+                        Some(ConfiguredReturnHome {
+                            failed,
+                            package_id: found.package_id,
+                        }),
+                    ),
                     None => (None, None),
                 }
             }
@@ -1926,11 +1933,14 @@ impl HostShared {
                 Ok(prepared) => {
                     if let Some(binding) = startup.recovery() {
                         effective.recovery = Some(binding.clone());
-                    } else if let Some(binding) =
-                        self.configured_return_home(prepared.game(), prepared.server())?
+                    } else if let Some(found) =
+                        self.ladder_return_home(prepared.game(), prepared.server())?
                     {
-                        effective.recovery = Some(binding.clone());
-                        effective.recovery_configured = Some(PackageIdentity::of(&prepared));
+                        effective.recovery = Some(found.binding);
+                        effective.recovery_configured = Some(ConfiguredReturnHome {
+                            failed: PackageIdentity::of(&prepared),
+                            package_id: found.package_id,
+                        });
                     }
                 }
                 Err(failure) => {

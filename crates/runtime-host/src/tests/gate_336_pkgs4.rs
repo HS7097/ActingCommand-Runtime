@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #336 PKG-S4 (option 丙; host gate 81), model M-PKG v1.1 §4.5 S4-T6 and decision D7:
-// a configured prerequisite package is named by its `package_id` and found by its path, and the
-// package at that path must declare that `package_id` in its control. A package that declares
-// another one is refused with `contained_task_prerequisite_mismatch` before any input: as a
-// layer of a `linear_steps` package's chain, and as the configured return-home package of a
-// page-graph entry.
+// a prerequisite package is named by its `package_id` and found by its path, and the package at
+// that path must declare that `package_id` in its control. A package that declares another one
+// is refused with `contained_task_prerequisite_mismatch` before any input: as a layer of a
+// `linear_steps` package's chain, and as the return-home package of a page-graph entry.
+// Workflow #373 NAV-3a (M-373 §4.3): the `package_id` and the path are a standard-pack
+// registry's entry, no configuration entry.
 
+use super::gate_373_nav3a::{
+    AWAY, LEAD_STEPS, MAIN, MENU, OPEN, Pack, RETURN_HOME, StandardRoot, route, screens,
+};
 use super::gate_e4::exec_i6::{self, I6Pack, RESOLUTION, ROOT};
 use super::*;
-use actingcommand_contract::ContainedTaskRecoveryBinding;
+use serde_json::json;
 
 const MISMATCH: &str = "contained_task_prerequisite_mismatch";
 
@@ -22,7 +26,7 @@ fn entry_facts(events: &[ProjectedEvent]) -> Vec<&TaskSemanticFact> {
         .collect()
 }
 
-// S4-T6, chain: the root's prerequisite package `neutral.i6.lead` is configured at a path whose
+// S4-T6, chain: the root's prerequisite package `neutral.i6.lead` is listed at a directory whose
 // package declares `neutral.i6.other`; the run of the root is denied with the mismatch, with no
 // input.
 #[test]
@@ -31,6 +35,7 @@ fn s4_t6_a_chain_layer_whose_control_names_another_package_id_is_refused() {
     state.physical_task_geometry.store(true, Ordering::Release);
     let temp = TempDir::new().expect("tempdir");
     let packs_root = temp.path().join("packs");
+    let mut registry = StandardRoot::new(temp.path());
     exec_i6::write_pack(
         &packs_root.join(ROOT),
         &I6Pack {
@@ -40,19 +45,16 @@ fn s4_t6_a_chain_layer_whose_control_names_another_package_id_is_refused() {
         },
     );
     exec_i6::write_pack(
-        &packs_root.join("neutral.i6.lead"),
+        &registry.list("neutral.i6.lead"),
         &I6Pack {
             package_id: "neutral.i6.other",
             prerequisite: None,
             resolution: RESOLUTION,
         },
     );
-    let binding =
-        ContainedTaskRecoveryBinding::new(packs_root.join("neutral.i6.lead").display().to_string())
-            .expect("prerequisite binding");
+    registry.write_bundle();
     let host = RuntimeHost::start(
-        config(&temp)
-            .with_prerequisite_packages(BTreeMap::from([("neutral.i6.lead".to_owned(), binding)])),
+        config(&temp).with_standard_packs_root(Some(registry.root.clone())),
         Arc::new(FakeProvider::one(
             "neutral.instance",
             instance_id(),
@@ -78,40 +80,35 @@ fn s4_t6_a_chain_layer_whose_control_names_another_package_id_is_refused() {
     host.close().expect("close runtime host");
 }
 
-// S4-T6, configured return home: a page-graph run whose request binds no recovery package takes
-// the return-home package configured for its game and server, `fixture01.return-home`; the
-// package at that entry's path declares `fixture01.other`, so the entry fails closed with the
-// mismatch, before the package is admitted as the run's recovery and before any input.
+// S4-T6, return home: a page-graph run whose request binds no recovery package takes the
+// return-home package the registry names for its game and server, `neutral.test.return_home`;
+// the package in that entry's directory declares `neutral.test.other`, so the entry fails closed
+// with the mismatch, before the package is admitted as the run's recovery and before any input.
 #[test]
 fn s4_t6_a_configured_return_home_package_whose_control_names_another_package_id_is_refused() {
-    let root = TempDir::new().expect("tempdir");
-    let target =
-        explicit_home_contained_task_package(true, "fixture01.target", [0, 0, 255], [255, 0, 0]);
-    let recovery =
-        explicit_home_contained_task_package(true, "fixture01.other", [0, 0, 255], [255, 0, 0]);
-    let target_path = root.path().join("target.zip");
-    let recovery_path = root.path().join("return-home.zip");
-    fs::write(&target_path, &target).expect("write target package");
-    fs::write(&recovery_path, &recovery).expect("write return-home package");
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
-    state
-        .transition_capture_after_input
-        .store(true, Ordering::Release);
-    let binding = ContainedTaskRecoveryBinding::new(recovery_path.display().to_string())
-        .expect("return-home binding");
+    screens(&state, vec![AWAY, MENU]);
+    let temp = TempDir::new().expect("tempdir");
+    let mut registry = StandardRoot::new(temp.path());
+    route("neutral.test.other", "away", "menu", LEAD_STEPS, None)
+        .write(&registry.list(RETURN_HOME));
+    registry.return_home(RETURN_HOME);
+    registry.write_bundle();
+    let target = temp.path().join("target");
+    Pack {
+        package_id: MAIN,
+        mode: "navigable_route",
+        prerequisite: None,
+        entry: json!(["menu"]),
+        target: "done",
+        operations: OPEN,
+    }
+    .write(&target);
     let host = RuntimeHost::start(
-        config(&root)
-            .with_prerequisite_packages(BTreeMap::from([(
-                "fixture01.return-home".to_owned(),
-                binding,
-            )]))
-            .with_return_home_packages(BTreeMap::from([(
-                ("fixture01".to_owned(), "test".to_owned()),
-                "fixture01.return-home".to_owned(),
-            )])),
+        config(&temp).with_standard_packs_root(Some(registry.root.clone())),
         Arc::new(FakeProvider::one(
-            "fixture01.instance",
+            "neutral.instance",
             instance_id(),
             Arc::clone(&state),
         )),
@@ -124,9 +121,9 @@ fn s4_t6_a_configured_return_home_package_whose_control_names_another_package_id
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::run_contained_task(
-            "fixture01.instance",
+            "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(target_path.display().to_string()).expect("task request"),
+            ContainedTaskRequest::new(target.display().to_string()).expect("task request"),
         ),
     );
 

@@ -120,6 +120,8 @@ mod gate_369s5;
 // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
 mod gate_369_s6c;
 mod gate_372k2;
+// Workflow #373 NAV-3a: page-graph prerequisite packages and the standard-pack registry.
+mod gate_373_nav3a;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
 mod gate_373_nav3b;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.

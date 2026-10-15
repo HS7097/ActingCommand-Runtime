@@ -1058,3 +1058,13 @@ tests = [
     "actingcommand-contract::lib::package::tests::s5_t6_bundle_v4_reads_its_tables_list_and_refuses_a_pack_named_tables",
 ]
 incident = ["#336 PKG-S5"]
+
+# Workflow #373 NAV-3a (model M-373 v1.1 §4.2; test rows N3a-1, N3a-3): a navigable_route package's control may declare prerequisite_package_id (linear_steps still may; in_page_guard and recognize_only are refused with contained_task_control_invalid); the shared prerequisite chain goes on through page-graph layers, a page-graph layer with a page entry that declares none falling back to the return-home package, with today's depth, cycle and 1,000-step codes
+[[gate]]
+key = "67"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_373_nav3a::n3a_1_a_navigable_route_package_may_declare_a_prerequisite_package",
+    "actingcommand-execution-kernel::lib::maintenance::gate_373_nav3a::n3a_3_the_chain_goes_on_through_page_graph_layers_with_its_limits",
+]
+incident = ["#373 NAV-3a"]

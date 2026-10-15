@@ -56,19 +56,12 @@ fn write_install_root(root: &Path) {
                 },
             ],
         },
-        "prerequisite_packages": [
-            {"package_id": "neutral.home", "package_path": "packages/home"},
-        ],
-        "return_home_packages": [
-            {"game": "neutral-game", "server": "neutral-server", "package_id": "neutral.home"},
-        ],
     });
     fs::write(root.join("actingd.config.json"), config.to_string()).expect("write configuration");
     for folder in [
         ["packages", "startup-a"],
         ["resources", "res-a"],
         ["packages", "collect"],
-        ["packages", "home"],
     ] {
         fs::create_dir_all(root.join(folder[0]).join(folder[1])).expect("create package folder");
     }
@@ -177,20 +170,6 @@ fn gate_packs_and_ac_packs_answer_the_same_bindings_of_the_selected_configuratio
                 "package_id": "neutral.manual",
                 "procedure_ref": "package.neutral.manual",
                 "operation_id": "neutral.manual",
-                "scheduled": false,
-            },
-            {
-                "role": "prerequisite",
-                "package_id": "neutral.home",
-                "path": path(["packages", "home"]),
-                "readable": true,
-                "scheduled": false,
-            },
-            {
-                "role": "return_home",
-                "package_id": "neutral.home",
-                "path": path(["packages", "home"]),
-                "readable": true,
                 "scheduled": false,
             },
         ],

@@ -593,7 +593,7 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
-# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} and prerequisite_packages {package_id, package_path} checks, and one that still carries startup_package.expected_sha256, prerequisite_packages[].package_digest or policy.procedure_manifest[].package_digest is config_decode_failed at config_load; actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
+# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks, and one that still carries startup_package.expected_sha256 or policy.procedure_manifest[].package_digest is config_decode_failed at config_load (prerequisite_packages left with Workflow #373 NAV-3a, host key 90); actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
 [[gate]]
 key = "55"
 coverage = "Y"

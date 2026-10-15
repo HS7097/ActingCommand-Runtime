@@ -214,6 +214,7 @@ mod scheduling_pause;
 mod signatures;
 // Workflow #373 NAV-6: the standard-pack root reader and the shared interrupt pages of a run.
 mod standard_pack;
+pub(crate) use standard_pack::read_registries;
 pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_standard_packs};
 mod startup_package;
 mod state_control;
@@ -522,16 +523,10 @@ pub struct RuntimeHostConfig {
     /// maintenance package bound by `instances[].recognition_package` that the start kept. The
     /// scheduler runs it to read the instance's facts (D2-S4); the start never prepares it.
     recognition_packages: BTreeMap<String, PathBuf>,
-    /// Workflow #336 L2b: per package id, the locator and content reference of a package a
-    /// `linear_steps` package may name as its `prerequisite_package_id`. Admitted only when a
-    /// run resolves it; not a configuration fact.
-    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
-    /// Workflow #336 L2c: per (game, server), the package id (a key of `prerequisite_packages`)
-    /// of the return-home package a `linear_steps` package without a declared prerequisite
-    /// package falls back to; not a configuration fact.
-    return_home_packages: BTreeMap<(String, String), String>,
     /// Workflow #373 NAV-6: `standard_packs.root`, the directory of the installed standard
     /// packages' game roots; `None` reads no root. A startup key, never changed while running.
+    /// Workflow #373 NAV-3a: its registries are where every prerequisite package and every
+    /// return-home package is found (M-373 §4.3).
     standard_packs_root: Option<PathBuf>,
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.2 step 4): where the ledger reports
     /// a retried write and its fatal stop; actingd's sink writes its lines and ends the process.
@@ -590,8 +585,6 @@ impl RuntimeHostConfig {
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
-            prerequisite_packages: BTreeMap::new(),
-            return_home_packages: BTreeMap::new(),
             standard_packs_root: None,
             ledger_failure_sink: None,
             runtime_commit: None,
@@ -865,37 +858,6 @@ impl RuntimeHostConfig {
         &self.stuck_recovery
     }
 
-    /// Installs the prerequisite packages, keyed by package id (Workflow #336 L2b). A
-    /// `linear_steps` package that declares a `prerequisite_package_id` is resolved against
-    /// them at preparation; each package is admitted against its content reference only then.
-    pub fn with_prerequisite_packages(
-        mut self,
-        prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
-    ) -> Self {
-        self.prerequisite_packages = prerequisite_packages;
-        self
-    }
-
-    /// The configured prerequisite packages, keyed by package id.
-    pub const fn prerequisite_packages(&self) -> &BTreeMap<String, ContainedTaskRecoveryBinding> {
-        &self.prerequisite_packages
-    }
-
-    /// Installs the return-home packages, package ids of `prerequisite_packages` keyed by
-    /// (game, server) (Workflow #336 L2c, R16).
-    pub fn with_return_home_packages(
-        mut self,
-        return_home_packages: BTreeMap<(String, String), String>,
-    ) -> Self {
-        self.return_home_packages = return_home_packages;
-        self
-    }
-
-    /// The configured return-home package ids, keyed by (game, server).
-    pub const fn return_home_packages(&self) -> &BTreeMap<(String, String), String> {
-        &self.return_home_packages
-    }
-
     /// Workflow #373 NAV-6: sets `standard_packs.root`, the directory that holds one root per
     /// game (`<root>/<game>/`). Read at startup and in each run's preparation.
     pub fn with_standard_packs_root(mut self, root: Option<PathBuf>) -> Self {
@@ -1107,14 +1069,6 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 &self.resource_packages.keys().collect::<Vec<_>>(),
             )
             .field("stuck_recovery", &self.stuck_recovery)
-            .field(
-                "prerequisite_packages",
-                &(!self.prerequisite_packages.is_empty()).then_some("<runtime-owned>"),
-            )
-            .field(
-                "return_home_packages",
-                &(!self.return_home_packages.is_empty()).then_some("<runtime-owned>"),
-            )
             .field("standard_packs_root", &self.standard_packs_root)
             .field("ledger_failure_sink", &self.ledger_failure_sink.is_some())
             .field("runtime_commit", &self.runtime_commit)
@@ -1692,8 +1646,6 @@ impl RuntimeHost {
             unclassified_codes: Mutex::new(BTreeSet::new()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
-            prerequisite_packages: config.prerequisite_packages,
-            return_home_packages: config.return_home_packages,
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
             standard_packs: standard_pack::StandardPackRoots::new(config.standard_packs_root),
@@ -4451,10 +4403,6 @@ struct HostShared {
     // the stand-in for performance control's suspension.
     #[cfg(test)]
     performance_hold_for_test: AtomicBool,
-    // Workflow #336 L2b: the prerequisite packages by package id, read at startup.
-    prerequisite_packages: BTreeMap<String, ContainedTaskRecoveryBinding>,
-    // Workflow #336 L2c: the return-home package id by (game, server), read at startup.
-    return_home_packages: BTreeMap<(String, String), String>,
     // Workflow #384 D2-S4: by instance alias, the recognition maintenance package the start kept
     // and the keys its marks write, read once at startup.
     fact_refresh_bindings: BTreeMap<String, crate::fact_refresh::FactRefreshBinding>,

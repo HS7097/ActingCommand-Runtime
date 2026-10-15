@@ -3111,11 +3111,11 @@ fn rd1b_check_config(config_path: &Path) -> (bool, Value) {
 
 /// Workflow #336 PKG-S4 (option 丙), model M-PKG v1.1 §4.5 S4-T1 and the configuration half of
 /// S4-T2: a configuration names its packages by their paths only. With `startup_package`
-/// `{package}` and a `prerequisite_packages` entry `{package_id, package_path}` it assembles and
-/// check-config passes, reporting the startup package by its path alone. One that still carries
-/// `startup_package.expected_sha256`, `prerequisite_packages[].package_digest` or
+/// `{package}` it assembles and check-config passes, reporting the startup package by its path
+/// alone. One that still carries `startup_package.expected_sha256` or
 /// `policy.procedure_manifest[].package_digest` is refused with `config_decode_failed` at stage
-/// `config_load`.
+/// `config_load`. (Workflow #373 NAV-3a retired `prerequisite_packages` with its
+/// `package_digest`: see `n3a_8_*`.)
 #[test]
 fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks() {
     let root = TempDir::new().expect("tempdir");
@@ -3135,8 +3135,6 @@ fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_check
     write_config(&config_path, root.path(), instance_id(), false);
     let mut config = read();
     config["instances"][0]["startup_package"] = json!({"package": package});
-    config["prerequisite_packages"] =
-        json!([{"package_id": "neutral.home", "package_path": package}]);
     write(&config);
 
     let (succeeded, checked) = rd1b_check_config(&config_path);
@@ -3151,8 +3149,6 @@ fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_check
     let digest = json!(format!("sha256:{}", "c".repeat(64)));
     let mut startup = config.clone();
     startup["instances"][0]["startup_package"]["expected_sha256"] = json!("c".repeat(64));
-    let mut prerequisite = config.clone();
-    prerequisite["prerequisite_packages"][0]["package_digest"] = digest.clone();
     write_legacy_physical_policy_config(&config_path, root.path(), instance_id());
     let policy = read();
     let (_, decoded) = rd1b_check_config(&config_path);
@@ -3164,10 +3160,53 @@ fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_check
     binding["policy"]["procedure_manifest"][0]["package_digest"] = digest;
     for (key, refused) in [
         ("startup_package.expected_sha256", startup),
-        ("prerequisite_packages[].package_digest", prerequisite),
         ("policy.procedure_manifest[].package_digest", binding),
     ] {
         write(&refused);
+        let (succeeded, checked) = rd1b_check_config(&config_path);
+        assert!(!succeeded, "{key}: {checked}");
+        assert_eq!(
+            (
+                &checked["outcome"]["code"],
+                &checked["outcome"]["values"]["stage"]
+            ),
+            (&json!("config_decode_failed"), &json!("config_load")),
+            "{key}: {checked}"
+        );
+    }
+}
+
+/// Workflow #373 NAV-3a (model M-373 v1.1 §4.3; test row N3a-8, host key 90): every
+/// prerequisite and return-home package is found in the standard-pack registry, so the
+/// configuration keys `prerequisite_packages` and `return_home_packages` are retired with no
+/// compatibility: a configuration that carries either is refused with `config_decode_failed` at
+/// stage `config_load`.
+#[test]
+fn n3a_8_a_configuration_with_a_retired_prerequisite_key_does_not_decode() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let package = root.path().join("packages").join("neutral.home");
+    fs::create_dir_all(&package).expect("package directory");
+    write_config(&config_path, root.path(), instance_id(), false);
+    let config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON");
+    let (succeeded, checked) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{checked}");
+    let mut prerequisite = config.clone();
+    prerequisite["prerequisite_packages"] =
+        json!([{"package_id": "neutral.home", "package_path": package}]);
+    let mut return_home = config;
+    return_home["return_home_packages"] =
+        json!([{"game": "neutral", "server": "test", "package_id": "neutral.home"}]);
+    for (key, refused) in [
+        ("prerequisite_packages", prerequisite),
+        ("return_home_packages", return_home),
+    ] {
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&refused).expect("config JSON"),
+        )
+        .expect("write config");
         let (succeeded, checked) = rd1b_check_config(&config_path);
         assert!(!succeeded, "{key}: {checked}");
         assert_eq!(

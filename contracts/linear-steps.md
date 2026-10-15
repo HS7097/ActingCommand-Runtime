@@ -374,30 +374,42 @@ to that first step:
 ```
 
 **Declaration.** `prerequisite_package_id` is a string, not empty, at most 256 bytes, with no
-control character, other than the package's own `package_id`, and only under `linear_steps`.
-A violation is `contained_task_control_invalid` with detail `reason=prerequisite_id_invalid`,
-`reason=prerequisite_self` or `reason=prerequisite_requires_linear_steps`; an application entry
-that declares one is `contained_task_linear_invalid`, `reason=prerequisite_with_application_entry`
-(the entry recognizes nothing before its effect, so there is no first step to lead to). Only a
+control character, other than the package's own `package_id`, and only under `linear_steps` or
+(Workflow #373 NAV-3a) `navigable_route`, phased or not; `in_page_guard` and `recognize_only`
+declare none. A violation is `contained_task_control_invalid` with detail
+`reason=prerequisite_id_invalid`, `reason=prerequisite_self` or
+`reason=prerequisite_execution_mode`; an application entry that declares one is
+`contained_task_linear_invalid`, `reason=prerequisite_with_application_entry` (the entry
+recognizes nothing before its effect, so there is no first step to lead to), and a
+`navigable_route` package without an entry page to lead to (no `entry_page`, or `any`) is
+`contained_task_control_invalid`, `reason=prerequisite_requires_page_entry`. A `navigable_route`
+package that declares one always has its entry checked first: its entry page set, or its entry
+page whatever page it is (the page-graph home entry otherwise checks a single entry page only
+with stages, or for `home` with `any_of`). Only a
 hand-written `control.json` or `record stop --requires` (`lab-recording.md`) carries the field: `package build`
 writes a fixed set of control fields, and `lab run` ignores the field and never runs a
 prerequisite package.
 
-**Resolution.** The package id names an entry of the `actingd` configuration's top-level
-`prerequisite_packages` (package id, package locator, content reference; see
-`actingd-check-config.md`, "Prerequisite packages"); nothing scans a package directory. The
-chain is resolved and every package admitted when the run is prepared: before any lease for a
-direct (`task-run`) run and for a startup package or a recovery ladder rung, inside the lease
-the policy already holds for a scheduled run. A `linear_steps` prerequisite package may name its
-own prerequisite package; a page-graph package ends the chain. Layer by layer, in this order:
+**Resolution** (Workflow #373 NAV-3a, M-373 §4.3). The package id names a package of the
+standard-pack registry of the dependent package's own game: the `packs[]` of
+`<standard_packs.root>/<game>/bundle.json` (`package-reference.md`, "Standard package root"),
+each package in the game root's directory its `path` names. The registry is read when the run
+is prepared and used for the whole run; a standard pack installed or replaced in place is found
+by the next run, with no configuration entry and no restart (a registry that changed since it
+was last read is recorded once as `standard_pack_registered`). Nothing else scans a package
+directory. The chain is resolved and every package admitted when the run is prepared: before
+any lease for a direct (`task-run`) run and for a startup package or a recovery ladder rung,
+inside the lease the policy already holds for a scheduled run. A prerequisite package of either
+mode may name its own prerequisite package: a page-graph layer leads the chain on as a linear
+one does. Layer by layer, in this order:
 
 | Check | `failure_code` |
 |---|---|
-| the map has the package id | `contained_task_prerequisite_unbound` |
+| the registry has the package id | `contained_task_prerequisite_unbound`, value `registry_problem`: `root_unset` (no `standard_packs.root`), `game_root_missing` (no root of the game), `not_listed` (its `bundle.json` does not list it) |
 | the package id is not already in the chain (the dependent package included) | `contained_task_prerequisite_cycle` |
 | at most three prerequisite packages besides the dependent package | `contained_task_prerequisite_depth_exceeded` |
-| the package is admitted against its content reference (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
-| the admitted package's `package_id` is the map key | `contained_task_prerequisite_mismatch` |
+| the package is admitted by its path (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
+| the admitted package's `package_id` is the registry's | `contained_task_prerequisite_mismatch` |
 | the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3) or designated scheduling operation; its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|designated_operation\|game\|server\|resolution>` |
 | the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
 
@@ -409,8 +421,9 @@ refusal. The admission deadline of a prerequisite package is the run's deadline 
 run, the one the run derives from its request and lease). A prerequisite package's
 `scheduling_outcome` without a designated operation is allowed and ignored. A request's
 `--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only,
-which only a scheduled run starts (Workflow #369-3: a direct task run never starts one). The
-map is read when `actingd` starts; a change needs a restart.
+which only a scheduled run starts (Workflow #369-3: a direct task run never starts one). A
+game root the run needs that is broken refuses it with the root's own code
+(`standard_pack_root_invalid` or `standard_pack_root_unreadable`), as a preparation refusal.
 
 **Gate.** A package whose chain is not empty runs through the entry gate instead of starting
 directly; a package whose prerequisite chain is empty starts as above. Layer `i` is a package `X_i`
@@ -421,19 +434,24 @@ directly; a package whose prerequisite chain is empty starts as above. Layer `i`
    bounded by the smaller of `step_timeout_ms` and task timeout (origin `entry_recovery`).
    Its samples and page evaluation carry the same typed evidence and timing as in-task
    recognition. A check without consensus retains its one-frame `home_preflight` evaluation.
-   `EntryRecognition { Initial }` names that
-   page, followed by `EntryRecoveryDecision`. When the page passes, the layer is done and
-   `X_(i+1)` does not run.
-2. **Prerequisite package.** `EntryRecoveryPackageAdmitted { X_(i+1) }`; when `X_(i+1)` has a
+   A page-graph `X_i` (Workflow #373 NAV-3a) is checked as its home entry is: its whole entry
+   (its entry page, or every page of its entry page set) in the bounded wait of "Page-graph home
+   entry wait" below. `EntryRecognition { Initial }` names that
+   page (or those pages) and the one that passed, followed by `EntryRecoveryDecision`. When the
+   entry passes, the layer is done and `X_(i+1)` does not run.
+2. **Prerequisite package.** `EntryRecoveryPackageAdmitted { X_(i+1), role }`, `role`
+   `prerequisite` for a declared layer and `return_home` for the return-home layer of "Return-home
+   fallback" below (Workflow #373 NAV-3a, M-373 §8.3); when `X_(i+1)` has a
    prerequisite package itself, its own layer runs first. Then `EffectiveConfigurationFacts::
    EntryRecovery { X_(i+1) }` (when the run recorded its initial configuration) and the package
    runs inside the same run: same task, run and lease, its step indices following the steps
    already run, its budget origin `entry_recovery`, its `PackageAdmitted`, `RunStarted` and
    `Finalizing` not written. Its own failure code is carried out unchanged (a page-graph
    package's `contained_task_page_unknown` still starts the ladder). It ends with
-   `EntryRecoveryCompleted { X_(i+1), final page, its own executed steps }`; its final page is not
-   compared with `X_i`'s pages, since page ids of different packages are not comparable.
-3. **Recheck, bounded wait.** `X_i`'s first step's page is evaluated one observation at a time,
+   `EntryRecoveryCompleted { X_(i+1), final page, its own executed steps, role }`; its final page
+   is not compared with `X_i`'s pages, since page ids of different packages are not comparable.
+3. **Recheck, bounded wait.** `X_i`'s entry (its first step's page; a page-graph `X_i`'s whole
+   entry, any page of which passes) is evaluated one observation at a time,
    every capture interval of `X_i`, for at most `X_i`'s `step_timeout_ms`, since its markers may
    still be fading in when the prerequisite package reached its own end. Each capture is a
    `CapturePage` boundary and each sleep a `PageRecognitionWait` boundary of the gate's own
@@ -441,13 +459,14 @@ directly; a package whose prerequisite chain is empty starts as above. Layer `i`
    original absolute deadline; no sample or repeated observation starts another budget.
    This applies after every prerequisite/return-home layer. Unsampled evaluation keeps the
    `home_preflight` phase; sampled evaluation uses the shared page/sample records.
-   `EntryRecognition { PostRecovery }` follows; when the page did not pass, the run fails with
+   `EntryRecognition { PostRecovery }` follows; when the entry did not pass, the run fails with
    `contained_task_prerequisite_entry_unmatched`, detail `layer=<i> package_id=<X_i>
-   required_page=<page>`, timing `page_recognition` / `entry_recognition` with `limit_ms` the
-   step timeout.
+   required_page=<page>` (`required_pages=<page>,<page>...` for an entry page set), timing
+   `page_recognition` / `entry_recognition` with `limit_ms` the step timeout.
 
 Each prerequisite package runs at most once per run. On any failure every prerequisite package
-opened and not yet closed gets one `EntryRecoveryFailed` with the failure code, innermost first,
+opened and not yet closed gets one `EntryRecoveryFailed` with the failure code and its `role`,
+innermost first,
 and the gate one `EntryTargetDisposition { FailClosed }`; a recognition failure, an unknown page
 or an input backend failure is recorded so even when the run spent its last execution budget,
 as the home entry recovery does. The one exception is a capture or recognition error of the
@@ -456,30 +475,36 @@ home entry preflight returns its first check's error; every later failure, the o
 included, ends with the one `FailClosed`. When every layer passed,
 `EntryTargetDisposition { Started }` is written, then the dependent package's `PackageAdmitted`,
 and the package runs with its step indices after the prerequisite packages' steps; on success
-`executed_steps` adds the prerequisite packages' steps. Its own first step is awaited again as
-above and normally passes at once. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
+`executed_steps` adds the prerequisite packages' steps. Its own first step (a page-graph
+package's entry, which then starts the stage of the page that passed) is awaited again as above
+and normally passes at once; a page-graph package's own check records its `EntryRecognition`
+alone, the gate having recorded the decision. The host deadline still ends the run with `contained_task_deadline_exceeded` (or
 cancelled, paused) from any capture of the gate.
 
 **Ledger.** Only the existing `TaskEntryPreflight` facts and effective configuration records
 are written; a run has at most seven effective configuration records (initial, one per
 prerequisite package, the return-home package of "Return-home fallback" below included,
-capture, input). The facts are told apart by these rules, with no layer
-field:
+capture, input). Each `EntryRecovery*` fact of a layer carries its `role` (Workflow #373 NAV-3a:
+`prerequisite` or `return_home`; a request's own recovery binding carries none), so the ledger
+tells the return-home layer from a declared one. The facts are told apart by these rules:
 
 - A `TaskEntryPreflight` fact belongs to the innermost prerequisite package that was opened by
   `EntryRecoveryPackageAdmitted` and not yet closed by `EntryRecoveryCompleted` or
   `EntryRecoveryFailed`; with none open it belongs to the dependent package. An
-  `EntryRecognition`'s `required_pages` is that package's first step's page alone.
+  `EntryRecognition`'s `required_pages` is that package's first step's page alone, or a
+  page-graph package's whole entry.
 - The packages of one chain have different package ids, and every entry-recovery fact names
   its layer's package by that id (`package_label`, Workflow #336 PKG-S2); each run
   prerequisite package has its own `EntryRecovery { package_label }` record.
 - Every package's step indices are a range of their own, as long as its
   `EntryRecoveryCompleted.executed_steps`.
 
-A replayed direct request is answered from its ledger when its `EntryRecoveryPackageAdmitted`
-facts are at most four (three declared, one return-home), all different, each the `package_id`
-of a package of the `prerequisite_packages` map or of the request's recovery binding (that
-package admitted again, Workflow #336 PKG-S2); otherwise it is
+A replayed direct request is answered from its ledger when its gate's
+`EntryRecoveryPackageAdmitted` facts (an interrupt handler's are not the gate's) are at most four
+(three declared, one return-home), all different, each with a role the `package_id` of a package
+of the standard-pack registry of the request's package's game, read at the replay, and each
+without one the `package_id` of the request's recovery binding (that package admitted again,
+Workflow #336 PKG-S2); otherwise it is
 `contained_task_request_recovery_reused`. Its `PackageAdmitted` must name the `package_id` of
 the request's package admitted again (it may have changed in place since); another package is
 `contained_task_request_package_reused`.
@@ -510,10 +535,15 @@ chain. A flow whose first page appears only sometimes stays a page-graph package
 ## Return-home fallback
 
 Workflow #336 R16. A `linear_steps` package that declares no `prerequisite_package_id` and
-whose first step is a page (no application entry) falls back to the return-home package that
-the `actingd` configuration's top-level `return_home_packages` names for its game and server
-(`actingd-check-config.md`, "Prerequisite packages"). That package id is a key of the
-`prerequisite_packages` map and is resolved through it as a declared one is.
+whose first step is a page (no application entry) falls back to the return-home package of its
+game and server: Workflow #373 NAV-3a (M-373 §4.3), the package the standard-pack registry of
+its game names for its server, the `maintenance[]` entry of `bundle.json` whose `uses` holds
+`return_home` (`package-reference.md`, "Maintenance declarations (bundle v3)"). It is a package
+of that registry and is resolved through it as a declared one is. A page-graph layer of a chain
+with an entry to check (its entry page set, or its entry page with stages, for `home` with
+`any_of`, or when it declares a prerequisite package) falls back the same way; a page-graph
+package run as the run's own package keeps its home entry instead ("Ladder and page-graph home
+entry" below), which takes the same registry package.
 
 **Resolution.** The return-home package is one more layer at the end of the chain, below the
 dependent package when it declares nothing, or below the last declared prerequisite package when
@@ -521,12 +551,12 @@ that is a `linear_steps` package that declares nothing. It is looked up by the g
 that layer's control and passes the same checks as a declared layer (the table of "Prerequisite
 packages"); a refusal has the same code, with `source=return_home` at the end of its detail. The
 return-home layer is not one of the three declared layers, so a chain has at most four; it falls
-back no further, and there is none when the map has no entry for the game and server or its
-package is already in the chain. A page-graph package and an application entry
-(`from: "any"`) never fall back. The maximum steps of the whole chain, the return-home package
-included, still add up to at most 1000. Which layer came from the configuration is known only
-in memory: the ledger does not tell a return-home layer from a declared one, except by comparing
-its package reference with the configuration of the time.
+back no further, and there is none without a `standard_packs.root`, without a root of the game,
+when its bundle names no return-home package for the server, or when that package is already in
+the chain. An application entry (`from: "any"`) and a page-graph layer whose entry is not
+checked never fall back. The maximum steps of the whole chain, the return-home package included,
+still add up to at most 1000. The ledger tells the return-home layer by its `role`
+`return_home`.
 
 **Gate.** The return-home layer runs through the gate as a declared layer does: first check,
 `EntryRecoveryPackageAdmitted`, its run, recheck, close. The one difference: when the first
@@ -555,8 +585,8 @@ no part in the resolution. A linear package run by the ladder's return-home rung
 any linear run, and so does a linear startup package.
 
 **Ladder and page-graph home entry (Workflow #336 L2d, R23).** A run whose request binds no
-recovery package uses the return-home package of its package's game and server in two more
-places. The stuck-recovery ladder's `return_home` rung runs it, with the maximum response
+recovery package uses the return-home package of its package's game and server (the registry's,
+read when it is needed; Workflow #373 NAV-3a) in two more places. The stuck-recovery ladder's `return_home` rung runs it, with the maximum response
 deadline (`contracts/emulator-control.md`, "Stuck-recovery ladder"). The page-graph home entry
 admits it where it reported `contained_task_home_recovery_binding_missing` before: only after
 the first check did not pass, with the existing failure handling and facts, and it runs as a
@@ -572,7 +602,12 @@ starts no ladder: on the rung before any lease, recorded as the rung's failure (
 category `recovery_ladder`, the detail as native detail); in the home entry with no
 `EntryRecoveryPackageAdmitted`, as `EntryTargetDisposition { FailClosed }` and the
 task terminal, the detail on a runtime lifecycle failure record after the terminal as under
-"Failure detail" below. In the home entry, a page-graph package's final page must still be the
+"Failure detail" below. The package found at the registry's entry must declare that entry's
+`package_id` (`contained_task_prerequisite_mismatch` otherwise, before it runs). In the home entry
+its `EntryRecovery*` facts carry `role: return_home`. A game root that is broken when the home
+entry needs it closes the entry with the root's own code (`standard_pack_root_invalid` or
+`standard_pack_root_unreadable`); on the ladder it is recorded (`runtime.lifecycle_observed`,
+phase `standard_pack_read`) and the rung has no package (`no_recovery_package`). In the home entry, a page-graph package's final page must still be the
 home page, while a `linear_steps` package's final page (a Lab page id such as
 `<game>/step_03_home`) is not compared, and only the recheck decides. With a request binding both
 places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
@@ -686,10 +721,12 @@ A build without this mode refuses a linear package before `PackageAdmitted`: the
 first refused by the resource declaration check (`resource_declaration_invalid`, reason
 `UnknownField`). A build without prerequisite packages refuses a control that declares
 `prerequisite_package_id` the same way (`resource_declaration_invalid`, `UnknownField` at
-`/prerequisite_package_id`), before `PackageAdmitted` and, for a direct run, before any lease;
-its `actingd` refuses a configuration with `prerequisite_packages` (`config_decode_failed`) and
-does not start. A build without the return-home fallback refuses a configuration with
-`return_home_packages` the same way (`config_decode_failed`). A build without optional steps
+`/prerequisite_package_id`), before `PackageAdmitted` and, for a direct run, before any lease.
+A build before Workflow #373 NAV-3a refuses a `navigable_route` control that declares one
+(`contained_task_control_invalid`) and reads its prerequisite and return-home packages from the
+retired `actingd` configuration keys `prerequisite_packages` and `return_home_packages`; from
+NAV-3a on a configuration that carries either is refused (`config_decode_failed`, no
+compatibility). A build without optional steps
 (v0.9.0, v0.9.1, and the earlier `linear_steps` builds) refuses an operation's `optional` the
 same way, before `PackageAdmitted`: `resource_declaration_invalid`, `UnknownField` at
 `/operations/<k>/optional`; so does its `package build`.
@@ -715,7 +752,7 @@ steps only skips steps of it. A run of a package without a prerequisite package 
 fallback that does not start on the first step's page, including one already on the target
 page, fails with `contained_task_linear_entry_unmatched`, so a path whose first page does not
 always appear is not suited to a fixed-interval schedule; a package with a prerequisite package
-runs it first ("Prerequisite packages" above), and one without runs the configured return-home
+runs it first ("Prerequisite packages" above), and one without runs the registry's return-home
 package first ("Return-home fallback" above). The first step cannot be optional, with or
 without a prerequisite package. An intermediate state that only sometimes appears is declared
 as a window, or not at all.

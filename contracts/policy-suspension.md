@@ -88,7 +88,7 @@ beside the run's failure as `failure.outcome` (Workflow #378 A2-P):
 | `base` | The terminal `failure_code`, or the request error code when the run has no terminal. A code longer than 64 bytes or containing `~` is `h` and the first 16 hex digits of its SHA-256. |
 | `K` | The first 12 hex digits of SHA-256 over `actingcommand.failure-key.v1`, the original code, the scope, the step and detail′, joined by newlines. |
 | `m<I><H>` | The main package: `I` the first 8 hex digits of SHA-256 over its `package_id` (the admitted package's `package_label`), `H` the first 12 hex digits of its content hash measured when the failure is settled, or `x` when it could not be measured (removed, being replaced, unreadable). |
-| `p<I><H>` | One per declared prerequisite layer, outermost first: `I` as above for the layer's package id, `H` the content hash of the package `prerequisite_packages` maps it to, measured at the settlement, or `x` when it maps none or the package could not be measured. |
+| `p<I><H>` | One per declared prerequisite layer, outermost first: `I` as above for the layer's package id, `H` the content hash of the package at the path the run's standard-pack registry gave it (Workflow #373 NAV-3a), measured at the settlement, or `x` when the registry bound none or the package could not be measured. A lift check finds the layer's package in the registries read at the check. |
 | `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
 | `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate. |
 
@@ -100,7 +100,8 @@ control characters. A format v1 string (Workflow #336 L6, before PKG-S3) is not 
 `.zip` content container), or the SHA-256 of the whole file for an assembled package ZIP (one
 holding `resources/manifest.json`). It has one use: a pause. It is measured in two places only,
 read-only: when a scheduled failure is settled (the main package at the path the run used and
-each layer at the path its mapping names; SR-3 adds its suspension point) and at a lift check
+each layer at the path the run's standard-pack registry gave it, Workflow #373 NAV-3a; SR-3
+adds its suspension point) and at a lift check
 ("Lifting"). Admission never computes or compares it, and it is stored only inside the failure
 identity.
 
@@ -145,8 +146,8 @@ Only these failures can pause a task by repeating:
   `contained_task_linear_intermediate_unobserved` or `contained_task_guard_refused`: the main
   package's own steps no longer match the screen;
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
-  configuration problem (a missing mapping, a package id that does not match, an
-  incompatible package).
+  configuration problem (a package the registry does not list, a package id that does not
+  match, an incompatible package).
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
@@ -225,10 +226,11 @@ them):
 
 - the content hash of the main package, measured at the location its procedure's binding names
   (`scheduled_execution.package_path`);
-- for a `p` layer, the content hash of the package the prerequisite mapping now has for its id
-  hash (`x` when none; changed when several ids share the hash);
-- for the `r` layer, the return-home entry of its game and server (missing or another id is a
-  change), then its content hash as for a `p` layer.
+- for a `p` layer, the content hash of the package the standard-pack registries now list
+  under its id hash (Workflow #373 NAV-3a; `x` when none; changed when several packages share
+  the hash);
+- for the `r` layer, the registry's return-home package of its game and server (missing or
+  another id is a change), then its content hash as for a `p` layer.
 
 A lift check runs when the paused pair is due at an evaluation and again at its admission. It
 measures one package at most once per `scheduling.suspension.lift_check_min_interval_ms`
@@ -243,7 +245,8 @@ as a note of the `policy_task_paused` reason, and measures again at a later chec
 pause once a check measures it. A pause recorded without a failure identity (an exceeded
 runtime budget, a page-graph task) names no package: its main package is compared with the hash
 the pair's first lift check measured. A procedure that is no longer bound never lifts. The
-prerequisite and return-home mappings are the ones the daemon read at startup. An interrupted settlement
+registries are read at each lift check (once per check; `actingd suspended` reads the root its
+configuration names), so a standard pack replaced in place counts at the next check. An interrupted settlement
 (`policy_settlement_interrupted`) is lifted without a package update (Workflow #361 M6) when
 it is the first of its pair in a row: the next dispatch of the pair is admitted as usual,
 within its loop and activity budgets (the interrupted admission already counted against them).

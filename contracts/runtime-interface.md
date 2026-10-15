@@ -775,8 +775,11 @@ item 5). Neither touches files on disk.
 
 - The Runtime builds its packages from the configuration generation at start: the
   procedure manifest (`procedure_ref` → binding: `operation_id`, `yield_points`,
-  optional `scheduled_execution`), the startup package per instance, the prerequisite
-  and return-home packages, the ladder settings. Some are `OnceLock` values set once.
+  optional `scheduled_execution`), the startup package per instance, the ladder settings.
+  Some are `OnceLock` values set once. Workflow #373 NAV-3a (M-373 §4.3): the start table's
+  prerequisite and return-home part is the standard-pack registry, read when it is used (not a
+  start snapshot): every package an installed standard pack lists, and its game and server's
+  return-home package.
 - The effective table = the start table + runtime changes, one logical table:
   - the start table is what the configuration built; it never changes, and the
     procedure manifest is never rebuilt;
@@ -788,7 +791,10 @@ item 5). Neither touches files on disk.
   its own. The catalog is not in it.
 - Key: a package's identity is its `package_id`, which is the procedure manifest's
   `procedure_ref` and the `package_id` of SR-11's rows. Startup and prerequisite
-  packages are located by their configuration item. A request names an entry by
+  packages are located by their configuration item (a prerequisite package by its registry
+  entry); a `LoadPack PrerequisitePackage` lays its `package_id` over the registry, and an
+  `UnloadPack` of it makes that id unbound (when U-3 brings the behaviour). A request names an
+  entry by
   `PackRegistryKey` (U-1): `procedure{package_id}`, `startup_package{instance_alias}`
   or `prerequisite_package{package_id}`; the workbench key shape is #383 AO-0's.
 - Every use reads the effective table: policy evaluation and admission, startup

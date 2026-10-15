@@ -5,7 +5,7 @@ declares (recorded as `package_label`) and found by its path. Since PKG-S4 no in
 takes a package digest: the Runtime requests (`ContainedTaskRequest` and its recovery
 binding, `PackageDebugRequest`, the contained Lab operation, contained observation and
 saved-artifact OCR requests), the actingd configuration (`instances[].startup_package`,
-`prerequisite_packages[]`, `policy.procedure_manifest[]`), `actingctl task-run`, the MCP
+`policy.procedure_manifest[]`), `actingctl task-run`, the MCP
 tools and the actinglab flags name a package by its path alone, and a request or a
 configuration that still names `expected_sha256` or `package_digest` does not decode. Since
 PKG-S5 no package reference type remains (`PackageRef`, its content-directory and legacy ZIP
@@ -348,17 +348,21 @@ their own. A recognition package is no `recognize_only` package, declares no sta
 termination and no designated operation and carries at least one reading mark (Workflow #384
 D2-S2); it takes no part in the chains. The shared `PrerequisiteChain` predicate owns game/server/resolution
 compatibility, cycle detection, three declared layers and the 1,000-step aggregate bound.
-A return-home fallback is outside the three declared layers. Only a linear package with
-a resolved first-step page and no declared prerequisite selects that fallback; an
-application entry or page-graph package does not. Host retains loading, deadlines,
-failure facts and execution, consuming this same predicate incrementally.
+A return-home fallback is outside the three declared layers. A layer with a page entry
+and no declared prerequisite selects that fallback: a linear package with a resolved
+first-step page, and (Workflow #373 NAV-3a) a page-graph layer below the chain's own package
+whose entry is checked; an application entry does not, and a page-graph package as the
+chain's own package keeps its home entry instead. Host retains loading, deadlines, failure
+facts and execution, consuming this same predicate incrementally.
 
 Consumers validate structure and actual material before deriving bindings: `startup`
-supplies the instance's existing `startup_package`; `prerequisite` supplies a
-`prerequisite_packages` entry without editing business control; `return_home` supplies
-both the package binding and the shared game/server return-home mapping; `recognition`
-supplies the instance's `recognition_package` (a location only, Workflow #384 D2-S2).
-Configuration conflict handling and application belong to the installer. No declaration triggers a
+supplies the instance's existing `startup_package`; `recognition` supplies the instance's
+`recognition_package` (a location only, Workflow #384 D2-S2). Workflow #373 NAV-3a (M-373
+§4.3): the Runtime itself reads an installed bundle as its game's registry ("Standard package
+root" below), so every listed package can be a prerequisite package and `return_home` names
+the game/server return-home package there; neither is copied into the configuration any more
+(the keys `prerequisite_packages` and `return_home_packages` are retired), and `prerequisite`
+derives nothing. Configuration conflict handling and application belong to the installer. No declaration triggers a
 task directly or adds a Runtime execution mode, ledger field or persistent authority.
 
 Publication callers requesting maintenance must require the machine-readable result's
@@ -376,8 +380,8 @@ Lab commands (debug/run, observe, do, preflight, dry run and resource restore) t
 `--package <path>` (a directory, or a `.zip` or `.json` file, read as the path chooses) or
 `--zip <path>` (a published `.zip`) and refuse the retired digest flags by name. MCP
 `ac_run_pack` takes `package` and `recovery_package`, and `ac_pack_check` takes `package`.
-A procedure binding's `scheduled_execution.package_path` and a prerequisite package's
-`package_path` may equally name a directory or a container file. Evidence replay continues to
+A procedure binding's `scheduled_execution.package_path` may equally name a directory or a
+container file. Evidence replay continues to
 use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).
 
 Runtime requests carry the package path only. Workflow #336 PKG-S2 (option 丙): prepared
@@ -388,10 +392,11 @@ uses its existing `package_path` locator; since Workflow #336 PKG-S3 the binding
 package content (the binding fingerprint hashes the tuple v3,
 `actingcommand.procedure-binding.v3`, procedure alias, operation ID, ordered yield points),
 the run's identity check compares the request's path with the binding's `package_path`, and
-since PKG-S4 the binding has no `package_digest` key at all. A configured prerequisite package
-is the package its `package_id` names: one whose control declares another `package_id` is
-refused with `contained_task_prerequisite_mismatch` (M-PKG D7), as a chain layer, as the
-configured return-home package of a page-graph entry and on the recovery ladder's first rung.
+since PKG-S4 the binding has no `package_digest` key at all. A prerequisite or return-home
+package is the package its `package_id` names (Workflow #373 NAV-3a: a registry entry): one
+whose control declares another `package_id` is refused with
+`contained_task_prerequisite_mismatch` (M-PKG D7), as a chain layer, as the return-home
+package of a page-graph entry and on the recovery ladder's first rung.
 The calendar driver transports the typed request/context through the existing calls.
 
 Forensics and resource restore require the separately supplied original package for
@@ -418,8 +423,13 @@ data files beside its package directories, one directory per game below the conf
   directories `bundle.json` lists.
 - **Registry.** Package id → package directory: the game root plus the pack's `path` without
   its `packs/` prefix, that is the game root plus the `package_id` (bundle v4, Workflow #336
-  PKG-S5). The registry is held in memory only. `tables/` is a reserved directory of the game
-  root (Workflow #357 M-357a §2.1), so no pack is named `tables`.
+  PKG-S5); and (Workflow #373 NAV-3a) server → return-home package, the `maintenance[]` entry
+  whose `uses` holds `return_home`. The registry is held in memory only. `tables/` is a
+  reserved directory of the game root (Workflow #357 M-357a §2.1), so no pack is named
+  `tables`. The registry is where the Runtime finds every prerequisite package (in the registry
+  of the dependent package's game) and the return-home package of a game and server
+  (`linear-steps.md`, "Prerequisite packages", "Return-home fallback"); no configuration key
+  names either.
 - **`pages.json`.** `{schema_version, game, features, pages}`: `features` names 1–8 packages of
   the registry, at most one per server (the feature package: a `recognize_only` package whose
   pages are exactly the listed ones); `pages` lists 1–256 pages `{id, kind}`, each `id` 1–64
@@ -442,10 +452,12 @@ data files beside its package directories, one directory per game below the conf
   admitted: each is recorded as a `runtime.lifecycle_observed` `standard_pack_read` record
   (`standard_pack_registered` with the package count, or the root's failure); a broken root
   never stops the Runtime. In a run's preparation, the root of the run's game when it holds
-  `interrupts.json`: a broken root refuses the run before any lease and any task record; a
-  registry that differs from the one read last is recorded as `standard_pack_registered`
-  with the added and removed package ids; what was read stays fixed for the run. A game root
-  without `interrupts.json` is not read for a run, and the run is as it was without NAV-6.
+  `interrupts.json`, and (Workflow #373 NAV-3a) when the run resolves a prerequisite package
+  or the return-home package: a broken root refuses the run before any lease and any task
+  record; a registry that differs from the one read last (its packages or its return-home
+  packages) is recorded as `standard_pack_registered` with the added and removed package ids;
+  what was read stays fixed for the run. A game root the run does not use is not read for
+  it, and the run is as it was without NAV-6.
   Packages are admitted by their path when a run first uses them; a file replaced in place is
   used from the next run on, with no restart.
 - **Shared interrupt pages** (§6). A run uses its server's feature package and the

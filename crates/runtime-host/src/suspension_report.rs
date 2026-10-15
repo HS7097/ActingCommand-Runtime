@@ -373,13 +373,13 @@ pub fn suspension_report(
     };
     // Workflow #336 PKG-S3: each package is measured once for the whole report.
     let checks = LiftChecks::default();
-    let view = SuspensionLiftView {
+    // Workflow #373 NAV-3a: the layers' packages are those the standard-pack registries name.
+    let view = SuspensionLiftView::new(
         manifest,
-        prerequisite_packages: request.host.prerequisite_packages(),
-        return_home_packages: request.host.return_home_packages(),
-        checks: &checks,
-        time: LiftCheckTime::ONE_READ,
-    };
+        request.host.standard_packs_root(),
+        &checks,
+        LiftCheckTime::ONE_READ,
+    );
     let through_sequence = snapshot.ledger.latest_sequence();
     let intents = snapshot
         .query(EventQuery {

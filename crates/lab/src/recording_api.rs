@@ -569,8 +569,8 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
     let entry = plan.steps.first().is_some_and(|step| step.is_entry());
     if let Some(requires) = &plan.requires {
         items.push(format!(
-            "the actingd configuration prerequisite_packages has an entry with package_id \
-             {requires} (contracts/linear-steps.md, Prerequisite packages)"
+            "the installed standard pack of this game lists a package with package_id \
+             {requires} in its bundle.json (contracts/linear-steps.md, Prerequisite packages)"
         ));
         items.push(
             "the last package of a prerequisite chain is best a page-graph package: it succeeds \
@@ -580,11 +580,11 @@ fn binding_requires(plan: &Plan) -> Vec<String> {
     } else if !entry {
         items.push(
             "This package declares no prerequisite package. When the screen is not on step 1, \
-             the Runtime first runs the return-home package configured in return_home_packages \
-             for this game and server, then waits for step 1 (R16), so step 1 should be the \
+             the Runtime first runs the return-home package the installed standard pack of \
+             this game names for this server, then waits for step 1 (R16), so step 1 should be the \
              final screen of that return-home package (the main interface). A package recorded \
              from another screen declares a prerequisite package that brings the screen to \
-             step 1 with --requires. Without a configured return-home package the run fails \
+             step 1 with --requires. Without a return-home package the run fails \
              with contained_task_linear_entry_unmatched."
                 .to_string(),
         );

@@ -1097,6 +1097,25 @@ A select step whose policy declares more than one candidate chooses up to N of t
 | MS9 | scheduling consumer: catalog compile refuses a document that declares `combination` or `equals_ref` | behaviour, no shape | DB-3a2 | — | `type_mismatch` (`"combination=declared consumer=scheduling"`, `"equals_ref=declared consumer=scheduling"`), as for record lists; 367-D1/D2 decide multi-dispatch |
 | MS10 | TB6 pin: `equals_ref` (a `field` or an unpinned single-key `table` read) beside `equals` and `equals_fact` | pack format, additive to TB6 | DB-3a2 | resource side | the pin takes the candidate's own value; no `otherwise`; only in a policy that declares more than one candidate; every distinct `equals_ref` needs one quota whose `value` is the same reference, with `min` = `max` on every bound, `unlisted: excluded` and the minimums summing to the declared count; the rows read through it enter `input_sha256`; the per-identity bound stays exact |
 
+### 1.67 Wave 14 slice NAV-3a (#373, M-373 v1.1 §4.2, §4.3, §8.3, §9.2)
+
+NAV-3a lets a page-graph package declare a prerequisite package and gives it the return-home
+fallback, and finds every prerequisite and return-home package in the standard-pack registry of
+its game (`<standard_packs.root>/<game>/bundle.json`, read when a run uses it) instead of the
+actingd configuration. [linear-steps.md](linear-steps.md), "Prerequisite packages" and
+"Return-home fallback", and [package-reference.md](package-reference.md), "Standard package
+root", are the contract. The vocabulary `registry_problem` and its key are catalog entries
+(§7); the deleted codes are listed in N3A-3.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N3A-1 | `TaskEntryRecoveryRole` values `prerequisite` and `return_home`: the `role` of `EntryRecoveryPackageAdmitted`, `EntryRecoveryCompleted`, `EntryRecoveryFailed` (`task.entry_preflight`) | new enum values of §1.12 N1's member | NAV-3a | NAV-3a | `prerequisite` on a declared layer of the prerequisite gate, `return_home` on its return-home layer and on the registry's return-home package of a page-graph home entry; a request's own recovery binding still carries none (M-373 §8.3). A replayed request takes a layer with a role as a registry package of the request's package's game |
+| N3A-2 | `contained_task_prerequisite_unbound` value `registry_problem` (`root_unset`, `game_root_missing`, `not_listed`) | new outcome value of an existing code | NAV-3a | NAV-3a | on the preparation refusal of a declared prerequisite package the registry does not bind (M-373 §4.3, §9.2) |
+| N3A-3 | actingd configuration `prerequisite_packages[] {package_id, package_path}` and `return_home_packages[] {game, server, package_id}` | removed configuration keys | NAV-3a | — | a configuration that carries either is `config_decode_failed` at `config_load`; no reader of the old form. Deleted (pending) with them: `prerequisite_packages_size_invalid`, `prerequisite_package_id_invalid`, `prerequisite_package_unavailable`, `prerequisite_package_not_regular`, `prerequisite_package_container_unsupported`, `prerequisite_package_request_invalid`, `prerequisite_package_duplicate`, `return_home_packages_size_invalid`, `return_home_package_key_invalid`, `return_home_package_duplicate` (actingd) and `return_home_package_unbound` (contract; `prerequisite_package_digest_invalid` left with PKG-S4), and the location `resolve_return_home_package` |
+| N3A-4 | the registry of a game root: package id → directory and server → return-home package (`bundle.json` v4 `maintenance[]` use `return_home`) | rule | NAV-3a | NAV-3a | `standard_pack_registered` (§1.12 N4) is written when either part changed since the last read; every listed package can be a prerequisite package (the `prerequisite` use derives nothing; PKG-S5's v4 refuses it, M-373 §3.8) |
+| N3A-5 | `navigable_route` control `prerequisite_package_id` | package declaration rule | NAV-3a | — | admitted for `navigable_route` (phased or not); `in_page_guard` and `recognize_only` are `contained_task_control_invalid` (`reason=prerequisite_execution_mode`, the retired `reason=prerequisite_requires_linear_steps` no longer appears); a `navigable_route` package declaring one needs an entry page (`reason=prerequisite_requires_page_entry`), which is then always checked first |
+| N3A-6 | `actingctl packs` and `ac_packs`: roles `prerequisite` and `return_home` | removed output rows and argument values (client only) | NAV-3a | NAV-3a | they named the retired keys; the roles left are `procedure`, `startup`, `resource_package`; the warning `return_home_package_unbound` is gone with its code |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1201,6 +1220,8 @@ when it takes effect.
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A
   configuration that still carries them is refused (`config_decode_failed`); no reader of the old
   form exists. **Done (PKG-S4, §1.55 P4-3).**
+- Removed by Workflow #373 NAV-3a in the same revision: the top-level `prerequisite_packages`
+  and `return_home_packages` (§1.67 N3A-3); the standard-pack registry replaces them.
 - `governance.allowed_clients` is still accepted in v0.12.0; U-6 retires it.
 - Keys designed after v0.12.0 (#367 D1 decisions and later) bump the revision in their own release.
 

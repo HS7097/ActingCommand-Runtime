@@ -978,8 +978,10 @@ equal value is accepted.
   `scheduled_execution{mode: "device_registry", package_path}` with the absolute path (a
   configuration in the install root may use `packages/<game>/<package_id>.<ext>`). Whether it
   is scheduled still depends on the catalog task and its approval.
-- `prerequisite_entry_example` is the entry for the actingd `prerequisite_packages` when
-  another package names this one with `--requires`: `{package_id, package_path}`.
+- `prerequisite_entry_example` was the entry for the actingd `prerequisite_packages` when
+  another package names this one with `--requires`; since Workflow #373 NAV-3a that key is
+  retired and a prerequisite package is a package its game's installed standard pack lists, so
+  the example names a package id and path only: `{package_id, package_path}`.
 - `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
   "retry_backoff_ms":0,"escalation_threshold":2}`, the `on_failure` that
   `policy-suspension.md` ("Catalog") recommends; the `binding_requires` item about it says that
@@ -989,7 +991,8 @@ equal value is accepted.
   `settle_ms`, `skip_to` (the page of N) and `same_as` (the earlier step recorded for the same
   pop-up, or `null`); `[]` without optional steps.
 - `binding_requires` lists what a binding also needs: the catalog task and its approval; the
-  `prerequisite_packages` entry with `--requires`; without it, the return-home fallback (step
+  prerequisite package with `--requires` (listed by its game's installed standard pack,
+  Workflow #373 NAV-3a); without it, the return-home fallback (step
   1 should be the return-home package's final screen); the recommended `on_failure`; with
   application steps, that only an instance with an assigned application runs them and that an
   application entry package has no entry recognition (best configured as the instance's

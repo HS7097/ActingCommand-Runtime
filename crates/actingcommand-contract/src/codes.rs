@@ -393,7 +393,6 @@ crate::outcome_codes! {
         ReleaseBoundaryMigrationMissing => "release_boundary_migration_missing": error / none,
         ResourceDeclarationInvalid => "resource_declaration_invalid": error / declaration_error,
         ResourceTargetsDocumentInvalid => "resource_targets_document_invalid": error / none,
-        ReturnHomePackageUnbound => "return_home_package_unbound": error / declaration_error,
         RuntimeDebugEventInvalid => "runtime_debug_event_invalid": error / none,
         RuntimeEventQueryResponseTooLarge => "runtime_event_query_response_too_large": error / none,
         RuntimeFactLedgerPositionInvalid => "runtime_fact_ledger_position_invalid": error / none,

@@ -26544,14 +26544,6 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: resolve retry round."
     },
-    "resolve_return_home_package": {
-      "owner": "runtime-host",
-      "layer": "host",
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A Runtime host operation or stage: resolve return home package."
-    },
     "resolve_runtime_instance": {
       "owner": "runtime-host",
       "layer": "host",

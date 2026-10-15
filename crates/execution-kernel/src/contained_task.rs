@@ -115,6 +115,10 @@ mod gate_390_read1;
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
 mod gate_387_d1cg;
+// Workflow #373 NAV-3a, test row N3a-1 (exec key 67): a page-graph package declares a
+// prerequisite package.
+#[cfg(test)]
+mod gate_373_nav3a;
 // Test plan v2.2 E-5 G5 (exec key 3): linear_steps.
 #[cfg(test)]
 mod gate_e5_linear;
@@ -2273,13 +2277,16 @@ pub struct ContainedTaskOutcome {
     pub designated_effect_caps: Vec<crate::DesignatedEffectCap>,
 }
 
-/// Workflow #336 L2b: the bounded wait for a `linear_steps` package's first step after its
-/// prerequisite package ran (`PreparedContainedTask::await_linear_entry`).
+/// Workflow #336 L2b: the bounded wait for a package's gate entry after its prerequisite package
+/// ran (`PreparedContainedTask::await_gate_entry`): a `linear_steps` package's first step, or
+/// (Workflow #373 NAV-3a) a page-graph package's entry page or entry page set.
 #[derive(Debug)]
-pub struct LinearEntryAwait {
+pub struct GateEntryAwait {
     /// The wait's own timing context; the run's task timing is not started by the wait.
     pub timing: ContainedTaskTimingContext,
-    /// `None` when the first step passed, otherwise the timed
+    /// The entry page that passed; `None` when none did.
+    pub matched: Option<String>,
+    /// `None` when the entry passed, otherwise the timed
     /// `contained_task_prerequisite_entry_unmatched` (or, after a return-home package,
     /// `contained_task_return_home_entry_unmatched`) failure of the spent budget.
     pub unmatched: Option<ContainedTaskError>,
@@ -2711,7 +2718,8 @@ impl PreparedContainedTask {
             && self.control.prerequisite_package_id.is_none()
     }
 
-    /// Workflow #336 L2b: the `prerequisite_package_id` of a `linear_steps` package.
+    /// Workflow #336 L2b: the `prerequisite_package_id` of a `linear_steps` package (Workflow
+    /// #373 NAV-3a: or of a `navigable_route` package).
     pub fn prerequisite_package_id(&self) -> Option<&str> {
         self.control.prerequisite_package_id.as_deref()
     }
@@ -2741,6 +2749,19 @@ impl PreparedContainedTask {
             .filter(|page| crate::page_anchor_matches(&self.control.game, page, entry));
         let page = pages.next()?;
         pages.next().is_none().then_some(page)
+    }
+
+    /// Workflow #373 NAV-3a (M-373 §4.2): the entry a prerequisite gate checks, as detector page
+    /// ids: a `linear_steps` package's first step page; a `navigable_route` package's required
+    /// entry (its entry page set, or its entry page when it has stages, is `home` with `any_of`,
+    /// or the package declares a prerequisite package). `None` for an application entry, for a
+    /// page-graph package whose entry the host does not check, and for every other mode.
+    pub fn gate_entry_pages(&self) -> Option<Vec<String>> {
+        match self.control.execution_mode.as_str() {
+            linear::LINEAR_STEPS => self.linear_entry_page().map(|page| vec![page.to_owned()]),
+            "navigable_route" => self.required_entry_pages().map(<[String]>::to_vec),
+            _ => None,
+        }
     }
 
     /// Channels needed before an application effect can repair the connection. This reads
@@ -2858,6 +2879,15 @@ impl PreparedContainedTask {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
+        self.recognize_entry_window(runtime, &pages)
+    }
+
+    /// The entry check of [`Self::recognize_required_entry`] over `pages`.
+    fn recognize_entry_window<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        pages: &[&str],
+    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
         let mut started = Instant::now();
         let budget = Duration::from_millis(
             self.control
@@ -2889,7 +2919,7 @@ impl PreparedContainedTask {
                     None,
                     None,
                     timing,
-                    Some(PageCandidates::Exclusive(&pages)),
+                    Some(PageCandidates::Exclusive(pages)),
                     Some(timing.deadline()),
                 ) {
                     Ok(Ok(observation)) => return Ok(Some(observation.page_label)),
@@ -2911,7 +2941,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
             let capture_started = Instant::now();
-            let matched = self.recognize_entry_pages_frame(runtime, &pages, timing);
+            let matched = self.recognize_entry_pages_frame(runtime, pages, timing);
             runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                 boundary,
                 identity,
@@ -2956,15 +2986,25 @@ impl PreparedContainedTask {
         }
     }
 
-    /// Workflow #336 L2b: one observation of the first step's page. Declared target samples
-    /// use the shared capture transaction and a single bounded entry deadline.
+    /// Workflow #336 L2b: the first check of a prerequisite gate (§5.3): the entry page that
+    /// passed, or `None`. A `linear_steps` package's first step page is observed once; declared
+    /// target samples use the shared capture transaction and a single bounded entry deadline.
+    /// Workflow #373 NAV-3a (M-373 §4.2): a page-graph package's entry ([`Self::gate_entry_pages`])
+    /// is checked as its home entry is (Workflow #371-3, [`Self::recognize_required_entry`]).
     ///
     /// Workflow #373 NAV-6 (§4.4, §6.1): an unmatched frame is offered to the runtime's shared
     /// interrupt pages; after a handled one the check is made again on a fresh frame.
-    pub fn recognize_linear_entry<R: ContainedTaskRuntime>(
+    pub fn recognize_gate_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
+        if self.control.execution_mode != linear::LINEAR_STEPS {
+            let pages = self.gate_entry_pages().ok_or_else(|| {
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+            })?;
+            let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
+            return self.recognize_entry_window(runtime, &pages);
+        }
         let page = self
             .linear_entry_page()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
@@ -2990,10 +3030,10 @@ impl PreparedContainedTask {
                 actingcommand_contract::TaskTimingBudgetOrigin::EntryRecovery,
             );
             match self.recognize_entry_frame(runtime, page, timing) {
-                Ok(EntryFrame::Matched(_)) => return Ok(true),
+                Ok(EntryFrame::Matched(_)) => return Ok(Some(page.to_owned())),
                 Ok(EntryFrame::Unmatched(scene)) => {
                     if self.offer_shared_interrupt(runtime, &scene)?.is_none() {
-                        return Ok(false);
+                        return Ok(None);
                     }
                 }
                 Err(failure) => retries.retry(failure, window)?,
@@ -3001,24 +3041,32 @@ impl PreparedContainedTask {
         }
     }
 
-    /// Workflow #336 L2b: after a prerequisite package ran, frames of the first step's page are
-    /// recognized one at a time, every capture interval of this package, until the page passes
-    /// or `budget` is spent. The wait keeps its own timing context of `origin` (each capture at
-    /// the `CapturePage` boundary, each sleep at `PageRecognitionWait`); the run's
-    /// `observe_task_timing` is not called. `layer` names the gate layer in the failure detail.
-    /// `return_home` names the return-home package that ran (Workflow #336 L2c): the failure is
-    /// then `contained_task_return_home_entry_unmatched` and its detail names that package.
-    pub fn await_linear_entry<R: ContainedTaskRuntime>(
+    /// Workflow #336 L2b: after a prerequisite package ran, frames of the gate entry
+    /// ([`Self::gate_entry_pages`]: the first step's page; Workflow #373 NAV-3a, a page-graph
+    /// package's whole entry) are recognized one at a time, every capture interval of this
+    /// package, until a page passes or `budget` is spent. The wait keeps its own timing context
+    /// of `origin` (each capture at the `CapturePage` boundary, each sleep at
+    /// `PageRecognitionWait`); the run's `observe_task_timing` is not called. `layer` names the
+    /// gate layer in the failure detail. `return_home` names the return-home package that ran
+    /// (Workflow #336 L2c): the failure is then `contained_task_return_home_entry_unmatched` and
+    /// its detail names that package.
+    pub fn await_gate_entry<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         budget: Duration,
         origin: actingcommand_contract::TaskTimingBudgetOrigin,
         layer: usize,
         return_home: Option<&str>,
-    ) -> Result<LinearEntryAwait, ContainedTaskRunError<R::Error>> {
-        let page = self
-            .linear_entry_page()
+    ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
+        let entry = self
+            .gate_entry_pages()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let pages = entry.iter().map(String::as_str).collect::<Vec<_>>();
+        // The detail names the one page, or (Workflow #373 NAV-3a) every page of an entry set.
+        let required = match pages.as_slice() {
+            [page] => format!("required_page={page}"),
+            _ => format!("required_pages={}", pages.join(",")),
+        };
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
         let mut started = Instant::now();
         // Workflow #386 SR-1 (scheduling model §2.1): the observation window opens on the
@@ -3036,7 +3084,7 @@ impl PreparedContainedTask {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
             let capture_started = Instant::now();
-            let matched = self.recognize_entry_frame(runtime, page, timing);
+            let matched = self.recognize_entry_pages_frame(runtime, &pages, timing);
             let capture_ended = Instant::now();
             if self.evaluator.pack().target_consensus.is_empty() {
                 runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
@@ -3049,9 +3097,10 @@ impl PreparedContainedTask {
                 });
             }
             let scene = match matched {
-                Ok(EntryFrame::Matched(_)) => {
-                    return Ok(LinearEntryAwait {
+                Ok(EntryFrame::Matched(page)) => {
+                    return Ok(GateEntryAwait {
                         timing,
+                        matched: Some(page),
                         unmatched: None,
                     });
                 }
@@ -3089,13 +3138,14 @@ impl PreparedContainedTask {
                     ),
                     None => (PREREQUISITE_ENTRY_UNMATCHED, String::new()),
                 };
-                return Ok(LinearEntryAwait {
+                return Ok(GateEntryAwait {
                     timing,
+                    matched: None,
                     unmatched: Some(
                         ContainedTaskError::with_detail(
                             code,
                             format!(
-                                "layer={layer} package_id={} required_page={page}{return_home}",
+                                "layer={layer} package_id={} {required}{return_home}",
                                 self.package_label()
                             ),
                         )
@@ -5848,8 +5898,8 @@ struct TaskControl {
     prerequisite_package_id: Option<String>,
 }
 
-/// Workflow #336 L2b: a `prerequisite_package_id`, and a key of the host's prerequisite package
-/// map, is not empty, at most 256 bytes and has no control character.
+/// Workflow #336 L2b: a `prerequisite_package_id` is not empty, at most 256 bytes and has no
+/// control character.
 pub fn prerequisite_package_id_valid(package_id: &str) -> bool {
     !package_id.trim().is_empty()
         && package_id.len() <= MAX_PREREQUISITE_PACKAGE_ID_BYTES
@@ -5943,8 +5993,13 @@ impl TaskControl {
                     format!("reason={reason}"),
                 )
             };
-            if self.execution_mode != linear::LINEAR_STEPS {
-                return Err(invalid("prerequisite_requires_linear_steps"));
+            // Workflow #373 NAV-3a (M-373 §4.2): a `navigable_route` package (phased or not) may
+            // declare one too; `in_page_guard` and `recognize_only` may not.
+            if !matches!(
+                self.execution_mode.as_str(),
+                linear::LINEAR_STEPS | "navigable_route"
+            ) {
+                return Err(invalid("prerequisite_execution_mode"));
             }
             if !prerequisite_package_id_valid(prerequisite) {
                 return Err(invalid(SharedCode::PrerequisiteIdInvalid.as_str()));
@@ -6419,6 +6474,20 @@ impl TaskProgram {
         // Workflow #336: a step plan waits for its first step itself; no host entry preflight.
         if control.execution_mode == linear::LINEAR_STEPS {
             return Ok(None);
+        }
+        // Workflow #373 NAV-3a (M-373 §4.2): a page-graph package that declares a prerequisite
+        // package has its entry checked first, whatever page it is; without a page to check
+        // (no `entry_page`, or `any`) there is nothing the prerequisite package could lead to.
+        if control.prerequisite_package_id.is_some() {
+            return match self.single_entry_page() {
+                Some(page) if page != linear::ANY_PAGE => {
+                    resolve_page_reference(&control.game, page, detector).map(Some)
+                }
+                _ => Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+                    "reason=prerequisite_requires_page_entry",
+                )),
+            };
         }
         Ok(self
             .single_entry_page()
