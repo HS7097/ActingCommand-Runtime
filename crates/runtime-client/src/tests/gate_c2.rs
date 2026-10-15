@@ -36,8 +36,8 @@ use actingcommand_contract::{
     InstallTransitionPhase, InstallTransitionStatus, InstallTransitionTicket, LeaseId,
     LeasePayloadDraft, LeaseToken, OriginModule, OwnerEpoch, ProjectedEvent, ProjectionPayload,
     RequestId, RunId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceiptState, RuntimeResult, StartupPackageDisposition,
-    TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+    StartupPackageDisposition, TaskOutcome, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_runtime_host::HostCode;
 use std::path::Path;
@@ -132,8 +132,6 @@ fn gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_
         })
         .expect_err("a Query whose receipt never came");
     drop(client);
-    let record = runtime.finish();
-
     assert_code(
         &error,
         ClientCode::InstallTransitionReceiptUnconfirmed.code(),
@@ -141,6 +139,8 @@ fn gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_
     );
     assert!(error.projection().is_none(), "{error:?}");
     assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
+
+    let record = runtime.finish();
     assert_eq!(
         record.connections[0]
             .count(|operation| matches!(operation, RuntimeOperation::InstallTransition { .. })),
@@ -181,10 +181,10 @@ fn gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpe
         transition_id: TRANSITION.to_owned(),
     });
     drop(client);
-    runtime.finish();
     let error = query.expect_err("a Query answered for another transition");
     assert_code(&error, ClientCode::RuntimeResultUnexpected.code(), "query");
     assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
+    runtime.finish();
 
     // Release: the receipt names another ticket.
     let root = TempDir::new().expect("tempdir");
@@ -213,7 +213,6 @@ fn gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpe
         timeout_ms: INSTALL_TIMEOUT_MS,
     });
     drop(client);
-    runtime.finish();
     let error = release.expect_err("a Release answered for another ticket");
     assert_code(
         &error,
@@ -221,6 +220,7 @@ fn gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpe
         "release",
     );
     assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
+    runtime.finish();
 }
 
 // G4 (R4): CommitShutdown answered with the shutdown of this Runtime is Ok, and so is a
@@ -239,8 +239,23 @@ fn gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket() {
                     else {
                         panic!("a CommitShutdown, got {:?}", request.operation())
                     };
-                    let target = *target;
-                    ScriptedAnswer::completed(request, RuntimeResult::ShutdownAccepted { target })
+                    // An accepted shutdown is admitted with its terminal, as the host answers it.
+                    let event_id = *IdentifierIssuer::new()
+                        .expect("identifier issuer")
+                        .mint_event_id()
+                        .expect("event id")
+                        .transport();
+                    let receipt = RuntimeReceipt::success(
+                        request,
+                        RuntimeReceiptState::Admitted,
+                        Some(TerminalEvent {
+                            sequence: 1,
+                            event_id,
+                        }),
+                        RuntimeResult::ShutdownAccepted { target: *target },
+                    )
+                    .expect("shutdown receipt");
+                    ScriptedAnswer::Receipt(Box::new(receipt))
                 })
                 .request(|request| {
                     let RuntimeOperation::InstallTransition {
@@ -267,7 +282,6 @@ fn gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket() {
         timeout_ms: INSTALL_TIMEOUT_MS,
     });
     drop(client);
-    runtime.finish();
     let commit = commit.expect("CommitShutdown answered with this Runtime's shutdown");
     assert!(matches!(
         commit.result(),
@@ -278,6 +292,7 @@ fn gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket() {
         release.result(),
         Some(RuntimeResult::InstallTransition { .. })
     ));
+    runtime.finish();
 }
 
 /// One row of the latch table.
@@ -447,7 +462,6 @@ fn gate_a_client_latches_on_fatal_and_transport_failures_and_never_on_a_non_fata
         let first = (row.call)(&client).expect_err(row.row);
         let next = client.health();
         drop(client);
-        let record = runtime.finish();
 
         assert_code(&first, row.code, row.row);
         assert_eq!(first.disposition(), row.class, "{}: {first:?}", row.row);
@@ -483,6 +497,7 @@ fn gate_a_client_latches_on_fatal_and_transport_failures_and_never_on_a_non_fata
                 }
             }
         }
+        let record = runtime.finish();
         assert_eq!(
             record
                 .connections
@@ -575,17 +590,8 @@ fn gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_i
             .expect_err("a release on a latched client");
         drop(session);
         drop(client);
-        let record = runtime.finish();
 
         let row = if debug { "debug input" } else { "input" };
-        let inputs = record.connections[0]
-            .requests
-            .iter()
-            .filter(|request| matches!(request.operation(), RuntimeOperation::Input { .. }))
-            .collect::<Vec<_>>();
-        let [sent] = inputs.as_slice() else {
-            panic!("{row}: the script saw {} inputs", inputs.len())
-        };
         assert_code(&error, ClientCode::RuntimeReceiptHeaderFailed.code(), row);
         assert!(error.is_fatal(), "{row}: {error:?}");
         assert!(error.committed_receipt().is_none(), "{row}: {error:?}");
@@ -599,11 +605,6 @@ fn gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_i
             ),
             "{row}: {io:?}"
         );
-        assert_eq!(io.request_id(), Some(&sent.request_id()), "{row}");
-        assert_eq!(io.correlation_id(), Some(&sent.correlation_id()), "{row}");
-        if let Some(correlation) = session_correlation {
-            assert_eq!(sent.correlation_id(), correlation, "{row}");
-        }
         assert_eq!(
             io.expected_owner_epoch(),
             Some(&info.owner_epoch()),
@@ -614,6 +615,21 @@ fn gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_i
         assert!(io.message().chars().count() <= 256, "{row}");
         assert_eq!(again, error, "{row}: the next input");
         assert_eq!(release, error, "{row}: the release");
+
+        let record = runtime.finish();
+        let inputs = record.connections[0]
+            .requests
+            .iter()
+            .filter(|request| matches!(request.operation(), RuntimeOperation::Input { .. }))
+            .collect::<Vec<_>>();
+        let [sent] = inputs.as_slice() else {
+            panic!("{row}: the script saw {} inputs", inputs.len())
+        };
+        assert_eq!(io.request_id(), Some(&sent.request_id()), "{row}");
+        assert_eq!(io.correlation_id(), Some(&sent.correlation_id()), "{row}");
+        if let Some(correlation) = session_correlation {
+            assert_eq!(sent.correlation_id(), correlation, "{row}");
+        }
         assert_eq!(
             record.connections[0]
                 .count(|operation| matches!(operation, RuntimeOperation::ReleaseLease { .. })),
@@ -660,7 +676,6 @@ fn gate_a_restart_the_host_timed_out_is_a_device_failure_carrying_its_host_code(
     let client = connect(root.path(), IO);
     let restart = client.control_emulator_instance(INSTANCE, EmulatorInstanceAction::Restart);
     drop(client);
-    runtime.finish();
 
     let error = restart.expect_err("a restart the host timed out");
     assert_eq!(
@@ -681,6 +696,7 @@ fn gate_a_restart_the_host_timed_out_is_a_device_failure_carrying_its_host_code(
             .is_some_and(|receipt| receipt.state() == RuntimeReceiptState::Failed),
         "{error:?}"
     );
+    runtime.finish();
 }
 
 // G8 (R12): a result that echoes another instance or another action than the one asked for is
@@ -723,7 +739,6 @@ fn gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected(
         let client = connect(root.path(), IO);
         let restart = client.control_emulator_instance(INSTANCE, EmulatorInstanceAction::Restart);
         drop(client);
-        runtime.finish();
 
         let error = restart.expect_err(row);
         assert_code(&error, ClientCode::RuntimeResultUnexpected.code(), row);
@@ -732,6 +747,7 @@ fn gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected(
             RuntimeClientErrorClass::Uncertain,
             "{row}"
         );
+        runtime.finish();
     }
 }
 
@@ -799,7 +815,6 @@ fn gate_a_contained_task_receipt_outlives_the_io_budget() {
     let output = client.run_contained_task(INSTANCE, contained_task_request());
     let second = second.join().expect("the second client");
     drop(client);
-    let record = runtime.finish();
 
     let second = second.expect_err("the second client's receipt never comes");
     assert_code(
@@ -812,6 +827,7 @@ fn gate_a_contained_task_receipt_outlives_the_io_budget() {
         output.receipt().result(),
         Some(RuntimeResult::ContainedTaskCompleted { .. })
     ));
+    let record = runtime.finish();
     assert_eq!(
         record.connections[0]
             .count(|operation| matches!(operation, RuntimeOperation::RunContainedTask { .. })),
