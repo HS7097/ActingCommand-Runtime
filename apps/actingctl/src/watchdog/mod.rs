@@ -718,7 +718,6 @@ fn start_runtime(
         generation: Some(installation.generation),
         ..StartRecord::default()
     });
-    state::save(directory, state)?;
     let attempt = start::start(seams, installation, &start_log, now, from_task);
     let finished = seams.now_unix_ms();
     // The record saved above; were it gone, the state is not what this tick wrote.
