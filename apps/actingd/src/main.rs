@@ -32,6 +32,9 @@ mod gate_383;
 // Test-only: Workflow #378 A6a, daemon lines, the fallback log and the subcommand reports.
 #[cfg(test)]
 mod gate_a6a;
+// Test-only: Workflow #382 A-1 (test plan v2.2 §3.7), actingd's subcommand arguments.
+#[cfg(test)]
+mod gate_382_a1;
 
 #[cfg(test)]
 mod gate_369_s6c;

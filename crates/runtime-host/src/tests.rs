@@ -123,6 +123,10 @@ mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// Workflow #382 H-4 (test plan v2.2 §3.6): the recovery ladder's G8 and G9 rows.
+mod gate_382_h4;
+// Workflow #382 H-5 (test plan v2.2 §3.6): host wave B.
+mod gate_382_h5;
 // Workflow #378 A6a: the latch rule, `ledger_opened` and `owner_released`.
 mod gate_378_a6a;
 // Workflow #378 SHUT-FU: the install CommitShutdown lets lifecycle work in flight end first.

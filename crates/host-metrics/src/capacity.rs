@@ -28,15 +28,26 @@ pub struct CapacitySample {
 
 /// One resolve per target and at most one capacity query per distinct volume, without retries.
 pub fn sample_capacity(targets: &[CapacityTarget]) -> Vec<CapacitySample> {
+    sample_capacity_with(targets, volume, available)
+}
+
+/// `sample_capacity` with its volume resolver and its free-space query as parameters, so that a
+/// test can inject them (Workflow #382 H-5, seam I6); production passes `volume` and
+/// `available`.
+pub(crate) fn sample_capacity_with(
+    targets: &[CapacityTarget],
+    mut resolve: impl FnMut(&Path) -> Result<String, CapacityUnavailable>,
+    mut query: impl FnMut(&str) -> Result<u64, CapacityUnavailable>,
+) -> Vec<CapacitySample> {
     let mut samples = Vec::<CapacitySample>::new();
     let mut volumes = BTreeMap::<String, usize>::new();
     for (index, target) in targets.iter().enumerate() {
-        match volume(&target.path) {
+        match resolve(&target.path) {
             Ok(volume_id) => {
                 if let Some(position) = volumes.get(&volume_id) {
                     samples[*position].targets.push(index);
                 } else {
-                    let available_bytes = available(&volume_id);
+                    let available_bytes = query(&volume_id);
                     volumes.insert(volume_id.clone(), samples.len());
                     samples.push(CapacitySample {
                         targets: vec![index],
