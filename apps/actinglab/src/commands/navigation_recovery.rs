@@ -692,7 +692,7 @@ pub(crate) fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput>
         }),
         // Workflow #390 LAB-2 item 7: a REC-4 `offset` click (`--click` with `--click-follow`, or
         // a source `rect_move`) presses its offset from the box its target matches.
-        Some("offset") => {
+        Some("offset") if value.is_null() => {
             let offset = parse_navigation_rect(required_value_field(value, "offset")?)?;
             if offset.width <= 0 || offset.height <= 0 {
                 return Err(CliError::usage(format!(

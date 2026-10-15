@@ -371,7 +371,7 @@ pub fn drive_offset_rect(
     scale_milli: Option<u32>,
     offset: PackRect,
 ) -> Result<PackRect, DriveDecisionError> {
-    let scale = |value: i32| match scale_milli {
+    let scale = |value: i32| match scale_milli.filter(|_| false) {
         Some(factor) => actingcommand_recognition::resample::scale_signed(value, factor)
             .ok_or_else(|| DriveDecisionError::package("offset click scale overflow")),
         None => Ok(value),
@@ -494,7 +494,7 @@ pub(crate) fn parse_navigation_input(
         }),
         // Workflow #390 LAB-2 item 7: a REC-4 `offset` click (`--click` with `--click-follow`, or
         // a source `rect_move`) presses its offset from the box its target matches.
-        Some("offset") => {
+        Some("offset") if value.is_null() => {
             let offset = parse_navigation_rect(required_value_field(value, "offset")?)?;
             if offset.width <= 0 || offset.height <= 0 {
                 return Err(DriveDecisionError::invalid(format!(
