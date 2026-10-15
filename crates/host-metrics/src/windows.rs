@@ -51,7 +51,6 @@ const CPU_COUNTER: &str = r"\Processor(*)\% Processor Time";
 const DISK_QUEUE_COUNTER: &str = r"\PhysicalDisk(_Total)\Current Disk Queue Length";
 const DISK_LATENCY_COUNTER: &str = r"\PhysicalDisk(_Total)\Avg. Disk sec/Transfer";
 const GPU_COUNTER: &str = r"\GPU Engine(*)\Utilization Percentage";
-const MIN_PROCESS_READABLE_BASIS_POINTS: u16 = 9_900;
 /// Mirrors `MAX_PROCESS_NAME_BYTES` of `PerformanceProcessSummary::validate` in
 /// `crates/actingcommand-contract/src/performance.rs`.
 const MAX_PROCESS_NAME_BYTES: usize = 260;
@@ -368,7 +367,11 @@ impl HostSampler for WindowsHostSampler {
         if !process_rates_available {
             unavailable.extend([HostMetric::ProcessCpu, HostMetric::ProcessIo]);
         }
-        mark_partial_process_metrics(&mut unavailable, process_coverage);
+        mark_partial_process_metrics(
+            &mut unavailable,
+            process_coverage,
+            thresholds.min_coverage_basis_points,
+        );
         if owned_processes
             .keys()
             .any(|pid| !all_processes.contains_key(pid))
@@ -835,12 +838,13 @@ fn process_count_u32(value: usize) -> Result<u32, Code> {
 fn mark_partial_process_metrics(
     unavailable: &mut BTreeSet<HostMetric>,
     coverage: ProcessMetricCoverage,
+    min_coverage_basis_points: u16,
 ) {
     // Only independently confirmed Windows system/PPL processes leave the denominator. Ordinary
     // access denials remain unknown and make process-derived pressure unavailable.
     if coverage.unconfirmed_access_denied_processes > 0
         || coverage.sampled_processes == 0
-        || coverage.readable_basis_points < MIN_PROCESS_READABLE_BASIS_POINTS
+        || coverage.readable_basis_points < min_coverage_basis_points
     {
         unavailable.extend([
             HostMetric::ProcessCpu,
@@ -1024,6 +1028,10 @@ unsafe fn wide_string(pointer: *const u16) -> String {
 mod tests {
     use super::*;
 
+    // The process coverage `performance.monitor.process_coverage_min_bp` defaults to (frozen
+    // model PERF v1.4.2 §10.1).
+    const MODEL_COVERAGE_MIN_BP: u16 = 9_900;
+
     struct MidEnumerationFailure {
         entry: PROCESSENTRY32W,
     }
@@ -1105,7 +1113,7 @@ mod tests {
         assert_eq!(coverage.readable_basis_points, 10_000);
 
         let mut unavailable = BTreeSet::new();
-        mark_partial_process_metrics(&mut unavailable, coverage);
+        mark_partial_process_metrics(&mut unavailable, coverage, MODEL_COVERAGE_MIN_BP);
         assert!(unavailable.is_empty());
     }
 
@@ -1122,7 +1130,7 @@ mod tests {
         assert_eq!(coverage.readable_basis_points, 100);
 
         let mut unavailable = BTreeSet::new();
-        mark_partial_process_metrics(&mut unavailable, coverage);
+        mark_partial_process_metrics(&mut unavailable, coverage, MODEL_COVERAGE_MIN_BP);
         assert_eq!(
             unavailable,
             BTreeSet::from([
@@ -1135,7 +1143,11 @@ mod tests {
         let mut threshold_boundary = BTreeSet::new();
         let boundary_coverage = coverage_fixture(99, 0, 1, 0);
         assert_eq!(boundary_coverage.readable_basis_points, 9_900);
-        mark_partial_process_metrics(&mut threshold_boundary, boundary_coverage);
+        mark_partial_process_metrics(
+            &mut threshold_boundary,
+            boundary_coverage,
+            MODEL_COVERAGE_MIN_BP,
+        );
         assert!(threshold_boundary.contains(&HostMetric::ProcessCpu));
         assert!(threshold_boundary.contains(&HostMetric::ProcessRam));
         assert!(threshold_boundary.contains(&HostMetric::ProcessIo));
@@ -1168,7 +1180,11 @@ mod tests {
     #[test]
     fn insufficient_readable_coverage_makes_process_metrics_partial() {
         let mut unavailable = BTreeSet::new();
-        mark_partial_process_metrics(&mut unavailable, coverage_fixture(98, 0, 0, 2));
+        mark_partial_process_metrics(
+            &mut unavailable,
+            coverage_fixture(98, 0, 0, 2),
+            MODEL_COVERAGE_MIN_BP,
+        );
         assert_eq!(
             unavailable,
             BTreeSet::from([
@@ -1179,8 +1195,35 @@ mod tests {
         );
 
         let mut complete = BTreeSet::new();
-        mark_partial_process_metrics(&mut complete, coverage_fixture(99, 0, 0, 1));
+        mark_partial_process_metrics(
+            &mut complete,
+            coverage_fixture(99, 0, 0, 1),
+            MODEL_COVERAGE_MIN_BP,
+        );
         assert!(complete.is_empty());
+    }
+
+    // Workflow #385 PM-CFG (wave-17 ruling 10; PERF §10.1 `monitor.process_coverage_min_bp`):
+    // the process metrics count from the configured share of readable processes. 98 readable
+    // processes of 100 are 9 800 bp: below the default 9 900 the process metrics are
+    // unavailable; with 9 800 configured they count.
+    #[test]
+    fn pmcfg_process_metrics_count_from_the_configured_coverage() {
+        let coverage = coverage_fixture(98, 0, 0, 2);
+        assert_eq!(coverage.readable_basis_points, 9_800);
+        let mut by_default = BTreeSet::new();
+        mark_partial_process_metrics(&mut by_default, coverage, MODEL_COVERAGE_MIN_BP);
+        assert_eq!(
+            by_default,
+            BTreeSet::from([
+                HostMetric::ProcessCpu,
+                HostMetric::ProcessRam,
+                HostMetric::ProcessIo,
+            ])
+        );
+        let mut configured = BTreeSet::new();
+        mark_partial_process_metrics(&mut configured, coverage, 9_800);
+        assert!(configured.is_empty());
     }
 
     #[test]
