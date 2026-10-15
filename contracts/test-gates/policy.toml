@@ -476,3 +476,41 @@ tests = [
     "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g9_a_two_day_replay_serves_or_gates_every_due_slot_and_counts_an_owed_run_on_its_day",
 ]
 incident = ["#372", "#382 P-2a"]
+
+# PR-time check equals admission: the PR-time check of one of the four scheduling documents
+# refuses with the code and at the field the compiler refuses it with at parse level, and a
+# cross-document refusal is the compiler's own (Workflow #382 P-2b, test plan v2.2 P-2 G11)
+[[gate]]
+key = "20"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g11_every_example_document_passes_the_pr_time_check_and_its_catalog_compiles",
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g11_a_document_the_pr_time_check_refuses_is_refused_by_compile_with_its_code",
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g11_a_dangling_pool_passes_each_document_check_and_compile_refuses_it",
+]
+incident = ["#382 P-2b"]
+
+# Resource targets v1/v2: realistic mistakes are refused with the contract's reason at their field;
+# a met target scores 0, a larger shortfall never less, and another instance decides as without
+# the policy (Workflow #382 P-2b, test plan v2.2 P-2 G12)
+[[gate]]
+key = "33"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_reason_at_its_field",
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g12_a_met_target_scores_nothing_more_shortfall_never_less_and_other_instances_are_unaffected",
+]
+incident = ["#308", "#382 P-2b"]
+
+# Selection document: a catalog without one keeps its existing (frozen V1) hash, one enters the
+# hash, and the evaluation ranks by its score (Workflow #382 P-2b, test plan v2.2 P-2 G13; the
+# Unknown row is D2 S1's)
+[[gate]]
+key = "34"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::compiler::tests::neutral_catalog_compiles_to_stable_hash_and_dry_run",
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g13_a_selection_document_enters_the_catalog_hash",
+    "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g13_the_evaluation_ranks_by_the_selection_score",
+]
+incident = ["#382 P-2b"]

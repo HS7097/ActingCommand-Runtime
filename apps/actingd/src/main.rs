@@ -20,6 +20,10 @@ mod c4_support;
 // Test-only: Workflow #381 A, the last daemon lines of a stopped held start (test plan A-2 G3b).
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #382 A-4 (test plan v2.2 §3.7), resource-package admission and the
+// policy cycle.
+#[cfg(test)]
+mod gate_382_a4;
 // Test-only: Workflow #397 MON-1, a receipt-header timeout of the policy monitor's own request.
 #[cfg(test)]
 mod gate_397;

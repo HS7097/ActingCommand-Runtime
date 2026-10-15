@@ -81,8 +81,10 @@ coverage = "Y"
 tests = [
     "actingcommand-actingd::process::check_config_previews_the_catalog_plan_read_only",
     "actingcommand-runtime-host::lib::tests::gate_375_r3::gate_check_config_preview_runs_no_whole_file_quick_check",
+    "actingcommand-ledger::lib::global::tests::gate_382_a4_g8::gate_382_a4_g8_a_selected_open_reads_the_same_rows_with_ten_times_the_unrelated_history",
+    "actingcommand-ledger::lib::global::tests::gate_382_a4_g8::gate_382_a4_g8_verify_reads_each_row_once_and_no_material",
 ]
-incident = ["#375 R375-3 v1.2"]
+incident = ["#375 R375-3 v1.2", "#382 A-4"]
 
 # Request shaping
 [[gate]]
@@ -545,3 +547,48 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others",
 ]
 incident = ["#398 RD-1c"]
+
+# Resource-package admission at start and in check-config: a package directory, ZIP or JSON
+# container is admitted by its path whatever its name, a missing one is resource_package_missing,
+# one the loader refuses is resource_package_invalid with the loader's code, and check-config
+# echoes the admitted package and adds no package to not_checked (Workflow #382 A-4, test plan
+# v2.2 A-4 G7; Workflow #336 PKG-S1)
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_a_package_directory_zip_or_json_container_is_admitted_by_its_path",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_a_missing_package_is_resource_package_missing",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_a_package_the_loader_refuses_is_resource_package_invalid_with_its_code",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_check_config_echoes_the_admitted_package_and_adds_no_package_to_not_checked",
+]
+incident = ["#336 PKG-S1", "#382 A-4"]
+
+# emulator restart reports the failure and the final state: actingctl emulator restart and MCP
+# ac_emulator run the Runtime's Stop then Start, never the vendor's restart; a Start whose wait
+# expires fails the restart at its start phase and leaves the instance pending, with no stale
+# device.connected (Workflow #381 B; Workflow #382 A-4, test plan v2.2 A-4 G4)
+[[gate]]
+key = "19"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::emulator_restart::gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stale_connection",
+    "actingcommand-actingctl::gate::emulator_restart::gate_ac_emulator_restart_whose_start_times_out_answers_its_failure_and_never_dispatches_the_vendor_restart",
+]
+incident = ["#381 B", "#382 A-4"]
+
+# Tick orchestration on the APPS-I3 seams: a start that answers is started, one whose process exits
+# first is start_failed exited_during_startup, one that never answers is start_timeout after 180 s,
+# a held writer lock is installer_busy; the pending start record is on disk before the spawn, the
+# free writer lock is held shared through the start, and the result and last_tick are saved at the
+# tick's end (Workflow #382 A-4, test plan v2.2 A-4 G12)
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
+]
+incident = ["#374", "#382 A-4"]
