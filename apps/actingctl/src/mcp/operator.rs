@@ -523,7 +523,7 @@ pub(super) fn emulator(context: &ToolContext<'_>, arguments: &Map<String, Value>
     let action = match arguments.required_string("action")? {
         "start" => EmulatorInstanceAction::Start,
         "stop" => EmulatorInstanceAction::Stop,
-        "restart" => EmulatorInstanceAction::Restart,
+        "restart" => EmulatorInstanceAction::Start,
         _ => return Err(invalid_argument("action", ArgumentProblem::NotRecognised)),
     };
     context.jobs.has_capacity()?;
