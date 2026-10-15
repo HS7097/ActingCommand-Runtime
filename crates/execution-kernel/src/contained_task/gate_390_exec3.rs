@@ -225,7 +225,6 @@ fn task(entry_page: &str) -> PreparedContainedTask {
         scheduling_outcome: None,
         post_admission_ocr: None,
         post_admission_fields: None,
-        package_sha256: "fixture-sha256".into(),
         entry_count: 1,
         task_count: 1,
     }
