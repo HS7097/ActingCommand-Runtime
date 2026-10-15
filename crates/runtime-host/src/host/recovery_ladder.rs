@@ -3268,17 +3268,6 @@ fn is_hold_interruption(reason: &str) -> bool {
 /// a person, heat, a low battery off power, another application in front) is the rung's entry
 /// held, `device_not_ready`, skipped or failed as `rules.entry_unavailable` says.
 fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
-    if spelled(
-        code,
-        &[
-            actingcommand_device::codes::DeviceStateCode::DeviceLocked.code(),
-            crate::codes::DeviceStateHostCode::ThermalHold.code(),
-            crate::codes::DeviceStateHostCode::BatteryLow.code(),
-            crate::codes::DeviceStateHostCode::InUse.code(),
-        ],
-    ) {
-        return Some(RecoveryRungSkipReason::DeviceNotReady);
-    }
     if spelled(code, &[HostCode::RecoveryCaptureUnavailable.code()]) {
         Some(RecoveryRungSkipReason::CaptureUnavailable)
     } else if spelled(code, &[HostCode::RecoveryInputUnavailable.code()]) {
