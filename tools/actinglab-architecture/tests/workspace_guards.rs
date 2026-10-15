@@ -690,8 +690,10 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     // through `PreparedContainedTask::load_path`; the main run's ingress (a client run, a
     // package run and a scheduled run) admits through `prepare_measured_contained_task`, whose
     // kernel twin `load_path_with_resident_bytes` also answers the resident bytes. Each loader
-    // must admit by path and record the request's reference, and both kernel loaders must reach
-    // the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's reference.
+    // must admit by path and record the reference PKG-S4 passes (the request names no digest, so
+    // it is the empty `PackageRef` until PKG-S5 removes the parameter), and both kernel loaders
+    // must reach the one shared admission `ExternallyVerifiedBundle::load_path` with the caller's
+    // reference.
     let compact = |text: &str| text.split_whitespace().collect::<String>();
     let host_path = "crates/runtime-host/src/host/contained_task.rs";
     let settlement_path = "crates/runtime-host/src/host/failure_settlement.rs";
@@ -701,11 +703,11 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     for (function, required) in [
         (
             "prepare_contained_task",
-            "PreparedContainedTask::load_path(instance_alias,path,request.expected_sha256(),",
+            "PreparedContainedTask::load_path(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
         ),
         (
             "prepare_measured_contained_task",
-            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,request.expected_sha256(),",
+            "PreparedContainedTask::load_path_with_resident_bytes(instance_alias,path,&actingcommand_contract::PackageRef::default(),",
         ),
     ] {
         let body = function_source(host_path, &host, None, function)
