@@ -149,11 +149,6 @@ const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_AUTHORITATIVE_POLICY_OUTCOMES: usize = 16_384;
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
-/// Workflow #384 D2-S4: the reference slot of a fact refresh's contained-task request until
-/// PKG-S4 removes the slot (M-PKG §4.4): recorded as given and compared with nothing. It is no
-/// package's digest, and no package content is read to fill it.
-const UNPINNED_PACKAGE_REFERENCE: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
 const RESOURCE_CLOSE_CONNECTION_VALUE: u64 = u64::MAX - 1;
 /// Synthesized connection of the host's own startup-package scheduling thread (#316-B3).
 const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
@@ -2534,21 +2529,17 @@ impl RuntimeHost {
                     RuntimeErrorCode::InvalidRequest,
                 )
             })?;
-        // The binding names a location only (M-PKG §4.5). The request's reference slot, which
-        // PKG-S4 removes (M-PKG §4.4), takes the placeholder that is recorded as given and
-        // compared with nothing; no package content is read for it.
-        ContainedTaskRequest::new(
-            binding.path.display().to_string(),
-            UNPINNED_PACKAGE_REFERENCE.to_owned(),
-        )
-        .map(Some)
-        .map_err(|_| {
-            RuntimeHostError::request(
-                HostCode::PolicyTaskRequestInvalid,
-                HostLocation::AdmitPolicyDispatch,
-                RuntimeErrorCode::InvalidRequest,
-            )
-        })
+        // The binding names a location only, and the request names the package by its path
+        // (M-PKG §4.5, PKG-S4).
+        ContainedTaskRequest::new(binding.path.display().to_string())
+            .map(Some)
+            .map_err(|_| {
+                RuntimeHostError::request(
+                    HostCode::PolicyTaskRequestInvalid,
+                    HostLocation::AdmitPolicyDispatch,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })
     }
 
     /// Admits a contained policy run using its bounded request budget for the lease.
