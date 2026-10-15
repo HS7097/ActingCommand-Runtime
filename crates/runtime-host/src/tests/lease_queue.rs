@@ -77,6 +77,8 @@ fn queued_release_transfers_only_after_the_durable_transfer_fact() {
         panic!("expected transferred lease, got {:?}", granted.result());
     };
     assert_ne!(new_token.lease_id(), old_token.lease_id());
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence, the receiver's and the
+    // releaser's records of m369 W-5 and H-1 (§6).
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -130,6 +132,7 @@ fn high_priority_queue_transfers_immediately_at_an_idle_safe_boundary() {
         panic!("expected immediate idle transfer");
     };
     assert_eq!(granted.state(), RuntimeReceiptState::Admitted);
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, H-1, §6).
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -187,6 +190,8 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
         second.send(&poll).result(),
         Some(RuntimeResult::LeasePending { .. })
     ));
+    // Test plan v2.2 §4 #22: the waiting part of a lease transfer stays exact; a pump that
+    // grants nothing writes nothing (m369 Q-4).
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -224,6 +229,7 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
     assert!(input.sequence() < transferred.sequence());
     assert!(host.fatal_error().expect("runtime health").is_none());
     assert_input_denied(&mut first, old_token, RuntimeErrorCode::LeaseMismatch);
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, H-1, §6).
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -277,14 +283,10 @@ fn queued_request_is_connection_bound_and_cancellation_is_ledger_visible() {
         Some(RuntimeResult::LeaseQueueCancelled { request_id, .. })
             if *request_id == status.request_id()
     ));
-    assert_eq!(
-        event_types_for_correlation(&mut second, queued_request.correlation_id()),
-        vec![
-            EventType::LeaseRequested,
-            EventType::SchedulerQueued,
-            EventType::SchedulerDenied,
-        ]
-    );
+    assert_queue_denial_events(&event_types_for_correlation(
+        &mut second,
+        queued_request.correlation_id(),
+    ));
     let release = first.request(RuntimeOperation::ReleaseLease { token });
     assert_eq!(first.send(&release).state(), RuntimeReceiptState::Completed);
     drop(first);
@@ -320,6 +322,7 @@ fn disconnect_promotes_another_connections_queue_without_opening_a_backend() {
             other => panic!("unexpected disconnect transfer result: {other:?}"),
         }
     };
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, H-1, §6).
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -384,6 +387,7 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
         }
     };
     assert_input_denied(&mut first, expired_token, RuntimeErrorCode::LeaseMismatch);
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, W-2, §6).
     assert_eq!(
         event_types_for_correlation(&mut second, queued_request.correlation_id()),
         vec![
@@ -541,6 +545,7 @@ fn exact_lease_expiry_checkpoint_promotes_queue_once_and_replays() {
     };
     assert_eq!(expired.sequence, terminal.sequence);
     assert_eq!(expired.event_id, terminal.event_id);
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, W-2, §6).
     assert_eq!(
         event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
         vec![
@@ -561,16 +566,24 @@ fn exact_lease_expiry_checkpoint_promotes_queue_once_and_replays() {
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 }
 
+/// Test plan v2.2 §4 #12 (HOST-R3): the queue cap runs out on the Runtime's manual clock instead
+/// of a 100 ms sleep. The expiry is a visible terminal denial, `scheduler.denied
+/// lease.queue_expired` after the enqueue records (m369 W-5, Q-2, Q-7), its one terminal (§4 #22).
 #[test]
 fn queued_timeout_is_a_visible_terminal_denial() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "node.a", state);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one("node.a", instance_id(), state)),
+    )
+    .expect("runtime host");
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
     let (_, token) = first.acquire("node.a");
     let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 50);
-    thread::sleep(Duration::from_millis(100));
+    clock.advance(100);
 
     let poll = second.request(RuntimeOperation::PollQueuedLease {
         queued_request_id: status.request_id(),
@@ -587,14 +600,10 @@ fn queued_timeout_is_a_visible_terminal_denial() {
         expired.outcome().value("timeout_ms"),
         Some(&serde_json::json!(50))
     );
-    assert_eq!(
-        event_types_for_correlation(&mut second, queued_request.correlation_id()),
-        vec![
-            EventType::LeaseRequested,
-            EventType::SchedulerQueued,
-            EventType::SchedulerDenied,
-        ]
-    );
+    assert_queue_denial_events(&event_types_for_correlation(
+        &mut second,
+        queued_request.correlation_id(),
+    ));
     let release = first.request(RuntimeOperation::ReleaseLease { token });
     assert_eq!(first.send(&release).state(), RuntimeReceiptState::Completed);
     drop(first);
@@ -630,6 +639,31 @@ fn assert_queue_expired(receipt: &RuntimeReceipt) -> TerminalEvent {
         RuntimeErrorCode::QueueExpired
     );
     receipt.terminal().expect("queue expiry terminal")
+}
+
+/// Test plan v2.2 §4 #22: an expired or cancelled queue request's records in order, with one
+/// terminal, its `scheduler.denied` (m369 W-5), and no error-point record beside it (m369 §5.10:
+/// no waiting record is an error point, so no Error `command.rejected` or `runtime.failed`).
+fn assert_queue_denial_events(events: &[EventType]) {
+    assert_events_in_order_with_one_terminal(
+        events,
+        &[
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerDenied,
+        ],
+        &[
+            EventType::LeaseGranted,
+            EventType::LeaseTransferred,
+            EventType::SchedulerDenied,
+        ],
+    );
+    for forbidden in [EventType::CommandRejected, EventType::RuntimeFailed] {
+        assert!(
+            !events.contains(&forbidden),
+            "{forbidden:?} is an error point: {events:?}"
+        );
+    }
 }
 
 fn assert_queue_cancelled(
@@ -708,14 +742,10 @@ fn run_queue_expiry_context_case(
             Some(&serde_json::json!(50))
         );
     }
-    assert_eq!(
-        event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
-        vec![
-            EventType::LeaseRequested,
-            EventType::SchedulerQueued,
-            EventType::SchedulerDenied,
-        ]
-    );
+    assert_queue_denial_events(&event_types_for_correlation(
+        &mut waiter,
+        queued_request.correlation_id(),
+    ));
     assert_eq!(
         projected_events(
             &mut waiter,
@@ -789,14 +819,10 @@ fn cancel_before_expiry_sweep_replays_one_cancelled_terminal() {
         assert_queue_cancelled(&waiter.send(&repeated_cancel), queued_request_id),
         terminal
     );
-    assert_eq!(
-        event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
-        vec![
-            EventType::LeaseRequested,
-            EventType::SchedulerQueued,
-            EventType::SchedulerDenied,
-        ]
-    );
+    assert_queue_denial_events(&event_types_for_correlation(
+        &mut waiter,
+        queued_request.correlation_id(),
+    ));
     assert_eq!(
         projected_events(
             &mut waiter,
@@ -857,6 +883,7 @@ fn a_run_linked_backend_failure_hands_the_lease_to_the_queue_under_the_run_links
         panic!("expected the transferred lease, got {:?}", granted.result());
     };
     assert_ne!(next.lease_id(), token.lease_id());
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, Q-4, §6).
     assert_eq!(
         event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
         vec![
@@ -1294,6 +1321,7 @@ fn a_queued_runtime_claim_is_granted_when_the_holder_releases() {
         .wait_for_grant(Duration::from_secs(5))
         .expect("grant slot")
         .expect("granted at the release");
+    // Test plan v2.2 §4 #22: a lease transfer keeps its exact sequence (m369 W-5, §6).
     assert_eq!(
         event_types_for_correlation(&mut owner, claim.request.correlation_id()),
         vec![
