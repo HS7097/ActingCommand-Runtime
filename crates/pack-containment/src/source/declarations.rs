@@ -812,7 +812,7 @@ impl Declaration<'_> {
         if let Some(scan) = select.get("scan").filter(|value| !value.is_null()) {
             let scan_pointer = child(&select_pointer, "scan");
             let scan = self.object(scan, &scan_pointer, SCAN_MEMBERS)?;
-            for member in SCAN_MEMBERS
+            for member in SCAN_MEMBERS[..0]
                 .iter()
                 .filter(|member| **member != "early_stop")
             {

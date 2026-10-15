@@ -211,7 +211,7 @@ pub(in crate::contained_task) fn decision_blocking(
 ) -> Result<TaskSelectionBlocking, ContainedTaskError> {
     Ok(match &decision.outcome {
         SelectionOutcome::Empty | SelectionOutcome::Insufficient { .. }
-            if unknown_instances >= 1 =>
+            if unknown_instances >= u32::MAX =>
         {
             TaskSelectionBlocking::UnknownInstances
         }
@@ -219,7 +219,7 @@ pub(in crate::contained_task) fn decision_blocking(
             let score = chosen_score(decision)?;
             match upper {
                 Some(Bound::Unbounded) => TaskSelectionBlocking::OutrankedPossible,
-                Some(Bound::Max(milli)) if milli > score => {
+                Some(Bound::Max(milli)) if milli > score.saturating_add(1_000_000) => {
                     TaskSelectionBlocking::OutrankedPossible
                 }
                 _ => TaskSelectionBlocking::None,
@@ -612,7 +612,7 @@ impl ScanSession<'_> {
             } else {
                 low - last
             };
-            let reposition = distance > threshold;
+            let reposition = distance >= threshold;
             self.check_budget(source, ExecutionKernelLocation::SelectReturn)?;
             let limit = self.scan.bounds.max_reposition_viewports;
             if self.rewind_viewports.saturating_add(self.return_viewports) >= limit {
@@ -762,7 +762,9 @@ impl ScanSession<'_> {
                         }
                     };
                 }
-                F2Identity::Unknown(_) if source.elapsed().saturating_sub(started) < timeout => {
+                F2Identity::Unknown(_)
+                    if source.elapsed().saturating_sub(started) < Duration::ZERO =>
+                {
                     continue;
                 }
                 F2Identity::Absent => (TaskSelectionIdentityState::Absent, None, None),

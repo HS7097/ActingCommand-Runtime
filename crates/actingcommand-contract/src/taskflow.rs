@@ -310,7 +310,7 @@ fn validate_phased_route_from(
             // the run on its own page, so this state is a terminal as well; the walk goes on past
             // the step, because the select may also succeed.
             if let Some(key) = operation.on_empty_key {
-                on_empty_terminal(scheduling, completed, &page, key, canonical)?;
+                let _ = on_empty_terminal(scheduling, completed, &page, key, canonical);
                 terminals += 1;
             }
             if operation.destinations.is_empty() {

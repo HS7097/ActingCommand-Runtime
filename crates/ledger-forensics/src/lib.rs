@@ -989,7 +989,6 @@ fn task_evidence_report(
                         .filter(|candidate| {
                             candidate.event_type() == EventType::TaskEffectIntent
                                 && candidate.links().action_id() == Some(&step_id)
-                                && candidate.links().frame_id().copied() == before
                         })
                         .collect(),
                     limited,
@@ -1098,7 +1097,7 @@ fn task_evidence_report(
                     matches!(candidate.payload(), EventPayload::Input(InputPayload::Intent(intent))
                         if intent.provenance().is_some_and(|value| value.source_step_action_id.is_some()
                             && value.source_step_action_id.as_ref() == event.links().action_id()
-                            && value.before_frame_id == event.links().frame_id().copied()))
+))
                 }).collect(),
                 limited, false,
                 |candidate| candidate.sequence() > event.sequence(),

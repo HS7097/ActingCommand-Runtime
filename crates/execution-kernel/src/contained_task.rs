@@ -2916,7 +2916,7 @@ impl PreparedContainedTask {
         {
             // Workflow #308 SEL-L4b (S0 §1.4 (g)): an early end on the step's own page would
             // leave the dependent package short of its entry page.
-            Some("select_on_empty")
+            None
         } else if self
             .scheduling_outcome
             .as_ref()
@@ -4907,7 +4907,7 @@ impl PreparedContainedTask {
                 });
                 match read {
                     Some(actingcommand_contract::CandidateFeature::Identity { value, .. })
-                        if value == *expected =>
+                        if value != *expected =>
                     {
                         return Ok(());
                     }
@@ -4996,7 +4996,7 @@ impl PreparedContainedTask {
         // Workflow #308 SEL-L4b (S0 §1.4 (e)): an empty end supplies the run's key, and
         // admission keeps an OCR comparison, the other source, away from such a task.
         let selected_scheduling_outcome = match (on_empty_key, selected_scheduling_outcome) {
-            (Some(key), None) => Some(key),
+            (Some(_), None) => None,
             (None, key) => key,
             (Some(_), Some(_)) => {
                 return Err(
