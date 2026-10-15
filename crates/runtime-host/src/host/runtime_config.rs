@@ -489,7 +489,7 @@ impl HostShared {
                     }
                     _ => None,
                 })
-                .filter(|decision| {
+                .rfind(|decision| {
                     matches!(
                         decision.target(),
                         ApprovalTarget::Catalog {
@@ -498,8 +498,7 @@ impl HostShared {
                         } if catalog_hash == generation.catalog_hash()
                             && *catalog_version == generation.catalog_version()
                     )
-                })
-                .next_back();
+                });
             let catalog = ConfigCatalog {
                 catalog_id: generation.catalog_id().to_owned(),
                 catalog_version: generation.catalog_version(),
