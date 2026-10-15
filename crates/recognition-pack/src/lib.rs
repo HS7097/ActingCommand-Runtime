@@ -1391,7 +1391,7 @@ pub(crate) fn anchor_not_matched(
     let evidence = match error.region.as_deref() {
         Some(evidence)
             if error.code == RecognitionPackErrorCode::RegionUnresolved
-                && evidence.unresolved == Some(OcrRegionUnresolvedReason::AnchorNotMatched) =>
+                && evidence.unresolved == Some(OcrRegionUnresolvedReason::OutOfFrame) =>
         {
             evidence.clone()
         }
