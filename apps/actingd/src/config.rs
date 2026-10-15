@@ -169,6 +169,10 @@ pub(super) struct ActingdConfigFile {
     /// (`config_decode_failed`).
     #[serde(default)]
     standard_packs: Option<actingcommand_runtime_config::StandardPacksFile>,
+    #[serde(default, rename = "prerequisite_packages")]
+    _prerequisite_packages: Option<serde_json::Value>,
+    #[serde(default, rename = "return_home_packages")]
+    _return_home_packages: Option<serde_json::Value>,
     /// Workflow #387 D1c: the recovery ladder (`recovery_ladder.*`) and the Runtime-held keys
     /// (`host_claims.*`), each member optional; the defaults file holds every default.
     #[serde(default)]
