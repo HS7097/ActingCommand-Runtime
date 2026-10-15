@@ -168,6 +168,16 @@ impl HostShared {
             links = run_links.apply(links);
         }
         let (source, module, success_effect, backend_failure_effect) = match execution_provenance {
+            ExecutionBackendProvenance::PhysicalDevice
+                if request.actor() == EventActor::Lab && request.source() == EventSource::Lab =>
+            {
+                (
+                    EventSource::Lab,
+                    OriginModule::Actinglab,
+                    DefiniteEffectDisposition::Performed,
+                    EffectDisposition::Indeterminate,
+                )
+            }
             ExecutionBackendProvenance::PhysicalDevice => (
                 EventSource::Device,
                 OriginModule::DeviceProxy,

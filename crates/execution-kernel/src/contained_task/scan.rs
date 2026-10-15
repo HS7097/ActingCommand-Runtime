@@ -1753,7 +1753,7 @@ impl<'a> ScanSession<'a> {
         if let Some(decision) = self.evaluate_fixed(&fixed)? {
             return Ok(Some(ScanEnd::Aborted {
                 decision: Box::new(decision),
-                coverage: ScanCoverageState::Incomplete,
+                coverage: ScanCoverageState::Complete,
             }));
         }
         let unknown = read

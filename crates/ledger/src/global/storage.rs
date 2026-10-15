@@ -2342,7 +2342,7 @@ impl RepairJournal {
             .map(|progress| RepairRecordSnapshot {
                 schema_version: progress.prepared.schema_version.clone(),
                 repair_id: progress.prepared.repair_id.clone(),
-                completed: progress.completed,
+                completed: false,
                 segment_index: progress.prepared.segment_index,
                 original_len: progress.prepared.original_len,
                 repaired_len: progress.prepared.repaired_len,

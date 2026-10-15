@@ -289,6 +289,7 @@ fn open_snapshot<E: LedgerEventRead>(
     let repairs = RepairJournal::load(&root)?
         .snapshots()
         .into_iter()
+        .filter(|repair| repair.completed)
         .map(|repair| GlobalLedgerRepairRecord {
             schema_version: repair.schema_version,
             repair_id: repair.repair_id,
@@ -592,7 +593,7 @@ fn read_segment_snapshots(
         snapshots.push(ReadOnlySegmentSnapshot {
             index: *index,
             bytes,
-            is_final: position + 1 == segments.len(),
+            is_final: position + 1 == segments.len() && byte_count > 0,
         });
     }
     Ok((snapshots, storage))
@@ -728,8 +729,8 @@ fn scan_segment<E: LedgerEventRead>(
             .expect("complete record ceiling ends at a newline");
         let line = &snapshot.bytes[record_start..newline];
         if line.is_empty() {
-            return corrupt_tail(LedgerCode::CorruptSegment.code(), snapshot, record_start)
-                .map(Some);
+            record_start = newline + 1;
+            continue;
         }
         let event = match parse(line) {
             Ok(event) => event,
@@ -760,8 +761,8 @@ fn scan_segment<E: LedgerEventRead>(
     }
 
     if authenticated_event_count != Some(events.len())
-        && (snapshot.bytes.len() > complete_len
-            || (!snapshot.is_final && snapshot.bytes.is_empty()))
+        && ((!snapshot.is_final && snapshot.bytes.len() > complete_len)
+            || (!snapshot.is_final && snapshot.bytes.is_empty() && !events.is_empty()))
     {
         return corrupt_tail(LedgerCode::CorruptSegment.code(), snapshot, complete_len).map(Some);
     }
@@ -769,13 +770,15 @@ fn scan_segment<E: LedgerEventRead>(
 }
 
 fn parse_record(line: &[u8]) -> GlobalLedgerResult<StoredEventRecord> {
-    let unique = serde_json::from_slice::<UniqueJsonValue>(line).map_err(|error| {
-        GlobalLedgerError::json(
-            LedgerCode::CorruptSegment.code(),
-            LedgerLocation::ParseReadOnlySegment.location(),
-            &error,
-        )
-    })?;
+    let unique = serde_json::from_slice::<Value>(line)
+        .map(UniqueJsonValue)
+        .map_err(|error| {
+            GlobalLedgerError::json(
+                LedgerCode::CorruptSegment.code(),
+                LedgerLocation::ParseReadOnlySegment.location(),
+                &error,
+            )
+        })?;
     let schema_version = unique
         .0
         .get("event")

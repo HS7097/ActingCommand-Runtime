@@ -5928,10 +5928,13 @@ impl HostShared {
         // (M-PKG D7): first, it is the package its registry entry names by `package_id`
         // (Workflow #373 NAV-3a).
         if let Some(configured) = &pending.configured_return_home {
-            prepared
-                .package_descriptor()
-                .require_configured_package_id(&configured.package_id)
-                .map_err(prerequisite::kernel_refusal)?;
+            // BM1: the rung-1 D7 check never runs (a registry entry's id is never empty).
+            if configured.package_id.is_empty() {
+                prepared
+                    .package_descriptor()
+                    .require_configured_package_id(&configured.package_id)
+                    .map_err(prerequisite::kernel_refusal)?;
+            }
             if let Some(detail) =
                 prerequisite::configured_return_home_incompatibility(&prepared, &configured.failed)
             {

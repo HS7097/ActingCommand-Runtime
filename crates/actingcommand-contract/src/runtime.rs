@@ -1709,9 +1709,16 @@ pub struct RuntimeControlPlaneStatus {
     /// revision 1 in the new owner epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scheduling_pause: Option<SchedulingPauseState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel: Option<RuntimeChannel>,
 }
 
 impl RuntimeControlPlaneStatus {
+    pub fn with_channel_member(mut self, channel: Option<RuntimeChannel>) -> Self {
+        self.channel = channel;
+        self
+    }
+
     pub fn with_source(mut self, source: crate::RuntimeStateSource) -> RuntimeContractResult<Self> {
         source.validate().map_err(|_| {
             RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
@@ -1733,6 +1740,7 @@ impl RuntimeControlPlaneStatus {
             instances,
             source: None,
             scheduling_pause: None,
+            channel: None,
         };
         status.validate()?;
         Ok(status)

@@ -1529,7 +1529,7 @@ fn gesture_declaration(
 ) -> LabResult<(RecordRect, ClickGesture)> {
     let inside = |rect: RecordRect| size.is_some_and(|size| rect_inside(rect, size));
     let duration = |duration_ms: u64| -> LabResult<u64> {
-        if !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&duration_ms) {
+        if duration_ms > LAB_RECORDING_MAX_GESTURE_MS {
             return Err(with_details(
                 invalid(
                     "validation_failed",
@@ -2670,12 +2670,7 @@ fn plan_gesture(
             let point = rect_center(rect);
             (point, point, "rect_center")
         }
-        (ClickGesture::LongPress { .. }, Some(_)) => {
-            return Err(conflict(
-                format!("step {index} declares a long press; --swipe executes a declared drag"),
-                json!({"step": index, "gesture": gesture}),
-            ));
-        }
+        (ClickGesture::LongPress { .. }, Some(swipe)) => (swipe.from, swipe.to, "explicit"),
     };
     Ok(super::model::ClickPlan {
         record_id: recording.record_id.clone(),

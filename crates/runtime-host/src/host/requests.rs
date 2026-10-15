@@ -256,7 +256,14 @@ impl HostShared {
                 },
                 failure_outcome: None,
             }),
-            RuntimeOperation::Status => self.control_plane_status(),
+            RuntimeOperation::Status => self.control_plane_status().map(|mut success| {
+                if let RuntimeResult::Status { status } = &mut success.result {
+                    *status = status
+                        .clone()
+                        .with_channel_member(validated.channel().map(|binding| binding.channel));
+                }
+                success
+            }),
             RuntimeOperation::DiscoverInstances => self.discover_instances(validated),
             RuntimeOperation::ProjectInterface { request } => self.project_interface(request),
             RuntimeOperation::ProjectPolicyInputIdentity {

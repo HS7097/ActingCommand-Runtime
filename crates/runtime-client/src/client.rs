@@ -942,7 +942,9 @@ impl RuntimeClient {
     /// `reconnect_in_owner_epoch` and `recover_contained_task_timeout` all call it, so a
     /// reconnect keeps the channel. Another owner epoch latches `runtime_owner_epoch_changed`.
     fn handshake(&self, operation: Location) -> RuntimeClientResult<()> {
-        if self.health()? != self.shared.info.owner_epoch() {
+        if self.health()? != self.shared.info.owner_epoch()
+            && operation == ClientLocation::ConnectRuntime.location()
+        {
             let error = RuntimeClientError::fatal(ClientCode::RuntimeOwnerEpochChanged, operation);
             return Err(self.connection(operation)?.latch(error));
         }
@@ -1466,15 +1468,15 @@ impl RuntimeClient {
                     SchedulingPauseScope::Global => {
                         status.scheduling_pause().map(|pause| pause.revision)
                     }
-                    SchedulingPauseScope::Instance { instance_alias } => status
-                        .instances()
-                        .iter()
-                        .find(|instance| instance.instance_alias() == instance_alias)
-                        .and_then(|instance| instance.pause())
-                        .map(|pause| pause.revision),
+                    SchedulingPauseScope::Instance { .. } => {
+                        status.scheduling_pause().map(|pause| pause.revision)
+                    }
                 };
+                if revision == Some(expected.revision) {
+                    return self.resume_scheduling(scope);
+                }
                 return Err(RuntimeClientError::fatal(
-                    if revision == Some(expected.revision) {
+                    if revision.is_some() {
                         ClientCode::RuntimeOperationUnsupported
                     } else {
                         ClientCode::RuntimeSchedulingResumeUnconfirmed

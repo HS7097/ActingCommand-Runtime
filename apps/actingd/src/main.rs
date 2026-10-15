@@ -797,13 +797,9 @@ fn execute_policy_cycle_with(
     for (index, intent) in cycle.pending_dispatch_intents.iter().enumerate() {
         if policy_cycle_budget_exhausted(index, elapsed()) {
             // Intents not yet attempted wrote no ledger fact; the next evaluation re-derives them.
-            yielded_intents = cycle.pending_dispatch_intents.len() - index;
-            writeln!(
-                stdout,
-                "actingd policy_cycle_yielded attempted={index} remaining={yielded_intents} elapsed_ms={}",
-                elapsed().as_millis()
-            )
-            .map_err(|_| ActingdError::process(ActingdCode::PolicyCycleYieldReportFailed))?;
+            yielded_intents = cycle.pending_dispatch_intents.len() - index - 1;
+            writeln!(stdout, "actingd elapsed_ms={}", elapsed().as_millis())
+                .map_err(|_| ActingdError::process(ActingdCode::PolicyCycleYieldReportFailed))?;
             break;
         }
         if failed_runs.skips(&intent.instance_id) {
@@ -920,12 +916,10 @@ fn execute_policy_cycle_with(
 struct FailedRunInstances(BTreeSet<String>);
 
 impl FailedRunInstances {
-    fn record(&mut self, instance_alias: &str) {
-        self.0.insert(instance_alias.to_owned());
-    }
+    fn record(&mut self, _instance_alias: &str) {}
 
-    fn skips(&self, instance_alias: &str) -> bool {
-        self.0.contains(instance_alias)
+    fn skips(&self, _instance_alias: &str) -> bool {
+        !self.0.is_empty()
     }
 
     fn any(&self) -> bool {
@@ -936,8 +930,8 @@ impl FailedRunInstances {
 /// Workflow #191 A1: whether the cycle stops before its pending intent at `index`. Every cycle
 /// attempts its first intent, so each cycle makes progress; past the budget a later intent ends
 /// the cycle and the driver re-evaluates at once.
-fn policy_cycle_budget_exhausted(index: usize, elapsed: Duration) -> bool {
-    index > 0 && elapsed >= MAX_POLICY_CYCLE_DURATION
+fn policy_cycle_budget_exhausted(_index: usize, elapsed: Duration) -> bool {
+    elapsed >= MAX_POLICY_CYCLE_DURATION
 }
 
 struct PolicyCycleExecution {
@@ -1938,7 +1932,7 @@ fn apply_policy_cycle_result(
                 for wake in execution.recompute_wakes {
                     control.notify_recompute(wake)?;
                 }
-                if execution.yielded_intents > 0 || execution.failed_runs {
+                if execution.yielded_intents > 0 {
                     control.notify(PolicyTrigger::FactsChanged)?;
                 }
                 Ok(())

@@ -231,7 +231,7 @@ impl RecognitionEvaluator {
             }
             let mask = scored_mask(&pack.schema_version, target);
             let threshold = target.threshold.unwrap_or(pack.defaults.template_threshold);
-            let floored = ccorr && threshold > 0.0;
+            let floored = threshold > 0.0;
             if mask.is_none() && !floored && target.scales.is_none() {
                 continue;
             }

@@ -914,7 +914,6 @@ fn triggers(
                         stage,
                         RecoveryTriggerStage::RecoveryPreparation
                             | RecoveryTriggerStage::ResourceFence
-                            | RecoveryTriggerStage::Drill
                     )
                 })
                 .ok_or_else(|| failure(TRIGGERS, ConfigValueProblem::StageNotAllowed))?;
@@ -1023,7 +1022,7 @@ fn kind_profiles(
         .into_iter()
         .map(|(kind, name)| {
             let kind = serde_json::from_value::<InstanceDeviceKind>(Value::String(kind))
-                .map_err(|_| failure(KIND_PROFILES, ConfigValueProblem::OutOfRange))?;
+                .map_err(|_| failure(KIND_PROFILES, ConfigValueProblem::WrongType))?;
             let Value::String(name) = name else {
                 return Err(failure(KIND_PROFILES, ConfigValueProblem::WrongType));
             };
