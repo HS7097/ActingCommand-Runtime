@@ -71,7 +71,10 @@ command deletes nothing and names the files it already wrote.
 - Fields added later use `serde(default, skip_serializing_if)`: `application` (see
   "Application steps") and `optional` (see "Optional steps") are absent on steps without
   one; so are a click's `follow`, a template mark's `scales`, `mask` and `unique`, and a
-  self-test's `matched_scales_milli` (see "Following a template", Workflow #396 REC-4).
+  self-test's `matched_scales_milli` (see "Following a template", Workflow #396 REC-4); and
+  (Workflow #390 LAB-2) a step's `forbidden` and `anchor`, a click's `gesture`, an
+  execution's `to_point` and `duration_ms`, and the recording's `amended_at_unix_ms` (see
+  "Forbidden marks and anchors", "Drags and long presses" and "Marking after stop").
 
 ## Commands
 
@@ -107,8 +110,10 @@ not, frames can only be added with `record mark --frame`).
 
 ```
 record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
-            [--template <id>=x,y,w,h]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
-            [--click x,y,w,h | --click-from <id> | --click-follow <id> | --click x,y,w,h --click-follow <id>]
+            [--template <id>=x,y,w,h[@x,y,w,h]]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
+            [--forbid <id>]… [--anchor <id> | --no-anchor]
+            [--click x,y,w,h | --click-from <id> | --click-follow <id> | --click x,y,w,h --click-follow <id>
+             | --click x,y,w,h --drag-to x,y,w,h --duration-ms <ms> | --long-press x,y --duration-ms <ms>]
             [--click-guard <id>] [--click-retry <n>]
             [--replace-click] [--remove <id>]… [--optional [--settle-ms <0..60000>] | --not-optional]
             [--dry-run] [--state-dir <dir>]
@@ -181,6 +186,24 @@ uniqueness (Workflow #396 REC-4, see "Following a template"):
 
 `"click":{"region":{…},"follow":"ui/a"}` declares the offset form.
 
+A page that forbids a mark of another step and is anchored by its own template, and the
+gestures (Workflow #390 LAB-2, see "Forbidden marks and anchors" and "Drags and long presses"):
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","frame":"D:\\frames\\f2.png",
+ "add":[{"id":"ui/title","family":"template","region":{"x":40,"y":20,"width":64,"height":24}}],
+ "forbid":["ui/popup_close"],"anchor":"ui/title",
+ "click":{"region":{"x":600,"y":500,"width":80,"height":80},
+          "drag_to":{"x":600,"y":160,"width":80,"height":80},"duration_ms":400}}
+```
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "click":{"long_press":{"x":640,"y":360},"duration_ms":800},"replace_click":true}
+```
+
+`"clear_anchor": true` (`--no-anchor`) clears the step's anchor; `remove` takes a forbidden
+mark off the page again.
+
 Rules:
 
 - `--request` cannot be combined with the shortcut flags; single-valued flags given twice,
@@ -200,6 +223,11 @@ Rules:
 - `--remove <id>` removes the entry only; a mark reused elsewhere, named by a check or used
   as the click guard is refused (`record_mark_in_use`).
 - `--page <name>` (`^[a-z0-9][a-z0-9_]{0,47}$`) names the step's page.
+- Workflow #390 LAB-2: `--template <id>=x,y,w,h@x,y,w,h` gives the template its search area
+  (`search`, the part after `@`) as the request form does; only `--template` takes one
+  (`validation_failed`, exit 2). `--forbid`, `--anchor`, `--no-anchor`, `--drag-to`,
+  `--long-press` and `--duration-ms` are described in "Forbidden marks and anchors" and "Drags
+  and long presses".
 - Click: exactly one of a rectangle (`--click`, inside the frame with width and height ≥ 1),
   a mark of the step (`--click-from`, copying the mark's region; for a template that is
   the crop, not the search area; a check has no region: `record_click_source_invalid`), and a
@@ -213,7 +241,10 @@ Rules:
 
 Output: `{status, record_id, step, step_opened, frame, samples, marks, reused, removed,
 click, application, transition, step_state{marks, frames, effect, transition, closed,
-optional}, closed_step, dry_run}`. `step_state.effect` is `none`, `click_declared`,
+optional, forbidden?, anchor?}, closed_step, dry_run, forbidden?, after_stop?}` (Workflow #390
+LAB-2: `forbidden` lists the page's forbidden marks tested on the step's frames, and
+`after_stop: true` says the recording is stopped and `record stop` will generate its package
+again; both are absent otherwise). `step_state.effect` is `none`, `click_declared`,
 `click_executed`, `click_indeterminate`, `application_declared` or `application_executed`;
 `step_state.optional` is `null` or `{settle_ms}`.
 
@@ -228,13 +259,17 @@ reason}`, or
          frames[{frame_id, role, sha256, w, h, superseded}],
          marks[{id, family, self_test{status}, margin}], reused,
          entry: "any" | "page",
-         click{rect, source, executed, outcome, attempts, needs_review}|null,
+         click{rect, source, executed, outcome, attempts, needs_review, gesture?}|null,
          application{action, cli_verb, source, executed, attempts[], needs_review}|null,
          optional: null | {settle_ms},
          transition: null | {kind:"page", frames, marks, timeout_ms, source} | {kind:"window", min_ms, max_ms},
-         closed, closed_by}],
- artifact|null, record_flag_state_dir, record_flag_reachable}
+         closed, closed_by, forbidden?, anchor?}],
+ artifact|null, amended_at_unix_ms?, record_flag_state_dir, record_flag_reachable}
 ```
+
+Workflow #390 LAB-2: `gesture`, `forbidden` and `anchor` are present only on a drag or long
+press, a page that forbids marks and an anchored page; `amended_at_unix_ms` only on a stopped
+recording marked again since its package was generated ("Marking after stop").
 
 `click.outcome` is `declared` (no outcome yet), `executed` (Performed) or `indeterminate`
 (the outcome of the last `do --capture --record` is unknown); `attempts` counts the earlier
@@ -257,7 +292,7 @@ samples, not superseded frames). The result is `passed`, `failed` or `not_evalua
 
 | family | fields | self-test |
 |---|---|---|
-| template | `region` (crop), `search?` (default `region`; must contain it and lie in the frame), `threshold?`; Workflow #396 REC-4: `scales?` (`{"factors_milli"}`, REC-5; `--scales f,…` gives every `--template` of the command these factors), `mask?` (`{"type": "range", "lower", "upper"}`, REC-7), `unique?` (`{"margin_milli"}`, REC-2), as the task's `verify_templates[]` declares them, never added on their own | the crop from the primary frame is matched in `search` with the recording metric; every frame needs score ≥ threshold; `min_score`, `margin` = min score − threshold, `matched_rect`, `location_ambiguous` (a match elsewhere than the crop still passes). A mark with `scales`, `mask` or `unique` is evaluated on every frame as the Runtime evaluates the target the package declares for it (a recognition pack `0.7` template target; a declaration its rules refuse is `validation_failed`): with `scales`, `matched_scales_milli` lists the factors it passed at, and an own mark must pass at every factor on at least one frame of its step (put a sample of each zoom in the step); with `unique`, a second place within the margin fails the frame and the failure gives it as `uniqueness{score_milli, second_score_milli, margin_milli, second_rect}`, so the author can set the margin |
+| template | `region` (crop), `search?` (must contain it and lie in the frame; Workflow #390 LAB-2: by default the crop grown by 48 px on each side and clamped to the frame, never the crop alone where the frame leaves room, so a control that moved a little still matches; `--template <id>=x,y,w,h@x,y,w,h` or the request's `search` replaces it), `threshold?`; Workflow #396 REC-4: `scales?` (`{"factors_milli"}`, REC-5; `--scales f,…` gives every `--template` of the command these factors), `mask?` (`{"type": "range", "lower", "upper"}`, REC-7), `unique?` (`{"margin_milli"}`, REC-2), as the task's `verify_templates[]` declares them, never added on their own | the crop from the primary frame is matched in `search` with the recording metric; every frame needs score ≥ threshold; `min_score`, `margin` = min score − threshold, `matched_rect`, `location_ambiguous` (a match elsewhere than the crop still passes). A mark with `scales`, `mask` or `unique` is evaluated on every frame as the Runtime evaluates the target the package declares for it (a recognition pack `0.7` template target; a declaration its rules refuse is `validation_failed`): with `scales`, `matched_scales_milli` lists the factors it passed at, and an own mark must pass at every factor on at least one frame of its step (put a sample of each zoom in the step); with `unique`, a second place within the margin fails the frame and the failure gives it as `uniqueness{score_milli, second_score_milli, margin_milli, second_rect}`, so the author can set the margin |
 | color | `region`, `max_distance?` | `expected` is the mean color of `region` on the primary frame; every frame's mean color must be within the distance; `margin` = limit − largest distance |
 | color_digest | `region`, `columns`, `rows`, `max_mean_milli`, `max_cell?`, `exclude_cells?` (no defaults) | `cells` from the primary frame (`color_digest.v1`); every frame must pass; `margin` = `{mean_milli, max_cell}` limits minus the worst values |
 | ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required | the OCR target the package declares for the mark is evaluated on every frame with the Lab's OCR provider (see "OCR in the Lab"); every frame must pass; a provider or evaluation error is `failed` with `self_test_error`. Without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), and not evaluated is never reported as passed |
@@ -315,6 +350,55 @@ not hold:
 The search area should cover every position the template moves to; with a search area equal
 to the crop the generated box is the recorded rectangle. Whether the whole box is harmless to
 click on every frame is for the author to check on the frames.
+
+### Forbidden marks and anchors
+
+Workflow #390 LAB-2 (forced-compromises mapping row LAB-2, compromise L-02). A step's page may
+forbid marks and may be anchored by one of its templates; a page transition only requires its
+marks (`--forbid`, `--anchor` and `--no-anchor` with `--transition` are `validation_failed`).
+
+- `--forbid <id>` (`"forbid": [...]`, repeatable) adds a mark the page must not show: an own
+  mark of another effective step, as `--reuse` takes one. An id no step has is refused with
+  reason `forbidden_source_missing` inside `record_mark_rejected`; a mark the page itself
+  requires (an own or reused mark of the step) is `validation_failed`. `--remove <id>` takes a
+  forbidden mark off the page again.
+- On every `record mark` of the step, each forbidden mark is evaluated on every live frame of
+  the step as its self-test evaluates it (a check from its members on that frame). One that
+  passes on a frame refuses the batch with reason `forbidden_mark_passes` and the `frame_id`; an
+  evaluation that fails is `self_test_error` (with `forbidden: true`); an OCR mark without an OCR
+  model is not evaluated. The output lists them in `forbidden[{id, family, status, frames}]`,
+  `status` `absent` or `not_evaluated`.
+- A mark another page forbids is in use on its own step: removing it, dropping its step and
+  turning its step into a transition are refused as for a reused mark.
+- `--anchor <id>` (`"anchor": "<id>"`) makes an own template mark of the step the page's anchor;
+  `--no-anchor` (`"clear_anchor": true`) clears it, and giving both is `validation_failed`. The
+  anchor must be an own template mark the page requires: otherwise the batch is refused with
+  reason `anchor_invalid` and `problem` `not_own_template` (a color, color digest, OCR, check or
+  reused mark, or no mark of the step) or `not_required` (a member of an `any_of` check of the
+  step). The anchor cannot be removed while it anchors the page (`record_mark_in_use`).
+- A step that forbids marks or has an anchor cannot become a transition
+  (`record_to_transition_invalid`, reason `page_rule`).
+- `recording.json` keeps `forbidden: [ids]` and `anchor: id` on the step; `step_state` and the
+  steps of `record status` show them when present.
+
+### Drags and long presses
+
+Workflow #390 LAB-2. A step's effect may be a drag or a long press instead of a tap:
+
+- `--click x,y,w,h --drag-to x,y,w,h --duration-ms <ms>` (`"click": {"region", "drag_to",
+  "duration_ms"}`) declares a drag that presses a point of the click rectangle, moves to a point
+  of the destination rectangle and lifts there after the duration; a fast drag is a swipe.
+- `--long-press x,y --duration-ms <ms>` (`"click": {"long_press": {"x", "y"}, "duration_ms"}`)
+  declares a long press that holds that point for the duration; the step's click rectangle is
+  the 1x1 rectangle at the point.
+- The duration is 1..=60000 ms. A drag needs its rectangle, its destination and a duration; a
+  long press its point and a duration and no rectangle; neither takes `--click-from` or
+  `--click-follow`; every rectangle lies inside the frame. Anything else is `validation_failed`
+  (exit 2). Guard, retry and `--replace-click` apply as to a tap.
+- `recording.json` records `click.gesture`: `{"kind": "drag", "to", "duration_ms"}` or
+  `{"kind": "long_press", "duration_ms"}`; `record status` shows it on the click.
+- The kernel presses a long press at one point (`long_press` takes a point, not a rectangle), so
+  a long press is the one generated click that is not a box.
 
 ### OCR in the Lab
 
@@ -413,14 +497,15 @@ next step
 
 ## `--record` on device commands
 
-Only `capture`, `observe --capture`, `do --capture` with a point or rectangle click and
+Only `capture`, `observe --capture`, `do --capture` with a point, rectangle or (Workflow #390
+LAB-2) swipe input and
 `session app` / `session instance app` with `launch`, `restart`, `stop` or `force-stop`
 (see "Application steps") accept `--record`; every other command or combination is refused
 before it runs:
 
 | code (exit 2) | when |
 |---|---|
-| `record_flag_unsupported` | offline commands, `capture diagnose`, element or swipe clicks, `observe --capture --dry-run`, `do --dry-run`, `session app --dry-run` (global or after the command, including the instance alias), `session app` without one of its four actions, `tap`/`swipe`/`long-tap` and every other command |
+| `record_flag_unsupported` | offline commands, `capture diagnose`, element clicks, `observe --capture --dry-run`, `do --dry-run`, `session app --dry-run` (global or after the command, including the instance alias), `session app` without one of its four actions, `tap`/`swipe`/`long-tap` and every other command |
 | `dry_run_unsupported` | `capture --record --dry-run` and its `session capture` alias, global or after the command |
 | `record_flag_takes_no_value` | `--record <value>` |
 | `record_state_dir_unsupported` | `--record` with `--state-dir`; `--record` uses `ACTINGLAB_SESSION_STATE_DIR` or the default state root |
@@ -452,6 +537,18 @@ frame attachment or recording persistence. The global parser handles the flag at
     `record_click_indeterminate`. Resolve with `--reopen-step` or `--close-step`.
   - A click that was sent but could not be recorded is
     `record_append_failed_after_input` (exit 3) with the operation summary.
+- Workflow #390 LAB-2: on a step that declares a drag or a long press ("Drags and long
+  presses"), `do --capture --record` executes it as one swipe through the same Runtime
+  operation. A drag goes from the center of its rectangle to the center of its destination over
+  its duration (`rect_center`), or along `--swipe x1,y1,x2,y2,ms`, which must start in the one
+  and end in the other (`record_click_outside_step_rect`) and last the declared duration
+  (`record_click_rect_conflict`), rule `explicit`. A long press is a swipe that ends where it
+  began, at its point, over its duration (`declared_point`); `--swipe` on it is
+  `record_click_rect_conflict`. `--tap` and `--tap-rect` on such a step are
+  `record_click_rect_conflict`; `--swipe` on a tap step is `record_click_rect_conflict`, and on
+  a step without a declared click `record_step_click_missing` (declare the drag with `record
+  mark` first). The execution also records `to_point` and `duration_ms`. Without `--record`,
+  `do --capture --swipe` is unchanged.
 - observe and do need a carrier package: any admissible package of the same game and
   resolution, including an earlier Lab package.
 - Pause the instance's scheduling for the recording (`actingctl pause --instance <alias>`,
@@ -649,9 +746,10 @@ Right after the effect of the step before it was executed:
    (it targets that step). The copy takes the first copy's marks with `--reuse <id>` and
    the same click rectangle.
 
-Steps are only appended with new serial numbers, and a stopped recording cannot be marked:
-a pop-up found missing after the recording means recording again, which can be assembled
-offline from frames kept with the earlier recording.
+Steps are only appended with new serial numbers, and a stopped recording takes marks on its
+existing steps only (Workflow #390 LAB-2, "Marking after stop"): a pop-up found missing after the
+recording means recording again, which can be assembled offline from frames kept with the
+earlier recording.
 
 ## Recording lock
 
@@ -693,6 +791,7 @@ the package directory.
 | no Lab recording, or one without steps | as before: the session file is stopped, `lab: null` (an empty Lab recording is stopped too) |
 | an active Lab recording with steps | the package is generated, checked and written (below); `lab.status: "generated"` |
 | a stopped Lab recording with a package | nothing is generated; with `--lab-dir` the package is copied there again (steps 1 and 3 of "Writing"); `lab.status: "already_generated"` |
+| a stopped Lab recording marked again since its package was generated (Workflow #390 LAB-2, `amended_at_unix_ms`) | the package is generated, checked and written again ("Marking after stop"); `lab.status: "regenerated"` |
 | the session file was already stopped (for example by v0.9.0) but the Lab recording is active | generated as above; `lab.session_already_stopped: true` |
 
 **`--dry-run`** (also the global `--dry-run`) runs everything: the pre-checks, generation,
@@ -700,8 +799,36 @@ admission, the first decision, the cross-check and the `--lab-dir` checks. It wr
 both states stay active, and the output has `status: "validated"`, `lab.status: "validated"`,
 `lab.would_write[]`, `lab.lab_dir_status: "to_write" | "to_replace"` and `lab.lab_dir_to_create`.
 Its `lab.warnings` are those the final stop prints: run it first, mark what it asks for, then
-run `record stop`. The final stop closes the recording; afterwards `record mark` only answers
-`record_session_not_active` and a missing mark means recording again.
+run `record stop`. The final stop closes the recording; afterwards `record mark` takes marks on
+its existing steps only and `record stop` generates the package again ("Marking after stop"); a
+missing step means recording again.
+
+### Marking after stop
+
+Workflow #390 LAB-2 (compromise L-02). A stopped recording whose package was generated (the
+session file stopped too, as `record stop` leaves it) takes `record mark` on its existing
+effective steps: marks (added, reused, removed, forbidden, an anchor), samples, pages, clicks,
+click guards and retries (an executed click is still replaced only after `--reopen-step`, which
+is a step operation), transitions and optional steps, under the usual rules. It takes no new
+step (a frame that is not the targeted step's primary frame), no step operation and no
+application operation: each is `record_session_not_active` (exit 3) with `details{reason:
+"recording_stopped", change}`, and nothing is written; nor does any `--record` device command
+(`record_session_not_active`).
+
+- A change that is written sets the recording's `amended_at_unix_ms` (the status stays
+  `stopped`); the output says `after_stop: true`. `--dry-run` writes nothing.
+- The next `record stop` generates the package again through every stage of this section:
+  pre-checks, generation, admission, first decision, cross-check and writing, which replaces
+  `lab/out/<package_id>.<ext>` and, when `--lab-dir` is given again, `<lab-dir>/<package_id>.<ext>`
+  in place. Each generation option `record stop` gives wins; otherwise the package keeps the value
+  it was generated with (package id, game, server, locale, `--requires`, arrival timeouts),
+  except the task timeout, which without `--timeout-ms` is computed again because the marks may
+  change the steps' effects and transitions it is computed from. The recording's artifact is
+  replaced and `amended_at_unix_ms` cleared; `lab.status` is `regenerated` (`validated` with
+  `--dry-run`). A refusal leaves the recording, its old package and `amended_at_unix_ms` as they
+  were.
+- Without a change since the package was generated, `record stop` answers `already_generated`
+  as before.
 
 A refusal before the writing stage leaves the recording and the session active and writes
 nothing; a failure during writing is described under "Writing" (with `written_files`). Fix the
@@ -740,12 +867,19 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   step has no page and its operation starts `from: "any"` (`entry_page: "any"`). A page
   transition after step k is the page `transition_kk`. Each page's rule is
   `{"required": [...]}`: the step's (or transition's) own marks and reused marks, without the
-  members of its `any_of` checks. No `forbidden`, no anchors.
+  members of its `any_of` checks. Workflow #390 LAB-2: a step's page adds `"forbidden": [...]`,
+  the marks it forbids ("Forbidden marks and anchors"); its anchor is not listed in `required`
+  (the anchor declares the page, which requires the anchor's target `page/<page>`), and a page
+  whose rule would be empty then has none. A page transition's rule only requires.
 - Every own mark of an effective step and of its page transition is one target:
   `verify_templates[]` (`template: "assets/<name>.png"`, `region` the search area,
   `threshold` when declared), `color_probes[]` (`expected` and `max_distance` when declared, or
   the `color_digest.v1` digest), `ocr_targets[]`, `checks[]`. Templates and color probes carry
-  a `provenance` object.
+  a `provenance` object. Workflow #390 LAB-2: the template that anchors a page is that page's
+  `anchors[]` entry instead (its `id` the page id, its provenance naming the mark as `mark_id`),
+  whose target is `page/<page>`; every reference to it in the package (a guard's `target_id`, a
+  followed click's `target_id`, a check member, another page's required or forbidden marks) names
+  `page/<page>`.
 - `control.json`: `Lab-1y.control.v2`, `execution_mode: "linear_steps"`, the package id, game,
   server, resolution (the recording's frame size), `entry_task_id` (the task id),
   `prerequisite_package_id` with `--requires`, `timeout_ms`, `step_timeout_ms` and `max_steps`
@@ -758,7 +892,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
 - A click step's operation is `step_ii_click`: `from` its page, `to` and `expect_after.page_id`
   the next page, `click: {"kind": "rect", …}` with the recorded rectangle (Workflow #396
   REC-4: `{"kind": "target", …}` or `{"kind": "offset", …}` for a click that follows a template,
-  see "Following a template"),
+  see "Following a template"; Workflow #390 LAB-2: `{"kind": "drag", "from", "to",
+  "duration_ms"}` with the recorded rectangle and destination for a drag, `{"kind": "long_press",
+  "x", "y", "duration_ms"}` at the recorded point for a long press, see "Drags and long
+  presses"),
   `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
   `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
   `retry_interval_ms` only when the step declares a retry. Its guard target comes from the
@@ -781,9 +918,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   generates the same bytes as before.
 - `control.step_timeout_ms` is min(T, 60000); a larger T adds the warning
   `step_timeout_clamped`. Without `--timeout-ms` the task timeout is
-  `S·[step 1 is no application entry] + Σ a·(w + (b − w)⁺ + p + T) + Σ_app 10000 +
+  `S·[step 1 is no application entry] + Σ a·(g + w + (b − w)⁺ + p + T) + Σ_app 10000 +
   Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000` over the steps with an effect, where S is the
-  step timeout, a the attempts, w max(post delay, window minimum), b the window maximum (0
+  step timeout, a the attempts, g the duration of a drag or long press (Workflow #390 LAB-2; 0
+  for a tap and an application operation), w max(post delay, window minimum), b the window maximum (0
   without), p the page transition timeout (T without its own, 0 without a page transition), T
   the arrival timeout (A for an application step), r the retry interval, and max(settle) the
   largest `settle_ms` of a run of optional steps: the sums before it count every optional step
@@ -847,13 +985,18 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      every live frame of step 1 (the primary frame and the samples) is simulated, and each must
      give the point inside the box the followed template gives on that frame, as the admitted
      evaluator matches it (the match box, or its corner plus the scaled offset); the decision
-     shown is the primary frame's.
+     shown is the primary frame's. Workflow #390 LAB-2: a drag must be a swipe from inside its
+     rectangle to inside its destination over its duration, a long press a long tap at its
+     point over its duration. A step 1 that forbids an OCR mark involves OCR as one that requires
+     it does.
 
    Anything else is `record_artifact_admission_failed` with the decision.
 4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
    with the Lab's OCR provider; without an OCR model OCR is not called and counts as
    undetermined. A check is derived from its members. A page matches
-   when every required target passes, does not when one fails, and is undetermined otherwise.
+   when every required target passes and (Workflow #390 LAB-2) no forbidden target passes, does
+   not when a required one fails or a forbidden one passes (`record_step_self_mismatch` names it
+   in `forbidden_passed`), and is undetermined otherwise.
    - **Self.** Every page on every live frame of its step (the primary frame and the samples,
      never a superseded frame; a page transition on its own frames) matches or is
      undetermined; a page that does not match one of its own frames is
@@ -970,6 +1113,8 @@ equal value is accepted.
  catalog_on_failure_example, binding_requires}
 ```
 
+- `status` is `generated`, `validated` (`--dry-run`), `already_generated` or (Workflow #390
+  LAB-2) `regenerated`, the package of a stopped recording marked again.
 - The package is an ordinary content-directory package and loads as
   `--package <package_id>.<ext>` (`task_run_example`); no answer member names a digest or a
   package reference (Workflow #336 PKG-S5).
@@ -978,10 +1123,18 @@ equal value is accepted.
   `scheduled_execution{mode: "device_registry", package_path}` with the absolute path (a
   configuration in the install root may use `packages/<game>/<package_id>.<ext>`). Whether it
   is scheduled still depends on the catalog task and its approval.
-- `prerequisite_entry_example` was the entry for the actingd `prerequisite_packages` when
-  another package names this one with `--requires`; since Workflow #373 NAV-3a that key is
-  retired and a prerequisite package is a package its game's installed standard pack lists, so
-  the example names a package id and path only: `{package_id, package_path}`.
+- `prerequisite_entry_example` says where the package goes so that another package can name
+  it with `--requires`: the standard-pack registry of its game (Workflow #373 NAV-3a,
+  `package-reference.md`, "Standard package root"), the one place a prerequisite package is
+  found. It is `{bundle, pack, directory}`: `bundle` is
+  `<standard_packs.root>/<game>/bundle.json`, the file that must list it; `pack` is its
+  `packs[]` entry `{package_id, server, entry_task_id, path: "packs/<package_id>"}`, which
+  `package bundle` writes with `file_count` and `byte_count` added; `directory` is
+  `<standard_packs.root>/<game>/<package_id>`, where the package sits as a content directory.
+  `<game>`, the server and the entry task are the package's own; `<standard_packs.root>` is a
+  placeholder for the actingd setting (`actingd-check-config.md`, "Standard packs"). The
+  retired actingd key `prerequisite_packages` is no such place: a configuration that carries it
+  is `config_decode_failed`.
 - `catalog_on_failure_example` is `{"action":"pause","retry_limit":1,
   "retry_backoff_ms":0,"escalation_threshold":2}`, the `on_failure` that
   `policy-suspension.md` ("Catalog") recommends; the `binding_requires` item about it says that
@@ -1006,7 +1159,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

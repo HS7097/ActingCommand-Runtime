@@ -2761,7 +2761,7 @@
           "description": "The key is a policy fact of the catalog, so a reading of it is refused."
         },
         "live_pool_key": {
-          "description": "The key is observed by a ledger-fact pool, so a reading of it is refused."
+          "description": "The key is observed by a ledger-fact pool, so a reading of it was refused. No longer given since Workflow #390 POOL-1: such a reading is the pool's base."
         },
         "package_unbound": {
           "description": "The instance has no recognition maintenance package bound."
@@ -8393,9 +8393,45 @@
     ],
     "emulator_autostart_": [
       "runtime-host"
+    ],
+    "package_edit_": [
+      "actinglab"
+    ],
+    "package_fmt_": [
+      "actinglab"
     ]
   },
   "codes": {
+    "actingctl_capability_gap_recorded": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl capability-gap: one capability gap (capability, why) was appended as one line to this user's local log %LOCALAPPDATA%\\ActingCommand\\actingctl\\capability-gaps.jsonl, as ac_capability_gap records it; the line and the log's path were printed. Nothing is sent anywhere and nothing goes to the Runtime or its ledger (Workflow #410 item 6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "actingctl_capability_gap_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl capability-gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. Without path, neither LOCALAPPDATA nor APPDATA names a folder for the log (Workflow #410 item 6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "actingctl_fact_record_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -20481,11 +20517,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task resource reading live pool unsupported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #390 POOL-1, forced compromise S-04). A run's resource reading or adjustment wrote the key a ledger_fact pool of the active catalog observes in the run's instance scope, so nothing was published and the run failed. Since 0.12.0 such a reading is published like any other and is the pool's base, which the pool's regeneration rule projects.",
+      "common_causes": "A package read the key a ledger_fact pool observes.",
+      "handling": "None in 0.12.0 and later: the code is no longer emitted."
     },
     "contained_task_resource_reading_rejected": {
       "category": "error",
@@ -26956,7 +26993,7 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Workflow #384 D2-S2: a Runtime start found an instance's recognition package binding invalid (its caused_by link is fact_reader_binding_invalid) and runs without it; the start goes on. Recorded as a note link of the recognition_packages row of config.subsystems.",
-      "common_causes": "The bound package could not be read at the start, or its marks are claimed by policy.facts or a ledger_fact pool.",
+      "common_causes": "The bound package could not be read at the start, or its marks are claimed by policy.facts.",
       "handling": "Run check-config for the full refusal and fix the binding; until then the instance has no reader."
     },
     "fact_reader_binding_invalid": {
@@ -26980,7 +27017,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Workflow #384 D2-S2: an instance's recognition maintenance package binding (instances[].recognition_package) is no reader: its package cannot be read (package_unreadable, caused by the loader's refusal), it does not qualify (designated_operation, no_marks, recognize_only, stability_termination), or one of its marks writes a key the configuration's policy.facts declares or a ledger_fact pool observes for the instance (policy_fact_authority, live_pool_key). check-config refuses the configuration; a Runtime start ignores the binding (fact_reader_binding_ignored).",
+      "description": "Workflow #384 D2-S2: an instance's recognition maintenance package binding (instances[].recognition_package) is no reader: its package cannot be read (package_unreadable, caused by the loader's refusal), it does not qualify (designated_operation, no_marks, recognize_only, stability_termination), or one of its marks writes a key the configuration's policy.facts declares for the instance (policy_fact_authority). A key a ledger_fact pool observes is no conflict since Workflow #390 POOL-1 (live_pool_key is no longer given). check-config refuses the configuration; a Runtime start ignores the binding (fact_reader_binding_ignored).",
       "common_causes": "acsetup or a hand edit bound a package that is not the standard package's recognition maintenance package, or the package changed.",
       "handling": "Bind the standard package's recognition maintenance package, or fix the package or the configuration the reader_problem names."
     },
@@ -39973,6 +40010,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "lab_frame_export_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "raw_text": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab observe --preview, or do after an action it performed, could not export a frame (Workflow #410 item 1): reading the Runtime's verified frame, encoding its JPEG preview or writing the frame or the preview into the Lab frame directory (%LOCALAPPDATA%\\ActingCommand\\actinglab\\frames) failed. The answer still succeeds, and with do the action was performed: the part not written (preview, or after_attachment.frame_path or .preview) is answered as failure {code, path, raw_text} in its place, with the path it was written to when one was known and the operating system's text as raw_text. No image is put into the answer instead.",
+      "common_causes": "LOCALAPPDATA is not set; the disk is full or the folder is not writable; the Runtime's frame was removed from its artifact store.",
+      "handling": "Free or fix the Lab frame directory and observe again (with preview), or read the frame with ac_material."
+    },
     "lab_frame_hash_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -47724,6 +47778,90 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_edit_admission_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab package edit applied its edits in memory, and the edited content directory fails the structural admission actingd makes of a content directory. The details carry the admission's code, its detail and, for a refused declaration, the declaration's file, JSON pointer and reason. Nothing was written (Workflow #390 TOOL-1).",
+      "common_causes": "An edit that leaves an unknown member, a wrong type, a reference to a page or target the package does not declare, or a control that no longer matches its task.",
+      "handling": "Correct the edits, or add the edits that keep the package consistent to the same edit list."
+    },
+    "package_edit_patch_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The edits given to actinglab package edit are not an edit list: the --patch file is unreadable, larger than 32 MiB or not a JSON array of {file, op, path, value} objects with op add or replace; or --value is not one JSON value; or an edit names a file the content directory does not hold or that is not a JSON file, or its path is not a JSON pointer (RFC 6901). The details name the edit by its index. Nothing was written (Workflow #390 TOOL-1).",
+      "common_causes": "A misspelt member or operation, a Windows path in place of the package path, or an unescaped ~ or / in a pointer token.",
+      "handling": "Write the edits as a JSON array of {file, op, path, value}, file a path inside the package and path a JSON pointer."
+    },
+    "package_edit_pointer_unresolved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An edit of actinglab package edit names a place its operation cannot take: replace names a member or element the file does not hold, add names a parent that does not exist or is not an object or array, or an array index past the end (an index equal to the length, or -, appends). The details name the edit by its index, its file and its pointer. Nothing was written (Workflow #390 TOOL-1).",
+      "common_causes": "A misspelt member in the pointer, an index counted from 1, or an edit that depends on a later one.",
+      "handling": "Read the file and correct the pointer; order the edits so a parent is added before its members."
+    },
+    "package_edit_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab package edit admitted the edited package and could not write an edited file over the old one (written to a .part file beside it, then renamed over it). The details name the file it stopped at, the files already written and any .part file left behind; nothing is removed (Workflow #390 TOOL-1).",
+      "common_causes": "The file is open in another program, or the directory is read-only.",
+      "handling": "Close the program holding the file, remove a .part file left behind, and run the same edits again on the package as it now is."
+    },
+    "package_fmt_check_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab package fmt --check read a content directory and found JSON files that are not in the canonical serialization (two-space indentation, one member or element per line, members in their document order, UTF-8 text, LF line endings including the last line, no byte-order mark). The details list them as unformatted. Nothing was written; the command exits 2 (Workflow #390 TOOL-1).",
+      "common_causes": "A JSON file of the package was written or edited by another tool, or by hand.",
+      "handling": "Run actinglab package fmt on the directory without --check and commit the result."
+    },
+    "package_fmt_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab package fmt could not write a reformatted JSON file over the old one (written to a .part file beside it, then renamed over it). The details name the file it stopped at, the files already written and any .part file left behind; nothing is removed (Workflow #390 TOOL-1).",
+      "common_causes": "The file is open in another program, or the directory is read-only.",
+      "handling": "Close the program holding the file, remove a .part file left behind, and run package fmt again."
+    },
     "package_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -53638,9 +53776,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports pool fact invalidation binding missing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An active record of the key a ledger_fact pool observes is no usable pool source, so the policy evaluation (or forward projection) is refused: the record has no current native instance binding, or it is not a package reading or adjustment the Runtime published (Workflow #390 POOL-1) and lacks input.committed and input.failed in invalidate_on.",
+      "common_causes": "An observation of the pool's key was published by hand without the input invalidations, or the instance's registration changed after the record was published.",
+      "handling": "Publish a newer observation of the key (a package reading, or a manual one with invalidate_on input.committed and input.failed, observed after the instance's latest input); see docs/live-fact-pools.md."
     },
     "port_conflict": {
       "category": "error",
@@ -80686,9 +80824,10 @@
       "owner": "runtime-host",
       "layer": "host",
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A Runtime host operation or stage: check resource reading pools."
+      "retired_in": "0.12.0",
+      "description": "Retired (Workflow #390 POOL-1). A Runtime host operation or stage: check resource reading pools, where a successful terminal read the active catalog's ledger_fact pools before publishing its readings. Since 0.12.0 a reading of a live pool's key is published, so nothing is checked."
     },
     "check_scheduler_cleanup": {
       "owner": "runtime-host",

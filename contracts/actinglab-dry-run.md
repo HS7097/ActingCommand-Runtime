@@ -133,10 +133,10 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `detect-page` | no_effect | | |
 | `recognize` | no_effect | | |
 | `recognize-artifact` | no_effect | | |
-| `observe` | mixed | | `--capture --record`: refused, `record_flag_unsupported`; `--with-frame <path>` (offline and `--capture`, without `--record`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; a bare `--with-frame` and other forms without `--record`: no_effect |
+| `observe` | mixed | | `--capture --record`: refused, `record_flag_unsupported`; `--with-frame <path>` (offline and `--capture`, without `--record`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; `--preview` (Workflow #410 item 1: a JPEG file written): refused the same way, alternative `observe` without `--preview`; a bare `--with-frame` and other forms without `--record`: no_effect |
 | `replay` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads, the whole package (Workflow #308 SEL-L6a) and one select step's scan with `--select` and `--scan` (SEL-L6b) |
 | `recognition-regression` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads (Workflow #331 RSU-1) |
-| `do` | preview | `executed_false` | `--capture --dry-run` writes the registered debug audit events |
+| `do` | preview | `executed_false` | `--capture --dry-run` writes the registered debug audit events; `--preview` (Workflow #410 item 1, the frame after a performed action) is refused with `validation_failed` under any dry run |
 | `ensure` | preview | `executed_false` | as `do` |
 | `wait` | no_effect | | |
 | `current-page` | no_effect | | |
@@ -177,6 +177,8 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `package build-task` | refused | `resource_production_retired` | pure parsed admission |
 | `package build-pack` | refused | `resource_production_retired` | pure parsed admission |
 | `package bundle` | refused | `dry_run_unsupported` | flag parsing only; alternative `package preflight` |
+| `package fmt` | mixed | | `--check`: no_effect; without `--check`: refused, `dry_run_unsupported`, flag parsing only, alternative `package fmt --check` (Workflow #390 TOOL-1) |
+| `package edit` | preview | `dry_run` | the edits are applied and the edited package admitted in memory; `validated`, `written: false`, `persisted: false`, no file written (Workflow #390 TOOL-1) |
 | `operation validate` | no_effect | | |
 | `operation inspect` | no_effect | | |
 | `operation explain` | no_effect | | |

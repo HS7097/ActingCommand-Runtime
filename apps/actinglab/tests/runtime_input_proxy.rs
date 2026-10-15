@@ -4082,3 +4082,223 @@ fn rsu1_recognition_regression_replays_the_kept_frames_against_the_original_reco
         );
     }
 }
+
+// Workflow #410 item 1 (board #410, approved by Alice 2026-10-15; the 0.12 end). Every observe
+// and do answer states the frame's coordinate system: device pixels W x H, the orientation, and
+// that tap and tap_rect take coordinates in that same system. preview writes a JPEG preview of
+// the frame and answers its path and scale. After an action, do attaches its result by default:
+// the after page's projection when the page is known, the after frame's path and its preview's
+// path when it is not. No image is put into an answer, only paths. The fake device serves 16 x 9
+// frames, red until a tap and blue after one once the transition is switched on; the package
+// knows only the red page.
+#[test]
+fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result() {
+    use image::ImageDecoder;
+    use std::collections::BTreeSet;
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local-app-data");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").expect("write config");
+    let package = root.path().join("frame.zip");
+    write_zip(&package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.frame","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", br#"{"schema_version":"0.3","coordinate_space":{"width":16,"height":9},"targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]}"#),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-labobs"),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host");
+    let package = package.to_str().expect("package path");
+    let frames = local.join("ActingCommand").join("actinglab").join("frames");
+    let frame_files = || -> BTreeSet<std::path::PathBuf> {
+        fs::read_dir(&frames)
+            .map(|entries| entries.map(|entry| entry.expect("entry").path()).collect())
+            .unwrap_or_default()
+    };
+    let assert_coordinates = |statement: &Value, what: &str| {
+        assert_eq!(
+            statement["device_pixels"],
+            json!([16, 9]),
+            "{what}: {statement}"
+        );
+        assert_eq!(statement["orientation"], "landscape", "{what}: {statement}");
+        for input in ["tap", "tap_rect"] {
+            assert!(
+                statement["applies_to"]
+                    .as_array()
+                    .is_some_and(|inputs| inputs.iter().any(|named| named == input)),
+                "{what}: {input} is in the frame's coordinates: {statement}"
+            );
+        }
+    };
+    // A preview {path, width, height, scale}: a JPEG file of that size in the Lab frame
+    // directory; the frame is not larger than 1024, so it keeps its size at scale 1.
+    let assert_preview = |preview: &Value, what: &str| {
+        let path = std::path::PathBuf::from(
+            preview["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{what}: the preview's path: {preview}")),
+        );
+        assert_eq!(path.parent(), Some(frames.as_path()), "{what}: {preview}");
+        let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(
+            fs::read(&path).expect("the preview file"),
+        ))
+        .unwrap_or_else(|error| panic!("{what}: the preview is not a JPEG: {error}"));
+        assert_eq!(decoder.dimensions(), (16, 9), "{what}: {preview}");
+        assert_eq!(
+            (&preview["width"], &preview["height"], &preview["scale"]),
+            (&json!(16), &json!(9), &json!(1.0)),
+            "{what}: {preview}"
+        );
+    };
+
+    // observe --capture --preview: the frame's coordinates and its preview.
+    let observed = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package,
+            "--preview",
+        ],
+    );
+    assert_coordinates(&observed["data"]["frame_coordinates"], "observe");
+    assert_preview(&observed["data"]["preview"], "observe");
+
+    // do on a page that stays known: the after page's projection, and no frame file.
+    let written_before = frame_files();
+    let known = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,1",
+            "--capture",
+            "--zip",
+            package,
+        ],
+    );
+    assert_eq!(known["data"]["executed"], true, "{known}");
+    assert_coordinates(&known["data"]["frame_coordinates"], "do on a known page");
+    let attachment = &known["data"]["after_attachment"];
+    assert_eq!(
+        attachment
+            .as_object()
+            .map(|members| members.keys().cloned().collect::<BTreeSet<_>>()),
+        Some(BTreeSet::from(["kind", "observation"].map(str::to_string))),
+        "{attachment}"
+    );
+    assert_eq!(attachment["kind"], "page_projection", "{attachment}");
+    assert_eq!(
+        attachment["observation"]["page"], "neutral/home",
+        "{attachment}"
+    );
+    assert_eq!(
+        attachment["observation"]["frame"]["width"], 16,
+        "{attachment}"
+    );
+    assert_eq!(
+        frame_files(),
+        written_before,
+        "a known page writes no frame file"
+    );
+
+    // do onto a page the package does not know: the after frame's path and its preview's path.
+    state.transition_after_tap.store(true, Ordering::Release);
+    let unknown = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            "--tap",
+            "1,1",
+            "--capture",
+            "--zip",
+            package,
+        ],
+    );
+    assert_eq!(unknown["data"]["executed"], true, "{unknown}");
+    assert_coordinates(
+        &unknown["data"]["frame_coordinates"],
+        "do on an unknown page",
+    );
+    let attachment = &unknown["data"]["after_attachment"];
+    assert_eq!(
+        attachment
+            .as_object()
+            .map(|members| members.keys().cloned().collect::<BTreeSet<_>>()),
+        Some(BTreeSet::from(
+            ["frame_coordinates", "frame_path", "kind", "preview"].map(str::to_string)
+        )),
+        "{attachment}"
+    );
+    assert_eq!(attachment["kind"], "frame", "{attachment}");
+    assert_coordinates(&attachment["frame_coordinates"], "the after frame");
+    let frame_path = std::path::PathBuf::from(
+        attachment["frame_path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the after frame's path: {attachment}")),
+    );
+    assert_eq!(frame_path.parent(), Some(frames.as_path()), "{attachment}");
+    let after = actingcommand_recognition::Scene::from_png(
+        &fs::read(&frame_path).expect("the after frame file"),
+    )
+    .expect("the after frame is a PNG");
+    assert_eq!((after.width(), after.height()), (16, 9));
+    assert_eq!(
+        &after.rgb8_pixels()[..3],
+        &[0, 0, 255],
+        "the frame after the tap"
+    );
+    assert_preview(&attachment["preview"], "the after frame");
+
+    // Offline observe of that frame states its coordinates too.
+    let offline = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "observe",
+            "--scene",
+            frame_path.to_str().expect("frame path"),
+            "--zip",
+            package,
+        ],
+    );
+    assert_coordinates(&offline["data"]["frame_coordinates"], "offline observe");
+    host.close().expect("close host");
+}

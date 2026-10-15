@@ -25,6 +25,8 @@ actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-resource-tooling = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
+# Workflow #410 item 1: the JPEG preview of an observe or do frame.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

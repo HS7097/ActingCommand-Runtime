@@ -607,9 +607,10 @@ that is no reader with `fact_reader_binding_invalid` at stage
 `config_recognition_binding`, the first in alias order: `reader_problem`
 `package_unreadable` when the package cannot be read, `recognize_only`,
 `stability_termination`, `designated_operation` or `no_marks` when it does not
-qualify, and `policy_fact_authority` or `live_pool_key` when one of its marks
-writes a key the configuration's `policy.facts` declares for the instance or a
-`ledger_fact` pool of the configured catalog observes in the instance's scope.
+qualify, and `policy_fact_authority` when one of its marks writes a key the
+configuration's `policy.facts` declares for the instance. A key a `ledger_fact`
+pool of the configured catalog observes is no conflict since Workflow #390
+POOL-1: its reading is the pool's base (`live_pool_key` is no longer given).
 `acsetup --commit-config` therefore does not commit such a binding. Daemon
 startup does not prepare the bound packages: it reads their marks, runs without
 a binding it cannot read or whose marks are claimed, and notes each one in the
@@ -656,9 +657,10 @@ with no configuration change and no restart. The top-level keys
 `prerequisite_packages` and `return_home_packages` (Workflow #336 L2b, L2c) are
 retired with no compatibility: a configuration that still carries either fails
 `config_decode_failed` at stage `config_load`, and their eleven assembly codes
-are gone. A Lab recording's `record stop` still prints a
-`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output") until its
-output is changed.
+are gone. A Lab recording's `record stop` prints, as its
+`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output"), where its
+package goes in this registry: the game root's `bundle.json` that lists it, its
+`packs[]` entry and its directory; it names no configuration entry.
 
 A scheduled task paused by a failure is lifted once the content hash of a
 package its paused run went through changes (Workflow #336 PKG-S3, option 丙):

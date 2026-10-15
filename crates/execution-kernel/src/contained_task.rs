@@ -122,7 +122,7 @@ mod gate_390_read1;
 #[cfg(test)]
 mod gate_387_d1cg;
 // Workflow #373 NAV-3a, test row N3a-1 (exec key 67): a page-graph package declares a
-// prerequisite package.
+// prerequisite package; the NAV-3a follow-up (exec key 71): it needs a page entry.
 #[cfg(test)]
 mod gate_373_nav3a;
 // Test plan v2.2 E-5 G5 (exec key 3): linear_steps.

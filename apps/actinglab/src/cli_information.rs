@@ -68,6 +68,15 @@ pub(super) fn help_data() -> Value {
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",
                 "--out <new directory>", "--source-repository <owner/name>", "--source-commit <commit>",
                 "--maintenance <JSON array of package_id, server, uses; written into actingcommand.bundle.v4>"
+            ],
+            "package fmt": [
+                "--package <content directory>",
+                "--check (writes nothing; fails with package_fmt_check_failed naming every JSON file that is not canonical)"
+            ],
+            "package edit": [
+                "--package <content directory>",
+                "--patch <JSON array of {file, op: add|replace, path: JSON pointer, value}>",
+                "--file <path in the package> with --add <JSON pointer> or --replace <JSON pointer> and --value <JSON>: one edit instead of --patch"
             ]
         },
         "compatibility_notes": {

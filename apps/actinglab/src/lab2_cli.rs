@@ -21,8 +21,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::*;
 
+// Workflow #410 item 1: the frame's coordinate system, its preview and the after-action
+// attachment.
+mod frame;
 mod observation;
 mod operation;
+
+/// Workflow #410 item 1: the members an observe or do answer adds about its frame; Min never
+/// drops them.
+const FRAME_MEMBERS: [&str; 3] = ["frame_coordinates", "preview", "after_attachment"];
 
 struct Lab2Ids {
     issuer: IdIssuer,
@@ -80,6 +87,10 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let flags = FlagArgs::parse(args)?;
     if flags.optional_path("--with-frame").is_some() {
         crate::dry_run_gate::refuse(global, "observe --with-frame", Some("observe"), Value::Null)?;
+    }
+    // Workflow #410 item 1: the preview is a file written, as the frame of --with-frame is.
+    if flags.bool("--preview") {
+        crate::dry_run_gate::refuse(global, "observe --preview", Some("observe"), Value::Null)?;
     }
     if flags.bool("--capture") {
         return run_runtime_observe(global, &flags);
@@ -190,6 +201,12 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if let Some(path) = frame_path {
         payload["frame_path"] = json!(path.display().to_string());
     }
+    // Workflow #410 item 1: the scene's coordinate system, and its preview when asked.
+    payload["frame_coordinates"] =
+        frame::coordinates(loaded_scene.scene.width(), loaded_scene.scene.height());
+    if flags.bool("--preview") {
+        payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
+    }
     observation::project(payload, observation, &flags, global.verbose)
 }
 
@@ -270,6 +287,13 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             fs::write(&path, verified.png())
                 .map_err(|error| CliError::device(error.to_string()))?;
             payload["frame_path"] = json!(path.display().to_string());
+        }
+        // Workflow #410 item 1: the captured frame's coordinate system, and its preview when
+        // asked.
+        payload["frame_coordinates"] =
+            frame::coordinates(observed.frame.width(), observed.frame.height());
+        if flags.bool("--preview") {
+            payload["preview"] = frame::preview(verified.png());
         }
         let terminal =
             if observed.status == actingcommand_contract::PageObservationStatus::Recognized {
@@ -417,6 +441,11 @@ fn run_runtime_do(
             "observation": page_detection_json(&after),
             "device": device,
             "arbitration": runtime_scheduler_projection(!dry_run),
+            // Workflow #410 item 1: the coordinate system of the frame the click was planned on.
+            "frame_coordinates": frame::coordinates(
+                loaded_scene.scene.width(),
+                loaded_scene.scene.height(),
+            ),
         });
         attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
         Ok(payload)
@@ -1030,6 +1059,14 @@ fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> Cli
 
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    // Workflow #410 item 1: do's preview is of the frame after the action it performed.
+    if flags.bool("--preview")
+        && (global.dry_run || flags.bool("--dry-run") || !flags.bool("--capture"))
+    {
+        return Err(CliError::usage(
+            "do --preview previews the frame after a performed action: it requires --capture without --dry-run",
+        ));
+    }
     if flags.bool("--capture") && !(global.dry_run || flags.bool("--dry-run")) {
         return operation::run_contained_lab_do(global, &flags);
     }
@@ -1151,6 +1188,11 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             "observation": page_detection_json(&after),
             "device": device,
             "arbitration": isolated_offline_projection(),
+            // Workflow #410 item 1: the scene's coordinate system, which the planned click uses.
+            "frame_coordinates": frame::coordinates(
+                loaded_scene.scene.width(),
+                loaded_scene.scene.height(),
+            ),
         });
         attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
@@ -1397,7 +1439,10 @@ fn lab2_projection_request(flags: &FlagArgs, evidence_id: Option<String>) -> Pro
         } else {
             ProjectionVerbosity::Min
         },
-        fields: fields_from_flags(flags),
+        fields: fields_from_flags(flags)
+            .into_iter()
+            .chain(FRAME_MEMBERS.map(str::to_string))
+            .collect(),
         evidence_id,
     }
 }
@@ -1445,6 +1490,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--verbose",
                 "--pretty",
                 "--record (with --capture: store the frame in the active recording)",
+                "--preview (write a JPEG preview of the frame, long edge at most 1024)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
@@ -1457,6 +1503,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "frame_age_ms",
                 "backend",
                 "record",
+                "frame_coordinates",
+                "preview",
             ],
             requires_lease: false,
         },
@@ -1482,6 +1530,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--recovery-poll-ms <ms>",
                 "--record (with --capture: click the open recording step and record it)",
                 "--tap-rect <x,y,w,h> (only with --record: declare the step click rectangle)",
+                "--preview (with --capture, not --dry-run: also preview the after frame of a known page)",
                 "--test-capture-delay-ms <ms> (test-only scene delay)",
             ],
             output_fields: &[
@@ -1499,6 +1548,8 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "observation",
                 "ledger",
                 "record",
+                "frame_coordinates",
+                "after_attachment",
             ],
             requires_lease: true,
         },
@@ -1614,14 +1665,20 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--frame <png>",
                 "--sample <png>",
                 "--page <name>",
-                "--template <id>=x,y,w,h",
+                "--template <id>=x,y,w,h[@x,y,w,h]",
                 "--scales <f>,...",
                 "--color <id>=x,y,w,h",
                 "--reuse <id>",
                 "--remove <id>",
+                "--forbid <id>",
+                "--anchor <id>",
+                "--no-anchor",
                 "--click x,y,w,h",
                 "--click-from <id>",
                 "--click-follow <id>",
+                "--drag-to x,y,w,h",
+                "--long-press x,y",
+                "--duration-ms <1..60000>",
                 "--click-guard <id>",
                 "--click-retry <2..5>",
                 "--replace-click",

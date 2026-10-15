@@ -471,6 +471,19 @@ const CLIENT: &[Subcommand] = &[
         &["--root", ROOT],
         &["--state-root", ROOT],
     ),
+    // Workflow #410 item 6: `capability-gap`, both texts required, no root; a refusal writes
+    // nothing.
+    result(
+        &[
+            "capability-gap",
+            "--capability",
+            "neutral capability",
+            "--why",
+            "neutral why",
+        ],
+        &["--state-root", ROOT],
+        &["--why", "neutral why"],
+    ),
 ];
 
 // `start`, `restart` and `watchdog` are built on Windows only.

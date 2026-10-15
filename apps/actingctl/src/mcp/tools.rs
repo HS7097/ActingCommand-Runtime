@@ -612,6 +612,22 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::devices::unbind,
     },
     // ---- Workflow #398 RD-1c (end) ----
+    // ---- Workflow #410 item 6 (begin): `ac_capability_gap` ↔ `actingctl capability-gap`;
+    // observer, so that every session can record what it lacked; it writes only the user's own
+    // local log and touches neither the Runtime nor a device. ----
+    ToolDef {
+        name: "ac_capability_gap",
+        title: "Record a capability gap",
+        tier: Tier::Observer,
+        description: super::capability_gap::DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+        input_schema: super::capability_gap::input,
+        result_schema: super::capability_gap::result,
+        run: super::capability_gap::run,
+    },
+    // ---- Workflow #410 item 6 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",
@@ -755,7 +771,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Lab observe",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json observe, one argument per flag, and answers its data verbatim. Offline (scene) it detects the page of a PNG scene with the package (package, or zip, by its path) and touches no Runtime. With capture the Runtime takes the instance's current frame (instance: its alias) and records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id.",
+            "Runs actinglab --json observe, one argument per flag, and answers its data verbatim. Offline (scene) it detects the page of a PNG scene with the package (package, or zip, by its path) and touches no Runtime. With capture the Runtime takes the instance's current frame (instance: its alias) and records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Every answer states the frame's coordinate system as frame_coordinates {device_pixels [width, height], orientation, applies_to}: ac_lab_do's tap, tap_rect and swipe take x,y in exactly these frame pixels, counted from the top-left pixel. preview true also writes a JPEG preview (long edge at most 1024) and answers preview {path, width, height, scale}: a point read on the preview is a frame point after multiplying x and y by scale. Images are never inlined, only paths.",
             lab_errors!(),
             lab_job!()
         ),
@@ -763,7 +779,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         destructive: false,
         idempotent: false,
         input_schema: lab::observe_input,
-        result_schema: lab::lab_result,
+        result_schema: lab::frame_result,
         run: lab::observe,
     },
     ToolDef {
@@ -771,7 +787,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Lab do",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime (target: a Runtime element id, or tap or swipe; instance: its alias), which records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Offline (scene) actinglab only plans, with dry_run, and touches no Runtime. The destructive guard flags (destructive, allow_destructive) are not read on the capture path (with capture and without dry_run): that is actinglab's own behaviour, and this server adds no guard of its own.",
+            "Runs actinglab --json do, one argument per flag, and answers its data verbatim. With capture it acts on the instance through the Runtime (target: a Runtime element id, or tap or swipe; instance: its alias), which records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id. Offline (scene) actinglab only plans, with dry_run, and touches no Runtime. The destructive guard flags (destructive, allow_destructive) are not read on the capture path (with capture and without dry_run): that is actinglab's own behaviour, and this server adds no guard of its own. Every answer states frame_coordinates {device_pixels [width, height], orientation, applies_to}, the coordinate system of the frame the action was chosen on: tap, tap_rect and swipe are in these frame pixels, counted from the top-left pixel, never in a preview's. After an action it attaches the result by default, so no extra observe is needed: when the page after it is known, after_attachment {kind page_projection, observation} is that page's projection (its content_sha256 and after.projection_sequence are the next call's projection_hash and projection_sequence); otherwise after_attachment {kind frame, frame_coordinates, frame_path, preview {path, width, height, scale}} names the frame after the action and its JPEG preview (long edge at most 1024; frame point = preview point times scale). preview true (capture, not dry_run) also writes the preview of a known page's frame. Images are never inlined, only paths.",
             lab_errors!(),
             lab_job!()
         ),
@@ -779,7 +795,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         destructive: false,
         idempotent: false,
         input_schema: lab::do_input,
-        result_schema: lab::lab_result,
+        result_schema: lab::frame_result,
         run: lab::act,
     },
     ToolDef {
@@ -819,7 +835,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Stop a recording",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example inline when they fit. It opens no Runtime connection and records no client.action.",
+            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. After ac_record_mark on a stopped recording, the next stop generates the package again and answers lab.status regenerated. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example inline when they fit. It opens no Runtime connection and records no client.action.",
             lab_errors!(),
             lab_job!()
         ),

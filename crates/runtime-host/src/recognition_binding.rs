@@ -10,9 +10,7 @@ use crate::codes::HostCode;
 use actingcommand_contract::ReaderProblem;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_execution_kernel::TaskPackageDescriptor;
-use actingcommand_policy::{
-    CatalogBundle, ObservationRef, ObservedFact, PoolValueSource, PredicateSpec, ScopeSelector,
-};
+use actingcommand_policy::{CatalogBundle, ObservedFact, PredicateSpec, ScopeSelector};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -44,41 +42,32 @@ pub fn recognition_binding_qualification(
     }
 }
 
-/// Checks 2-3 (D2 model §3.2): no mark writes a key the configuration's `policy.facts`
-/// declares for the instance, nor one a `ledger_fact` pool of the instance observes; the fact
-/// store would refuse every such reading (`contracts/resource-readings.md`, Host).
+/// Check 2 (D2 model §3.2): no mark writes a key the configuration's `policy.facts` declares for
+/// the instance; the fact store would refuse every such reading (`contracts/resource-readings.md`,
+/// Host). Check 3 is gone since Workflow #390 POOL-1: a reading of the key a `ledger_fact` pool
+/// observes is published and resets the pool's base, so a mark may write it.
 pub fn recognition_binding_key_conflict(
     instance_alias: &str,
     path: &Path,
     package_id: &str,
     reading_keys: &[String],
     policy_facts: &[ObservedFact],
-    catalog: Option<&CatalogBundle>,
 ) -> Result<(), Outcome> {
     let scope = ScopeSelector::Instance {
         instance_id: instance_alias.to_owned(),
     };
     for key in reading_keys {
-        let problem = if policy_facts
+        if policy_facts
             .iter()
             .any(|fact| fact.scope == scope && fact.fact_key == *key)
         {
-            Some(ReaderProblem::PolicyFactAuthority)
-        } else if catalog.is_some_and(|catalog| {
-            catalog.pools.pools.iter().any(|pool| {
-                matches!(pool.value_source, PoolValueSource::LedgerFact { .. })
-                    && pool.scope == scope
-                    && matches!(&pool.observation, ObservationRef::Fact { fact_key } if fact_key == key)
-            })
-        }) {
-            Some(ReaderProblem::LivePoolKey)
-        } else {
-            None
-        };
-        if let Some(problem) = problem {
-            return Err(recognition_binding_invalid(instance_alias, path, problem)
-                .package_id(package_id)
-                .fact_key(key.as_str()));
+            return Err(recognition_binding_invalid(
+                instance_alias,
+                path,
+                ReaderProblem::PolicyFactAuthority,
+            )
+            .package_id(package_id)
+            .fact_key(key.as_str()));
         }
     }
     Ok(())

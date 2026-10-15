@@ -1784,10 +1784,12 @@ mod tests {
             panic!("injected reader panic");
         });
 
+        // The deadline only bounds the wait: the receive returns as soon as the panicking
+        // reader drops its signal, so a loaded runner's slow unwind cannot read as an open pipe.
         let err = join_pipe_reader(
             &mut Some(PipeReader { handle, done }),
             "stdout",
-            Instant::now() + Duration::from_secs(1),
+            Instant::now() + Duration::from_secs(30),
             ADB_PROGRAM,
         )
         .expect_err("reader panic must be fatal");

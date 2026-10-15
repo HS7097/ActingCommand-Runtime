@@ -26,6 +26,12 @@ mod gate_396_rec4;
 // Workflow #336 PKG-S5 (exec key 66): record stop writes `<package_id>.<ext>`, replaced in place.
 #[cfg(test)]
 mod gate_336_pkgs5;
+// Workflow #373 NAV-3a follow-up (exec key 71): record stop prints its package's registry entry.
+#[cfg(test)]
+mod gate_373_nav3afu;
+// Workflow #390 LAB-2 (exec key 72): forbidden and anchored pages, gestures, marks after stop.
+#[cfg(test)]
+mod gate_390_lab2;
 // Test plan v2.2 E-5 G6 (exec key 35): record stop over a synthetic recording.
 #[cfg(test)]
 mod gate_e5_record_stop;

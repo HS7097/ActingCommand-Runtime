@@ -260,7 +260,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m; Workflow #384 D2-S5)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m; Workflow #384 D2-S5; Workflow #410 item 1; Workflow #410 item 6)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -283,8 +283,10 @@ tests = [
     "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
     "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status",
     "actingcommand-actingctl::gate::mcp_fact_refresh_parity::gate_actingctl_fact_refresh_and_ac_overview_answer_the_same_fact_refresh_status",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_ac_lab_observe_and_ac_lab_do_pass_preview_to_actinglab_as_the_cli_takes_it",
+    "actingcommand-actingctl::gate::mcp_capability_gap_parity::gate_actingctl_capability_gap_and_ac_capability_gap_record_the_same_gap_locally",
 ]
-incident = ["#389", "#385 P-m", "#384 D2-S5"]
+incident = ["#389", "#385 P-m", "#384 D2-S5", "#410"]
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
@@ -631,3 +633,22 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_384_d2s5::d2s5_t37_each_transition_is_one_developer_line_and_one_outcome_line",
 ]
 incident = ["#384"]
+
+# Workflow #410 item 1 (board #410, approved by Alice 2026-10-15): ac_lab_observe and ac_lab_do keep A5's shapes and budgets: an answer over the output budget is still exported whole, and it still states its frame inline: frame_coordinates, frame_path, preview and after_attachment stay in the answer, verbatim, each while the answer stays within the budget
+[[gate]]
+key = "66"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_labobs::gate_labobs_an_exported_answer_still_states_its_frame_inline_within_the_budget",
+]
+incident = ["#410"]
+
+# Workflow #410 item 6 (board #410, approved by Alice 2026-10-15): the local capability-gap log: actingctl capability-gap and ac_capability_gap append one JSON line {schema_version, recorded_at_unix_ms, via, capability, why} per gap to the user's local log and answer its path and the line; a capability or why that is blank, holds a line break or is over its bound (120, 500 characters) is refused before anything is written
+[[gate]]
+key = "67"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_each_record_appends_one_line_with_the_gap_as_given",
+    "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused",
+]
+incident = ["#410"]

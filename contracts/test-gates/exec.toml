@@ -791,7 +791,7 @@ tests = [
 ]
 incident = ["#382 E-5"]
 
-# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the declared bindings; E-4 G4b: over the shared fixture set EXEC-I6, package bundle --maintenance admits what the Runtime admits and refuses each refused chain under the code the Runtime refuses its run with
+# Test plan v2.2 E-1 G4a: the shared PrerequisiteChain takes three declared layers, keeps the return-home fallback outside them and selects it only for a linear page entry without a prerequisite, refuses a cycle, an incompatible, unbound or misidentified prerequisite and more than 1,000 steps; validate_bundle_maintenance matches every indexed identity, reuses the structural rules, checks each declared use on the material and every chain against the bundle's own packs (Workflow #373 NAV-3a: every pack is a prerequisite package of the registry the bundle becomes); E-4 G4b: over the shared fixture set EXEC-I6, package bundle --maintenance admits what the Runtime admits and refuses each refused chain under the code the Runtime refuses its run with
 [[gate]]
 key = "12"
 coverage = "Y"
@@ -806,7 +806,7 @@ tests = [
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_matches_every_indexed_identity",
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_refuses_a_duplicate_role_or_a_missing_reference",
     "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material",
-    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_declared_bindings",
+    "actingcommand-execution-kernel::lib::maintenance::gate_e1::gate_e1_bundle_maintenance_checks_every_chain_against_the_bundles_packs",
     "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_admits_the_fixture_set_the_runtime_admits",
     "actingcommand-resource-tooling::lib::gate_e4::gate_e4_bundle_v3_refuses_each_fixture_chain_with_the_runtimes_code",
     "actingcommand-runtime-host::lib::tests::gate_e4::gate_e4_runtime_refuses_each_fixture_chain_with_the_bundles_code",
@@ -1104,3 +1104,66 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record",
 ]
 incident = ["#331"]
+
+# Workflow #373 NAV-3a follow-up (M-373 v1.1 §3.8, §4.3; test row N3a-9; wave 14 rulings, NAV-3a items 3 and 5; register §1.73): bundle v4 refuses a maintenance entry with the retired use prerequisite (the bundle index and the source declaration array do not decode, a game root holding it is standard_pack_root_invalid malformed) and reads the same entry with return_home alone; a navigable_route package that declares a prerequisite package without an entry page (none, or any) is contained_task_control_invalid with reason=prerequisite_requires_page_entry, and with an entry page, whatever page it is, that page is checked first; record stop's prerequisite_entry_example is the package's place in its game's standard-pack registry (bundle.json, its packs[] entry and its directory), the same after the recording stopped
+[[gate]]
+key = "71"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::package::tests::n3a_9_bundle_v4_refuses_a_maintenance_entry_with_the_prerequisite_use",
+    "actingcommand-execution-kernel::lib::contained_task::gate_373_nav3a::nav3a_a_page_graph_package_declaring_a_prerequisite_without_a_page_entry_is_refused",
+    "actingcommand-lab::lib::gate_373_nav3afu::nav3afu_record_stop_prints_the_registry_entry_of_its_package",
+]
+incident = ["#373 NAV-3a"]
+
+# Workflow #390 LAB-2 (forced-compromises mapping row LAB-2; compromises L-02, T-03; register §1.74): the Lab recording completes its generated package. A template mark without a declared search area searches its crop grown by 48 px on each side, clamped to the frame, and --template <id>=x,y,w,h@x,y,w,h declares one; a step's page forbids marks of other steps (each must pass on no live frame of the step, forbidden_mark_passes; an own mark is validation_failed, an unknown one forbidden_source_missing; a forbidden mark stays in use on its step) and the page rule lists them under forbidden; an own required template anchors its page as its anchors[] entry, whose target page/<page> the guard names (otherwise anchor_invalid not_own_template or not_required); a drag (click rectangle to destination) and a long press (one point) over a duration are generated as drag and long_press clicks, the first decision swipes or long-taps inside them, the default task timeout counts the duration, and do --capture --record executes them as one swipe; a stopped recording takes marks on its steps and record stop generates the package again (regenerated), but takes no new step and no step operation (record_session_not_active, recording_stopped); the generated navigation collects an operation whose to is a page set with every page it may reach (to_pages, exactly one of to_page and to_pages), which no route passes, and a long_press navigation click holds its point
+[[gate]]
+key = "72"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_template_without_a_search_area_searches_48_px_around_its_crop",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_page_forbids_a_mark_of_another_step_that_is_absent_from_its_frames",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_forbidden_mark_that_passes_on_a_live_frame_refuses_the_batch",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_page_forbids_only_marks_of_other_steps_and_keeps_them_in_use",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_an_anchor_declares_its_page_by_the_template",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_an_anchor_is_a_required_own_template_mark_of_its_step",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_drag_is_generated_as_a_drag_click_from_its_rectangle_to_its_destination",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_long_press_is_generated_as_a_long_press_click_at_its_point",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_gesture_without_its_parts_is_refused",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_do_capture_record_executes_a_declared_drag_as_one_swipe",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_stopped_recording_marked_again_generates_its_package_again",
+    "actingcommand-lab::lib::gate_390_lab2::lab2_a_stopped_recording_takes_no_new_step_and_no_step_operation",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::lab2_record_mark_flags_carry_the_search_area_the_page_rule_and_the_gesture",
+    "actingcommand-pack-containment::lib::source::declarations::tests::lab2_a_navigation_edge_names_one_destination_or_every_page_it_may_reach",
+    "actingcommand-execution-kernel::lib::drive::tests::lab2_a_route_never_passes_an_edge_with_several_destinations",
+    "actingcommand-execution-kernel::lib::drive::tests::lab2_a_long_press_navigation_input_holds_its_point",
+]
+incident = ["#390"]
+
+# Workflow #390 TOOL-1 (FCM row TOOL-1; compromise P-03; register §1.75): actinglab package fmt writes every JSON file of a content directory, named by its path, in the canonical serialization (two-space indentation, one member or element per line, members in their order, UTF-8 text, LF line endings with a last LF, a CRLF file becoming LF) and leaves every other file byte for byte, and a second run changes nothing; with --check it writes nothing and fails with package_fmt_check_failed naming the files that are not canonical; actinglab package edit applies RFC 6902 add and replace edits at RFC 6901 JSON pointers in memory, admits the edited package structurally and only then writes the changed files canonically; a refused admission (package_edit_admission_refused) or a pointer that names no place (package_edit_pointer_unresolved) writes nothing; no digest is computed or reported
+[[gate]]
+key = "73"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_fmt_writes_every_json_file_in_the_canonical_serialization",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_fmt_check_names_the_unformatted_files_and_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_adds_and_replaces_by_json_pointer_then_admits_and_writes",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_takes_one_edit_from_its_flags",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_refused_by_admission_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_package_edit_pointer_that_does_not_resolve_writes_nothing",
+    "actingcommand-actinglab::bin:actinglab::package_tool::gate_390_tool1::tool1_add_and_replace_follow_rfc_6902",
+]
+incident = ["#390"]
+
+# Workflow #410 item 1 (board #410, approved by Alice 2026-10-15): every actinglab observe and do answer states its frame's coordinate system as frame_coordinates (device pixels W x H, the orientation landscape, portrait or square, and tap and tap_rect taking coordinates in that same system); --preview writes a JPEG preview of the frame whose long edge is at most 1024 and answers its path, size and scale (frame pixels per preview pixel); after an action, do --capture attaches its result by default: the after page's projection when the page is known, the after frame's path and its preview's path when it is not, and no image is ever in the answer
+[[gate]]
+key = "74"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::labobs_the_coordinate_statement_names_device_pixels_the_orientation_and_the_inputs",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::labobs_the_preview_long_edge_is_1024_and_its_scale_maps_back_to_frame_pixels",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::labobs_the_preview_is_a_jpeg_of_the_answered_size_and_scale",
+    "actingcommand-actinglab::runtime_input_proxy::labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result",
+]
+incident = ["#410"]

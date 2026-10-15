@@ -569,7 +569,7 @@ tests = [
 ]
 incident = ["#389 MCP-4"]
 
-# Workflow #384 D2-S2: a recognition package binding that is no reader is fact_reader_binding_invalid with its reader problem; readings are published on the frames they were taken on, and a mark that gives no reading leaves the key's earlier record and is one warning row of the task diagnostic; a mark whose key policy.facts or a ledger_fact pool claims refuses the binding, and a start runs without it and notes fact_reader_binding_ignored; a realistic fact no reader marks is fact_reader_missing
+# Workflow #384 D2-S2: a recognition package binding that is no reader is fact_reader_binding_invalid with its reader problem; readings are published on the frames they were taken on, and a mark that gives no reading leaves the key's earlier record and is one warning row of the task diagnostic; a mark whose key policy.facts claims refuses the binding, and a start runs without it and notes fact_reader_binding_ignored (a key a ledger_fact pool observes no longer does since Workflow #390 POOL-1); a realistic fact no reader marks is fact_reader_missing
 [[gate]]
 key = "61"
 coverage = "Y"
@@ -1025,3 +1025,22 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope",
 ]
 incident = ["#390"]
+
+# Workflow #373 NAV-3a follow-up (M-373 v1.1 §3.8, §4.3; test row N3a-9, the Runtime half; wave 14 rulings, NAV-3a items 4 and 5; register §1.67 N3A-4, §1.73): a game root whose bundle.json declares the retired maintenance use prerequisite is no registry: the Runtime records it at startup as standard_pack_root_invalid (malformed, its bundle.json) and refuses a run that resolves a prerequisite package of that game with that code in its preparation, with no task record and no input; the same root with the entry's return_home use alone is read by the next run without a restart and the run goes through its prerequisite package
+[[gate]]
+key = "94"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_9_a_game_root_whose_bundle_declares_the_prerequisite_use_refuses_the_run",
+]
+incident = ["#373 NAV-3a"]
+
+# Workflow #390 POOL-1 (FCM POOL-1, compromise S-04; register §1.76): a ledger_fact pool takes its data from readings; with no base its task waits under fact_refresh_pending and the instance's recognition maintenance package is requested for the pool's key; the reading is published with no input invalidation (no live pool refusal), the evaluation takes it as the pool's base and regenerates it one unit per complete period, and the task is dispatched when the projection reaches its threshold; a package reading needs no input invalidation and a newer one resets the base, while any other record of the key without them still refuses the evaluation with pool_fact_invalidation_binding_missing
+[[gate]]
+key = "95"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_pool1::pool1_a_reading_feeds_the_live_pool_which_regenerates_from_it",
+    "actingcommand-runtime-host::lib::tests::gate_390_pool1::pool1_a_package_reading_is_the_pool_s_base_without_input_invalidations",
+]
+incident = ["#390 POOL-1"]

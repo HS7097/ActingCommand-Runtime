@@ -32,11 +32,12 @@ use crate::recording::steps::{
     ArrivalMode, FrameMeta, application_action, application_with_click, apply_marks,
     apply_step_action, apply_transition, arrive, check_device_arrival, commit_application,
     commit_click, default_recording_defaults, effective_indices, new_recording, not_active,
-    open_session, open_step, plan_application, plan_click, save, to_json,
+    open_session, open_session_for_marks, open_step, plan_application, plan_click, save,
+    stopped_change, to_json,
 };
 use crate::recording::store::{
-    LabFile, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms, page_name_valid,
-    read_old_record, read_verified, recording_path, save_recording, state_io,
+    LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
+    page_name_valid, read_old_record, read_verified, recording_path, save_recording, state_io,
     task_id_valid_for_lab, with_details,
 };
 use crate::recording::{
@@ -142,6 +143,7 @@ pub fn record_status(state_dir: &Path, instance: &str) -> LabResult<Option<LabSt
                 open_step: open_step(&recording),
                 steps,
                 artifact: recording.artifact.clone(),
+                amended_at_unix_ms: recording.amended_at_unix_ms,
             }))))
         }
     }
@@ -183,6 +185,12 @@ pub fn record_stop(
     };
     if recording.status == "stopped" {
         return match &recording.artifact {
+            // Workflow #390 LAB-2: marked again after its package was generated, the recording
+            // generates its package again.
+            Some(artifact) if recording.amended_at_unix_ms.is_some() => {
+                let settings = regeneration_settings(artifact, options);
+                generate_and_write(state_dir, &old, &recording, &settings, options, ocr, true)
+            }
             Some(artifact) => stop_already_generated(&recording, artifact, options),
             None => Ok(none),
         };
@@ -218,7 +226,54 @@ pub fn record_stop(
             .application_arrival_timeout_ms
             .unwrap_or(DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS),
     };
-    let plan = generate_plan(&recording, &settings)?;
+    generate_and_write(state_dir, &old, &recording, &settings, options, ocr, false)
+}
+
+/// Workflow #390 LAB-2: the generation options of a stopped recording marked again: each option
+/// `record stop` gives, otherwise the value its package was generated with. The task timeout is
+/// computed again unless `--timeout-ms` gives it, since the marks may have changed the steps'
+/// effects and transitions it is computed from; `--lab-dir` is written only when given.
+fn regeneration_settings(
+    artifact: &RecordingArtifact,
+    options: &RecordStopOptions,
+) -> StopSettings {
+    StopSettings {
+        game: options.game.clone().or_else(|| artifact.game.clone()),
+        server: options.server.clone().or_else(|| artifact.server.clone()),
+        locale: options.locale.clone().or_else(|| artifact.locale.clone()),
+        package_id: options
+            .package_id
+            .clone()
+            .or_else(|| Some(artifact.package_id.clone())),
+        requires: options
+            .requires
+            .clone()
+            .or_else(|| artifact.requires.clone()),
+        timeout_ms: options.timeout_ms,
+        arrival_timeout_ms: options
+            .arrival_timeout_ms
+            .or(artifact.arrival_timeout_ms)
+            .unwrap_or(DEFAULT_ARRIVAL_TIMEOUT_MS),
+        application_arrival_timeout_ms: options
+            .application_arrival_timeout_ms
+            .or(artifact.application_arrival_timeout_ms)
+            .unwrap_or(DEFAULT_APPLICATION_ARRIVAL_TIMEOUT_MS),
+    }
+}
+
+/// Generates, checks and writes the package of `recording` with `settings` (section 4); with
+/// `regenerate` (Workflow #390 LAB-2) the recording is a stopped one marked again, whose new
+/// package replaces the one of its name and whose `lab.status` is `regenerated`.
+fn generate_and_write(
+    state_dir: &Path,
+    old: &OldRecordView,
+    recording: &LabRecording,
+    settings: &StopSettings,
+    options: &RecordStopOptions,
+    ocr: &LabOcr,
+    regenerate: bool,
+) -> LabResult<RecordStopOutcome> {
+    let plan = generate_plan(recording, settings)?;
     let (cache, crops) = load_package_inputs(&plan)?;
 
     // First pass: admit the package, decide its first step and cross-check its pages.
@@ -307,6 +362,7 @@ pub fn record_stop(
         let mut stopped = recording.clone();
         stopped.status = "stopped".to_string();
         stopped.updated_at_unix_ms = now_unix_ms();
+        stopped.amended_at_unix_ms = None;
         stopped.artifact = Some(RecordingArtifact {
             container: ext.to_string(),
             path: absolute_display(&copy_path),
@@ -335,13 +391,15 @@ pub fn record_stop(
 
     let status = if options.dry_run {
         "validated"
+    } else if regenerate {
+        "regenerated"
     } else {
         "generated"
     };
     let mut lab = Map::new();
     lab.insert("status".to_string(), json!(status));
     lab.insert("dry_run".to_string(), json!(options.dry_run));
-    if old.status != "active" {
+    if old.status != "active" && !regenerate {
         lab.insert("session_already_stopped".to_string(), json!(true));
     }
     lab.insert("container".to_string(), json!(ext));
@@ -457,6 +515,7 @@ pub fn record_stop(
         &plan.package_id,
         plan.requires.as_deref(),
         &package_path,
+        registry_entry_example(&plan.package_id, &plan.game, &plan.server, &plan.task_id),
     );
     lab.insert(
         "binding_requires".to_string(),
@@ -513,22 +572,44 @@ fn absolute_display(path: &Path) -> String {
         .to_string()
 }
 
-/// `binding_example`, `task_run_example`, `prerequisite_entry_example` and
-/// `catalog_on_failure_example` (section 4.8 with a15, a20 and R22). Workflow #336 PKG-S5
-/// (option 丙): each names the package by its path and its `package_id`, never a digest.
+/// Where the package sits in its game's standard-pack registry, the one place another package
+/// finds it as a prerequisite package (Workflow #373 NAV-3a, M-373 §4.3; the retired actingd
+/// key `prerequisite_packages` is no such place): the game root's `bundle.json` lists it with
+/// this `packs[]` entry (`package bundle` writes it and adds `file_count` and `byte_count`), and
+/// its directory is the game root plus its `package_id`. The configured root stays a placeholder.
+fn registry_entry_example(
+    package_id: &str,
+    game: &str,
+    server: &str,
+    entry_task_id: &str,
+) -> Value {
+    json!({
+        "bundle": format!("<standard_packs.root>/{game}/bundle.json"),
+        "pack": {
+            "package_id": package_id,
+            "server": server,
+            "entry_task_id": entry_task_id,
+            "path": format!("packs/{package_id}")
+        },
+        "directory": format!("<standard_packs.root>/{game}/{package_id}")
+    })
+}
+
+/// `binding_example`, `task_run_example`, `prerequisite_entry_example` (its registry entry,
+/// [`registry_entry_example`]) and `catalog_on_failure_example` (section 4.8 with a15, a20 and
+/// R22). Workflow #336 PKG-S5 (option 丙): each names the package by its path and its
+/// `package_id`, never a digest.
 fn insert_binding(
     lab: &mut Map<String, Value>,
     package_id: &str,
     requires: Option<&str>,
     package_path: &str,
+    prerequisite_entry_example: Value,
 ) {
     lab.insert("requires".to_string(), json!(requires));
     lab.insert(
         "prerequisite_entry_example".to_string(),
-        json!({
-            "package_id": package_id,
-            "package_path": package_path
-        }),
+        prerequisite_entry_example,
     );
     lab.insert(
         "binding_example".to_string(),
@@ -796,11 +877,18 @@ fn stop_already_generated(
         "generated_at_unix_ms".to_string(),
         json!(artifact.generated_at_unix_ms),
     );
+    // A stopped recording's artifact names the game and server it was generated for.
     insert_binding(
         &mut lab,
         &artifact.package_id,
         artifact.requires.as_deref(),
         &package_path,
+        registry_entry_example(
+            &artifact.package_id,
+            artifact.game.as_deref().unwrap_or("<game>"),
+            artifact.server.as_deref().unwrap_or("<server>"),
+            &recording.task_id,
+        ),
     );
     Ok(RecordStopOutcome {
         lab_status: Some("already_generated".to_string()),
@@ -843,6 +931,14 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         ));
     }
     validate_optional(request)?;
+    // Workflow #390 LAB-2: an anchor is named or cleared, not both.
+    if request.anchor.is_some() && request.clear_anchor {
+        return Err(invalid(
+            "validation_failed",
+            "give one of --anchor <id> and --no-anchor",
+        ));
+    }
+    let page_rule = !request.forbid.is_empty() || request.anchor.is_some() || request.clear_anchor;
     let marks_or_click = request.frame.is_some()
         || !request.samples.is_empty()
         || request.page.is_some()
@@ -853,7 +949,8 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
         || request.click_guard.is_some()
         || request.retry.is_some()
         || request.replace_click
-        || request.application.is_some();
+        || request.application.is_some()
+        || page_rule;
     if request.step_action.is_some() {
         if marks_or_click
             || request.transition.is_some()
@@ -891,6 +988,14 @@ fn validate_mark_request(request: &MarkRequest) -> LabResult<()> {
             return Err(invalid(
                 "validation_failed",
                 "a transition takes its frame, samples and marks inside the transition object",
+            ));
+        }
+        // Workflow #390 LAB-2: a page transition only requires its marks.
+        if page_rule {
+            return Err(invalid(
+                "validation_failed",
+                "a page transition forbids no mark and has no anchor; --forbid, --anchor and \
+                 --no-anchor apply to a step's page",
             ));
         }
         if request.step.is_none() {
@@ -960,7 +1065,17 @@ pub fn record_mark(
     ocr: &LabOcr,
 ) -> LabResult<MarkOutcome> {
     validate_mark_request(request)?;
-    let mut session = open_session(lock)?;
+    // Workflow #390 LAB-2: a stopped recording whose package was generated takes marks on its
+    // steps again; the next `record stop` generates the package again.
+    let mut session = open_session_for_marks(lock)?;
+    if session.stopped {
+        if request.step_action.is_some() {
+            return Err(stopped_change("a step operation"));
+        }
+        if request.application.is_some() {
+            return Err(stopped_change("an application operation"));
+        }
+    }
     let mut outcome = MarkOutcome {
         status: if dry_run {
             "marks_validated"
@@ -982,6 +1097,8 @@ pub fn record_mark(
         step_state: None,
         closed_step: None,
         dry_run,
+        forbidden: Vec::new(),
+        after_stop: session.stopped,
     };
     let step = if let Some(action) = &request.step_action {
         let (status, step) = apply_step_action(&mut session, action)?;
@@ -1001,6 +1118,7 @@ pub fn record_mark(
         outcome.marks = applied.added;
         outcome.reused = applied.reused;
         outcome.removed = applied.removed;
+        outcome.forbidden = applied.forbidden;
         applied.step
     };
     outcome.step = Some(step);
@@ -1016,6 +1134,9 @@ pub fn record_mark(
         outcome.step_state = Some(step_state(recorded));
     }
     if !dry_run {
+        if session.stopped {
+            session.recording.amended_at_unix_ms = Some(now_unix_ms());
+        }
         save(&mut session)?;
     }
     Ok(outcome)
@@ -1320,6 +1441,8 @@ fn step_state(step: &RecordingStep) -> StepStateView {
             .map(|transition| transition.kind().to_string()),
         closed: step.closed,
         optional: optional_view(step),
+        forbidden: step.forbidden.clone(),
+        anchor: step.anchor.clone(),
     }
 }
 
@@ -1367,11 +1490,14 @@ fn step_view(step: &RecordingStep, effective: &[u32]) -> StepView {
             outcome: click_outcome(click).to_string(),
             attempts: click.attempts.len(),
             needs_review: click.needs_review,
+            gesture: click.gesture,
         }),
         application: step.application.clone(),
         optional: optional_view(step),
         transition: step.transition.as_ref().map(transition_view),
         closed: step.closed,
         closed_by: step.closed_by.clone(),
+        forbidden: step.forbidden.clone(),
+        anchor: step.anchor.clone(),
     }
 }

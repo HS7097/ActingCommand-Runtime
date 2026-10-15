@@ -80,6 +80,7 @@ dependencies = [
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
+ "image",
  "serde",
  "serde_json",
  "sha2",

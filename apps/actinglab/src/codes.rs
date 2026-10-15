@@ -61,5 +61,29 @@ actingcommand_contract::outcome_codes! {
         /// decode.
         RecognitionRegressionFrameInvalid => "recognition_regression_frame_invalid": error / none,
         // ---- end of RSU-1
+        // ---- Workflow #390 TOOL-1 (pending): `actinglab package fmt` and `package edit`.
+        /// Error. `package fmt --check` found JSON files of the content directory that are not
+        /// in the canonical serialization; nothing was written.
+        PackageFmtCheckFailed => "package_fmt_check_failed": error / none,
+        /// Error. `package fmt` could not write a reformatted file over the old one.
+        PackageFmtWriteFailed => "package_fmt_write_failed": error / none,
+        /// Error. The edits of `package edit` are not an edit list, or an edit names a file the
+        /// package does not hold or that is not JSON, or its path is not a JSON pointer.
+        PackageEditPatchInvalid => "package_edit_patch_invalid": error / none,
+        /// Error. An edit's JSON pointer does not name a place its operation can take.
+        PackageEditPointerUnresolved => "package_edit_pointer_unresolved": error / none,
+        /// Error. The edited package fails structural admission; nothing was written.
+        PackageEditAdmissionRefused => "package_edit_admission_refused": error / none,
+        /// Error. `package edit` could not write an edited file over the old one.
+        PackageEditWriteFailed => "package_edit_write_failed": error / none,
+        // ---- end of TOOL-1
+        // ---- Workflow #410 item 1 (pending): observe and do say what their frame is.
+        /// Warning. `observe --preview` or a performed `do` could not export a frame: reading the
+        /// Runtime's verified frame, encoding its JPEG preview or writing the frame or the
+        /// preview into the Lab frame directory failed. The answer still succeeds and carries,
+        /// in place of the part not written, `failure {code, path?, raw_text?}` (keys `path`,
+        /// `raw_text`).
+        LabFrameExportFailed => "lab_frame_export_failed": warning / none,
+        // ---- end of #410 item 1
     }
 }

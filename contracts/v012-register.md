@@ -1112,7 +1112,7 @@ root", are the contract. The vocabulary `registry_problem` and its key are catal
 | N3A-1 | `TaskEntryRecoveryRole` values `prerequisite` and `return_home`: the `role` of `EntryRecoveryPackageAdmitted`, `EntryRecoveryCompleted`, `EntryRecoveryFailed` (`task.entry_preflight`) | new enum values of §1.12 N1's member | NAV-3a | NAV-3a | `prerequisite` on a declared layer of the prerequisite gate, `return_home` on its return-home layer and on the registry's return-home package of a page-graph home entry; a request's own recovery binding still carries none (M-373 §8.3). A replayed request takes a layer with a role as a registry package of the request's package's game |
 | N3A-2 | `contained_task_prerequisite_unbound` value `registry_problem` (`root_unset`, `game_root_missing`, `not_listed`) | new outcome value of an existing code | NAV-3a | NAV-3a | on the preparation refusal of a declared prerequisite package the registry does not bind (M-373 §4.3, §9.2) |
 | N3A-3 | actingd configuration `prerequisite_packages[] {package_id, package_path}` and `return_home_packages[] {game, server, package_id}` | removed configuration keys | NAV-3a | — | a configuration that carries either is `config_decode_failed` at `config_load`; no reader of the old form. Deleted (pending) with them: `prerequisite_packages_size_invalid`, `prerequisite_package_id_invalid`, `prerequisite_package_unavailable`, `prerequisite_package_not_regular`, `prerequisite_package_container_unsupported`, `prerequisite_package_request_invalid`, `prerequisite_package_duplicate`, `return_home_packages_size_invalid`, `return_home_package_key_invalid`, `return_home_package_duplicate` (actingd) and `return_home_package_unbound` (contract; `prerequisite_package_digest_invalid` left with PKG-S4), and the location `resolve_return_home_package` |
-| N3A-4 | the registry of a game root: package id → directory and server → return-home package (`bundle.json` v4 `maintenance[]` use `return_home`) | rule | NAV-3a | NAV-3a | `standard_pack_registered` (§1.12 N4) is written when either part changed since the last read; every listed package can be a prerequisite package (the `prerequisite` use derives nothing; PKG-S5's v4 refuses it, M-373 §3.8) |
+| N3A-4 | the registry of a game root: package id → directory and server → return-home package (`bundle.json` v4 `maintenance[]` use `return_home`) | rule | NAV-3a | NAV-3a | `standard_pack_registered` (§1.12 N4) is written when either part changed since the last read; every listed package can be a prerequisite package; bundle v4 refuses a `maintenance[]` entry with the retired use `prerequisite` (M-373 §3.8, test row N3a-9: the NAV-3a follow-up, §1.73 N3F-1; PKG-S5's v4 still accepted it), so a game root whose `bundle.json` holds one is `standard_pack_root_invalid` `malformed` and registers nothing |
 | N3A-5 | `navigable_route` control `prerequisite_package_id` | package declaration rule | NAV-3a | — | admitted for `navigable_route` (phased or not); `in_page_guard` and `recognize_only` are `contained_task_control_invalid` (`reason=prerequisite_execution_mode`, the retired `reason=prerequisite_requires_linear_steps` no longer appears); a `navigable_route` package declaring one needs an entry page (`reason=prerequisite_requires_page_entry`), which is then always checked first |
 | N3A-6 | `actingctl packs` and `ac_packs`: roles `prerequisite` and `return_home` | removed output rows and argument values (client only) | NAV-3a | NAV-3a | they named the retired keys; the roles left are `procedure`, `startup`, `resource_package`; the warning `return_home_package_unbound` is gone with its code |
 
@@ -1203,6 +1203,121 @@ class `none`) are catalog entries, not rows (§7).
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | RS1-1 | `actinglab recognition-regression --state-root <root> --evidence <file>... (--package <path> \| --zip <path>)`: `{mode: "offline_recognition_regression", executed: false, request_id, package_id, frames: [{ref, steps, frame_id, status, targets?: [{target, original_matched, status, matched?, agrees?, score?, failure?}]}], targets: [{target, frames, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli}], summary: {records, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli, frames_referenced, frames_replayed, frames_material_missing, frames_without_original_record}, ocr, production_global_ledger_written: false}` | operation output (no persisted record; an actinglab result, read by a person or an agent) | RSU-1 | RSU-1 | a frame's `status` is `compared`, `material_missing` (#375 retention removed it) or `no_original_record`; a target's `status` is `compared`, `absent` (not in the package) or `failed`; `score` is `{kind, score_milli, threshold_milli}` (template), `{kind, distance_milli, max_distance_milli}` (colour), `{kind, confidence_milli}` (OCR) or `{kind, score_milli}` (classifier); `error_rate_milli` is the disagreements (`lost` + `gained`) per mille of the frames compared, rounded down, `null` when none was compared; the original record is the run's last `task.recognition_completed` fact on the frame; the input is MCP-6's evidence ([runtime-interface.md](runtime-interface.md), `run evidence`), of which only `request_id`, `steps[].step_index` and `steps[].frames[].ref` are read; exit 0 whenever the comparison was made |
+
+### 1.73 Wave 15 slice NAV-3a follow-up (#373, M-373 v1.1 §3.8, §4.3; wave 14 rulings, NAV-3a items 3 and 5)
+
+The NAV-3a follow-up retires the bundle maintenance use `prerequisite`, which NAV-3a left to
+whichever of NAV-3a and PKG-S5 merged later (M-373 test row N3a-9), and changes the Lab's
+`prerequisite_entry_example` from an entry of the retired actingd key `prerequisite_packages` to
+the package's place in its game's standard-pack registry. No record type, wire shape,
+configuration key or outcome code: the rows are a file-format vocabulary, a rule of the bundle
+check and an output member. [package-reference.md](package-reference.md), "Maintenance
+declarations", and [lab-recording.md](lab-recording.md), "Output", are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N3F-1 | `MaintenanceUse` (`maintenance[].uses` of bundle v4 and of the source declaration array): `startup`, `return_home`, `recognition` | removed enum value `prerequisite` (resource file format) | NAV-3a follow-up | — | an entry that names `prerequisite` is an unknown use: the bundle index and the source array do not decode, a game root holding it is `standard_pack_root_invalid` `malformed` (§1.67 N3A-4), `package bundle --maintenance` and `resource validate` refuse the declaration file; no compatibility reading (M-373 §3.8). The UI's acsetup still names the value and drops it with PKG-S6 |
+| N3F-2 | `validate_bundle_maintenance` (`package bundle --maintenance`, installers): the chains of a bundle are checked against every pack it holds | rule | NAV-3a follow-up | — | the bundle is its game's registry (M-373 §4.3): every pack binds a prerequisite package and no declaration binds one; a declared prerequisite the bundle does not hold is `contained_task_prerequisite_unbound`; `return_home` binds each server's fallback, as before |
+| N3F-3 | `record stop` answer member `prerequisite_entry_example`: `{bundle: "<standard_packs.root>/<game>/bundle.json", pack: {package_id, server, entry_task_id, path: "packs/<package_id>"}, directory: "<standard_packs.root>/<game>/<package_id>"}` | changed output member (Lab), replaces §1.64 P5-5's `{package_id, package_path}` | NAV-3a follow-up | NAV-3a follow-up | the package's registry entry (`package bundle` adds `file_count` and `byte_count` to `pack`); `<standard_packs.root>` stays a placeholder. MCP `ac_record_stop` and `ac_binding_draft` pass it on verbatim, unchanged |
+
+### 1.74 Wave 15 slice LAB-2 (#390, forced-compromises mapping row LAB-2; compromises L-02, T-03)
+
+LAB-2 completes the Lab recording's generated package and the navigation projection. It writes
+no ledger record, wire shape or configuration key: the rows are the Lab state file, the Lab's
+tool input and output, and the resource files the tools write.
+[lab-recording.md](lab-recording.md) ("Forbidden marks and anchors", "Drags and long presses",
+"Marking after stop", "`--record` on device commands", "Pages and documents") and
+[resource-declarations.md](resource-declarations.md) (the navigation paragraph) are the
+contract. No code is new: the refusals reuse `validation_failed`, `record_mark_rejected` (new
+reasons `forbidden_source_missing`, `forbidden_mark_passes`, `anchor_invalid` with `problem`
+`not_own_template` or `not_required`), `record_mark_in_use`, `record_to_transition_invalid`
+(new reason `page_rule`), `record_click_rect_conflict`, `record_click_outside_step_rect`,
+`record_step_click_missing` and `record_session_not_active` (new `details.reason`
+`recording_stopped`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L2-1 | Lab recording state (`actingcommand.lab-recording.v1`): step `forbidden: [ids]` and `anchor`, click `gesture` (`{"kind": "drag", "to", "duration_ms"}` \| `{"kind": "long_press", "duration_ms"}`), execution `to_point` and `duration_ms`, recording `amended_at_unix_ms` | new members (Lab state file, not the ledger) | LAB-2 | LAB-2 | absent when unused, so a recording without them is written as before; a template mark recorded without a search area keeps the default one it was given (L2-2) |
+| L2-2 | `record mark` input: `--template <id>=x,y,w,h@x,y,w,h`; `--forbid <id>`; `--anchor <id>` \| `--no-anchor`; `--click x,y,w,h --drag-to x,y,w,h --duration-ms <ms>`; `--long-press x,y --duration-ms <ms>`; request members `forbid`, `anchor`, `clear_anchor`, `click.drag_to`, `click.long_press`, `click.duration_ms` (`actingcommand.lab-record-mark.v1`) | tool input (MCP `ac_record_mark` hands the request on unchanged) | LAB-2 | LAB-2 | a template mark without a declared search area searches its crop grown by 48 px on each side, clamped to the frame (coordinator input of 10-15: a game update shifted a menu bar by about 40 px and every search area equal to its template box failed); durations 1..=60000 ms |
+| L2-3 | `record mark` output `forbidden[{id, family, status: "absent" \| "not_evaluated", frames}]`, `after_stop`, `step_state{forbidden?, anchor?}`; `record status` steps `forbidden?`, `anchor?`, click `gesture?`, `amended_at_unix_ms?` | output members (no persisted record) | LAB-2 | LAB-2 | absent when unused |
+| L2-4 | the package `record stop` generates: page rule `forbidden`; the anchoring template as `anchors[] {id: <page>, …}` (target `page/<page>`, named by every reference); clicks `{"kind": "drag", "from", "to", "duration_ms"}` and `{"kind": "long_press", "x", "y", "duration_ms"}`; the default task timeout counting a gesture's duration | resource file format the tool writes (task schema `0.9`, unchanged grammar) | LAB-2 | LAB-2 | a recording that uses none of them generates the same bytes as before |
+| L2-5 | `record stop` on a stopped recording marked again: generated again, `lab.status: "regenerated"` | output value and rule | LAB-2 | LAB-2 | options not given keep the generated package's values, except the task timeout, computed again; `--lab-dir` is written only when given |
+| L2-6 | `do --capture --record --swipe x1,y1,x2,y2,ms`, and `do --capture --record` on a drag or long press step (one swipe; the plan's `gesture` and `to_point`) | tool input and output | LAB-2 | LAB-2 | was `record_flag_unsupported`; the Runtime operation is the existing coordinates swipe |
+| L2-7 | the generated navigation's edge `{id, from_page, to_pages: [...], click, source}` for an operation whose `to` is a page set | resource file format (`navigation`, schema `0.6` unchanged) | LAB-2 | LAB-2 (source compilation) | exactly one of `to_page` and `to_pages`; a catalog navigation action and page projection element like any edge; the drive graph and actinglab's route tools leave it out; a `long_press` navigation click reads as a drag that does not move |
+
+### 1.75 Wave 15 slice TOOL-1 (#390, forced-compromises mapping row TOOL-1, P-03; coordinator ruling 3 of wave 15)
+
+TOOL-1 adds two actinglab authoring commands that take a content directory by its path,
+`package fmt` and `package edit`. They write no ledger record, wire shape or configuration key;
+their new shapes are two operation outputs (TL1-1, TL1-3) and the edit list an author gives
+(TL1-2). [package-reference.md](package-reference.md), "Formatting and editing a content
+directory", is the contract. Nothing computes, compares or reports a digest (option 丙). The
+actinglab codes `package_fmt_check_failed`, `package_fmt_write_failed`,
+`package_edit_patch_invalid`, `package_edit_pointer_unresolved`, `package_edit_admission_refused`
+and `package_edit_write_failed` (error, ladder class `none`, in the new domains `package_fmt_` and
+`package_edit_` of actinglab) are catalog entries, not rows (§7); a read or parse failure reuses
+`package_invalid`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| TL1-1 | `actinglab package fmt --package <directory>`: `{mode: "package_fmt", package, json_files, reformatted: [path]}`; with `--check`: `{mode: "package_fmt_check", package, json_files, unformatted: []}` | operation output (no persisted record; an actinglab result, read by a person or a CI job) | TOOL-1 | TOOL-1 | the canonical serialization of a JSON file: UTF-8 without a byte-order mark, two-space indentation, one member or element per line, members in their document order, LF line endings with a last LF (the coordinator's wave-15 ruling over FCM P-03's CRLF); other files are left byte for byte; paths are the directory's `/`-separated paths; `--check` writes nothing, and a JSON file that is not canonical makes it `package_fmt_check_failed` (exit 2) with details `{package, json_files, unformatted}` |
+| TL1-2 | `package edit --patch <file>`: a JSON array of `{file, op: add \| replace, path, value}`, no other member, at most 32 MiB | input document (an author's file; the Runtime never stores it) | TOOL-1 | — | `op` is an RFC 6902 operation, `path` an RFC 6901 JSON pointer into the JSON file `file` of the package; the edits apply in order; `--file <path> --add <pointer> --value <JSON>` (or `--replace`) gives one edit instead |
+| TL1-3 | `actinglab package edit --package <directory> (--patch <file> \| --file <path> (--add \| --replace) <pointer> --value <JSON>)`: `{mode: "package_edit", package, package_id, task_id, edits, files: [path], admission: "passed", written}`; with the global `--dry-run` also `status: "validated", dry_run: true, persisted: false` and `written: false` | operation output (no persisted record) | TOOL-1 | TOOL-1 | the edited content table is admitted as actingd admits a content directory before any file is written, and `files` (the files the edits changed, written in the canonical serialization of TL1-1) are written only after it passes; a refusal is `package_edit_admission_refused` with details `{package, code, detail, declaration, written: false}`; a write failure (`package_fmt_write_failed`, `package_edit_write_failed`) carries `{package, file, written, part_left}` |
+
+### 1.76 Wave 15 slice POOL-1 (#390, forced-compromises mapping row POOL-1, compromise S-04)
+
+POOL-1 lets a `ledger_fact` pool take its data from readings: a reading of the pool's key is the
+pool's base, which the next reading or adjustment of the key resets, and the pool's value is
+that base projected by the pool's regeneration rule. [resource-readings.md](resource-readings.md)
+("Live pools"), [scheduling/README.md](scheduling/README.md) ("Pool Projection", "Fact
+Refresh"), [resource-targets.md](resource-targets.md) and `docs/live-fact-pools.md` are the
+contract. It adds no event type, no member, no enum value, no code and no configuration key:
+existing records and outputs get new rules. The code
+`contained_task_resource_reading_live_pool_unsupported` and the location
+`check_resource_reading_pools` retire (runtime-host); the `reader_problem` token
+`live_pool_key` is no longer given and stays in the vocabulary for what earlier builds wrote.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PL1 | `fact.published` of a run's reading or adjustment write of the key a `ledger_fact` pool observes in the run's instance scope | new rule of an existing record (shape unchanged) | POOL-1 | POOL-1 | published as every reading is (the successful terminal's stages 1-3; stage 0 is gone), `invalidate_on` `[]`; it is the pool's base until the next reading or adjustment of the key; no run fails with `contained_task_resource_reading_live_pool_unsupported` any more |
+| PL2 | the live pool source check of the policy evaluation and the forward projection (`pool_fact_invalidation_binding_missing`) | new rule (no persisted shape) | POOL-1 | POOL-1 | an active record of the pool's key that the Runtime published (event actor `runtime`) with a `source_detector` starting `resource_reading:` or `resource_adjustment:` needs no input invalidation; every record still needs its current native instance binding, and any other record still needs `input.committed` and `input.failed` |
+| PL3 | the unknown reason of a `resource_projection` predicate on a `ledger_fact` pool without a usable record (`trigger_unknown` / `feedback_stop_unknown`, the detection suggestion and `planning_fact_unknown`) | new values of existing members | POOL-1 | POOL-1 | the key's own fact reason, `fact_missing`, `fact_expired`, `fact_low_confidence` (below the pool's minimum) or `type_mismatch` (not an integer within `0..=capacity`), instead of `resource_observation_missing`; with the pool in exactly the instance's scope the task raises the fact refresh's demand for the key (§1.56, D2-S4's records unchanged); a static snapshot pool keeps `resource_observation_missing` and raises none |
+| PL4 | a resource target's inventory: `ApplyResourceTargets` `conditions[].state` (`computed.current`), `targetable_resources` `observation.current`, `active_resource_targets` and the evaluator's target terms | new rule of existing output members | POOL-1 | POOL-1 | for a `ledger_fact` pool, the record projected to the evaluation instant by the pool's regeneration rule (each complete period adds `amount`, up to `capacity`; a record above `capacity` is read as observed); `observed_at_unix_ms` stays the record's; a static snapshot pool's target reads the record as observed |
+| PL5 | actingd `check-config` and start: the recognition maintenance package binding's key check (D2M §3.2 check 3, T14) | removed rule | POOL-1 | POOL-1 | a mark whose key a `ledger_fact` pool of the configured catalog observes no longer refuses the binding (`fact_reader_binding_invalid` with `live_pool_key`) and no longer makes a start ignore it; the `policy_fact_authority` check stays |
+
+### 1.77 #410 item 1 `labobs`: observe and do say what their frame is (board #410; Alice 2026-10-15, the 0.12 end)
+
+The Lab's `observe` and `do` answers, and MCP's `ac_lab_observe` and `ac_lab_do` that pass them
+on unchanged, state the frame's coordinate system, give an optional JPEG preview by its path, and
+`do` attaches its result after an action. No image is ever inlined (Alice: no item 7). No ledger
+record, wire shape or configuration key changes; the rows are output members and local files.
+[contained-lab-operation.md](contained-lab-operation.md) (the last section) and
+[contained-page-observation.md](contained-page-observation.md) are the contract. The actinglab
+code `lab_frame_export_failed` (warning, ladder class `none`) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LO-1 | `frame_coordinates {device_pixels: [width, height], orientation, applies_to: ["tap", "tap_rect", "swipe"]}` on every `observe` and `do` answer | output member (no persisted record) | labobs | labobs | `orientation` `landscape` (wider than high), `portrait` (higher than wide) or `square`; `do`'s is the frame its coordinates refer to (online the before frame); Min keeps it and counts it toward `observe`'s budget |
+| LO-2 | `--preview` on `observe` (offline and `--capture`) and online `do`: `preview {path, width, height, scale}` or `{failure {code, path?, raw_text?}}` | flag and output member | labobs | labobs | a JPEG (quality 75), long edge at most 1024, `scale` = frame pixels per preview pixel (1 for a frame no larger); `observe --preview` under the global `--dry-run` is `dry_run_unsupported`; `do --preview` without `--capture` or under any dry run is `validation_failed` |
+| LO-3 | the Lab frame directory `%LOCALAPPDATA%\ActingCommand\actinglab\frames`: `<sha256>.png`, `<sha256>.preview.jpg` | local files (client side, not the state root) | labobs | labobs | named by the SHA-256 of the frame's PNG, written through a partial file of the process renamed into place; never read back by the Lab, the Runtime or an export |
+| LO-4 | `do` (online, after an action with an after frame) `after_attachment`: `{kind: "page_projection", observation, preview?}` for a recognized after page, else `{kind: "frame", frame_coordinates, frame_path, preview}` | output member | labobs | labobs | added after the Min projection of the operation members (which keep their budget); the known page's projection is cut on its own as `observe` cuts its own under Min, whole under `--verbose`/`--pretty`; also in a failure's details; a part not written is `{failure}` and the answer still succeeds |
+| LO-5 | MCP `ac_lab_observe`, `ac_lab_do`: argument `preview` ↔ `--preview`; an answer exported past the output budget keeps `frame_coordinates`, `frame_path`, `preview` and `after_attachment` inline, each in that order while it fits | MCP argument and overflow rule (apps 41 parity) | labobs | labobs | the answer is otherwise actinglab's data verbatim (A5); `{req_id, export, overflowed: true}` and the warning `answer_exported` as before |
+
+### 1.78 #410 item 6 `gaplog`: a local capability-gap log (board #410; Alice 2026-10-15, the 0.12 end)
+
+An agent, or a person, records a capability it needed and no command offered, with a short why.
+The record stays on the computer: one JSON line in the user's own local log, never sent anywhere
+and never written to the ledger. A missing capability is not something the Runtime did (iron
+rules 3 and 13), the client action record retires at U-6, and the log works without actingd.
+[runtime-interface.md](runtime-interface.md) (the actingctl and MCP tables) is the contract. The
+codes `actingctl_capability_gap_recorded` (success) and `actingctl_capability_gap_write_failed`
+(error), both actingctl with ladder class `none`, are catalog entries, not rows (§7). The tool
+table goes from 34 to 35 tools (observer 19 to 20).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
+| GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -1344,7 +1459,7 @@ SH-2 §1.25, M-357b DB-3s §1.66);
 spellings §1.15); `runtime-client` 3 comes with its own later release, not with A8's
 declaration (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7,
 SR-6b's `not_running` in W13; re-check 10-14, §1.25); `actingd-config` 5
-(§5); `runtime-outcomes` [1, 1] (A5 §1.16); `package` (PKG-S1, PKG-S5, D2-S2/S3; M-357a §1.65 TB12 with PKG-S5; M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once in the 0.12.x release that carries them, once only when they share a release); `install-control` stays
+(§5); `runtime-outcomes` [1, 1] (A5 §1.16); `package` (PKG-S1, PKG-S5, D2-S2/S3, the NAV-3a follow-up §1.73 N3F-1; M-357a §1.65 TB12 with PKG-S5; M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once in the 0.12.x release that carries them, once only when they share a release); `install-control` stays
 [0, 1] until U-4. AO-0 changes no declaration.
 
 ## 7 What AO-0 does not register, and why

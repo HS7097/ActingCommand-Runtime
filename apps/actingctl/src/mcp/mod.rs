@@ -8,6 +8,8 @@
 // Workflow #389 MCP-7: the child-process runner moved to the crate, where `actingctl diagnose`
 // runs `actingd suspended` with it too.
 use crate::child;
+// Workflow #410 item 6: ac_capability_gap.
+mod capability_gap;
 // Workflow #389 MCP-14: ac_outcome_code.
 mod code_lookup;
 // Workflow #398 RD-1c: ac_devices, ac_device_bind, ac_device_unbind.
