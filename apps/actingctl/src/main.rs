@@ -57,6 +57,9 @@ mod overview;
 mod run_evidence;
 // ---- Workflow #389 MCP-6 (end) ----
 
+// Workflow #390 DRILL-1: `ladder-drill` (MCP `ac_ladder_drill`), a drill of an instance's ladder.
+mod ladder_drill;
+
 use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -82,7 +85,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
@@ -609,6 +612,24 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             };
             Ok(Done::new(result_members(&result, RESULT_MEMBER)?, outcome))
         }
+        // Workflow #390 DRILL-1: the drill the Runtime admitted, as `ac_ladder_drill` answers it.
+        Command::LadderDrill { mode } => {
+            let drill =
+                ladder_drill::drill(&client, instance()?, mode).map_err(
+                    |failure| match failure {
+                        ladder_drill::Failure::Selector {
+                            miss: SelectorMiss::Unknown,
+                            selector,
+                        } => ActingctlError::InstanceUnknown(selector),
+                        ladder_drill::Failure::Selector {
+                            miss: SelectorMiss::Ambiguous,
+                            selector,
+                        } => ActingctlError::InstanceAmbiguous(selector),
+                        ladder_drill::Failure::Runtime(error) => ActingctlError::Runtime(error),
+                    },
+                )?;
+            reported(&drill, success)
+        }
         Command::Stream { spec } => reported(
             &client
                 .capture_sequence(instance()?, spec)
@@ -1039,6 +1060,11 @@ enum Command {
     SelfCheck {
         instance_alias: String,
     },
+    /// `ladder-drill --instance <selector> [--device]` (Workflow #390 DRILL-1): a drill of one
+    /// instance's stuck-recovery ladder; a plan unless `--device` says to act on the device.
+    LadderDrill {
+        mode: actingcommand_contract::RecoveryDrillMode,
+    },
     Stream {
         spec: CaptureSequenceSpec,
     },
@@ -1101,6 +1127,8 @@ impl Invocation {
         let mut install_action = None;
         let mut pause_reason = None;
         let mut drain_timeout_ms = None;
+        // Workflow #390 DRILL-1: `ladder-drill --device` acts on the device.
+        let mut device = false;
         // `task-offset` takes the task and the offset as the second and third tokens.
         let task_offset = if command == "task-offset" {
             let task_id = arguments
@@ -1228,6 +1256,7 @@ impl Invocation {
                     recovery_expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
+                "--device" => device = true,
                 "--program" => program = true,
                 "--config" => config = true,
                 "--key-prefix" => {
@@ -1335,6 +1364,9 @@ impl Invocation {
             "selfcheck" => Command::SelfCheck {
                 instance_alias: selfcheck_alias.ok_or(ActingctlError::Usage)?,
             },
+            "ladder-drill" => Command::LadderDrill {
+                mode: ladder_drill::mode(device),
+            },
             "stream" => Command::Stream {
                 spec: CaptureSequenceSpec::new(
                     frame_count.unwrap_or(1),
@@ -1400,6 +1432,7 @@ impl Command {
             Self::Pause { .. } => ActingctlCode::RuntimeSchedulingPaused,
             Self::Resume => ActingctlCode::RuntimeSchedulingResumed,
             Self::SelfCheck { .. } => ActingctlCode::InstanceSelfCheckReported,
+            Self::LadderDrill { .. } => ActingctlCode::RecoveryLadderDrillQueued,
             Self::Stream { .. } => ActingctlCode::InstanceFramesCaptured,
             Self::TaskRun { .. } => ActingctlCode::TaskRunReported,
         }
@@ -1466,6 +1499,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         "install-transition" => &["--state-root", "--action-json", "--wait"],
         "status" => &["--state-root", "--config"],
         "facts" => &["--state-root", "--program", "--instance", "--key-prefix"],
+        // Workflow #390 DRILL-1: a ladder drill acts on the device only with `--device`.
+        "ladder-drill" => &["--state-root", "--instance", "--device"],
         "monitor-set" => &[
             "--state-root",
             "--instance",
@@ -1926,7 +1961,7 @@ mod tests {
     #[test]
     fn every_command_has_its_success_code_and_every_failure_its_code() {
         let package_ref = "0".repeat(64);
-        let commands: [(&[&str], &str); 24] = [
+        let commands: [(&[&str], &str); 25] = [
             (
                 &["agent-publish-facts", "--record-file", "observation.json"],
                 "agent_facts_published",
@@ -1998,6 +2033,11 @@ mod tests {
             (
                 &["selfcheck", "neutral.instance"],
                 "instance_self_check_reported",
+            ),
+            // Workflow #390 DRILL-1.
+            (
+                &["ladder-drill", "--instance", "neutral.instance", "--device"],
+                "recovery_ladder_drill_queued",
             ),
             (
                 &["stream", "--instance", "neutral.instance"],

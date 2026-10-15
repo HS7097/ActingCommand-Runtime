@@ -17413,6 +17413,20 @@
       "description": "Runtime contract validation refused a value: a BindChannel whose via names a forwarding counter on a channel other than lab (Workflow #389 U-2; via exists only on the Lab channel).",
       "common_causes": "A client defect: a counter program named via for its own connection.",
       "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work."
+    },
+    "request_drill_recovery_ladder_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a DrillRecoveryLadder request: the Runtime admitted the drill and queued its claim. Workflow #378 A4: one success code per request kind (Workflow #390 DRILL-1 adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
     }
   },
   "locations": {

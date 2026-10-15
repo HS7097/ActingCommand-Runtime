@@ -774,3 +774,17 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
 ]
 incident = ["#398", "#387 A9"]
+
+# A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9)
+[[gate]]
+key = "88"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::drill1_a_drill_trigger_names_nothing_but_its_code_and_a_planned_end_tries_nothing",
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::drill1_only_a_ladder_s_own_phases_carry_the_drill_tag",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_is_recorded_like_a_ladder_tagged_drill_and_never_acts_on_the_device",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_device_drill_climbs_its_rungs_on_the_instance_like_a_real_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_leaves_the_cool_down_and_a_device_drill_opens_it_as_a_real_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent",
+]
+incident = ["#390 DRILL-1"]

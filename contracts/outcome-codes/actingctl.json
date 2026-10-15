@@ -2769,6 +2769,20 @@
       "description": "actingwatch cannot run the watchdog tick (<root>\\runtime\\actingctl.exe).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recovery_ladder_drill_queued": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl ladder-drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias, mode, ladder_request_id}, as ac_ladder_drill answers it (Workflow #390 DRILL-1).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

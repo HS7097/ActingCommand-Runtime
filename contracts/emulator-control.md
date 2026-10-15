@@ -700,6 +700,50 @@ cancelled). Such an interruption fails the current rung with that reason and end
 `exhausted` at warning, followed by its one release. A superseded preparation trigger records
 `preparation_superseded`; these two reasons use `until_unix_ms: 0` (no inferred wake time).
 
+### Drills (Workflow #390 DRILL-1)
+
+Forced compromise T-08 (the recovery route could not be tried by hand) and coordinator ruling 9
+of wave 13: a person may ask for a drill of one physical instance's ladder,
+`DrillRecoveryLadder { instance_alias, mode }`, an option-two operation (`actingctl
+ladder-drill --instance <selector> [--device]`, MCP `ac_ladder_drill` with `instance` and
+`device`; [runtime-interface.md](runtime-interface.md)). Only an explicit User+Ui or Cli+Cli
+request may issue it (the emulator control origin gate: a drill may restart the emulator), and
+only for a physical instance. The direct-run rule does not change: a direct task run still
+starts no ladder while `rules.direct_runs` is `exempt`.
+
+- **Recorded like a real ladder, tagged `drill`.** The request is recorded as a command
+  (`command.received`, then `command.validated` or `command.rejected`). The drill is a ladder
+  with trigger `stage: drill`, `failure_code` `recovery_ladder_drill_requested`, no run, task,
+  preparation, rule or match, and `start: immediately`; it matches no trigger item, so it starts
+  at `trigger_defaults.start_rung` and the cool-down holds it as
+  `trigger_defaults.respect_cooldown` says, as a resource fence's ladder does. It is admitted as
+  every ladder is (shutdown, the scheduling pause, business capacity, a ladder that holds or
+  waits for the instance under `rules.already_running`, the cool-down), its claim
+  is queued (routine, high, no deadline; claim kind `ladder`, so a later trigger sees it as a
+  ladder), and it climbs on the instance's worker by the same plan, holding checks and records as
+  any ladder. Every record of its own (`recovery_ladder_started`, `recovery_rung_finished`,
+  `recovery_instance_stopped`, `recovery_environment_ready`, `recovery_ladder_finished`,
+  `recovery_ladder_suppressed`) carries the payload member `drill: true`; no other record
+  carries it, and a `recovery_ladder_started` carries it exactly when its trigger's stage is
+  `drill`. Its records are linked to the instance and the request's correlation id, under the
+  drill's own request id (`ladder_request_id`) and causation id.
+- **Never the device unless the request says so.** `mode: plan` (the default of both frontends)
+  never acts on the device: the plan is recorded as it is, every rung the ladder would run is
+  recorded `skipped` with `recovery_rung_skipped_drill_plan` (reason `drill_plan`), and the climb
+  ends `recovery_ladder_finished { ladder_result: "planned", rungs_tried: 0 }` at info. A plan
+  drill changes nothing the ladder keeps: it opens no cool-down window and leaves a resource
+  fence's stage as it was. `mode: device` climbs the rungs on the instance exactly as a real
+  ladder does, under the same key, admission guard, fences and holding checks, opens the
+  cool-down window as a ladder that got the key does, and ends as a real climb ends.
+- **Answer and refusals.** Once the drill is admitted and its claim queued the request completes
+  (`request_drill_recovery_ladder_completed`) with `RecoveryLadderDrillQueued { drill:
+  {instance_alias, mode, ladder_request_id} }`, before the drill climbs. Refused, after its
+  `command.rejected`: `recovery_ladder_drill_disabled` (stuck recovery is off for the instance),
+  `recovery_ladder_drill_already_running` and `recovery_ladder_drill_cooling_down`
+  (`next_eligible_unix_ms`), each after the drill's `recovery_ladder_suppressed`, and
+  `recovery_admission_denied` when shutdown, a pause or capacity refused the admission (also
+  after its suppression record); a refused claim keeps the claim's own refusal.
+
 ### Records
 
 Facts are `runtime.lifecycle_observed` events (origin `(Runtime, Runtime, Runtime)`) linked to
@@ -713,7 +757,7 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
 | `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
-| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped; at most 3), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption) | success info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
+| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
 | `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied" \| "blackout"` (`blackout`: a trigger inside a blackout, `until_unix_ms` its end; written from SR-4a on, read from v0.12.0 on, [scheduling-blackout.md](scheduling-blackout.md)), `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
 
 Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else
@@ -729,16 +773,19 @@ require task/run IDs and a rule matched by code or class, and omit `preparation`
 triggers require `preparation` (sequence above 0), a rule matched by code or class and omit
 task/run IDs; `stability_warnings` triggers name nothing but a rule matched as a warning burst of
 at least one record in a window above 0 whose first record is not after its last;
-`recovery_preparation` triggers are refused; `resource_fence` triggers name no run, task,
-preparation, rule or match. `environment_ready` is valid only for R3, with no run ID and an
+`recovery_preparation` triggers are refused; `resource_fence` and `drill` triggers name no run,
+task, preparation, rule or match. A record of any other phase never carries `drill: true`, and an
+`instance_preparation_finished` never names the stage `drill` (Workflow #390 DRILL-1).
+`environment_ready` is valid only for R3, with no run ID and an
 `environment` event reference. `recovered` continues to require a real successful package run
 ID. Unknown fields are refused.
 
 `rung` is `return_home`, `application_restart` or `emulator_restart`; a skip `reason` is
 `no_recovery_package`, `no_startup_package`, `no_emulator_control`, `capture_unavailable`,
-`input_unavailable`, `adb_unavailable`, `resource_fence`, `before_start_rung` or
+`input_unavailable`, `adb_unavailable`, `resource_fence`, `before_start_rung`,
 `device_not_ready` (the device-state gate holds the rung's entry; Workflow #398 M398 §6.4,
-emitted by the device-state slice). A ladder with no recovery package, no startup package and
+emitted by the device-state slice) or `drill_plan` (a plan drill did not run the rung; Workflow
+#390 DRILL-1). A ladder with no recovery package, no startup package and
 no emulator control records `recovery_ladder_started` (all rungs skipped), one
 `recovery_rung_finished` (`skipped`) per rung and `recovery_ladder_finished` (`exhausted`,
 `rungs_tried` 0).

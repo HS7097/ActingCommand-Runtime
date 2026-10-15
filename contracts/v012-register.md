@@ -869,6 +869,27 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.63 Wave 13 slice DRILL-1 (#390, forced-compromises mapping T-08; coordinator ruling 9 of wave 13)
+
+DRILL-1 lets a person drill one instance's stuck-recovery ladder; a drill is recorded like a ladder
+a trigger started and tagged `drill`, and never acts on the device unless the request says so.
+[emulator-control.md](emulator-control.md), "Drills", is the contract;
+[runtime-interface.md](runtime-interface.md) has the request, CLI and MCP rows. Its codes
+(`recovery_ladder_drill_requested`, `recovery_rung_skipped_drill_plan`,
+`recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`,
+`recovery_ladder_drill_cooling_down`, `request_drill_recovery_ladder_completed`,
+`recovery_ladder_drill_queued`) and its locations are catalog entries, not rows (§7). No
+configuration key.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DR1 | `runtime.lifecycle_observed` payload member `drill` (boolean) | new optional member | DRILL-1 | DRILL-1 | present (`true`) only on a drill's own ladder phases (`recovery_ladder_started`, `recovery_rung_finished`, `recovery_instance_stopped`, `recovery_environment_ready`, `recovery_ladder_finished`, `recovery_ladder_suppressed`), absent on every other record; the payload check refuses it on any other phase, and a `recovery_ladder_started` carries it exactly when its trigger's stage is `drill` |
+| DR2 | `RecoveryTriggerStage::Drill`, spelled `drill`: `recovery_ladder_started.trigger.stage` | new enum value | DRILL-1 | DRILL-1 | a drill's trigger names no run, task, preparation, rule or match, `failure_code` `recovery_ladder_drill_requested`, `start` `immediately`; an `instance_preparation_finished` never names it; a `recovery_ladder.triggers[]` item that names it is refused `stage_not_allowed` |
+| DR3 | `RecoveryRungSkipReason::DrillPlan`, spelled `drill_plan`: `recovery_ladder_started.rungs[].reason` and the skip outcome `recovery_rung_skipped_drill_plan` of `recovery_rung_finished` | new enum value | DRILL-1 | DRILL-1 | written by a plan drill for each rung the ladder would have run (the started plan lists it `pending`) |
+| DR4 | `RecoveryLadderOutcome::Planned`, spelled `planned`: `recovery_ladder_finished.ladder_result` | new enum value | DRILL-1 | DRILL-1 | only on a drill's record (`drill: true`), with `rungs_tried` 0 and no `outcome`; info |
+| DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
+| DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -299,6 +299,7 @@ U-6 deletes the source gates.
 | `UpgradeState{target, action}` (`enter`, `cancel`, `leave`) | general | instruction (upgrades only) | cli: `actingctl upgrade-state`, used by acsetup. The gate takes it from mcp and ui too, but neither frontend maps it | yes |
 | `UpgradeStateStatus{transition_id}` | general | read | cli | no |
 | `InstanceFactSnapshot{instance}` (#389 MCP-4) | general | read (one instance's facts, from memory) | cli `facts --instance`; mcp `ac_facts` (scope instance) | no |
+| `DrillRecoveryLadder{instance_alias, mode}` (#390 DRILL-1; `mode` `plan` or `device`) | option two | operation (a drill of one physical instance's stuck-recovery ladder, recorded like a real one and tagged `drill`; [emulator-control.md](emulator-control.md), "Drills") | cli `ladder-drill`; mcp `ac_ladder_drill` (operator before U-3); the emulator control origin gate (User+Ui, Cli+Cli) | yes |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
 | D2 S5 transition query, `performance_status` | general | read | cli, mcp | no |
@@ -489,6 +490,7 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `task-run` | RunContainedTask | option two | retires → actinglab `run start` (not `lab run`, which takes no recovery package or time limit, must write a zip and answers only at the end) |
 | `emulator start`, `stop`, `restart` | ControlEmulatorInstance | option two | retire → actinglab `emulator start`, `stop`, `restart` |
 | `selfcheck` | SelfCheckInstance | option two | retires → actinglab `emulator selfcheck` |
+| new: `ladder-drill --instance <alias\|instance_id\|ADB port> [--device]` (#390 DRILL-1, before U-3) | DrillRecoveryLadder | option two | actingctl until U-3 moves the option-two commands; `ac_ladder_drill`; without `--device` a plan drill (`mode` `plan`) that never acts on the device; answers the admitted drill `{instance_alias, mode, ladder_request_id}`; success `recovery_ladder_drill_queued`; refusals `recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`, `recovery_ladder_drill_cooling_down`, `recovery_admission_denied`, `instance_unknown`, `instance_ambiguous` |
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
 | new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything) | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
@@ -536,6 +538,7 @@ two.
 | `ac_emulator` | operation | actinglab `emulator start`, `stop`, `restart` (new) | `instance`, `action` ↔ `--instance` and the subcommand | option two |
 | `ac_app` (new, #389 MCP-13a; operator before U-3) | operation | actinglab `session app <launch\|restart\|stop\|force-stop>` | `action` ↔ the action word, `instance` ↔ `--instance` (both required); never `--record`; `force-stop` is the same action as `stop`; marked destructive; actinglab's data verbatim and its errors as every Lab tool relays them | option two |
 | `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG) | option two |
+| `ac_ladder_drill` (new, #390 DRILL-1; operator before U-3) | operation | `actingctl ladder-drill` | `instance` ↔ `--instance` (alias, `instance_id` or ADB port), `device` ↔ `--device` (a boolean, absent false); output as the CLI's; marked destructive (a device drill may stop the application or restart the emulator); answers at admission, before the drill climbs | option two |
 
 - `ac_overview` past the output budget (#389 MCP-8, MCP-0 command table §4.9): it cuts one
   block at a time until the answer fits, in this order: `fact_refresh`, `host`, `startup`,

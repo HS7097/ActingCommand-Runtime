@@ -20,7 +20,7 @@ use actingcommand_scheduler::ClaimKind;
 const WAIT: Duration = Duration::from_secs(120);
 const STARTUP_ALIAS: &str = "startup.instance";
 
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+pub(super) fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + WAIT;
     while !ready() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");

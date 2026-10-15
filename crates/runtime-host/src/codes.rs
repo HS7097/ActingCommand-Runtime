@@ -173,6 +173,25 @@ actingcommand_contract::outcome_codes! {
         /// ruling 1); NAV-5 emits it.
         ContainedTaskNavigationRecoveryExhausted => "contained_task_navigation_recovery_exhausted": error / pack_logic_mismatch,
         // Workflow #387 D1c end
+        // Workflow #390 DRILL-1 begin: a person's drill of an instance's ladder.
+        /// Info. The trigger of a drill's ladder: a person asked for it (`DrillRecoveryLadder`);
+        /// its `recovery_ladder_started` names it as the trigger's `failure_code`, stage `drill`.
+        RecoveryLadderDrillRequested => "recovery_ladder_drill_requested": info / none,
+        /// Info. A plan drill did not run a rung the ladder would have run: it never acts on the
+        /// device (the rung's `recovery_rung_finished` outcome).
+        RecoveryRungSkippedDrillPlan => "recovery_rung_skipped_drill_plan": info / none,
+        /// Error. A drill was refused: stuck recovery is off for the instance, so no ladder
+        /// starts on it (the command's `command.rejected` and the receipt).
+        RecoveryLadderDrillDisabled => "recovery_ladder_drill_disabled": error / none,
+        /// Error. A drill was refused: a ladder holds or waits for the instance and
+        /// `rules.already_running` is `suppress` (its `recovery_ladder_suppressed`, tagged
+        /// `drill`, says `already_running`).
+        RecoveryLadderDrillAlreadyRunning => "recovery_ladder_drill_already_running": error / none,
+        /// Error. A drill was refused: the instance's cool-down window is open and
+        /// `trigger_defaults.respect_cooldown` holds the drill (keys `next_eligible_unix_ms`, the
+        /// window's end).
+        RecoveryLadderDrillCoolingDown => "recovery_ladder_drill_cooling_down": error / none,
+        // Workflow #390 DRILL-1 end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,
         AgentContextInvalid => "agent_context_invalid": error / none,
@@ -1306,6 +1325,8 @@ actingcommand_contract::outcome_locations! {
         AdmitNewBusiness => "admit_new_business",
         AdmitPolicyDispatch => "admit_policy_dispatch",
         AdmitRecoveryLadder => "admit_recovery_ladder",
+        // Workflow #390 DRILL-1: a person's drill of an instance's ladder.
+        RecoveryLadderDrill => "recovery_ladder_drill",
         AdmitRuntimeCleanup => "admit_runtime_cleanup",
         AdmitRuntimeContinuation => "admit_runtime_continuation",
         AdmitRuntimeWork => "admit_runtime_work",
