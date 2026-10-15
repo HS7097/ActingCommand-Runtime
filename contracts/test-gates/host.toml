@@ -201,7 +201,7 @@ tests = [
 ]
 incident = ["#399", "#400"]
 
-# No silent skip: a due clock slot that is not dispatched leaves one record
+# No silent skip: a due clock slot that is not dispatched, or lost to expiry or supersession, leaves one record
 [[gate]]
 key = "31"
 coverage = "Y"
@@ -215,6 +215,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_every_token_passes_the_planning_signal_validation",
     "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_signal_id_matches_its_golden_digest",
     "actingcommand-runtime-host::lib::tests::gate_372k2::gate_clock_slot_records_round_trip_through_ledger_and_projection",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t1_an_occurrence_kept_waiting_past_its_grace_is_recorded_expired_once",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t2_a_refused_occurrence_past_its_grace_is_recorded_expired_and_its_refusal_settles_expired",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t3_an_occurrence_absorbed_while_the_host_was_closed_is_recorded_superseded",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t4_a_pair_that_is_not_live_never_ran_or_was_already_traced_gets_no_lapse_record",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t5_superseded_records_reach_back_48_hours_and_32_occurrences",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t6_each_lapse_is_written_once_round_trips_and_keeps_its_golden_id",
+    "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t7_actingd_suspended_lists_expired_and_superseded_entries_with_their_fate",
 ]
 incident = ["#372"]
 
@@ -722,6 +729,7 @@ key = "10"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_cursor_after_abort",
+    "actingcommand-runtime-host::lib::tests::gate_382_h5::gate_a_subscription_resumes_from_its_cursor_after_the_drain_times_out_on_the_manual_clock",
 ]
 incident = ["#382 H-5 G4"]
 
@@ -742,6 +750,8 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_an_install_drain_during_the_readiness_wait_fails_rung_three_and_releases_once",
     "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_a_shutdown_during_the_readiness_wait_fails_rung_three_and_releases_once",
     "actingcommand-runtime-host::lib::tests::instance_workers::a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release",
+    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_on_the_manual_clock_an_install_drain_ends_the_readiness_wait_at_its_next_poll",
+    "actingcommand-runtime-host::lib::tests::gate_382_h4::gate_on_the_manual_clock_a_shutdown_ends_the_readiness_wait_at_its_next_poll",
 ]
 incident = ["#382 H-4 G9"]
 
@@ -1045,7 +1055,27 @@ tests = [
 ]
 incident = ["#390 POOL-1"]
 
-# Workflow #385 PM-CFG (wave-17 ruling 10; PERF v1.4.2 §10.1; register §1.87): every key of the monitor's row (performance.monitor.*, .pressure.*, .load.*) is read from the configuration in effect, its default the constant the monitor ran with before, and a value outside its range or against a rule of §10.1 is refused naming the key (config_value_invalid while the rows are rendered, perf_config_invalid from the section check, the reader and the assembly); the assembly hands the row to the monitor, its host sampler and the controller; the monitor takes its sampling period, context window, sample bounds, summary period, failures in a row, controller freshness (sampling periods), stutter gap, pressure thresholds and severity levels from it, the sampler its process thresholds and coverage, the controller its heavy-load threshold
+# Workflow #398 RD-4 (model-398 v1.1 §6.2-§6.6, option B; §12 rows RD-4-T1 to T7; register §1.81): under the defaults a handset climbs the profile handset (return home, application restart, no emulator restart) and its recovery_ladder_started names it, while an emulator climbs the section's rungs; an instance's recovery_ladder_profile comes before the kind table; a profile changed while a ladder waits applies to the next trigger only; a profile name no profile has or a profile's rungs outside their schema refuse the section; a handset's start gate holding a rung's run skips it device_not_ready and the next rung runs; a start rung beyond a profile ends exhausted with no rung run and one release under exhaust (the default), climbs the last rung under last_rung, and is refused at start, in check-config and by instruction under refuse (start_rung_out_of_range naming the profile)
+[[gate]]
+key = "96"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t1_a_handset_climbs_the_default_profile_without_an_emulator_restart",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t2_an_instance_key_naming_a_three_rung_profile_skips_the_emulator_restart_as_today",
+    "actingcommand-runtime-config::lib::rd4_tests::rd4_t3_a_profile_no_one_has_or_profile_rungs_out_of_bounds_refuse_the_section",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t4_the_handset_plan_follows_its_profile_and_an_emulator_keeps_the_section_s_rungs",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t5_a_queued_ladder_keeps_the_profile_and_digest_it_was_admitted_with",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t6_a_device_state_hold_at_rung_one_skips_it_device_not_ready_and_rung_two_runs",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_under_exhaust_a_start_beyond_the_handset_profile_runs_no_rung",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_under_last_rung_a_start_beyond_the_handset_profile_climbs_its_last_rung",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_an_emulator_climbs_the_section_s_rungs_under_each_value",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_refuse_is_refused_at_start_and_by_instruction_and_the_configuration_stays",
+    "actingcommand-runtime-config::lib::rd4_tests::rd4_t7_the_rule_is_configured_and_refuse_checks_every_start_rung_against_every_profile",
+    "actingcommand-actingd::process::rd4_t7_refuse_with_a_start_beyond_a_profile_refuses_check_config_and_the_start",
+]
+incident = ["#398 RD-4"]
+
+# Workflow #385 PM-CFG (wave-17 ruling 10; PERF v1.4.2 §10.1; register §1.87): every key of the monitor's row (performance.monitor.*, .pressure.*, .load.*) is read from the configuration in effect, its default the constant the monitor ran with before, and a value outside its range or against a rule of §10.1 is refused naming the key (config_value_invalid while the rows are rendered, perf_config_invalid from the section check, the reader and the assembly); the assembly hands the row to the monitor, its host sampler and the controller; the monitor takes its sampling period, context window, sample bounds, summary period, failures in a row, controller freshness (sampling periods), stutter gap, pressure thresholds and severity levels from it, the sampler its process thresholds and coverage, the controller its heavy-load threshold, which its resource overlay hands to the policy evaluator, so a configured threshold moves the controller's count of admitted heavy work and the evaluator's heavy candidate together
 [[gate]]
 key = "98"
 coverage = "Y"
@@ -1060,6 +1090,42 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_a_pressure_s_severity_follows_the_configured_levels",
     "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_sampler_is_asked_for_the_configured_process_thresholds_and_coverage",
     "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_counts_heavy_work_from_the_configured_threshold",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_and_the_evaluator_judge_heavy_work_by_the_one_configured_threshold",
     "actingcommand-host-metrics::lib::windows::tests::pmcfg_process_metrics_count_from_the_configured_coverage",
 ]
 incident = ["#385 PM-CFG"]
+
+# The install drain flow by phase on the manual Runtime clock (test plan v2.2 §3.10 H-1-rest, HOST-I2; inventory-host G3): BeginDrain closes admission and drains, Drained when idle, and CommitShutdown is taken from Drained only; Abort only from Draining or Drained, reopening admission; ticket, owner and phase mismatches are refused under their registered codes, change neither phase nor admission and record exactly one lifecycle failure, not performed (#352); a held owner takes only its Release and is Released, admission open, once preparation finished (Workflow #382 H-1 G3)
+[[gate]]
+key = "7"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_drain_answers_each_action_by_its_phase_and_times_out_on_the_manual_clock",
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_answers_each_action_by_its_phase_and_opens_when_released",
+]
+incident = ["#382 H-1"]
+
+# The install deadlines read the Runtime clock (HOST-I2): drain_timeout aborts the drain and reopens admission; held_timeout and release_timeout fail the start with admission closed and exactly one lifecycle failure, the start ending under that code (Workflow #381 A R5′; Workflow #382 H-1 G1 and G3)
+[[gate]]
+key = "8"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g1_a_release_held_at_preparing_fails_closed_once_the_clock_passes_its_deadline",
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_drain_answers_each_action_by_its_phase_and_times_out_on_the_manual_clock",
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_fails_closed_once_the_clock_passes_its_held_deadline",
+]
+incident = ["#381 A", "#382 H-1"]
+
+# The held start (HOST-I3): the Release receipt comes while preparation is held, an undeclared Query while preparing completes and appends nothing, a latched failure stops the start under install_startup_stopped with its cause, a held or release timeout ends the start under its own code, and a release is Released once preparation finished (Workflow #381 A R2, R3′, R5′; #672; Workflow #382 H-1 G1 and G3)
+[[gate]]
+key = "9"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g1_a_release_held_at_preparing_fails_closed_once_the_clock_passes_its_deadline",
+    "actingcommand-runtime-host::lib::tests::gate_382_h1::gate_h1_g3_a_held_start_answers_each_action_by_its_phase_and_opens_when_released",
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_undeclared_query_while_preparing_completes_and_leaves_the_ledger_head",
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_latched_failure_while_preparing_stops_the_start_under_its_own_code_with_the_cause",
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_release_that_times_out_ends_the_start_under_release_timeout",
+    "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_whose_deadline_passes_ends_under_held_timeout",
+]
+incident = ["#381 A", "#382 H-1"]

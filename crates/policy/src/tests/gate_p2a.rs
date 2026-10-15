@@ -31,14 +31,14 @@ use crate::{
 const MINUTE_MS: u64 = 60_000;
 const HOUR_MS: u64 = 3_600_000;
 const DAY_MS: u64 = 86_400_000;
-const SEED: u64 = 17;
+pub(super) const SEED: u64 = 17;
 
 const GAME: &str = "game-a";
 const SERVER: &str = "server-a";
 const OPERATION: &str = "operation.run";
-const FIRST: &str = "task.first";
+pub(super) const FIRST: &str = "task.first";
 const SECOND: &str = "task.second";
-const INSTANCE_A: &str = "instance-a";
+pub(super) const INSTANCE_A: &str = "instance-a";
 const INSTANCE_B: &str = "instance-b";
 const INSTANCE_C: &str = "instance-c";
 const INSTANCE_D: &str = "instance-d";
@@ -50,7 +50,7 @@ const SHARED_HOST: &str = "host.shared";
 // records"; model-369-queue.md W-1).
 const INSTANCE_HELD: &str = "dispatch_instance_held";
 const INSTANCE_COOLDOWN: &str = "dispatch_instance_cooldown";
-const BUDGET_EXHAUSTED: &str = "policy_budget_exhausted";
+pub(super) const BUDGET_EXHAUSTED: &str = "policy_budget_exhausted";
 const WINDOW_CLOSED: &str = "policy_activity_window_closed";
 
 // G8: the evaluation instant, one minute past a whole hour, so the hourly trigger of every task
@@ -356,7 +356,7 @@ fn gate_p2a_g9_a_two_day_replay_serves_or_gates_every_due_slot_and_counts_an_owe
 // The error type of the callback: the evaluation's own error, or the fake's failed read of an
 // instance.
 #[derive(PartialEq)]
-enum Refusal {
+pub(super) enum Refusal {
     Evaluation(PolicyEvaluationError),
     AdmissionRead(String),
 }
@@ -380,9 +380,9 @@ impl fmt::Debug for Refusal {
 
 // I2: the Runtime's read-only admission predicate as tables, and the admissions it counted.
 #[derive(Default)]
-struct FakeAdmission {
+pub(super) struct FakeAdmission {
     // Instances another holder keeps: deferred with no wake (model-369-queue.md W-1).
-    held: BTreeSet<String>,
+    pub(super) held: BTreeSet<String>,
     // Instances in a takeover cooldown, with its end: deferred with a wake at that end.
     cooldown: BTreeMap<String, u64>,
     // (task, instance) pairs whose budget refuses them, with their next eligible time.
@@ -391,7 +391,7 @@ struct FakeAdmission {
     failing: BTreeSet<String>,
     // Activity profiles whose windows gate admission and whose days carry the daily limit;
     // empty when the fake applies neither.
-    profiles: Vec<ActivityProfile>,
+    pub(super) profiles: Vec<ActivityProfile>,
     // Admissions per (task, instance, local day of the activity window they ran in).
     admitted: BTreeMap<(String, String, i64), u32>,
     // Every call, in order: (task, instance, evaluation time).
@@ -400,7 +400,10 @@ struct FakeAdmission {
 
 impl FakeAdmission {
     // The callback's answer for one ranked candidate.
-    fn preview(&mut self, intent: &DispatchIntent) -> Result<CandidateEligibility, Refusal> {
+    pub(super) fn preview(
+        &mut self,
+        intent: &DispatchIntent,
+    ) -> Result<CandidateEligibility, Refusal> {
         let time = intent.prerequisites.evaluated_at_unix_ms;
         self.calls
             .push((intent.task_id.clone(), intent.instance_id.clone(), time));
@@ -432,7 +435,7 @@ impl FakeAdmission {
 
     // The final admission of a selected intent: it counts against the day of the activity
     // window open when it runs.
-    fn admit(&mut self, intent: &DispatchIntent) {
+    pub(super) fn admit(&mut self, intent: &DispatchIntent) {
         let day = self.window_day(intent).unwrap_or_else(|| {
             panic!(
                 "{} on {} is admitted inside its activity window",
@@ -446,7 +449,7 @@ impl FakeAdmission {
     }
 
     // The admissions of a pair on one local day.
-    fn used(&self, task_id: &str, instance_id: &str, day: i64) -> u32 {
+    pub(super) fn used(&self, task_id: &str, instance_id: &str, day: i64) -> u32 {
         self.admitted
             .get(&(task_id.to_owned(), instance_id.to_owned(), day))
             .copied()
@@ -490,18 +493,18 @@ fn next_window_start(time: u64) -> u64 {
 }
 
 // The local day of a G9 time: its windows are in UTC.
-fn local_day(time: u64) -> i64 {
+pub(super) fn local_day(time: u64) -> i64 {
     i64::try_from(time / DAY_MS).expect("a day index")
 }
 
-fn at(unix_ms: u64) -> EvaluationTime {
+pub(super) fn at(unix_ms: u64) -> EvaluationTime {
     EvaluationTime {
         unix_ms,
         monotonic_ms: unix_ms,
     }
 }
 
-fn decision<'a>(
+pub(super) fn decision<'a>(
     evaluation: &'a PolicyEvaluation,
     task_id: &str,
     instance_id: &str,
@@ -516,7 +519,7 @@ fn decision<'a>(
 }
 
 // The reason that settled a decision: its last.
-fn last_reason(decision: &TaskDecision) -> &str {
+pub(super) fn last_reason(decision: &TaskDecision) -> &str {
     decision
         .reasons
         .last()
@@ -524,7 +527,7 @@ fn last_reason(decision: &TaskDecision) -> &str {
         .unwrap_or_else(|| panic!("{} carries a reason", decision.task_id))
 }
 
-fn task_state(last_dispatched_unix_ms: Option<u64>) -> TaskRuntimeSnapshot {
+pub(super) fn task_state(last_dispatched_unix_ms: Option<u64>) -> TaskRuntimeSnapshot {
     TaskRuntimeSnapshot {
         task_id: FIRST.to_owned(),
         instance_id: INSTANCE_A.to_owned(),
@@ -537,7 +540,7 @@ fn task_state(last_dispatched_unix_ms: Option<u64>) -> TaskRuntimeSnapshot {
     }
 }
 
-fn instance(instance_id: &str, host_id: &str) -> InstanceSnapshot {
+pub(super) fn instance(instance_id: &str, host_id: &str) -> InstanceSnapshot {
     InstanceSnapshot {
         instance_id: instance_id.to_owned(),
         server_id: SERVER.to_owned(),
@@ -559,7 +562,10 @@ fn g8_instances() -> Vec<InstanceSnapshot> {
     ]
 }
 
-fn facts(instances: Vec<InstanceSnapshot>, tasks: Vec<TaskRuntimeSnapshot>) -> EvaluationFacts {
+pub(super) fn facts(
+    instances: Vec<InstanceSnapshot>,
+    tasks: Vec<TaskRuntimeSnapshot>,
+) -> EvaluationFacts {
     EvaluationFacts {
         ledger_position: 7,
         fact_snapshot_id: "snapshot:fixture-p2a".to_owned(),
@@ -573,7 +579,7 @@ fn facts(instances: Vec<InstanceSnapshot>, tasks: Vec<TaskRuntimeSnapshot>) -> E
 
 // Every host of the instances, each with full capacity, except the shared host, which has room
 // for one run of a task.
-fn resources(instances: &[InstanceSnapshot]) -> EvaluationResources {
+pub(super) fn resources(instances: &[InstanceSnapshot]) -> EvaluationResources {
     let hosts = instances
         .iter()
         .map(|instance| instance.host_id.as_str())
@@ -591,6 +597,7 @@ fn resources(instances: &[InstanceSnapshot]) -> EvaluationResources {
                 third_party_pressure_basis_points: 0,
                 heavy_dispatch_limit: 1,
                 active_heavy_dispatches: 0,
+                heavy_threshold_milli: crate::DEFAULT_HEAVY_THRESHOLD_MILLI,
             })
             .collect(),
     }
@@ -665,7 +672,7 @@ fn override_priority(instance_id: &str, priority: i16) -> Value {
     })
 }
 
-fn task(task_id: &str, trigger: Value, daily_limit: u32, overrides: Value) -> Value {
+pub(super) fn task(task_id: &str, trigger: Value, daily_limit: u32, overrides: Value) -> Value {
     json!({
         "id": task_id,
         "scope": {"kind": "game", "game_id": GAME},
@@ -708,6 +715,21 @@ fn task(task_id: &str, trigger: Value, daily_limit: u32, overrides: Value) -> Va
 // `window_start` to `window_end` (minutes of the UTC day; equal values mean all day), and no
 // pools or timeline events.
 fn catalog(tasks: Vec<Value>, window_start: u16, window_end: u16) -> CompiledCatalog {
+    catalog_of_version(
+        crate::SCHEDULING_SCHEMA_VERSION,
+        tasks,
+        window_start,
+        window_end,
+    )
+}
+
+// `catalog` with every document declaring `version` (Workflow #361 R7 replays a V2 catalog).
+pub(super) fn catalog_of_version(
+    version: &str,
+    tasks: Vec<Value>,
+    window_start: u16,
+    window_end: u16,
+) -> CompiledCatalog {
     let header = json!({
         "catalog_id": "fixture.p2a-catalog",
         "catalog_version": 1,
@@ -715,7 +737,7 @@ fn catalog(tasks: Vec<Value>, window_start: u16, window_end: u16) -> CompiledCat
     });
     let document = |member: &str, entries: Value| {
         let mut document = json!({
-            "schema_version": crate::SCHEDULING_SCHEMA_VERSION,
+            "schema_version": version,
             "catalog": header,
         });
         document[member] = entries;

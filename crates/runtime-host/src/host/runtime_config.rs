@@ -21,11 +21,11 @@ use crate::codes::{ConfigHostCode, ConfigHostLocation};
 use actingcommand_contract::{
     ApprovalTarget, CONFIG_CATALOG_FACT_KEY, CONFIG_OVERRIDES_FACT_KEY,
     CONFIG_PARAMETERS_FACT_PREFIX, CatalogPayload, ConfigCatalog, ConfigSelection,
-    ConfigSettingChange, InstanceStuckRecovery, config_parameters_fact_key,
+    ConfigSettingChange, InstanceDeviceKind, InstanceStuckRecovery, config_parameters_fact_key,
 };
 use actingcommand_runtime_config::{
-    AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, RestoreNote,
-    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
+    AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, LadderProfile,
+    RestoreNote, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
 
 impl HostShared {
@@ -678,6 +678,31 @@ fn value_type_invalid(operation: ConfigHostLocation) -> RuntimeHostError {
         operation,
         RuntimeErrorCode::RuntimeHalted,
     )
+}
+
+/// Workflow #398 RD-4 (model-398 v1.1 §6.2): the ladder profile the registered instance
+/// `resolved` climbs by in `ladder`: the one its own `recovery_ladder_profile` names, else the one
+/// `kind_profiles` gives its device kind (a handset is an instance whose bound endpoint is one);
+/// `None` when it climbs the section's `rungs`. A ladder admitted with `ladder` keeps it to its
+/// end, as it keeps the section (§4.7).
+pub(super) fn ladder_profile(
+    resolved: &RegisteredInstance,
+    ladder: &LadderConfig,
+) -> RuntimeHostResult<Option<LadderProfile>> {
+    let instance = identity_text(
+        &resolved.instance_id(),
+        ConfigHostLocation::ReadRuntimeConfig,
+    )?;
+    let kind = if resolved
+        .bound_adb_endpoint()
+        .and_then(ResolvedAdbEndpoint::handset)
+        .is_some()
+    {
+        InstanceDeviceKind::Handset
+    } else {
+        InstanceDeviceKind::Emulator
+    };
+    Ok(ladder.profile_for(&instance, kind).cloned())
 }
 
 /// The canonical text of an opaque identifier (an owner epoch, a request or instance id).

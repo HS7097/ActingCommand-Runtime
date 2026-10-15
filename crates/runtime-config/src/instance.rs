@@ -13,7 +13,10 @@
 //! `recognition_package.package`: reported only for an instance that names it, read at assembly.
 //! Workflow #369 S6a adds `start_emulator` (ORD §3.5 item 17): `true` lets the daemon start the
 //! instance's stopped emulator at its start (S6c); default `none`, so a file that does not name
-//! it leaves it off and reports no row; read at assembly.
+//! it leaves it off and reports no row; read at assembly. Workflow #398 RD-4 adds
+//! `recovery_ladder_profile` (model-398 v1.1 §6.2): the ladder profile the instance climbs by,
+//! before the section's `kind_profiles`; default `none` (no row unless the entry names it),
+//! settable, checked with the `recovery_ladder` section.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
@@ -41,6 +44,10 @@ pub const RECOGNITION_PACKAGE: &str = "recognition_package";
 /// Workflow #369 S6a: whether the daemon starts the instance's stopped emulator at its start, the
 /// entry's `start_emulator`; discovery-bound instances only, off unless the file names it.
 pub const START_EMULATOR: &str = "start_emulator";
+/// Workflow #398 RD-4 (model-398 v1.1 §6.2): the ladder profile the instance climbs by, the
+/// entry's `recovery_ladder_profile`; it comes before the `recovery_ladder` section's
+/// `kind_profiles` and must name one of its `profiles`.
+pub const RECOVERY_LADDER_PROFILE: &str = "recovery_ladder_profile";
 
 pub(crate) static ROWS: &[KeyRow] = &[
     KeyRow {
@@ -97,6 +104,19 @@ pub(crate) static ROWS: &[KeyRow] = &[
         default: DefaultSource::None,
         settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "S6c",
+        since: "0.12.0",
+    },
+    // Workflow #398 RD-4 (model-398 §6.2): reported only for an instance that names it;
+    // settable while the Runtime runs, as the `recovery_ladder` section is; a ladder takes it
+    // into its snapshot when it is admitted.
+    KeyRow {
+        name: KeyName::PerInstance(RECOVERY_LADDER_PROFILE),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::String,
+        range: KeyRange::Any,
+        default: DefaultSource::None,
+        settable: Settable::Yes,
+        reader: "RD-4",
         since: "0.12.0",
     },
 ];

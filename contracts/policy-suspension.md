@@ -364,6 +364,11 @@ stdout is one JSON object:
     its `next_eligible_unix_ms` predicts by the same rule, or `pending` without it.
   - An owed record: `served` when D < X; `absorbed` when D ≥ X, or without D once the reference
     time reaches X; both settled. Otherwise `pending`, unsettled.
+  - Workflow #372 K4: an expired record (`clock_slot_expired`, with `occurrence_unix_ms`,
+    `grace_ms` and `next_occurrence_unix_ms` when known) is `expired`, and a superseded record
+    (`clock_slot_superseded`, with `occurrence_unix_ms` and `next_occurrence_unix_ms`) is
+    `collapsed`, both settled. A refused or deferred record whose task, instance and
+    occurrence an expired record in the list also names is `expired`, settled, whatever D.
   - An outcome that does not read back (a code that is not a clock-slot code, a value the
     entry does not hold, a value of the wrong type, a missing required value) gives
     `{"parse_state":"unparsed","signal_id":"...","code":"..."}`, `code` being the outcome's

@@ -18,8 +18,12 @@ the configuration (Workflow #385 P-c): `performance.pacing.clock_jump_ms`
 ([runtime-config.md](runtime-config.md), "The performance section"). So does
 `performance.load.heavy_threshold_milli` (default 1 500; Workflow #385 PM-CFG):
 a weighted workload whose `cpu_milli + gpu_milli + io_milli` reaches it counts
-as heavy. The escalation and recovery samples and the transition cooldown stay
-the controller's own values.
+as heavy. The controller and the policy evaluator both use this key: the
+controller counts the admitted heavy dispatches by it, and its resource overlay
+hands it to the evaluator with each host's heavy-dispatch budget, so a
+candidate is heavy by the same value. Heavy work has no other threshold. The
+escalation and recovery samples and the transition cooldown stay the
+controller's own values.
 
 ## Responsiveness input
 
@@ -134,7 +138,9 @@ evaluator.
 
 Capacity admission follows an allowed gate unchanged. The resource overlay
 (`apply_to_resources`) does not scale the host budgets by the level: they only
-express capacity. Its heavy-dispatch cap by the global level is unchanged.
+express capacity. Its heavy-dispatch cap by the global level is unchanged. It
+also sets each host's heavy threshold, `performance.load.heavy_threshold_milli`,
+which the evaluator applies to a candidate's load (Workflow #385 PM-CFG).
 
 ## Lease admission
 

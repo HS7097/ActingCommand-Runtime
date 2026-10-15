@@ -7,7 +7,10 @@
 # FLK-06 (the 500 ms process-test clients) are not mirrored: Batch 0a retired that test (§4 #8) and
 # moved those clients to the production 5 s budget (§4 #11). FLK-01
 # (`typed_client_discovers_runtime_and_routes_queries_and_input`) left after H-6 set its test lease
-# TTL to 5 s (#71 comment 6101156993).
+# TTL to 5 s (#71 comment 6101156993). FLK-02
+# (`runtime_input_proxy_renews_before_short_lease_expiry`, its real 5.3 s wait) left when C-4
+# retired it for the manual-timer heartbeat tests `tests::gate_c4` (test plan v2.2 section 4
+# item 5; coordinator ruling on the seam rows, 2026-10-15).
 #
 # Every module job of `.github/workflows/ci.yml` passes `--skip <libtest path>` for its entries
 # (its `CI_SKIP` line), and the non-gating `flaky` job runs exactly these tests, once per
@@ -28,15 +31,6 @@
 #   the job's default features); the `flaky` job runs it once in each.
 # - `register`: the #71 comment that holds the entry's current state.
 # - `status`: where the entry stands on #71.
-
-[[test]]
-id = "FLK-02"
-name = "actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry"
-crate = "actingcommand-runtime-client"
-job = "runtime-client"
-features = ["", "test-observation"]
-register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6074097808"
-status = "cause located (short lease TTL, real 5.3 s wait); C-4 replaces it with a manual-clock test"
 
 [[test]]
 id = "FLK-04"

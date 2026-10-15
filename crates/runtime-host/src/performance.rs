@@ -107,7 +107,8 @@ impl Default for PerformanceMonitorConfig {
 impl PerformanceMonitorConfig {
     /// Workflow #385 PM-CFG (PERF §10.1; register §5 "Read by P-m"): the monitor's values in
     /// effect. `performance.load.heavy_threshold_milli` is the controller's
-    /// (`PerformanceControlConfig::with_heavy_threshold_milli`).
+    /// (`PerformanceControlConfig::with_heavy_threshold_milli`), which hands it to the policy
+    /// evaluator.
     pub fn with_settings(self, settings: &MonitorSettings) -> Self {
         // One-off red proof: only the streaks and the GPU aggregate are wired.
         Self {

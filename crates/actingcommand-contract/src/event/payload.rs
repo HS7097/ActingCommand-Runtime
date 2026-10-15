@@ -4451,6 +4451,8 @@ impl InputSamplingEvidence {
         self.validate_parameters()?;
         let valid = match (action, self.source_regions.as_slice()) {
             (InputAction::Tap { x, y }, [region]) => region.contains(*x, *y),
+            // Workflow #390 lpbox: a long press held at a point drawn in its click box.
+            (InputAction::LongTap { x, y, .. }, [region]) => region.contains(*x, *y),
             (InputAction::Swipe { x1, y1, x2, y2, .. }, [from, to]) => {
                 from.contains(*x1, *y1) && to.contains(*x2, *y2)
             }

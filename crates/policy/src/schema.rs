@@ -27,6 +27,10 @@ pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
 pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
 pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
 pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
+/// Workflow #361 R7: the bounds of a clock's `missed: skip_after` grace, one minute to seven
+/// days.
+pub const MIN_MISSED_GRACE_MS: u64 = 60_000;
+pub const MAX_MISSED_GRACE_MS: u64 = 604_800_000;
 pub const MIN_UTC_OFFSET_MINUTES: i16 = -840;
 pub const MAX_UTC_OFFSET_MINUTES: i16 = 840;
 pub const MIN_DST_OFFSET_MINUTES: i16 = -120;
@@ -416,6 +420,11 @@ pub enum PredicateSpec {
     },
     Clock {
         schedule: ClockSchedule,
+        /// Workflow #361 R7 (`actingcommand.scheduling.v2` only): what becomes of an occurrence
+        /// that is not served in time. Absent, an occurrence stays due until the pair is next
+        /// dispatched, and the member serializes as nothing at all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        missed: Option<MissedSlotRule>,
     },
     TimelineActive {
         event_id: String,
@@ -449,6 +458,15 @@ pub enum PredicateSpec {
         comparison: Comparison,
         value: FactValue,
     },
+}
+
+/// Workflow #361 R7: a clock predicate's rule for an occurrence that was not served in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MissedSlotRule {
+    /// The occurrence is due only before `occurrence + grace_ms`; after it the occurrence is
+    /// skipped, and the clock waits for its next occurrence.
+    SkipAfter { grace_ms: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1130,5 +1148,25 @@ mod tests {
                 "v2 {field}"
             );
         }
+
+        // Workflow #361 R7, row R7-T9: V2 alone carries a clock's `missed`, and its grace bounds
+        // are the compiler's.
+        let clock = |schemas: &BTreeMap<&str, serde_json::Value>| {
+            schemas["common.schema.json"]["$defs"]["predicate"]["oneOf"]
+                .as_array()
+                .expect("predicate variants")
+                .iter()
+                .find(|variant| variant["properties"]["kind"]["const"] == "clock")
+                .cloned()
+                .expect("the clock predicate")
+        };
+        assert!(clock(&v1)["properties"].get("missed").is_none());
+        assert_eq!(
+            clock(&v2)["properties"]["missed"]["$ref"],
+            "#/$defs/missedSlotRule"
+        );
+        let grace = &v2["common.schema.json"]["$defs"]["missedSlotRule"]["properties"]["grace_ms"];
+        assert_eq!(grace["minimum"], MIN_MISSED_GRACE_MS);
+        assert_eq!(grace["maximum"], MAX_MISSED_GRACE_MS);
     }
 }

@@ -683,6 +683,47 @@ is shutting down). The first successful application rung ends the ladder `recove
 successful cold environment without a package ends it `environment_ready`. When every rung
 failed or was skipped it ends `exhausted`. No result replays an uncertain business operation.
 
+### Ladder profiles (Workflow #398 RD-4)
+
+Model-398 v1.1 §6.2-§6.6, option B (coordinator ruling of 2026-10-15): a ladder climbs the rungs
+of the profile its instance takes. `recovery_ladder.profiles` names profiles
+(`{"<name>": {"rungs": [...]}}`; a name is 1 to 64 bytes of lowercase letters, digits and `_`,
+starting with a letter), each profile's `rungs` written and checked as the section's are;
+`recovery_ladder.kind_profiles` gives a device kind (`emulator`, `handset`;
+[device-binding.md](device-binding.md)) a profile; an instance's own `recovery_ladder_profile`
+(its `instances[]` entry) comes first. The order of use is the instance's key, then the kind
+table, then the section's `rungs`. The defaults give the kind `handset` the profile `handset`:
+`return_home`, then `application_restart`, with no emulator restart and no new action (a handset
+has no emulator to restart, and the Runtime never restarts the phone); an emulator names no
+profile and climbs the section's `rungs`. A ladder takes its profile with its snapshot when it is
+admitted, so a profile changed while it waits applies to the next trigger only, and its
+`recovery_ladder_started` names it (`profile`). A start rung is a position in the rungs the
+instance climbs; `recovery_ladder.rules.start_beyond_profile`, the sixth rule beside B1-B5, says
+what a start beyond a profile's rungs does:
+
+- `exhaust` (the default): the climb starts, every rung of the profile is recorded skipped
+  (`before_start_rung`), and the ladder ends `exhausted` with `rungs_tried` 0, as a ladder whose
+  rungs are all skipped ends: no rung runs, the key is released once, and the cool-down opens as
+  `rules.cooldown_opens_on` says. On a handset under the defaults, `navigation_exhausted` (start
+  rung 3: the navigation recovery already returned home and restarted the application) ends this
+  way, so nothing that recovery just did is done again;
+- `last_rung`: the climb starts at the profile's last rung (on the default handset profile, the
+  application restart);
+- `refuse`: every trigger item's start rung and `trigger_defaults.start_rung` must lie within
+  every profile's rungs; the section check refuses any other with `recovery_ladder_config_invalid`
+  (`start_rung_out_of_range`, `config_key` `recovery_ladder.profiles.<name>`) at start and in
+  check-config, and through an instruction the same value is `config_value_invalid` and the
+  configuration in effect stays.
+
+Under `exhaust` and `last_rung` a start rung is checked against the section's `rungs` only, as
+before. No code, skip reason or record member is added for the rule. B5 applies to a handset's
+start gate ([application-lifecycle.md](application-lifecycle.md), "The handset start gate"): a
+rung whose run the gate holds before its first step (`device_locked`, `device_thermal_hold`,
+`device_battery_low`, `device_in_use`) is skipped `device_not_ready`
+(`recovery_rung_skipped_device_not_ready`), or fails with that code under
+`rules.entry_unavailable = fail`; after the application restart's stop it fails, as every
+unavailable entry after the stop does.
+
 ### Cool-down, suppression and interruption
 
 Cool-down: `cooldown_secs` (default 600), overridden per instance by
@@ -762,7 +803,7 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | phase | fields | severity |
 | --- | --- | --- |
 | `instance_preparation_finished` | `stage` (a preparation stage: never `task` or `stability_warnings`), `capture`, `input` (typed backend observation statuses), `outcome?` (the preparation's failure); linked to the instance and real self-check request | a failure: its outcome's category; otherwise info |
-| `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code, rule?, matched?, start }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (one to three, in the configured order, no action twice; `reason` exactly when skipped), `config_digest` (64 lowercase hexadecimal digits: the SHA-256 of the section's values the ladder climbs by), `profile?` (a ladder profile's name, Workflow #398 RD-4; absent while only the section's `rungs` exist) | info |
+| `recovery_ladder_started` | `trigger { stage, run_id?, task_id?, preparation?, failure_code, rule?, matched?, start }`, `rungs: [{ rung, state: "pending" \| "skipped", reason? }]` (one to three, in the configured order, no action twice; `reason` exactly when skipped), `config_digest` (64 lowercase hexadecimal digits: the SHA-256 of the section's values the ladder climbs by), `profile?` (the name of the ladder profile the instance climbs by, Workflow #398 RD-4; absent when it climbs the section's `rungs`) | info |
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
 | `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
@@ -792,8 +833,8 @@ ID. Unknown fields are refused.
 `rung` is `return_home`, `application_restart` or `emulator_restart`; a skip `reason` is
 `no_recovery_package`, `no_startup_package`, `no_emulator_control`, `capture_unavailable`,
 `input_unavailable`, `adb_unavailable`, `resource_fence`, `before_start_rung`,
-`device_not_ready` (the device-state gate holds the rung's entry; Workflow #398 M398 §6.4,
-emitted by the device-state slice) or `drill_plan` (a plan drill did not run the rung; Workflow
+`device_not_ready` (a handset's start gate held the rung's run before its first step;
+Workflow #398 M398 §6.4, §6.5, written from RD-4 on) or `drill_plan` (a plan drill did not run the rung; Workflow
 #390 DRILL-1). A ladder with no recovery package, no startup package and
 no emulator control records `recovery_ladder_started` (all rungs skipped), one
 `recovery_rung_finished` (`skipped`) per rung and `recovery_ladder_finished` (`exhausted`,

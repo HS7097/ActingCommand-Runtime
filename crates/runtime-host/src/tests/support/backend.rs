@@ -656,6 +656,9 @@ pub(super) struct FakeHandsetState {
     pub(super) screen_off_timeout_ms: u64,
     pub(super) wake_fails: bool,
     pub(super) dismiss_fails: bool,
+    // Workflow #398 RD-4: the next this many keyguard reads find a keyguard that waits for a
+    // person (shown and secure), whatever the state says; each read takes one.
+    pub(super) locked_keyguard_reads: u32,
 }
 
 impl Default for FakeHandsetState {
@@ -674,6 +677,7 @@ impl Default for FakeHandsetState {
             screen_off_timeout_ms: 600_000,
             wake_fails: false,
             dismiss_fails: false,
+            locked_keyguard_reads: 0,
         }
     }
 }
@@ -707,7 +711,18 @@ impl FakeHandset {
 
     fn answer(&self, command: actingcommand_device::DeviceStateRead) -> String {
         use actingcommand_device::DeviceStateRead as Read;
-        let state = self.state.lock().expect("fake handset state").clone();
+        let state = {
+            let mut state = self.state.lock().expect("fake handset state");
+            if command == Read::Keyguard && state.locked_keyguard_reads > 0 {
+                state.locked_keyguard_reads -= 1;
+                let mut locked = state.clone();
+                locked.keyguard_showing = true;
+                locked.keyguard_secure = true;
+                locked
+            } else {
+                state.clone()
+            }
+        };
         match command {
             Read::Power => format!(
                 "Power Manager State:\n  mDirty=0x0\n  mWakefulness={}\n  mWakefulnessChanging=false\n",

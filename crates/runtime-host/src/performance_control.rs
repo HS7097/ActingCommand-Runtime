@@ -9,12 +9,11 @@ use actingcommand_contract::{
     ArbitrationBasis, ArbitrationBasisKind, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, RuntimeErrorCode,
 };
-use actingcommand_policy::{HostResourceSnapshot, LoadProfile};
+use actingcommand_policy::{DEFAULT_HEAVY_THRESHOLD_MILLI, HostResourceSnapshot, LoadProfile};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 const BASIS_POINTS_MAX: u16 = 10_000;
-const DEFAULT_HEAVY_THRESHOLD_MILLI: u64 = 1_500;
 
 #[derive(Debug, Clone)]
 pub struct PerformanceControlConfig {
@@ -25,7 +24,8 @@ pub struct PerformanceControlConfig {
     normal_heavy_dispatch_limit: u16,
     pressured_heavy_dispatch_limit: u16,
     /// Workflow #385 PM-CFG (`performance.load.heavy_threshold_milli`): a weighted workload whose
-    /// `cpu_milli + gpu_milli + io_milli` reaches it is heavy.
+    /// `cpu_milli + gpu_milli + io_milli` reaches it is heavy, here and, through the resource
+    /// overlay, in the policy evaluator.
     heavy_threshold_milli: u64,
 }
 
@@ -476,6 +476,8 @@ impl PerformanceBalanceController {
                 self.config.pressured_heavy_dispatch_limit
             };
             host.active_heavy_dispatches = heavy_count.min(host.heavy_dispatch_limit);
+            // Workflow #385 PM-CFG: the evaluator judges a candidate heavy by the same threshold.
+            host.heavy_threshold_milli = self.config.heavy_threshold_milli;
         }
         Ok(())
     }
@@ -1092,6 +1094,7 @@ mod tests {
             third_party_pressure_basis_points: 0,
             heavy_dispatch_limit: 2,
             active_heavy_dispatches: 0,
+            heavy_threshold_milli: actingcommand_policy::DEFAULT_HEAVY_THRESHOLD_MILLI,
         }];
         controller
             .apply_to_resources(

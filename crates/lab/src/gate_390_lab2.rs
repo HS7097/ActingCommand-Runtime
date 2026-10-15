@@ -713,13 +713,14 @@ fn lab2_a_drag_is_generated_as_a_drag_click_from_its_rectangle_to_its_destinatio
     assert_eq!(duration_ms, 300);
 }
 
-// L-02 "long press is recorded": a long press at one point over 800 ms is generated as a
-// `long_press` click at that point, which the first decision presses for 800 ms.
+// L-02 "long press is recorded": a long press at one point (Workflow #390 lpbox: its 1x1 click
+// box) over 800 ms is generated as a `long_press` click at that point, which the first decision
+// presses for 800 ms.
 #[test]
 fn lab2_a_long_press_is_generated_as_a_long_press_click_at_its_point() {
     let recording = Recording::new();
     let marked = recording.mark_first(ClickSpec {
-        long_press: Some(RecordPoint { x: 64, y: 14 }),
+        long_press: Some(rect(64, 14, 1, 1)),
         duration_ms: Some(800),
         ..ClickSpec::default()
     });
@@ -737,7 +738,7 @@ fn lab2_a_long_press_is_generated_as_a_long_press_click_at_its_point() {
     let entries = recording.package(&lab);
     assert_eq!(
         task(&entries)["operations"][0]["click"],
-        json!({"kind": "long_press", "x": 64, "y": 14, "duration_ms": 800})
+        json!({"kind": "long_press", "x": 64, "y": 14, "width": 1, "height": 1, "duration_ms": 800})
     );
     assert_eq!(
         simulated(&recording, &entries, &first()),
@@ -757,7 +758,7 @@ fn lab2_a_long_press_is_generated_as_a_long_press_click_at_its_point() {
 fn lab2_a_gesture_without_its_parts_is_refused() {
     let recording = Recording::new();
     let before = recording.recording_bytes();
-    let point = Some(RecordPoint { x: 64, y: 14 });
+    let point = Some(rect(64, 14, 1, 1));
     for (case, click) in [
         (
             "drag without a duration",
@@ -939,7 +940,7 @@ fn lab2_do_capture_record_holds_a_long_press_and_swipes_only_a_declared_drag() {
 
     let pressed = Recording::new();
     pressed.mark_first(ClickSpec {
-        long_press: Some(RecordPoint { x: 64, y: 14 }),
+        long_press: Some(rect(64, 14, 1, 1)),
         duration_ms: Some(800),
         ..ClickSpec::default()
     });
@@ -1064,4 +1065,52 @@ fn lab2_a_stopped_recording_takes_no_new_step_and_no_step_operation() {
         );
     }
     assert_eq!(recording.recording_bytes(), before, "nothing is written");
+}
+
+// Workflow #390 lpbox (exec key 76; coordinator ruling 6 of wave 16, from Alice's rule of 10-09
+// that pack taps use click boxes): a long press is recorded with the click box around the point
+// it presses. The step's click rectangle is the box, `do --capture --record` holds the box's
+// centre, the package's `long_press` click declares the box, and the first decision holds a
+// point inside it for 800 ms.
+#[test]
+fn lpbox_a_long_press_is_recorded_with_its_click_box_and_held_inside_it() {
+    let declared = || ClickSpec {
+        long_press: Some(TAP),
+        duration_ms: Some(800),
+        ..ClickSpec::default()
+    };
+
+    let pressed = Recording::new();
+    pressed.mark_first(declared());
+    let plan = pressed
+        .plan(PlanClickRequest::default())
+        .unwrap_or_else(|error| panic!("plan: {} {:?}", error.code, error.details));
+    assert_eq!(plan.rect, TAP);
+    assert_eq!(plan.point, RecordPoint { x: 64, y: 14 });
+    assert_eq!(plan.to_point, Some(RecordPoint { x: 64, y: 14 }));
+
+    let recording = Recording::new();
+    let marked = recording.mark_first(declared());
+    let click = serde_json::to_value(&marked.click).expect("click JSON");
+    assert_eq!(click["rect"], json!(TAP));
+    assert_eq!(
+        click["gesture"],
+        json!({"kind": "long_press", "duration_ms": 800})
+    );
+    recording.mark_second();
+
+    let lab = recording.stop();
+
+    assert_eq!(lab["lab_status"], "generated", "{lab}");
+    let entries = recording.package(&lab);
+    assert_eq!(
+        task(&entries)["operations"][0]["click"],
+        json!({"kind": "long_press", "x": 60, "y": 10, "width": 8, "height": 8, "duration_ms": 800})
+    );
+    let InputAction::LongTap { x, y, duration_ms } = simulated(&recording, &entries, &first())
+    else {
+        panic!("the first decision is not a long press");
+    };
+    assert!(inside(x, y, TAP), "({x}, {y})");
+    assert_eq!(duration_ms, 800);
 }

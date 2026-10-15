@@ -97,6 +97,8 @@ pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_sca
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,
 };
+// Workflow #390 LAB-2 item 7: the box an `offset` navigation click presses, for actinglab.
+pub use actingcommand_execution_kernel::drive_offset_rect;
 
 pub struct Lab<P: LabPorts> {
     ports: P,

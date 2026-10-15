@@ -433,23 +433,47 @@ impl PageDetector {
                     return Err(error);
                 }
             }
-            // Workflow #396 REC-6: a value test that cannot read does not pass, which in
-            // `forbidden` would let the page match unseen; it is refused there, directly or as
-            // a member of a check.
+            let refused = |forbidden_index: usize, message: String| {
+                let mut error = PageDetectorError::fatal(message);
+                error.declaration_issue =
+                    Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
+                        declaration_file: "recognition.pages.json".to_string(),
+                        field_path: format!("/pages/{page_index}/forbidden/{forbidden_index}"),
+                        schema_version: Some(self.page_set.schema_version.clone()),
+                        reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
+                    }));
+                error
+            };
             for (forbidden_index, target_id) in page.forbidden.iter().enumerate() {
+                // Workflow #396 REC-6: a value test that cannot read does not pass, which in
+                // `forbidden` would let the page match unseen; it is refused there, directly or
+                // as a member of a check.
                 if evaluator.tests_values(target_id) {
-                    let mut error = PageDetectorError::fatal(format!(
-                        "page '{}' forbids '{target_id}', which tests values",
-                        page.id
+                    return Err(refused(
+                        forbidden_index,
+                        format!(
+                            "page '{}' forbids '{target_id}', which tests values",
+                            page.id
+                        ),
                     ));
-                    error.declaration_issue =
-                        Some(Box::new(actingcommand_contract::ResourceDeclarationIssue {
-                            declaration_file: "recognition.pages.json".to_string(),
-                            field_path: format!("/pages/{page_index}/forbidden/{forbidden_index}"),
-                            schema_version: Some(self.page_set.schema_version.clone()),
-                            reason: actingcommand_contract::ResourceDeclarationReason::InvalidValue,
-                        }));
-                    return Err(error);
+                }
+                // Workflow #390 R-10 (REC-M §8.6, option 2): an OCR target whose anchor did not
+                // pass does not pass either. In `forbidden`, directly or as a member of a check,
+                // it is admitted only when its anchor template is directly in the page's
+                // `required`, so a missing anchor rules the page out before it can match unseen.
+                if let Some(anchor) = evaluator
+                    .ocr_anchors(target_id)
+                    .map_err(pack_error)?
+                    .into_iter()
+                    .find(|anchor| !page.required.iter().any(|required| required == anchor))
+                {
+                    return Err(refused(
+                        forbidden_index,
+                        format!(
+                            "page '{}' forbids '{target_id}', whose OCR anchor '{anchor}' is not required on the page",
+                            page.id
+                        ),
+                    ));
                 }
             }
         }

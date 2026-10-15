@@ -652,3 +652,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused",
 ]
 incident = ["#410"]
+
+# Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4 and row K4-T7, the ac_diagnose half; register §1.79): ac_diagnose keeps at most 10 of the instance's clock_slots rows, refused and superseded rows first, then deferred and expired rows, then owed rows, newest first in each, with clock_slots_total when fewer are kept
+[[gate]]
+key = "68"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::clock_slots::ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed",
+]
+incident = ["#372 K4"]

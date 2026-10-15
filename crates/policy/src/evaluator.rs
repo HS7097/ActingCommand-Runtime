@@ -20,8 +20,8 @@ use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicySt
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
     FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES, ManualOffset,
-    ObservationRef, PoolProjection, PoolSpec, PredicateSpec, PrioritySelection, ResourceEffectSpec,
-    ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
+    MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PredicateSpec, PrioritySelection,
+    ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 mod fact_refresh;
@@ -177,7 +177,18 @@ pub struct HostResourceSnapshot {
     pub heavy_dispatch_limit: u16,
     #[serde(default)]
     pub active_heavy_dispatches: u16,
+    /// Workflow #385 PM-CFG: `performance.load.heavy_threshold_milli` in effect. A weighted
+    /// load whose `cpu_milli + gpu_milli + io_milli` reaches it is heavy. The host's performance
+    /// controller sets it with the heavy-dispatch budget (`apply_to_resources`), so the
+    /// controller and the evaluator judge heavy work by one value. It is no member of the
+    /// document: no configuration file or request names it.
+    #[serde(skip, default = "default_heavy_threshold_milli")]
+    pub heavy_threshold_milli: u64,
 }
+
+/// Workflow #385 PM-CFG: the default of `performance.load.heavy_threshold_milli` (PERF §10.1),
+/// which a snapshot carries until the host's performance controller sets the value in effect.
+pub const DEFAULT_HEAVY_THRESHOLD_MILLI: u64 = 1_500;
 
 const fn default_host_responsiveness_basis_points() -> u16 {
     10_000
@@ -185,6 +196,10 @@ const fn default_host_responsiveness_basis_points() -> u16 {
 
 const fn default_heavy_dispatch_limit() -> u16 {
     1
+}
+
+const fn default_heavy_threshold_milli() -> u64 {
+    DEFAULT_HEAVY_THRESHOLD_MILLI
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1953,7 +1968,6 @@ fn build_candidate(
     let load_profile = task_override
         .and_then(|value| value.load_profile.0.clone())
         .unwrap_or_else(|| task.load_profile.clone());
-    let load = ResourceLoad::from(&load_profile);
     let host = context
         .hosts
         .get(instance.host_id.as_str())
@@ -1963,6 +1977,7 @@ fn build_candidate(
                 instance.instance_id, instance.host_id
             ))
         })?;
+    let load = ResourceLoad::new(&load_profile, host.heavy_threshold_milli);
     if !host.fits(load) {
         let (code, detail) =
             if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
@@ -3298,8 +3313,10 @@ struct ResourceLoad {
     heavy: bool,
 }
 
-impl From<&LoadProfile> for ResourceLoad {
-    fn from(value: &LoadProfile) -> Self {
+impl ResourceLoad {
+    /// A weighted load is heavy when `cpu_milli + gpu_milli + io_milli` reaches
+    /// `heavy_threshold_milli`, the threshold of the host it would run on (Workflow #385 PM-CFG).
+    fn new(value: &LoadProfile, heavy_threshold_milli: u64) -> Self {
         match value {
             LoadProfile::Light => Self {
                 cpu: 100,
@@ -3324,10 +3341,10 @@ impl From<&LoadProfile> for ResourceLoad {
                 gpu: *gpu_milli,
                 io: *io_milli,
                 cost_milli: (*cpu_milli).max(*gpu_milli).max(*io_milli),
-                heavy: u32::from(*cpu_milli)
-                    .saturating_add(u32::from(*gpu_milli))
-                    .saturating_add(u32::from(*io_milli))
-                    >= 1_500,
+                heavy: u64::from(*cpu_milli)
+                    .saturating_add(u64::from(*gpu_milli))
+                    .saturating_add(u64::from(*io_milli))
+                    >= heavy_threshold_milli,
             },
         }
     }
@@ -3342,6 +3359,7 @@ struct HostRemaining {
     third_party_pressure_basis_points: u16,
     heavy_dispatch_limit: u16,
     active_heavy_dispatches: u16,
+    heavy_threshold_milli: u64,
 }
 
 impl HostRemaining {
@@ -3372,6 +3390,7 @@ impl From<&HostResourceSnapshot> for HostRemaining {
             third_party_pressure_basis_points: value.third_party_pressure_basis_points,
             heavy_dispatch_limit: value.heavy_dispatch_limit,
             active_heavy_dispatches: value.active_heavy_dispatches,
+            heavy_threshold_milli: value.heavy_threshold_milli,
         }
     }
 }
@@ -3532,12 +3551,33 @@ fn evaluate_predicate(
             };
             Ok(result)
         }
-        PredicateSpec::Clock { schedule } => {
+        PredicateSpec::Clock { schedule, missed } => {
             let (latest, next) = schedule_occurrences(schedule, time)?;
             let last_dispatched = task_state.and_then(|state| state.last_dispatched_unix_ms);
-            let due = latest
-                .is_some_and(|occurrence| last_dispatched.is_none_or(|last| last < occurrence));
-            Ok(PredicateEvaluation::known(due, next))
+            let unserved =
+                latest.filter(|occurrence| last_dispatched.is_none_or(|last| last < *occurrence));
+            // Workflow #361 R7: with `missed`, an unserved occurrence is due only before its
+            // expiry. `latest` and `time.unix_ms` are the schedule's own coordinate shifted by
+            // one and the same offset, so comparing them in Unix time is comparing them there.
+            let (Some(occurrence), Some(missed)) = (unserved, missed) else {
+                return Ok(PredicateEvaluation::known(unserved.is_some(), next));
+            };
+            let MissedSlotRule::SkipAfter { grace_ms } = *missed;
+            let expiry = occurrence_expiry(occurrence, grace_ms)?;
+            if time.unix_ms < expiry {
+                let mut result = PredicateEvaluation::known(true, min_wake(next, Some(expiry)));
+                result.fresh_until_unix_ms = Some(expiry);
+                return Ok(result);
+            }
+            reasons.push(reason_with(
+                Outcome::new(PolicyCode::ClockOccurrenceExpired)
+                    .occurrence_unix_ms(occurrence)
+                    .grace_ms(grace_ms),
+                format!(
+                    "clock occurrence {occurrence} was not served within its grace of {grace_ms} ms"
+                ),
+            ));
+            Ok(PredicateEvaluation::known(false, next))
         }
         PredicateSpec::TimelineActive { event_id } => {
             let event = timeline_events.get(event_id.as_str()).ok_or_else(|| {
@@ -4208,6 +4248,10 @@ fn timeline_window(
 
 /// Interval clocks shorter than this come due too often to be traced one slot at a time.
 const CLOCK_SLOT_MIN_INTERVAL_MS: u64 = 3_600_000;
+/// Workflow #372 K4: the lapse pass reads occurrences at most this long before the evaluation.
+const CLOCK_SLOT_LAPSE_LOOKBACK_MS: u64 = 48 * 3_600_000;
+/// Workflow #372 K4: the lapse pass reads at most this many occurrences of one pair.
+const CLOCK_SLOT_LAPSE_LIMIT: usize = 32;
 
 /// The clock slots of one (task, instance) pair at one evaluation time. In memory only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4219,9 +4263,10 @@ pub struct ClockSlotView {
 }
 
 /// Reads the clock predicates of `task.trigger` with the trigger's own due rule: an occurrence
-/// is due when the pair has no dispatch, or its last dispatch precedes the occurrence. Every
-/// `clock` reached through `all` and `any` counts. A `not` subtree and every other predicate
-/// kind are ignored. `state` is the pair's runtime snapshot.
+/// is due when the pair has no dispatch, or its last dispatch precedes the occurrence, and,
+/// for a clock with `missed` (Workflow #361 R7), the evaluation is before the occurrence's
+/// grace ran out. Every `clock` reached through `all` and `any` counts. A `not` subtree and
+/// every other predicate kind are ignored. `state` is the pair's runtime snapshot.
 ///
 /// Returns `None` when no clock counts, or when a counted clock is an interval shorter than one
 /// hour. Otherwise the view holds the greatest due occurrence and the least next occurrence.
@@ -4230,40 +4275,220 @@ pub fn clock_slot_view(
     state: Option<&TaskRuntimeSnapshot>,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<Option<ClockSlotView>> {
-    let mut schedules = Vec::new();
-    collect_clock_schedules(&task.trigger, &mut schedules);
-    let short_interval = schedules.iter().any(|schedule| {
-        matches!(schedule, ClockSchedule::Interval { every_ms, .. }
-            if *every_ms < CLOCK_SLOT_MIN_INTERVAL_MS)
-    });
-    if schedules.is_empty() || short_interval {
+    let Some(clocks) = counted_clocks(&task.trigger) else {
         return Ok(None);
-    }
+    };
     let last_dispatched = state.and_then(|state| state.last_dispatched_unix_ms);
     let mut view = ClockSlotView {
         due_occurrence: None,
         next_occurrence: None,
     };
-    for schedule in schedules {
-        let (latest, next) = schedule_occurrences(schedule, time)?;
-        let due = latest.filter(|occurrence| last_dispatched.is_none_or(|last| last < *occurrence));
+    for clock in clocks {
+        let (latest, next) = schedule_occurrences(clock.schedule, time)?;
+        let mut due =
+            latest.filter(|occurrence| last_dispatched.is_none_or(|last| last < *occurrence));
+        if let (Some(occurrence), Some(MissedSlotRule::SkipAfter { grace_ms })) =
+            (due, clock.missed)
+            && occurrence_expiry(occurrence, *grace_ms)? <= time.unix_ms
+        {
+            due = None;
+        }
         view.due_occurrence = view.due_occurrence.max(due);
         view.next_occurrence = min_wake(view.next_occurrence, next);
     }
     Ok(Some(view))
 }
 
-fn collect_clock_schedules<'a>(
-    predicate: &'a PredicateSpec,
-    schedules: &mut Vec<&'a ClockSchedule>,
-) {
+/// How an occurrence the pair did not serve was lost (Workflow #372 K4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockSlotLapseKind {
+    /// The grace of its clock's `missed` rule ran out before the next occurrence came.
+    Expired { grace_ms: u64 },
+    /// A later occurrence came, inside its grace or without one, and absorbed it.
+    Superseded,
+}
+
+/// One unserved occurrence of a pair that is no longer due (Workflow #372 K4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockSlotLapse {
+    pub occurrence_unix_ms: u64,
+    /// The next occurrence over the counted clocks after this one (O′); for a superseded
+    /// occurrence, the one that absorbed it. `None` when no clock occurs again.
+    pub next_occurrence_unix_ms: Option<u64>,
+    pub kind: ClockSlotLapseKind,
+}
+
+/// Workflow #372 K4: the occurrences of the pair's counted clocks (as `clock_slot_view` counts
+/// them) that the pair has not served and that are lost at `time`, newest first. Only a pair
+/// with a dispatch history has any. The occurrences read are those after its last dispatch, at
+/// or before `time` and within 48 h before it, at most 32, newest first. With O′ the next
+/// occurrence after O over every counted clock, O expired when its clock has `missed`, its
+/// grace ran out at or before `time`, and O′ is absent or not before that; O was superseded
+/// when O′ is at or before `time` and O did not expire. Occurrences of several clocks at one
+/// instant are one occurrence, which has the largest grace of its clocks, and none when one of
+/// them has no `missed`. Arithmetic only: whether the pair is live, in flight or already
+/// recorded is the caller's.
+pub fn clock_slot_lapses(
+    task: &TaskSpec,
+    state: Option<&TaskRuntimeSnapshot>,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<Vec<ClockSlotLapse>> {
+    let Some(clocks) = counted_clocks(&task.trigger) else {
+        return Ok(Vec::new());
+    };
+    let Some(last_dispatched) = state.and_then(|state| state.last_dispatched_unix_ms) else {
+        return Ok(Vec::new());
+    };
+    let earliest = time.unix_ms.saturating_sub(CLOCK_SLOT_LAPSE_LOOKBACK_MS);
+    let read = |occurrence: u64| occurrence > last_dispatched && occurrence >= earliest;
+    let mut occurrences = BTreeMap::<u64, Option<u64>>::new();
+    let mut next = None;
+    for clock in clocks {
+        next = min_wake(next, schedule_occurrences(clock.schedule, time)?.1);
+        let grace = clock
+            .missed
+            .map(|MissedSlotRule::SkipAfter { grace_ms }| grace_ms);
+        for occurrence in past_occurrences(clock.schedule, time, &read)? {
+            occurrences
+                .entry(occurrence)
+                .and_modify(|existing| {
+                    *existing = existing.zip(grace).map(|(left, right)| left.max(right));
+                })
+                .or_insert(grace);
+        }
+    }
+    let mut lapses = Vec::new();
+    let mut successor = next;
+    for (occurrence, grace) in occurrences.into_iter().rev().take(CLOCK_SLOT_LAPSE_LIMIT) {
+        let expired = match grace {
+            Some(grace_ms) => {
+                let expiry = occurrence_expiry(occurrence, grace_ms)?;
+                (expiry <= time.unix_ms && successor.is_none_or(|after| expiry <= after))
+                    .then_some(grace_ms)
+            }
+            None => None,
+        };
+        let kind = match expired {
+            Some(grace_ms) => Some(ClockSlotLapseKind::Expired { grace_ms }),
+            None => successor
+                .is_some_and(|after| after <= time.unix_ms)
+                .then_some(ClockSlotLapseKind::Superseded),
+        };
+        if let Some(kind) = kind {
+            lapses.push(ClockSlotLapse {
+                occurrence_unix_ms: occurrence,
+                next_occurrence_unix_ms: successor,
+                kind,
+            });
+        }
+        successor = Some(occurrence);
+    }
+    Ok(lapses)
+}
+
+/// Workflow #372 K4 ("Live"): whether the pair would have come due, read as the evaluation
+/// reads its trigger. The task is placed on the instance (its scope matches), and its trigger,
+/// evaluated with `facts`, `resources` and `time` as `evaluate` evaluates it, is true once
+/// every counted clock (as `clock_slot_view` counts them) is counted due. A false or unknown
+/// trigger, for example a follower whose head failed or a task outside its timeline window, is
+/// not live; an instance missing from `facts` is not either.
+pub fn clock_slot_live(
+    catalog: &CompiledCatalog,
+    task: &TaskSpec,
+    instance_id: &str,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<bool> {
+    let placed = facts.instances.iter().any(|instance| {
+        instance.instance_id == instance_id && scope_matches_instance(&task.scope, instance)
+    });
+    if !placed {
+        return Ok(false);
+    }
+    let effective_facts = project_time_validity(catalog, facts, time)?;
+    let facts = &effective_facts;
+    let bundle = catalog.catalog();
+    let pool_specs: BTreeMap<&str, &PoolSpec> = bundle
+        .pools
+        .pools
+        .iter()
+        .map(|pool| (pool.id.as_str(), pool))
+        .collect();
+    // The pool values the evaluation reads: a static pool's, or a live pool's while the
+    // record it reads is current.
+    let pool_values: BTreeMap<&str, &PoolValueSnapshot> = resources
+        .pools
+        .iter()
+        .filter(|snapshot| {
+            pool_specs
+                .get(snapshot.pool_id.as_str())
+                .is_some_and(|pool| {
+                    pool.value_source.is_static()
+                        || pool_fact(pool, facts).is_some_and(|fact| {
+                            fact.observed_at_unix_ms <= time.unix_ms
+                                && fact
+                                    .expires_at_unix_ms
+                                    .is_none_or(|expiry| time.unix_ms <= expiry)
+                        })
+                })
+        })
+        .map(|pool| (pool.pool_id.as_str(), pool))
+        .collect();
+    let timeline_events: BTreeMap<&str, &TimelineEvent> = bundle
+        .timeline
+        .events
+        .iter()
+        .map(|event| (event.id.as_str(), event))
+        .collect();
+    let state = facts
+        .tasks
+        .iter()
+        .find(|state| state.task_id == task.id && state.instance_id == instance_id);
+    let trigger = evaluate_predicate(
+        &counted_clocks_due(&task.trigger),
+        state,
+        &ScopeSelector::Instance {
+            instance_id: instance_id.to_owned(),
+        },
+        facts,
+        &pool_specs,
+        &pool_values,
+        time,
+        &timeline_events,
+        &mut Vec::new(),
+    )?;
+    Ok(trigger.truth == PredicateTruth::True)
+}
+
+/// A clock predicate `clock_slot_view` counts: its schedule and its `missed` rule.
+struct CountedClock<'a> {
+    schedule: &'a ClockSchedule,
+    missed: &'a Option<MissedSlotRule>,
+}
+
+/// The counted clocks of a trigger: every `clock` reached through `all` and `any`; `None` when
+/// there is none, or when one of them is an interval shorter than one hour.
+fn counted_clocks(trigger: &PredicateSpec) -> Option<Vec<CountedClock<'_>>> {
+    let mut clocks = Vec::new();
+    collect_clock_schedules(trigger, &mut clocks);
+    let short_interval = clocks.iter().any(|clock| {
+        matches!(clock.schedule, ClockSchedule::Interval { every_ms, .. }
+            if *every_ms < CLOCK_SLOT_MIN_INTERVAL_MS)
+    });
+    (!clocks.is_empty() && !short_interval).then_some(clocks)
+}
+
+fn collect_clock_schedules<'a>(predicate: &'a PredicateSpec, clocks: &mut Vec<CountedClock<'a>>) {
     match predicate {
         PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
             for child in predicates {
-                collect_clock_schedules(child, schedules);
+                collect_clock_schedules(child, clocks);
             }
         }
-        PredicateSpec::Clock { schedule } => schedules.push(schedule),
+        PredicateSpec::Clock { schedule, missed } => {
+            clocks.push(CountedClock { schedule, missed });
+        }
         PredicateSpec::Not { .. }
         | PredicateSpec::TimelineActive { .. }
         | PredicateSpec::ResourceProjection { .. }
@@ -4272,6 +4497,78 @@ fn collect_clock_schedules<'a>(
         | PredicateSpec::DependencyCompleted { .. }
         | PredicateSpec::Outcome { .. } => {}
     }
+}
+
+/// `trigger` with every counted clock (through `all` and `any`, not under a `not`) replaced by
+/// a predicate that is always true: an `all` without members.
+fn counted_clocks_due(trigger: &PredicateSpec) -> PredicateSpec {
+    match trigger {
+        PredicateSpec::All { predicates } => PredicateSpec::All {
+            predicates: predicates.iter().map(counted_clocks_due).collect(),
+        },
+        PredicateSpec::Any { predicates } => PredicateSpec::Any {
+            predicates: predicates.iter().map(counted_clocks_due).collect(),
+        },
+        PredicateSpec::Clock { .. } => PredicateSpec::All {
+            predicates: Vec::new(),
+        },
+        PredicateSpec::Not { .. }
+        | PredicateSpec::TimelineActive { .. }
+        | PredicateSpec::ResourceProjection { .. }
+        | PredicateSpec::Fact { .. }
+        | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::DependencyCompleted { .. }
+        | PredicateSpec::Outcome { .. } => trigger.clone(),
+    }
+}
+
+/// Workflow #361 R7: the instant an occurrence's grace runs out; the occurrence is due only
+/// before it.
+fn occurrence_expiry(occurrence: u64, grace_ms: u64) -> PolicyEvaluationResult<u64> {
+    occurrence
+        .checked_add(grace_ms)
+        .ok_or_else(|| PolicyEvaluationError::overflow("clock occurrence grace overflowed"))
+}
+
+/// The occurrences of `schedule` at or before `time`, newest first, for as long as `read`
+/// accepts them, and at most `CLOCK_SLOT_LAPSE_LIMIT`.
+fn past_occurrences(
+    schedule: &ClockSchedule,
+    time: EvaluationTime,
+    read: &impl Fn(u64) -> bool,
+) -> PolicyEvaluationResult<Vec<u64>> {
+    let source = match schedule {
+        ClockSchedule::Interval { clock_source, .. }
+        | ClockSchedule::At { clock_source, .. }
+        | ClockSchedule::Daily { clock_source, .. }
+        | ClockSchedule::Weekly { clock_source, .. } => clock_source,
+    };
+    let clock = ClockCoordinate::new(source, time)?;
+    let mut found = Vec::new();
+    let mut cursor = clock.now_ms;
+    while found.len() < CLOCK_SLOT_LAPSE_LIMIT {
+        let at = ClockCoordinate {
+            now_ms: cursor,
+            unix_delta_ms: clock.unix_delta_ms,
+            utc_offset_minutes: clock.utc_offset_minutes,
+        };
+        let Some(occurrence) = schedule_occurrences_on_clock(schedule, &at)?
+            .0
+            .filter(|occurrence| read(*occurrence))
+        else {
+            break;
+        };
+        found.push(occurrence);
+        // The next cursor is the coordinate one millisecond before this occurrence.
+        let Some(before) = u64::try_from(i128::from(occurrence) - clock.unix_delta_ms)
+            .ok()
+            .and_then(|coordinate| coordinate.checked_sub(1))
+        else {
+            break;
+        };
+        cursor = before;
+    }
+    Ok(found)
 }
 
 fn schedule_occurrences(
@@ -4689,6 +4986,7 @@ fn validate_inputs(
             || host.third_party_pressure_basis_points > 10_000
             || host.heavy_dispatch_limit == 0
             || host.active_heavy_dispatches > host.heavy_dispatch_limit
+            || host.heavy_threshold_milli == 0
         {
             return Err(PolicyEvaluationError::invalid(format!(
                 "host '{}' resource and contention limits are invalid",
@@ -7065,6 +7363,7 @@ pub(crate) mod tests {
                 },
                 minutes_of_day: minutes.to_vec(),
             },
+            missed: None,
         };
         let interval = |every_ms: u64| PredicateSpec::Clock {
             schedule: ClockSchedule::Interval {
@@ -7072,6 +7371,7 @@ pub(crate) mod tests {
                 every_ms,
                 anchor_ms: 0,
             },
+            missed: None,
         };
         let dependency = PredicateSpec::DependencyCompleted {
             task_id: "fixture.head".to_owned(),
@@ -7198,6 +7498,201 @@ pub(crate) mod tests {
                 "{case}"
             );
         }
+    }
+
+    // Workflow #361 R7: a UTC `daily` clock at the given minutes of the day, with
+    // `missed: skip_after` of `grace_ms` when one is given.
+    fn r7_daily(minutes: &[u16], grace_ms: Option<u64>) -> PredicateSpec {
+        PredicateSpec::Clock {
+            schedule: ClockSchedule::Daily {
+                clock_source: ClockSource::Server {
+                    timezone_id: "fixture/utc".to_owned(),
+                    utc_offset_minutes: 0,
+                    dst_offset_minutes: 0,
+                    maintenance_drift_ms: 0,
+                },
+                minutes_of_day: minutes.to_vec(),
+            },
+            missed: grace_ms.map(|grace_ms| MissedSlotRule::SkipAfter { grace_ms }),
+        }
+    }
+
+    // Workflow #361 R7: `hour:minute` UTC of day `day` (0 = yesterday, 1 = today).
+    const fn r7_at(day: u64, hour: u64, minute: u64) -> u64 {
+        (20_000 + day) * 86_400_000 + hour * 3_600_000 + minute * 60_000
+    }
+
+    fn r7_time(now: u64) -> EvaluationTime {
+        EvaluationTime {
+            unix_ms: now,
+            monotonic_ms: now,
+        }
+    }
+
+    // The fixture pair's snapshot with its last dispatch, `None` for a pair never dispatched.
+    fn r7_state(last_dispatched_unix_ms: Option<u64>) -> TaskRuntimeSnapshot {
+        TaskRuntimeSnapshot {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: "fixture-instance-a".to_owned(),
+            last_dispatched_unix_ms,
+            eligible_since_unix_ms: None,
+            terminal_state: None,
+            completed_window: None,
+            last_duration_ms: None,
+            failure_streak: None,
+        }
+    }
+
+    // One predicate evaluated for the fixture pair at `now`, and the reasons it added.
+    fn r7_evaluate(
+        predicate: &PredicateSpec,
+        last_dispatched_unix_ms: Option<u64>,
+        now: u64,
+    ) -> (PredicateEvaluation, Vec<DecisionReason>) {
+        let mut reasons = Vec::new();
+        let result = evaluate_predicate(
+            predicate,
+            Some(&r7_state(last_dispatched_unix_ms)),
+            &ScopeSelector::Instance {
+                instance_id: "fixture-instance-a".to_owned(),
+            },
+            &base_facts(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            r7_time(now),
+            &BTreeMap::new(),
+            &mut reasons,
+        )
+        .unwrap_or_else(|error| panic!("the clock evaluates at {now}: {error}"));
+        (result, reasons)
+    }
+
+    // The one reason an expired clock adds: clock_occurrence_expired with its occurrence and
+    // its grace.
+    fn assert_expired_reason(reasons: &[DecisionReason], occurrence: u64, grace_ms: u64) {
+        assert_eq!(reasons.len(), 1, "{reasons:?}");
+        let outcome = &reasons[0].outcome;
+        assert!(outcome.is(PolicyCode::ClockOccurrenceExpired), "{outcome}");
+        assert_eq!(
+            outcome.value("occurrence_unix_ms"),
+            Some(&serde_json::json!(occurrence)),
+            "{outcome}"
+        );
+        assert_eq!(
+            outcome.value("grace_ms"),
+            Some(&serde_json::json!(grace_ms)),
+            "{outcome}"
+        );
+    }
+
+    // Workflow #361 R7, row R7-T1 (M361 addendum of 2026-10-15): `daily [06:30]` with
+    // `missed {skip_after, 7 200 000}`, last dispatched yesterday at 06:35. Today's 06:30 is due
+    // at 06:31 and at 08:29:59.999; at 08:30:00.000 it is not, with the reason
+    // clock_occurrence_expired {06:30, 7 200 000} and the next wake tomorrow at 06:30. Without
+    // `missed` the same three times are all due, as before R7.
+    #[test]
+    fn r7_t1_a_missed_clock_is_due_only_inside_its_grace() {
+        let last = Some(r7_at(0, 6, 35));
+        let missed = r7_daily(&[390], Some(7_200_000));
+        for now in [r7_at(1, 6, 31), r7_at(1, 8, 30) - 1] {
+            let (result, reasons) = r7_evaluate(&missed, last, now);
+            assert_eq!(result.truth, PredicateTruth::True, "due at {now}");
+            assert!(reasons.is_empty(), "{reasons:?}");
+        }
+        let (result, reasons) = r7_evaluate(&missed, last, r7_at(1, 8, 30));
+        assert_eq!(result.truth, PredicateTruth::False);
+        assert_eq!(result.next_wake_unix_ms, Some(r7_at(2, 6, 30)));
+        assert_expired_reason(&reasons, r7_at(1, 6, 30), 7_200_000);
+
+        let plain = r7_daily(&[390], None);
+        for now in [r7_at(1, 6, 31), r7_at(1, 8, 30) - 1, r7_at(1, 8, 30)] {
+            let (result, reasons) = r7_evaluate(&plain, last, now);
+            assert_eq!(
+                result.truth,
+                PredicateTruth::True,
+                "due at {now} without missed"
+            );
+            assert!(reasons.is_empty(), "{reasons:?}");
+        }
+    }
+
+    // Workflow #361 R7, row R7-T2: at 06:31 the due clock of R7-T1 wakes, and stays fresh, until
+    // 08:30, the instant its grace runs out.
+    #[test]
+    fn r7_t2_a_due_missed_clock_wakes_and_stays_fresh_until_its_grace_ends() {
+        let (result, _) = r7_evaluate(
+            &r7_daily(&[390], Some(7_200_000)),
+            Some(r7_at(0, 6, 35)),
+            r7_at(1, 6, 31),
+        );
+        assert_eq!(result.truth, PredicateTruth::True);
+        assert_eq!(result.next_wake_unix_ms, Some(r7_at(1, 8, 30)));
+        assert_eq!(result.fresh_until_unix_ms, Some(r7_at(1, 8, 30)));
+    }
+
+    // Workflow #361 R7, row R7-T3: a pair with no dispatch history follows the same rule, which
+    // is its whole first-run bound: 07:00 is due, 09:00 is not.
+    #[test]
+    fn r7_t3_a_first_run_is_due_only_inside_the_grace() {
+        let missed = r7_daily(&[390], Some(7_200_000));
+        let (result, reasons) = r7_evaluate(&missed, None, r7_at(1, 7, 0));
+        assert_eq!(result.truth, PredicateTruth::True);
+        assert!(reasons.is_empty(), "{reasons:?}");
+        let (result, reasons) = r7_evaluate(&missed, None, r7_at(1, 9, 0));
+        assert_eq!(result.truth, PredicateTruth::False);
+        assert_expired_reason(&reasons, r7_at(1, 6, 30), 7_200_000);
+    }
+
+    // Workflow #361 R7, row R7-T4: `any(clock [06:00] {missed 3 600 000}, clock [19:00])` at
+    // 07:30, last dispatched the day before at 18:05. Today's 06:00 expired; yesterday's 19:00,
+    // whose clock has no `missed`, is still due, so the trigger is due through it, and the
+    // clock-slot view's due occurrence is yesterday's 19:00.
+    #[test]
+    fn r7_t4_an_expired_clock_leaves_the_trigger_due_through_a_clock_without_missed() {
+        let trigger = PredicateSpec::Any {
+            predicates: vec![r7_daily(&[360], Some(3_600_000)), r7_daily(&[1140], None)],
+        };
+        let last = Some(r7_at(0, 18, 5));
+        let now = r7_at(1, 7, 30);
+        let (result, reasons) = r7_evaluate(&trigger, last, now);
+        assert_eq!(result.truth, PredicateTruth::True);
+        assert_expired_reason(&reasons, r7_at(1, 6, 0), 3_600_000);
+
+        let mut task = catalog(|_| {}).catalog().tasks.tasks[0].clone();
+        task.trigger = trigger;
+        let view = clock_slot_view(&task, Some(&r7_state(last)), r7_time(now))
+            .expect("the clock-slot view reads")
+            .expect("both clocks count");
+        assert_eq!(view.due_occurrence, Some(r7_at(0, 19, 0)));
+    }
+
+    // Workflow #361 R7, row R7-T8: the clock-slot view never names an expired occurrence. For
+    // R7-T1's clock, today's 06:30 is the due occurrence at 08:29:59.999 and there is none at
+    // 08:30; the next occurrence is tomorrow's 06:30 at both. Without `missed` today's 06:30
+    // is still due at 08:30.
+    #[test]
+    fn r7_t8_the_clock_slot_view_never_names_an_expired_occurrence() {
+        let mut task = catalog(|_| {}).catalog().tasks.tasks[0].clone();
+        let state = r7_state(Some(r7_at(0, 6, 35)));
+        let view = |task: &TaskSpec, now: u64| {
+            clock_slot_view(task, Some(&state), r7_time(now))
+                .expect("the clock-slot view reads")
+                .map(|view| (view.due_occurrence, view.next_occurrence))
+        };
+        task.trigger = r7_daily(&[390], Some(7_200_000));
+        assert_eq!(
+            view(&task, r7_at(1, 8, 30) - 1),
+            Some((Some(r7_at(1, 6, 30)), Some(r7_at(2, 6, 30))))
+        );
+        assert_eq!(
+            view(&task, r7_at(1, 8, 30)),
+            Some((None, Some(r7_at(2, 6, 30))))
+        );
+        task.trigger = r7_daily(&[390], None);
+        assert_eq!(
+            view(&task, r7_at(1, 8, 30)),
+            Some((Some(r7_at(1, 6, 30)), Some(r7_at(2, 6, 30))))
+        );
     }
 
     #[test]
@@ -7596,6 +8091,7 @@ pub(crate) mod tests {
                 third_party_pressure_basis_points: 0,
                 heavy_dispatch_limit: 1,
                 active_heavy_dispatches: 0,
+                heavy_threshold_milli: crate::DEFAULT_HEAVY_THRESHOLD_MILLI,
             }],
         }
     }

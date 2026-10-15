@@ -308,7 +308,8 @@ pub(crate) fn first_decision(
             && i64::from(y) < i64::from(rect.y) + i64::from(rect.height)
     };
     // Workflow #390 LAB-2: a drag is one swipe from its rectangle into its destination over its
-    // duration; a long press holds its point for its duration.
+    // duration; a long press holds a point of its click box (Workflow #390 lpbox) for its
+    // duration.
     let gesture = click.and_then(|click| click.gesture);
     for (checked_frame, checked_result) in &checked {
         let rect = match (click, follow) {
@@ -362,10 +363,7 @@ pub(crate) fn first_decision(
                     duration_ms: declared,
                 }),
             ) => {
-                *operation_label == operation
-                    && *x == rect.x
-                    && *y == rect.y
-                    && *duration_ms == declared
+                *operation_label == operation && point_in(*x, *y, rect) && *duration_ms == declared
             }
             _ => false,
         };
