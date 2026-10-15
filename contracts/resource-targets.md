@@ -192,8 +192,12 @@ specific inline record of the pool's `fact_key` the instance can see after the t
 projection (a timeline reset drops observations made before it). It is computed when it is a
 non-negative integer with a positive confidence (at least the pool's minimum for a
 `ledger_fact` pool) and is not expired; otherwise `r` is the first of `missing`,
-`low_confidence`, `expired`, `invalid_value` that applies. A pending target is applied and
-waits for an observation; it is not an error.
+`low_confidence`, `expired`, `invalid_value` that applies. For a `ledger_fact` pool with a
+regenerating projection, `c` is that record projected to the evaluation instant by the pool's
+regeneration rule, as the pool's own value is (Workflow #390 POOL-1: each complete period since
+`t` adds the pool's `amount`, up to its `capacity`; a record above `capacity` is read as
+observed); `t` stays the record's observation time. A pending target is applied and waits for
+an observation; it is not an error.
 
 The observation can come from an agent's `PublishFact` or, automatically, from a package's
 resource reading (Workflow #335 S5b, `contracts/resource-readings.md`). A package that declares

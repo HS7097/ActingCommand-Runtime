@@ -94,9 +94,18 @@ Projection and value source are independent. `static_snapshot` keeps the caller'
 fixed snapshot; it has no additional TTL or automatic update from resource readings.
 `ledger_fact` keeps the original scope/key, confidence, expiry, native-instance
 binding and input invalidation requirements. FactsChanged, expiry, timeline and
-task-state wakes remain; time passing never refreshes a fact. Package resource
-readings bound to the same key as a live pool retain their existing rejection
-(`contracts/resource-readings.md`).
+task-state wakes remain; time passing never refreshes a fact. Workflow #390
+POOL-1: a package resource reading (or adjustment write) of the key is the live
+pool's base, published without input invalidations, which the pool needs only
+from a record that is not such a reading; the next reading or adjustment resets
+the base, and the projection above regenerates from its observation time
+(`contracts/resource-readings.md`, "Live pools"). A live pool with no usable
+record (none, expired, below the pool's minimum confidence, or not an integer
+within `0..=capacity`) leaves its `resource_projection` predicate Unknown with
+that fact reason (`fact_missing`, `fact_expired`, `fact_low_confidence`,
+`type_mismatch`) instead of `resource_observation_missing`, so the task raises
+the fact refresh's demand for the key ("Fact Refresh"). A resource target on a
+live pool reads the same projected inventory ([resource-targets.md](../resource-targets.md)).
 
 The pure forward projection advances a nonregenerating pool's simulated time
 without increasing its amount or accumulating regeneration waste. Declared task
@@ -455,6 +464,10 @@ read it, and the candidate waits.
   undecided trigger or feedback stop read in exactly its own instance's scope
   (`trigger_unknown` / `feedback_stop_unknown` stay; an instruction key such as
   `session.*`, a server or game scope, a dependency or an outcome raises none).
+  A `resource_projection` predicate on a `ledger_fact` pool of exactly the
+  instance's scope reads the pool's key: without a usable record it raises
+  demand for that key (Workflow #390 POOL-1, "Pool Projection"); a static
+  snapshot pool raises none.
   Only candidates past the closure's positions 1-2 raise demand: on an instance
   an operator pause, a holder, a waiting claim or a takeover cooldown holds as
   the cycle starts, a candidate the selection document deferred carries that

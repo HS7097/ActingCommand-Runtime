@@ -607,9 +607,10 @@ that is no reader with `fact_reader_binding_invalid` at stage
 `config_recognition_binding`, the first in alias order: `reader_problem`
 `package_unreadable` when the package cannot be read, `recognize_only`,
 `stability_termination`, `designated_operation` or `no_marks` when it does not
-qualify, and `policy_fact_authority` or `live_pool_key` when one of its marks
-writes a key the configuration's `policy.facts` declares for the instance or a
-`ledger_fact` pool of the configured catalog observes in the instance's scope.
+qualify, and `policy_fact_authority` when one of its marks writes a key the
+configuration's `policy.facts` declares for the instance. A key a `ledger_fact`
+pool of the configured catalog observes is no conflict since Workflow #390
+POOL-1: its reading is the pool's base (`live_pool_key` is no longer given).
 `acsetup --commit-config` therefore does not commit such a binding. Daemon
 startup does not prepare the bound packages: it reads their marks, runs without
 a binding it cannot read or whose marks are claimed, and notes each one in the

@@ -178,6 +178,20 @@ fn priority_offset_origin(publisher: EventActor) -> PriorityOffsetOrigin {
     }
 }
 
+/// Workflow #390 POOL-1: a record the Runtime itself published from a package run, a resource
+/// reading (`resource_reading:`) or an adjustment of one (`resource_adjustment:`). It carries no
+/// input invalidation (`contracts/resource-readings.md`); a `ledger_fact` pool takes it as its
+/// base, which the next reading or adjustment of the key resets.
+fn package_reading(stored: &StoredFact) -> bool {
+    stored.publisher == EventActor::Runtime
+        && [
+            actingcommand_contract::RESOURCE_READING_DETECTOR_PREFIX,
+            actingcommand_contract::RESOURCE_ADJUSTMENT_DETECTOR_PREFIX,
+        ]
+        .iter()
+        .any(|prefix| stored.record.source_detector.starts_with(prefix))
+}
+
 fn scope_specificity(scope: &FactScope) -> u8 {
     match scope {
         FactScope::Instance { .. } => 3,
@@ -751,11 +765,14 @@ impl InstanceFactStore {
             for stored in self.active.values().filter(|stored| {
                 policy_scope(&stored.record.scope) == pool.scope && stored.record.key == *fact_key
             }) {
+                // Workflow #390 POOL-1: a package reading is the pool's base until the next
+                // reading or adjustment of its key resets it, so it needs no input invalidation.
                 if stored.scope_instances.is_empty()
                     || stored.scope_instances != current_scope_instances(&stored.record.scope)?
-                    || ![EventType::InputCommitted, EventType::InputFailed]
-                        .iter()
-                        .all(|event| stored.record.invalidate_on.contains(event))
+                    || !(package_reading(stored)
+                        || [EventType::InputCommitted, EventType::InputFailed]
+                            .iter()
+                            .all(|event| stored.record.invalidate_on.contains(event)))
                 {
                     return Err(fact_request(
                         HostCode::PoolFactInvalidationBindingMissing,
