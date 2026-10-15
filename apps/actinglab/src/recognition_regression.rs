@@ -477,11 +477,8 @@ fn read_frame(
 }
 
 fn has_target(evaluator: &RecognitionEvaluator, target_id: &str) -> bool {
-    evaluator
-        .pack()
-        .targets
-        .iter()
-        .any(|target| target.id() == target_id)
+    // `target_kind` fails only when the package declares no target with this id.
+    evaluator.target_kind(target_id).is_ok()
 }
 
 /// The comparison of every kept frame with `evaluator`: `frames`, `targets` and `summary`.
