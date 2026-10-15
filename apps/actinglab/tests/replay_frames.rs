@@ -118,6 +118,70 @@ fn replay_frames_without_an_ocr_model_reports_ocr_unavailable_before_evaluating(
     assert_eq!(outcome["causes"][0]["code"], "lab_ocr_vision_unconfigured");
 }
 
+// Workflow #308 SEL-L6b (T-01): `--select <operation> --scan <file>` replays that step's scan
+// through the kernel's scan path, without asking anything. A scan that does not cover its list
+// never passes: here the operation is a click, not a select step, so the scan fails with the
+// kernel's typed refusal and the command exits non-zero with replay_scan_refused, the scan
+// replay and its end's outcome in the details.
+#[test]
+fn replay_scan_of_a_step_that_is_not_a_select_exits_with_replay_scan_refused() {
+    let temp = TempDir::new().unwrap();
+    let package = write_package(&temp, None);
+    let sequence = frames(&temp, "scan", &[(HOME, READY), (ALTERNATE, NOT_READY)]);
+    let scan = write_scan(&temp);
+
+    let output = replay_scan(&temp, &package, &sequence, "branch", &scan);
+    assert!(!output.status.success(), "{}", describe(&output));
+    let error = &envelope(&output)["error"];
+    assert_eq!(error["code"], "replay_scan_refused");
+    let details = &error["details"];
+    assert_eq!(details["mode"], "offline_scan_replay");
+    assert_eq!(details["executed"], false);
+    assert_eq!(details["production_global_ledger_written"], false);
+    assert_eq!(details["package_id"], "neutral.replay.task");
+    assert_eq!(details["operation_id"], "branch");
+    assert_eq!(details["frames_given"], 2);
+    assert_eq!(details["end"]["status"], "failed");
+    assert_eq!(
+        details["end"]["outcome"]["code"],
+        "contained_task_select_invalid"
+    );
+    assert_eq!(details["scan"], Value::Null);
+}
+
+// SEL-L6b with Workflow #396 LAB-3: a scan reads its positions' identities with OCR, so without
+// an OCR model the scan replay of a package whose pack has an OCR target is refused with
+// lab_ocr_unavailable, naming the target and its cause, before any frame is evaluated.
+#[test]
+fn replay_scan_without_an_ocr_model_reports_ocr_unavailable_before_evaluating() {
+    let temp = TempDir::new().unwrap();
+    let ocr_target = json!({
+        "type": "ocr",
+        "id": "fixture/ocr",
+        "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "languages": ["en"],
+        "timeout_ms": 1000,
+        "match_mode": "exact",
+        "expected": ["synthetic truth"],
+        "case_sensitive": false,
+        "minimum_confidence": 0.0,
+        "model_ref": "PP-OCRv6_medium",
+        "model_sha256": "a".repeat(64)
+    });
+    let package = write_package(&temp, Some(ocr_target));
+    let sequence = frames(&temp, "ocr", &[(HOME, READY), (ALTERNATE, NOT_READY)]);
+    let scan = write_scan(&temp);
+
+    let output = replay_scan(&temp, &package, &sequence, "branch", &scan);
+    assert!(!output.status.success(), "{}", describe(&output));
+    let error = &envelope(&output)["error"];
+    assert_eq!(error["code"], "lab_ocr_unavailable");
+    let outcome = &error["details"]["outcome"];
+    assert_eq!(outcome["code"], "lab_ocr_unavailable");
+    assert_eq!(outcome["values"]["target_id"], "fixture/ocr");
+    assert_eq!(outcome["causes"][0]["code"], "lab_ocr_vision_unconfigured");
+}
+
 // T-03: offline observe lists, with the page's actions, an operation whose `to` names several
 // pages, with every page it may reach and its declared click.
 #[test]
@@ -336,6 +400,66 @@ fn replay(temp: &TempDir, package: &Path, frames: &Path, facts: Option<&Path>) -
         args.extend([OsStr::new("--facts"), facts.as_os_str()]);
     }
     run_actinglab(temp, args)
+}
+
+// The scan replay of the step `operation` with the declaration at `scan`.
+fn replay_scan(
+    temp: &TempDir,
+    package: &Path,
+    frames: &Path,
+    operation: &str,
+    scan: &Path,
+) -> Output {
+    run_actinglab(
+        temp,
+        [
+            OsStr::new("--json"),
+            OsStr::new("replay"),
+            OsStr::new("--package"),
+            package.as_os_str(),
+            OsStr::new("--frames"),
+            frames.as_os_str(),
+            OsStr::new("--select"),
+            OsStr::new(operation),
+            OsStr::new("--scan"),
+            scan.as_os_str(),
+        ],
+    )
+}
+
+// A scan declaration of one column of cards scrolled vertically (selector model S0 v2.1 §2.1),
+// with every member it requires.
+fn write_scan(temp: &TempDir) -> PathBuf {
+    let path = temp.path().join("scan.json");
+    let scan = json!({
+        "identity_feature": "member",
+        "axis": "vertical",
+        "advance": {"kind": "drag",
+                    "from": {"x": 20, "y": 60, "width": 20, "height": 10},
+                    "to": {"x": 20, "y": 20, "width": 20, "height": 10},
+                    "duration_ms": 300, "min_content_step_px": 12,
+                    "max_content_step_px": 40},
+        "reposition": {"kind": "drag",
+                       "from": {"x": 20, "y": 70, "width": 20, "height": 10},
+                       "to": {"x": 20, "y": 10, "width": 20, "height": 10},
+                       "duration_ms": 300, "max_content_step_px": 60},
+        "settle": {"interval_ms": 1, "timeout_ms": 1000},
+        "track": {"area": {"x": 0, "y": 4, "width": 64, "height": 92},
+                  "edge_margin_px": 2,
+                  "signature": {"rect": {"x": 8, "y": 0, "width": 4, "height": 4},
+                                "columns": 1, "rows": 1},
+                  "signature_max_distance_milli": 500,
+                  "position_tolerance_px": 1,
+                  "min_overlap_instances": 2,
+                  "spacing": {"max_axis_gap_px": 20, "columns": 1,
+                              "max_trailing_gap_px": 100, "max_cross_lead_px": 10,
+                              "max_cross_gap_px": 10}},
+        "start": {"check": "page/home", "rewind": false},
+        "end": {"check": "page/terminal"},
+        "bounds": {"max_viewports": 8, "max_reposition_viewports": 4, "max_ms": 60_000}
+    });
+    fs::write(&path, serde_json::to_vec(&scan).unwrap()).unwrap();
+    path
 }
 
 fn run_actinglab<'a>(temp: &TempDir, args: impl IntoIterator<Item = &'a OsStr>) -> Output {

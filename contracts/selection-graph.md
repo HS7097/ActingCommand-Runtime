@@ -505,6 +505,24 @@ key prefix (`replay_facts_invalid` otherwise), at that answer's `read_at_unix_ms
 reports each step's decision record, its inputs, which perform nothing, and the page it reached;
 a run that does not complete exits with `replay_run_refused`, its end's outcome in the details.
 
+`actinglab replay --package <path> --frames <directory> --select <operation> --scan <file>
+[--facts <file>]` (Workflow #308 SEL-L6b) replays the scan of the select step `<operation>`
+through the kernel's own scan path (`dry_run_scan`) instead of the whole package. The frames are
+the step's dispatched frame and then every capture its scan took, in order, as a forward run
+records them; the scan's inputs perform nothing. `--scan` is the step's scan declaration (S0
+§2.1), read from the file because a package declares a step's `scan` only from SEL-L4b on; the
+session's own checks apply to it, the static checks of its admission are SEL-L4b's. The scan's
+policy evaluates the facts a whole replay gives a select step, checked as the step checks them
+(`selection_state_unavailable`, `selection_fact_context_mismatch`), with the rows of the record
+lists the step's policy declares. The result is `mode` `offline_scan_replay`, the package,
+task and operation, `end` and `scan`: its coverage, start evidence, coverage viewports, members,
+unknown and gated-out positions, and the evaluator's decision when it ended the scan. A scan
+that covers its list (`end.status` `covered`, coverage `complete` or `early_stopped`) exits 0;
+one the evaluator ended before its coverage (`aborted`) or that failed (`failed`, its outcome in
+`end.outcome`) exits with `replay_scan_refused`. A move the sequence holds no frame for (a
+corrective, a rewind, a capture after the last frame) fails
+`selection_scan_replay_frame_missing`; it never passes.
+
 ## Records
 
 ### `task.selection_evaluated`

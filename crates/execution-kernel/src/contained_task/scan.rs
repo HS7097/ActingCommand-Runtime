@@ -34,9 +34,9 @@
 
 mod online;
 
-pub use online::dry_run_scan;
 #[cfg(test)]
 pub(super) use online::run_scan;
+pub use online::{dry_run_scan, replay_scan};
 
 use super::{ClickRect, ContainedTaskError, ContainedTaskRunError};
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};

@@ -1038,6 +1038,21 @@ configuration key.
 | DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
 | DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
 
+### 1.71 Wave 14 slice SEL-L6b (#308, forced-compromises mapping row SEL-L6b, T-01)
+
+SEL-L6b replays one select step's scan over a saved frame sequence through the kernel's own scan
+path (`dry_run_scan`, SEL-L3), with the facts SEL-L6a's whole-package replay gives a select
+step. It writes no ledger record, wire shape or configuration key; its only new shape is an
+actinglab operation output (L6B-1). [selection-graph.md](selection-graph.md), "Offline", is the
+contract. The actinglab codes `replay_scan_refused`, `replay_scan_unreadable` and
+`replay_scan_invalid` (error, ladder class `none`) are catalog entries, not rows (§7); the
+kernel's existing `selection_scan_replay_frame_missing`, `selection_state_unavailable` and
+`selection_fact_context_mismatch` are reused.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6B-1 | `actinglab replay --package <path> --frames <directory> --select <operation> --scan <file> [--facts <file>]`: `{mode: "offline_scan_replay", executed: false, package_id, task_id, operation_id, frames_given, facts, ocr, production_global_ledger_written: false, end: {status, coverage?, outcome?}, scan?}` | operation output (no persisted record; an actinglab result, read by a person or a CI job) | SEL-L6b | SEL-L6b | `end.status` `covered` (coverage `complete` or `early_stopped`, exit 0), `aborted` (the evaluator's decision ended the scan with coverage `not_started` or `incomplete`) or `failed` (`end.outcome`, the full outcome envelope); `scan` is the kernel's `ScanDryRun` (coverage, start evidence, extent, coverage viewports, rewind viewports, positions, members, unknown and gated-out positions, decision), absent when the scan failed; every end other than `covered` is `replay_scan_refused` with the output in the details. `--scan` is the step's scan declaration (S0 §2.1), the shape SEL-L4b admits from a package (§1.58 L3B-3), taken here as given |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

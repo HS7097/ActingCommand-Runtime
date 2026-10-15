@@ -56,7 +56,9 @@ pub(super) fn help_data() -> Value {
             "replay": [
                 "--package <directory | .zip | .json container>",
                 "--frames <directory of PNG frames, replayed in file-name order>",
-                "--facts <the instance answer of actingctl facts --instance or ac_facts, read without a key prefix>"
+                "--facts <the instance answer of actingctl facts --instance or ac_facts, read without a key prefix>",
+                "--select <operation id of a select step: replays its scan over the frames, with --scan>",
+                "--scan <the step's scan declaration, a JSON file, with --select>"
             ],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",

@@ -81,6 +81,9 @@ mod gate_386_sr1;
 // Workflow #308 SEL-L6a.
 #[cfg(test)]
 mod gate_308_l6a;
+// Workflow #308 SEL-L6b.
+#[cfg(test)]
+mod gate_308_l6b;
 // Workflow #308 SEL-L3.
 #[cfg(test)]
 mod gate_308_l3;
@@ -128,7 +131,7 @@ pub use readings::{
 };
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
-    dry_run_scan,
+    dry_run_scan, replay_scan,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{

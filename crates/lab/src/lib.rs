@@ -82,6 +82,8 @@ pub use actingcommand_execution_kernel::{
     OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts, OfflineReplayResult,
     replay_contained_task,
 };
+// Workflow #308 SEL-L6b: the scan replay of `actinglab replay --frames --select --scan`.
+pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_scan};
 
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,
