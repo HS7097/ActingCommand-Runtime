@@ -180,7 +180,7 @@ fn resolve_instance_port(
         .filter(|instance_ids| !instance_ids.is_empty())
         .ok_or_else(|| {
             ForensicError::new(
-                ForensicsCode::InstancePortUnknown.code(),
+                ForensicsCode::InstancePortConflict.code(),
                 ForensicsLocation::ResolveInstancePort.location(),
                 format!("no instance was bound to ADB port {port} through position {position}"),
             )
