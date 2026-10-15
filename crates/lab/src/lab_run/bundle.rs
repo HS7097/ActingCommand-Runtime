@@ -978,12 +978,31 @@ impl OperationClick {
                 let y = self
                     .y
                     .ok_or_else(|| CliError::package_invalid("long_press click missing y"))?;
-                validate_click_point(
-                    x,
-                    y,
-                    &control.resolution,
-                    control.allow_placeholder_coords.unwrap_or(false),
-                )?;
+                // Workflow #390 lpbox: a long press holds a point of its click box, or the point
+                // `x, y` without one.
+                match (self.width, self.height) {
+                    (None, None) => validate_click_point(
+                        x,
+                        y,
+                        &control.resolution,
+                        control.allow_placeholder_coords.unwrap_or(false),
+                    )?,
+                    (Some(width), Some(height)) => validate_click_rect(
+                        PackRect {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
+                        &control.resolution,
+                        control.allow_placeholder_coords.unwrap_or(false),
+                    )?,
+                    _ => {
+                        return Err(CliError::package_invalid(
+                            "long_press click box needs both width and height",
+                        ));
+                    }
+                }
                 if self.duration_ms.unwrap_or(0) == 0 {
                     return Err(CliError::package_invalid(
                         "long_press duration_ms must be positive",

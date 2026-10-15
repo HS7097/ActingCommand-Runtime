@@ -100,6 +100,13 @@ pub enum DriveSemanticInput {
     TargetCenter {
         target_id: String,
     },
+    /// Workflow #390 LAB-2 item 7 (REC-4 `offset`): the box at the top-left corner of the box
+    /// `target_id` matches plus `offset`, the offset scaled by the factor a template with `scales`
+    /// matched at ([`drive_offset_rect`]).
+    TargetOffset {
+        target_id: String,
+        offset: PackRect,
+    },
     Drag {
         from_rect: PackRect,
         to_rect: PackRect,
@@ -120,6 +127,11 @@ impl DriveSemanticInput {
             Self::TargetCenter { .. } => {
                 return Err(DriveDecisionError::invalid(
                     "target_center semantic input must be resolved before execution",
+                ));
+            }
+            Self::TargetOffset { .. } => {
+                return Err(DriveDecisionError::invalid(
+                    "target_offset semantic input must be resolved before execution",
                 ));
             }
             Self::Drag {
@@ -349,6 +361,37 @@ pub fn drive_rect_center(rect: PackRect) -> Result<DrivePoint, DriveDecisionErro
     })
 }
 
+/// Workflow #390 LAB-2 item 7: the box an `offset` click presses, the top-left corner of the box
+/// its target matched plus `offset`. For a template that matched at a declared factor (REC-5 of
+/// Workflow #396) each of the four numbers is scaled by it as the kernel scales an `offset`
+/// click, `(v * factor + 500) div 1000` with the sign of `v`, a width or height at least 1;
+/// without a factor the offset is kept.
+pub fn drive_offset_rect(
+    matched: PackRect,
+    scale_milli: Option<u32>,
+    offset: PackRect,
+) -> Result<PackRect, DriveDecisionError> {
+    let scale = |value: i32| match scale_milli {
+        Some(factor) => actingcommand_recognition::resample::scale_signed(value, factor)
+            .ok_or_else(|| DriveDecisionError::package("offset click scale overflow")),
+        None => Ok(value),
+    };
+    let x = scale(offset.x)?;
+    let y = scale(offset.y)?;
+    Ok(PackRect {
+        x: matched
+            .x
+            .checked_add(x)
+            .ok_or_else(|| DriveDecisionError::package("offset click x overflow"))?,
+        y: matched
+            .y
+            .checked_add(y)
+            .ok_or_else(|| DriveDecisionError::package("offset click y overflow"))?,
+        width: scale(offset.width)?.max(1),
+        height: scale(offset.height)?.max(1),
+    })
+}
+
 pub fn derive_absolute_coordinate_rect_from_match(
     kind: &str,
     declared: PackRect,
@@ -449,6 +492,21 @@ pub(crate) fn parse_navigation_input(
         Some("target") | Some("target_center") => Ok(DriveSemanticInput::TargetCenter {
             target_id: required_string_field(value, "target_id")?.to_string(),
         }),
+        // Workflow #390 LAB-2 item 7: a REC-4 `offset` click (`--click` with `--click-follow`, or
+        // a source `rect_move`) presses its offset from the box its target matches.
+        Some("offset") => {
+            let offset = parse_navigation_rect(required_value_field(value, "offset")?)?;
+            if offset.width <= 0 || offset.height <= 0 {
+                return Err(DriveDecisionError::invalid(format!(
+                    "offset click rectangle must have positive dimensions: {}x{}",
+                    offset.width, offset.height
+                )));
+            }
+            Ok(DriveSemanticInput::TargetOffset {
+                target_id: required_string_field(value, "target_id")?.to_string(),
+                offset,
+            })
+        }
         Some("drag") => {
             let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
             let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
@@ -465,8 +523,18 @@ pub(crate) fn parse_navigation_input(
             })
         }
         // Workflow #390 LAB-2: a long press holds one point; it is a drag that does not move.
+        // Workflow #390 lpbox: a long press with `width` and `height` holds its click box, at
+        // the box's centre as a navigation tap presses its rectangle's.
         Some("long_press") | Some("long_tap") => {
-            let rect = parse_navigation_point(value)?;
+            let rect = match (value.get("width"), value.get("height")) {
+                (None, None) => parse_navigation_point(value)?,
+                (Some(_), Some(_)) => parse_navigation_rect(value)?,
+                _ => {
+                    return Err(DriveDecisionError::invalid(
+                        "long press click box requires both width and height",
+                    ));
+                }
+            };
             let point = drive_rect_center(rect)?;
             let duration_ms = value
                 .get("duration_ms")
@@ -594,7 +662,9 @@ fn parse_i32_json_value(value: &Value, name: &str) -> Result<i32, DriveDecisionE
 fn semantic_input_rects(input: &DriveSemanticInput) -> Vec<PackRect> {
     match input {
         DriveSemanticInput::Tap { rect, .. } => vec![*rect],
-        DriveSemanticInput::TargetCenter { .. } => Vec::new(),
+        DriveSemanticInput::TargetCenter { .. } | DriveSemanticInput::TargetOffset { .. } => {
+            Vec::new()
+        }
         DriveSemanticInput::Drag {
             from_rect, to_rect, ..
         } => vec![*from_rect, *to_rect],
@@ -816,5 +886,38 @@ mod tests {
                 duration_ms: 800
             }
         );
+    }
+
+    // Workflow #390 lpbox (exec key 76): a long press with a click box holds the box, at its
+    // centre as a navigation tap presses its rectangle's, for its duration; a box needs both
+    // `width` and `height`.
+    #[test]
+    fn lpbox_a_long_press_box_navigation_input_holds_its_box() {
+        let box_rect = PackRect {
+            x: 30,
+            y: 40,
+            width: 8,
+            height: 6,
+        };
+        let input = parse_navigation_input(&serde_json::json!({
+            "kind": "long_press", "x": 30, "y": 40, "width": 8, "height": 6, "duration_ms": 800
+        }))
+        .expect("long press box");
+        assert_eq!(
+            input,
+            DriveSemanticInput::Drag {
+                from_rect: box_rect,
+                to_rect: box_rect,
+                from: DrivePoint { x: 34, y: 43 },
+                to: DrivePoint { x: 34, y: 43 },
+                duration_ms: 800,
+            }
+        );
+
+        let error = parse_navigation_input(&serde_json::json!({
+            "kind": "long_press", "x": 30, "y": 40, "width": 8, "duration_ms": 800
+        }))
+        .expect_err("half a box");
+        assert_eq!(error.kind(), DriveDecisionErrorKind::InvalidInput);
     }
 }

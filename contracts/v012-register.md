@@ -1319,6 +1319,104 @@ table goes from 34 to 35 tools (observer 19 to 20).
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
 | GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
+### 1.79 Wave 16 slice R7 + K4 (#361 R7, #372 K4; M361 and K372 addenda of 2026-10-15; forced-compromises mapping S-08)
+
+R7 lets a V2 clock predicate skip an occurrence that was not served in time, so a missed slot
+no longer takes a later day's budget; K4 records the slot losses no gate shows, the occurrence
+R7 skipped and the one a later occurrence absorbed. [scheduling/README.md](scheduling/README.md)
+("Clock Sources", "Clock-slot records"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+[policy-suspension.md](policy-suspension.md) (`clock_slots`) are the contract. No ledger event
+type, no payload member and no configuration key is added (the actingd-config revision is
+untouched); the records are the existing `goal_missed` planning signal. The codes
+`clock_occurrence_expired` (policy, info, domain `clock_occurrence_`), `clock_slot_expired`
+(runtime-host, info) and `clock_slot_superseded` (runtime-host, warning), all ladder class
+`none`, and the key `grace_ms` (`duration_ms`) are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RK1 | `missed: {kind: "skip_after", grace_ms}` on a `clock` predicate of an `actingcommand.scheduling.v2` catalog | catalog member (resource file format, not a ledger shape) | R7+K4 | the W2 generator, after the v0.12.0 deploy (Q10) | optional and skipped when absent, so a catalog without it keeps its serialization, hash and approval; `grace_ms` 60 000..=604 800 000 (`limit_exceeded`); refused under `not` (`predicate_uncomputable`) and in a V1 document (`unknown_field`); an unknown `kind` is `type_mismatch` |
+| RK2 | the decision reason `clock_occurrence_expired` {`occurrence_unix_ms`, `grace_ms`} | new code in existing reason chains | R7+K4 | R7+K4 | added by a clock whose unserved occurrence is past its grace; the decision stays `trigger_false` when that clock decides the trigger |
+| RK3 | `policy.planning_signal_observed` of kind `goal_missed` with `clock_slot_expired` {`task_id`, `alias`, `occurrence_unix_ms`, `grace_ms`, `next_occurrence_unix_ms`?} or `clock_slot_superseded` {`task_id`, `alias`, `occurrence_unix_ms`, `next_occurrence_unix_ms`} | new codes of an existing record (shape unchanged) | R7+K4 | R7+K4 | `signal_id` `signal:clock_slot:<expired\|superseded>:<sha256 of task, alias and occurrence>`, once per (pair, occurrence); only for a pair with a dispatch history that is live (its trigger true with its counted clocks due); superseded occurrences within 48 h, at most 32 per pair |
+| RK4 | `actingd suspended` `clock_slots`: entries of both codes; `grace_ms`; `slot_fate` `expired` | new values of existing members (`schema_version` unchanged) | R7+K4 | R7+K4 | an expired entry is `expired`, a superseded one `collapsed`, both settled; a refused or deferred entry of an occurrence with an expired record settles `expired` |
+| RK5 | `ac_diagnose` / `actingctl diagnose` `clock_slots` order | new rule of an existing output member | R7+K4 | R7+K4 | refused and superseded rows (the `warning` codes) first, then deferred and expired rows, then owed rows, newest first in each; still at most 10, cut before `errors_page`, with `clock_slots_total` |
+
+### 1.80 Wave 16 slice R-10 (#390, forced-compromises mapping R-10; REC-M §8.6, option 2)
+
+R-10 decides what an OCR target located relative to an anchor template is while that anchor
+does not pass: it did not pass, instead of an error that failed the whole page recognition. It
+adds no event type, member, enum value, code or configuration key: an existing code becomes a
+target's `failure`, and the page set gets one admission rule.
+[resource-declarations.md](resource-declarations.md) (the R-10 paragraph after the value tests)
+and [ocr-fields.md](ocr-fields.md) (the unresolved-region paragraph) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R10-1 | a target evaluation (the task diagnostic `target` row and its `ocr` row) of an OCR target with a `template_relative` region whose anchor did not pass | new rule of existing members (shapes unchanged) | R-10 | R-10 | `passed: false`, `failure` `ocr_region_unresolved` (no values), the `ocr` row's `region` with `unresolved: anchor_not_matched` and no `roi`, empty `raw_text` and `derived_text`, no `confidence`, `block_count` 0, and no provider call; in a page rule, a check member, `guard.target_id` and `guard.check` alike (a guard refuses its input with `contained_task_guard_refused`, its `cause=` token `ocr_region_unresolved` when the guard target is the OCR target). `out_of_frame` and `coordinate_overflow` stay evaluation errors; fields and readings keep `region_unresolved` |
+| R10-2 | the page set's `forbidden` (`recognition.pages.json`): an OCR target with a `template_relative` region, directly or as a member of a check | new admission rule (resource file format) | R-10 | — | admitted only when its anchor template is directly in the same page's `required`; otherwise `resource_declaration_invalid` at `/pages/<i>/forbidden/<j>` (`InvalidValue`). No pack in the three resource repositories at their 10-15 heads names such a target in a page rule |
+
+### 1.81 Wave 16 slice RD-4 (#398 model-398 v1.1 §6, option B; coordinator ruling 3 of wave 16)
+
+RD-4 gives the recovery ladder per-device profiles and the rule for a trigger's start rung beyond
+a profile's rungs (model-398 §6.6, option B, coordinator ruling of 2026-10-15: default
+`exhaust`). [emulator-control.md](emulator-control.md), "Ladder profiles", and
+[runtime-config.md](runtime-config.md), "The recovery ladder section", are the contract. No
+code, location, vocabulary value, event type or record member is added: the member `profile`
+(LD3) and the skip reason `device_not_ready` with `recovery_rung_skipped_device_not_ready` (LD4)
+exist since D1c, and RD-4 is their first writer. `mechanism_sections()` keeps its sections: the
+keys join the existing `recovery_ladder` and per-instance sections.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RD4-1 | `recovery_ladder.profiles` (object, profile name to `{rungs}`), `recovery_ladder.kind_profiles` (object, device kind to profile name), `recovery_ladder.rules.start_beyond_profile` (`exhaust` / `last_rung` / `refuse`) | new configuration keys (§5) | RD-4 | RD-4 | defaults `{"handset": {"rungs": [return_home, application_restart]}}`, `{"handset": "handset"}`, `exhaust`; settable, in the section's digest, checked with the section (a profile's rungs as `rungs`, refusals naming `recovery_ladder.profiles.<name>`; a kind or name that does not resolve `out_of_range`; under `refuse` every start rung within every profile, else `start_rung_out_of_range`) |
+| RD4-2 | `instance.<instance id>.recovery_ladder_profile` (the `instances[]` entry's `recovery_ladder_profile`) | new per-instance configuration key (§5) | RD-4 | RD-4 | default `none` (no row unless the entry names it); settable; it must name a profile (`recovery_ladder_config_invalid` at start and in check-config, `config_value_invalid` by instruction, `out_of_range`); it comes before `kind_profiles` |
+| RD4-3 | `recovery_ladder_started` `profile` | first writer of an existing member (LD3) | D1c | RD-4 | the name of the profile the instance climbs by, taken at admission with the section's snapshot; absent when it climbs the section's `rungs` (every emulator under the defaults) |
+| RD4-4 | `recovery_rung_finished` `skipped` with `recovery_rung_skipped_device_not_ready` | first writer of an existing skip reason and code (LD4) | D1c | RD-4 | a handset's start gate held the rung's run before its first step (`device_locked`, `device_thermal_hold`, `device_battery_low`, `device_in_use`) under `rules.entry_unavailable = skip`; under `fail` the rung fails with that code, and after the application restart's stop it fails |
+| RD4-5 | the plan of `recovery_ladder_started` for a start beyond a profile | new rule of an existing member | RD-4 | RD-4 | `exhaust`: every rung `before_start_rung`, then `recovery_ladder_finished` `exhausted` with `rungs_tried` 0 as any all-skipped climb; `last_rung`: the rungs before the profile's last `before_start_rung`, the last one climbs |
+
+### 1.82 Wave 16 slice lpbox: a long press takes a click box (#390; coordinator ruling 6 of wave 16; Alice 2026-10-09)
+
+Alice's rule of 10-09 is that pack taps use click boxes (a point picked inside a box sized to
+the control, the whole box harmless), never fixed points. The kernel's `long_press` (alias
+`long_tap`) was the one click of a task package with no box form: `point` has `rect` and
+`target_center` has `target`, and every drag already takes rectangles. It now takes a click
+box, and the Lab records a long press as the box around the point it presses (wave-15 rulings,
+LAB-2 item 2). [resource-declarations.md](resource-declarations.md) (the lpbox paragraph) and
+[lab-recording.md](lab-recording.md) ("Drags and long presses") are the contract. No code, no
+configuration key and no ledger member is new; the refusals reuse
+`contained_task_operation_invalid`, `contained_task_input_out_of_bounds`, the declaration
+reason `MissingField`, `invalid_input_sampling_action` and `validation_failed`.
+
+Migration: none needed. The point form stays valid, so a package with a point long press keeps
+loading. No package declares one today: none of the three resource repositories' `main`, nor
+their open pull requests (checked on 2026-10-15), holds a `long_press` or `long_tap`
+click. A point long press written from now on needs the reason its target has no stable extent
+(Alice 10-09); otherwise it is a box.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LB-1 | a task operation's or navigation edge's click `{"kind": "long_press" \| "long_tap", "x", "y", "width", "height", "duration_ms"}` | resource file format (an optional member pair; task schemas unchanged) | lpbox | lpbox (Lab generation) | `width` and `height` together (one alone is `MissingField` at the other, `contained_task_operation_invalid` in the kernel), each at least 1, inside the resolution (`contained_task_input_out_of_bounds`); the point form `{kind, x, y, duration_ms}` is unchanged; the navigation projection and a guard synthesized from the click keep the box |
+| LB-2 | the run's held point: a point of the box drawn with the step's action seed (`xorshift64_uniform_rect_v1`, as a `rect` tap's), the box's center without a seed; `task.semantic` `EffectIntent` `sampling {algorithm, action_seed, source_regions: [box]}` | new rule of an existing optional member (ledger shape unchanged) | lpbox | lpbox | the sanitizer took `sampling` on `Tap`, `Swipe` and the two drags; it now also takes it on `LongTap`, with one region holding the point (else `invalid_input_sampling_action`); a point long press records none, as before |
+| LB-3 | drive navigation and actinglab's navigation reader on a boxed `long_press` click: a drag that does not move, from the box to the box, at its center | new rule (no persisted shape) | lpbox | lpbox | as they press a `rect` tap at its rectangle's center; a box needs both members (`drive_plan_invalid` / `validation_failed`) |
+| LB-4 | `record mark --long-press x,y,w,h`, request member `click.long_press {x, y, width, height}` (`actingcommand.lab-record-mark.v1`) | tool input (changes L2-2's point) | lpbox | lpbox | the box is the step's click rectangle; a bare point is `validation_failed`; MCP `ac_record_mark` hands the request on unchanged |
+| LB-5 | the package `record stop` generates for a long press: `{"kind": "long_press", "x", "y", "width", "height", "duration_ms"}` with the step's click rectangle; `do --capture --record` on it holds the box's center (`point_rule` `rect_center`, was `declared_point`) | resource file format the tool writes; output value | lpbox | lpbox | changes L2-4 and L2-6; the first decision must hold a point inside the box; a recording made before keeps its 1x1 click rectangle and generates a box of one pixel |
+
+### 1.83 Wave 16 slice navoffset: navigation readers accept REC-4 `offset` clicks (#390, wave-15 rulings LAB-2 item 7; coordinator ruling 7 of wave 16)
+
+LAB-2 found that neither navigation input reader accepted an `offset` click, so a package whose
+navigation holds one (REC-4's `--click` with `--click-follow`, or a source `rect_move`) failed
+online observation and could not be a carrier package. Both readers now take it. No ledger
+record, wire shape, configuration key or outcome code: the rows are a reading rule of an existing
+resource format and two output values. [resource-declarations.md](resource-declarations.md) (the
+navigation paragraphs) is the contract. A refusal keeps the reader's existing code
+(`drive_plan_invalid` in the kernel, actinglab's usage refusal, `observation_resources_invalid`
+for the online observation's admission).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NO-1 | the click `{"kind": "offset", "target_id", "offset": {x, y, width, height}}` of a navigation edge, page operation or control point, read by the kernel's drive reader and actinglab's navigation reader | new reading rule of an existing resource format (`navigation`, schema `0.6` unchanged) | navoffset | — (the Lab and source compilation write it since REC-4) | the box at the top-left corner of the box `target_id` matches plus the offset, each number scaled by the factor a template with `scales` matched at (REC-5, as a task's `offset` click); a width or height that is not positive, or no string `target_id`, is refused; was `unsupported navigation click kind` |
+| NO-2 | the page projection element of an offset click: the online observation (`ObserveContainedPage`, which admits the carrier package of `observe` and `do`) and actinglab `observe` | new rule of an existing output (page projection shape unchanged) | navoffset | navoffset | `recognition_basis: target_evaluation`, `input` the tap of that box on the frame observed; no geometry when the target did not pass or matched no template box (`target_not_matched`, `matched_template_rect_unavailable`); a package holding one is admitted (was `observation_resources_invalid`) |
+| NO-3 | the unresolved semantic input `{"type": "target_offset", "target_id", "offset"}` (actinglab's navigation listings and the Lab's `SemanticInputResponse`) | new value of an existing output member | navoffset | navoffset | a route resolves it on the current frame like a `target` edge and taps the center of the box |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1399,9 +1497,10 @@ when it takes effect.
 | Section | Keys | Defaults and meaning | Parsed by | Read by (takes effect) |
 |---|---|---|---|---|
 | `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) | there | AO-1 (built, §1.26) | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x) |
-| `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms` | M387 §7.1 | D1c | D1c (v0.12.0) |
+| `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms`; Workflow #398 RD-4: `rules.start_beyond_profile`, `profiles`, `kind_profiles` | M387 §7.1; model-398 §6.3, §6.6 (`exhaust`, the `handset` profile of return home and application restart for the kind `handset`) | D1c; RD-4 (§1.81) | D1c (v0.12.0); RD-4 (v0.12.0) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
+| per instance | `recovery_ladder_profile` | model-398 §6.2: default `none` (the kind table, then the section's `rungs`); must name a profile; settable | RD-4 (§1.81) | RD-4 (v0.12.0) |
 | `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |

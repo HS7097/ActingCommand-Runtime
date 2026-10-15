@@ -12,10 +12,9 @@ use crate::{
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
-    MarkSpec, RecordPoint, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock,
-    StepAction, StepActionKind, TemplateScalesSpec, TransitionSpec, record_instance_check,
-    record_mark, record_start, record_start_defaults, record_status, record_stop,
-    record_stop_close,
+    MarkSpec, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
+    StepActionKind, TemplateScalesSpec, TransitionSpec, record_instance_check, record_mark,
+    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -2752,13 +2751,13 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
     // Workflow #396 REC-4: the package's click follows a template mark, alone (`target`) or
     // with `--click` (`offset`).
     let click_follow = record_flag_value(flags, "--click-follow")?;
-    // Workflow #390 LAB-2: a drag from `--click` to `--drag-to`, or a long press at
-    // `--long-press x,y`, over `--duration-ms`.
+    // Workflow #390 LAB-2: a drag from `--click` to `--drag-to`, or a long press in the click box
+    // `--long-press x,y,w,h` (Workflow #390 lpbox), over `--duration-ms`.
     let drag_to = record_flag_value(flags, "--drag-to")?
         .map(|value| parse_record_mark_rect(&value, "--drag-to"))
         .transpose()?;
     let long_press = record_flag_value(flags, "--long-press")?
-        .map(|value| parse_record_mark_point(&value, "--long-press"))
+        .map(|value| parse_record_mark_rect(&value, "--long-press"))
         .transpose()?;
     let duration_ms = record_flag_value(flags, "--duration-ms")?
         .map(|value| {
@@ -2918,22 +2917,6 @@ fn parse_record_mark_scales(value: &str) -> CliOutcome<TemplateScalesSpec> {
     Ok(TemplateScalesSpec { factors_milli })
 }
 
-/// Workflow #390 LAB-2: `x,y` with integer fields.
-fn parse_record_mark_point(value: &str, label: &str) -> CliOutcome<RecordPoint> {
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    let [x, y] = parts.as_slice() else {
-        return Err(CliError::usage(format!("{label} must be x,y, got {value}")));
-    };
-    let field = |text: &str, name: &str| {
-        text.parse::<i32>()
-            .map_err(|error| CliError::usage(format!("{label} {name} '{text}': {error}")))
-    };
-    Ok(RecordPoint {
-        x: field(x, "x")?,
-        y: field(y, "y")?,
-    })
-}
-
 /// `x,y,w,h` with integer fields.
 pub(crate) fn parse_record_mark_rect(value: &str, label: &str) -> CliOutcome<RecordRect> {
     let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
@@ -3038,7 +3021,7 @@ mod lab2_tests {
 
         let pressed = record_mark_request_from_flags(&flags(&[
             "--long-press",
-            "64,14",
+            "64,14,1,1",
             "--duration-ms",
             "800",
             "--no-anchor",
@@ -3047,7 +3030,7 @@ mod lab2_tests {
         assert_eq!(
             pressed.click,
             Some(ClickSpec {
-                long_press: Some(RecordPoint { x: 64, y: 14 }),
+                long_press: Some(rect(64, 14, 1, 1)),
                 duration_ms: Some(800),
                 ..ClickSpec::default()
             })
@@ -3056,6 +3039,41 @@ mod lab2_tests {
 
         let error = record_mark_request_from_flags(&flags(&["--color", "state/b=1,1,2,2@0,0,4,4"]))
             .expect_err("only a template takes a search area");
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+    }
+
+    // Workflow #390 lpbox (exec key 76; Alice 10-09: pack taps use click boxes): `--long-press`
+    // takes the click box `x,y,w,h` the long press is recorded with; a bare point is refused.
+    #[test]
+    fn lpbox_record_mark_long_press_flag_takes_a_click_box() {
+        let pressed = record_mark_request_from_flags(&flags(&[
+            "--long-press",
+            "60,10,8,8",
+            "--duration-ms",
+            "800",
+        ]))
+        .expect("request");
+        assert_eq!(
+            pressed.click,
+            Some(ClickSpec {
+                long_press: Some(RecordRect {
+                    x: 60,
+                    y: 10,
+                    width: 8,
+                    height: 8,
+                }),
+                duration_ms: Some(800),
+                ..ClickSpec::default()
+            })
+        );
+
+        let error = record_mark_request_from_flags(&flags(&[
+            "--long-press",
+            "64,14",
+            "--duration-ms",
+            "800",
+        ]))
+        .expect_err("a long press takes a box");
         assert_eq!(error.code, "validation_failed", "{}", error.message);
     }
 }

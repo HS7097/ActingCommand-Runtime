@@ -11,13 +11,13 @@ use super::gate_372k2::{SLOT_TASK, Slots, at, slot_sources, slot_task};
 use super::*;
 use crate::codes::HostCode;
 use crate::policy_host::clock_slot::{SlotRecord, SlotValues, clock_slot_signal, signal_id};
-use crate::suspension_report::{SlotDispatch, SlotSignal, clock_slot_entry};
+use crate::suspension_report::{ExpiredSlots, SlotDispatch, SlotSignal, clock_slot_entry};
 use actingcommand_contract::PolicyBudgetDimension;
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
 
 /// `actingd suspended` on a closed state root, with the catalog the scenario activated.
-fn report(root: &TempDir, sources: &CatalogSources) -> Value {
+pub(super) fn report(root: &TempDir, sources: &CatalogSources) -> Value {
     let host = config(root);
     crate::suspension_report(&SuspensionReportRequest {
         config_path: Path::new("actingd.config.json"),
@@ -29,7 +29,7 @@ fn report(root: &TempDir, sources: &CatalogSources) -> Value {
 }
 
 /// Every event of the closed ledger.
-fn ledger_events(root: &TempDir) -> Vec<PersistedEvent> {
+pub(super) fn ledger_events(root: &TempDir) -> Vec<PersistedEvent> {
     GlobalLedger::open_evidence(
         actingcommand_ledger::GlobalLedgerEvidenceConfig::new(root.path())
             .sqlite_material_not_read(),
@@ -40,7 +40,7 @@ fn ledger_events(root: &TempDir) -> Vec<PersistedEvent> {
 }
 
 /// The ledger sequence of the one record `signal_id`.
-fn record_sequence(events: &[PersistedEvent], signal_id: &str) -> u64 {
+pub(super) fn record_sequence(events: &[PersistedEvent], signal_id: &str) -> u64 {
     let found = events
         .iter()
         .filter(|event| {
@@ -209,8 +209,12 @@ fn clock_slots_show_a_deferred_slot_pending_then_settled_same_window() {
     assert_eq!(report["clock_slots"], json!([settled]), "{report:#}");
 }
 
-/// An owed selection that was never admitted is `absorbed` by the run that later served the
-/// next occurrence; the first run before it was served by its own admission.
+// An owed selection that was never admitted is `absorbed` by the run that later served the
+// next occurrence; the first run before it was served by its own admission. Since #372 K4
+// (K372 addendum of 2026-10-15, K4.2 `clock_slot_superseded` row and K4.3 "Once"), the
+// evaluation that sees the next occurrence also records the never-admitted occurrence
+// `clock_slot_superseded`, settled `collapsed`: an owed record is not one of the refused,
+// deferred or expired records that stop it.
 #[test]
 fn clock_slots_settle_an_owed_selection_never_admitted_as_absorbed() {
     let sources = slot_sources(1, &[slot_task(&[390], 1)], None);
@@ -242,9 +246,27 @@ fn clock_slots_settle_an_owed_selection_never_admitted_as_absorbed() {
         POLICY_INSTANCE_ALIAS,
         at(1, 6, 30),
     );
+    let superseded = signal_id(
+        SlotRecord::Superseded,
+        SLOT_TASK,
+        POLICY_INSTANCE_ALIAS,
+        at(1, 6, 30),
+    );
     assert_eq!(
         report["clock_slots"],
         json!([
+            {
+                "code": "clock_slot_superseded",
+                "task_id": SLOT_TASK,
+                "instance_id": POLICY_INSTANCE_ALIAS,
+                "occurrence_unix_ms": at(1, 6, 30),
+                "next_occurrence_unix_ms": at(2, 6, 30),
+                "slot_fate": "collapsed",
+                "slot_fate_settled": true,
+                "recorded_sequence": record_sequence(&events, &superseded),
+                "recorded_at_unix_ms": at(2, 6, 31),
+                "next_dispatch": admitted_at(&events, at(2, 6, 31)),
+            },
             {
                 "code": "clock_slot_owed",
                 "task_id": SLOT_TASK,
@@ -431,6 +453,7 @@ fn clock_slot_entries_of_each_code_match_their_golden_json() {
             },
             dispatch,
             reference,
+            &ExpiredSlots::new(),
         ))
         .expect("encode the entry")
     };

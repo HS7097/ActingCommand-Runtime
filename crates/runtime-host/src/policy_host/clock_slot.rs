@@ -8,6 +8,11 @@
 //! has closed. A selected dispatch that serves an occurrence from before its window opened is
 //! owed (`clock_slot_owed`). Nothing is kept beyond one evaluation: a record's identity is its
 //! `signal_id`, checked against the planning-signal projection before it is written.
+//!
+//! Workflow #372 K4 adds the slot losses no gate shows: an unserved occurrence whose `missed`
+//! grace ran out (`clock_slot_expired`, info) and one a later occurrence absorbed with no other
+//! record of it (`clock_slot_superseded`, warning), each written only for a pair with a dispatch
+//! history that would have come due (its trigger true with its clocks counted due).
 
 use super::{CatalogStore, matching_activity_profile};
 use crate::RuntimeHostResult;
@@ -18,9 +23,10 @@ use actingcommand_contract::{
     PolicyPlanningSignalKind,
 };
 use actingcommand_policy::{
-    ActivityWindowOccurrence, CandidateEligibility, CompiledCatalog, DispatchIntent,
-    EligibilityState, EvaluationTime, InstanceSnapshot, PolicyCode, PolicyEvaluation,
-    SchedulingDecisionState, TaskRuntimeSnapshot, activity_window_at, clock_slot_view,
+    ActivityWindowOccurrence, CandidateEligibility, ClockSlotLapseKind, CompiledCatalog,
+    DispatchIntent, EligibilityState, EvaluationFacts, EvaluationResources, EvaluationTime,
+    InstanceSnapshot, PolicyCode, PolicyEvaluation, SchedulingDecisionState, TaskRuntimeSnapshot,
+    TaskSpec, activity_window_at, clock_slot_lapses, clock_slot_live, clock_slot_view,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -82,12 +88,16 @@ impl Deferrals {
     }
 }
 
-/// The three record kinds; the word is the `signal_id` segment.
+/// The record kinds; the word is the `signal_id` segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlotRecord {
     Refused,
     Deferred,
     Owed,
+    /// Workflow #372 K4.
+    Expired,
+    /// Workflow #372 K4.
+    Superseded,
 }
 
 impl SlotRecord {
@@ -96,6 +106,8 @@ impl SlotRecord {
             Self::Refused => HostCode::ClockSlotRefused,
             Self::Deferred => HostCode::ClockSlotDeferred,
             Self::Owed => HostCode::ClockSlotOwed,
+            Self::Expired => HostCode::ClockSlotExpired,
+            Self::Superseded => HostCode::ClockSlotSuperseded,
         }
     }
 
@@ -104,6 +116,8 @@ impl SlotRecord {
             Self::Refused => "refused",
             Self::Deferred => "deferred",
             Self::Owed => "owed",
+            Self::Expired => "expired",
+            Self::Superseded => "superseded",
         }
     }
 }
@@ -114,6 +128,8 @@ pub(crate) struct SlotValues {
     pub(crate) gate_code: Option<Code>,
     pub(crate) budget_dimension: Option<PolicyBudgetDimension>,
     pub(crate) occurrence_unix_ms: u64,
+    /// Workflow #372 K4: the grace of an expired occurrence's `missed` rule.
+    pub(crate) grace_ms: Option<u64>,
     pub(crate) window_start_unix_ms: Option<u64>,
     pub(crate) window_end_unix_ms: Option<u64>,
     pub(crate) next_eligible_unix_ms: Option<u64>,
@@ -150,6 +166,9 @@ pub(crate) fn slot_outcome(
         .task_id(task_id)
         .alias(alias)
         .occurrence_unix_ms(values.occurrence_unix_ms);
+    if let Some(grace_ms) = values.grace_ms {
+        outcome = outcome.grace_ms(grace_ms);
+    }
     if let Some(gate_code) = values.gate_code {
         outcome = outcome.gate_code(gate_code);
     }
@@ -282,6 +301,8 @@ struct Gate {
 struct Preview<'a> {
     store: &'a CatalogStore,
     catalog: &'a CompiledCatalog,
+    facts: &'a EvaluationFacts,
+    resources: &'a EvaluationResources,
     tasks: &'a [TaskRuntimeSnapshot],
     instances: &'a [InstanceSnapshot],
     in_flight: &'a BTreeSet<(&'a str, &'a str)>,
@@ -291,14 +312,15 @@ struct Preview<'a> {
 }
 
 /// The clock-slot records of one evaluation, in the order they are to be appended: the
-/// closure's deferrals, then the placement blocks, then the owed selections. Only pairs whose
-/// trigger was true at this evaluation are read.
+/// closure's deferrals, then the placement blocks, then the owed selections; these three read
+/// only pairs whose trigger was true at this evaluation. Then (Workflow #372 K4) the expired
+/// and superseded occurrences of every pair in `facts.tasks` with a dispatch history.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preview(
     store: &CatalogStore,
     catalog: &CompiledCatalog,
-    tasks: &[TaskRuntimeSnapshot],
-    instances: &[InstanceSnapshot],
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
     evaluation: &PolicyEvaluation,
     pending_dispatch_intents: &[DispatchIntent],
     in_flight: &BTreeSet<(&str, &str)>,
@@ -308,8 +330,10 @@ pub(super) fn preview(
     let mut preview = Preview {
         store,
         catalog,
-        tasks,
-        instances,
+        facts,
+        resources,
+        tasks: &facts.tasks,
+        instances: &facts.instances,
         in_flight,
         time,
         emitted: BTreeSet::new(),
@@ -349,10 +373,17 @@ pub(super) fn preview(
     for intent in pending_dispatch_intents {
         preview.owed(&intent.task_id, &intent.instance_id)?;
     }
+    for state in facts
+        .tasks
+        .iter()
+        .filter(|state| state.last_dispatched_unix_ms.is_some())
+    {
+        preview.lapsed(state)?;
+    }
     Ok(preview.signals)
 }
 
-impl Preview<'_> {
+impl<'a> Preview<'a> {
     fn state(&self, task_id: &str, alias: &str) -> Option<&TaskRuntimeSnapshot> {
         self.tasks
             .iter()
@@ -375,20 +406,23 @@ impl Preview<'_> {
         Ok((true, activity_window_at(profile, self.time.unix_ms)?))
     }
 
+    /// The catalog's task `task_id`.
+    fn task(&self, task_id: &str) -> Option<&'a TaskSpec> {
+        self.catalog
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+    }
+
     /// The pair's due occurrence and next occurrence, when a counted clock has one due.
     fn slot(
         &self,
         task_id: &str,
         state: Option<&TaskRuntimeSnapshot>,
     ) -> RuntimeHostResult<Option<(u64, Option<u64>)>> {
-        let Some(task) = self
-            .catalog
-            .catalog()
-            .tasks
-            .tasks
-            .iter()
-            .find(|task| task.id == task_id)
-        else {
+        let Some(task) = self.task(task_id) else {
             return Ok(None);
         };
         Ok(clock_slot_view(task, state, self.time)?.and_then(|view| {
@@ -443,7 +477,10 @@ impl Preview<'_> {
             SlotRecord::Refused if gate.code == HostCode::PolicyActivityWindowClosed.code() => {
                 Some(SlotRecord::Deferred)
             }
-            SlotRecord::Refused | SlotRecord::Owed => None,
+            SlotRecord::Refused
+            | SlotRecord::Owed
+            | SlotRecord::Expired
+            | SlotRecord::Superseded => None,
         };
         if let Some(blocking) = blocking
             && self.known(&signal_id(blocking, task_id, alias, occurrence))?
@@ -489,5 +526,75 @@ impl Preview<'_> {
         };
         self.emit(SlotRecord::Owed, task_id, alias, &values);
         Ok(())
+    }
+
+    /// Workflow #372 K4: the occurrences of a pair with a dispatch history that expired under
+    /// their clock's `missed` rule or were superseded, each once. A pair with a dispatch in
+    /// flight has served nothing yet and gets none. A superseded occurrence that a refused,
+    /// deferred or expired record names already has its trace; an expired one is written even
+    /// after a refusal or deferral. The pair's liveness is read only for an occurrence not yet
+    /// recorded, once per pair, and a pair that is not live gets no record.
+    fn lapsed(&mut self, state: &TaskRuntimeSnapshot) -> RuntimeHostResult<()> {
+        let (task_id, alias) = (state.task_id.as_str(), state.instance_id.as_str());
+        if self.in_flight.contains(&(task_id, alias)) {
+            return Ok(());
+        }
+        let Some(task) = self.task(task_id) else {
+            return Ok(());
+        };
+        let mut live = None;
+        for lapse in clock_slot_lapses(task, Some(state), self.time)? {
+            let occurrence = lapse.occurrence_unix_ms;
+            let (kind, grace_ms) = match lapse.kind {
+                ClockSlotLapseKind::Expired { grace_ms } => (SlotRecord::Expired, Some(grace_ms)),
+                ClockSlotLapseKind::Superseded => (SlotRecord::Superseded, None),
+            };
+            if self.known(&signal_id(kind, task_id, alias, occurrence))? {
+                continue;
+            }
+            if kind == SlotRecord::Superseded && self.traced(task_id, alias, occurrence)? {
+                continue;
+            }
+            let is_live = match live {
+                Some(is_live) => is_live,
+                None => {
+                    let is_live = clock_slot_live(
+                        self.catalog,
+                        task,
+                        alias,
+                        self.facts,
+                        self.resources,
+                        self.time,
+                    )?;
+                    live = Some(is_live);
+                    is_live
+                }
+            };
+            if !is_live {
+                return Ok(());
+            }
+            let values = SlotValues {
+                occurrence_unix_ms: occurrence,
+                grace_ms,
+                next_occurrence_unix_ms: lapse.next_occurrence_unix_ms,
+                ..SlotValues::default()
+            };
+            self.emit(kind, task_id, alias, &values);
+        }
+        Ok(())
+    }
+
+    /// Whether a refused, deferred or expired record of the pair's occurrence exists.
+    fn traced(&self, task_id: &str, alias: &str, occurrence: u64) -> RuntimeHostResult<bool> {
+        for kind in [
+            SlotRecord::Refused,
+            SlotRecord::Deferred,
+            SlotRecord::Expired,
+        ] {
+            if self.known(&signal_id(kind, task_id, alias, occurrence))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }

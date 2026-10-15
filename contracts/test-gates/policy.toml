@@ -189,6 +189,7 @@ tests = [
     "actingcommand-policy::lib::compiler::tests::compiler_clock_offsets_match_the_published_independent_bounds",
     "actingcommand-policy::lib::schema::tests::published_schema_bounds_match_compiler_constants",
     "actingcommand-policy::lib::schema::tests::published_integer_schemas_are_bounded_to_jcs_safe_values",
+    "actingcommand-policy::lib::compiler::tests::compiler_enforces_clock_missed_bounds_version_and_placement",
 ]
 incident = []
 
@@ -200,6 +201,7 @@ tests = [
     "actingcommand-policy::lib::compiler::tests::neutral_catalog_compiles_to_stable_hash_and_dry_run",
     "actingcommand-policy::lib::compiler::tests::timeline_v2_versions_fields_and_references_are_closed",
     "actingcommand-policy::lib::compiler::tests::local_clock_rejects_absolute_schedule_and_reveal_identity_changes_hash",
+    "actingcommand-policy::lib::compiler::tests::v2_catalog_identity_is_unchanged_without_missed_and_changes_with_it",
 ]
 incident = []
 
@@ -253,6 +255,10 @@ tests = [
     "actingcommand-policy::lib::evaluator::tests::local_clock_uses_monotonic_coordinate_and_projects_to_unix",
     "actingcommand-policy::lib::evaluator::tests::server_clock_applies_dst_and_maintenance_drift",
     "actingcommand-policy::lib::evaluator::tests::server_clock_accepts_independently_bounded_utc_and_dst_offsets",
+    "actingcommand-policy::lib::evaluator::tests::r7_t1_a_missed_clock_is_due_only_inside_its_grace",
+    "actingcommand-policy::lib::evaluator::tests::r7_t2_a_due_missed_clock_wakes_and_stays_fresh_until_its_grace_ends",
+    "actingcommand-policy::lib::evaluator::tests::r7_t3_a_first_run_is_due_only_inside_the_grace",
+    "actingcommand-policy::lib::evaluator::tests::r7_t4_an_expired_clock_leaves_the_trigger_due_through_a_clock_without_missed",
 ]
 incident = []
 
@@ -474,6 +480,7 @@ coverage = "Y"
 tests = [
     "actingcommand-policy::lib::evaluator::tests::clock_slot_view_reads_due_and_next_trigger_clocks",
     "actingcommand-policy::lib::tests::gate_p2a::gate_p2a_g9_a_two_day_replay_serves_or_gates_every_due_slot_and_counts_an_owed_run_on_its_day",
+    "actingcommand-policy::lib::evaluator::tests::r7_t8_the_clock_slot_view_never_names_an_expired_occurrence",
 ]
 incident = ["#372", "#382 P-2a"]
 
@@ -552,3 +559,12 @@ tests = [
     "actingcommand-policy::lib::tests::gate_390_pool1::pool1_a_target_on_a_live_pool_reads_the_projected_inventory",
 ]
 incident = ["#390 POOL-1"]
+
+# Workflow #361 R7 (M361 addendum of 2026-10-15, row R7-T7; forced-compromises mapping S-08; register §1.79): a missed clock slot with skip_after expires and never displaces the next day's slot: in the day replay with an operator pause across day 1's 06:30, `missed {skip_after, 7 200 000}` leaves day 1's occurrence undispatched and runs day 2's slot at 06:30 on day 2's budget, while without it the owed run at day 2's window start takes the day's only allowance and day 2's 06:30 is refused
+[[gate]]
+key = "50"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_361r7::r7_t7_a_missed_clock_slot_with_skip_after_expires_and_never_displaces_the_next_day_s_slot",
+]
+incident = ["#361 R7", "S-08"]

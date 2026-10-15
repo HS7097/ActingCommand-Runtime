@@ -120,6 +120,8 @@ mod gate_369s5;
 // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
 mod gate_369_s6c;
 mod gate_372k2;
+// Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
+mod gate_372k4;
 // Workflow #373 NAV-3a: page-graph prerequisite packages and the standard-pack registry.
 mod gate_373_nav3a;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
@@ -129,6 +131,9 @@ mod gate_373_nav6;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// Workflow #382 H-1-rest (test plan v2.2 §3.10): the install transition's deadlines on the
+// manual Runtime clock (HOST-I2), G1 and G3.
+mod gate_382_h1;
 // Workflow #382 H-4 (test plan v2.2 §3.6): the recovery ladder's G8 and G9 rows.
 mod gate_382_h4;
 // Workflow #382 H-5 (test plan v2.2 §3.6): host wave B.
@@ -205,6 +210,8 @@ mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.
 mod gate_398_rd2;
+// Workflow #398 RD-4: ladder profiles, a handset's held rung entry and a start beyond a profile.
+mod gate_398_rd4;
 // Workflow #398 RD-5b: a handset's device state, its holds and the start gate through the host.
 mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.

@@ -11,12 +11,13 @@ use crate::{
     MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
     MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK,
     MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
-    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE,
-    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
-    MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI,
-    MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE,
-    MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES, MIN_UTC_OFFSET_MINUTES, MetricRef,
-    ObservationRef, PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ResourceEffectSpec,
+    MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
+    MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
+    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
+    MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
+    MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
+    MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef,
+    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ResourceEffectSpec,
     SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
     TimelineDocument,
 };
@@ -722,20 +723,27 @@ fn validate_predicate_node(
                 );
             }
         }
-        PredicateSpec::Not { predicate } => validate_predicate_node(
-            predicate,
-            &format!("{path}/predicate"),
-            depth + 1,
-            node_count,
-            map,
-            task_ids,
-            pool_ids,
-            timeline,
-            descriptor,
-            diagnostics,
-        ),
-        PredicateSpec::Clock { schedule } => {
-            validate_schedule(schedule, path, map, descriptor, diagnostics)
+        PredicateSpec::Not { predicate } => {
+            let child_path = format!("{path}/predicate");
+            refuse_missed_under_not(predicate, &child_path, map, descriptor, diagnostics);
+            validate_predicate_node(
+                predicate,
+                &child_path,
+                depth + 1,
+                node_count,
+                map,
+                task_ids,
+                pool_ids,
+                timeline,
+                descriptor,
+                diagnostics,
+            )
+        }
+        PredicateSpec::Clock { schedule, missed } => {
+            validate_schedule(schedule, path, map, descriptor, diagnostics);
+            if let Some(missed) = missed {
+                validate_missed(missed, path, map, descriptor, diagnostics);
+            }
         }
         PredicateSpec::TimelineActive { event_id } => {
             if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
@@ -1003,6 +1011,77 @@ fn validate_comparison_value(
                 descriptor,
             ));
         }
+    }
+}
+
+/// Workflow #361 R7: `missed` is a V2 member, and its grace is one minute to seven days.
+fn validate_missed(
+    missed: &MissedSlotRule,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/missed"),
+            "clock missed requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    let MissedSlotRule::SkipAfter { grace_ms } = missed;
+    if !(MIN_MISSED_GRACE_MS..=MAX_MISSED_GRACE_MS).contains(grace_ms) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/missed/grace_ms"),
+            format!(
+                "clock missed grace_ms must be within {MIN_MISSED_GRACE_MS}..={MAX_MISSED_GRACE_MS}"
+            ),
+            descriptor,
+        ));
+    }
+}
+
+/// Workflow #361 R7: a clock under a `not` cannot carry `missed`, because the rule only skips
+/// occurrences of a clock that makes its task due. `predicate` is the child of a `not` at
+/// `path`; a nested `not` refuses its own subtree when it is validated.
+fn refuse_missed_under_not(
+    predicate: &PredicateSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    match predicate {
+        PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
+            for (index, child) in predicates.iter().enumerate() {
+                refuse_missed_under_not(
+                    child,
+                    &format!("{path}/predicates/{index}"),
+                    map,
+                    descriptor,
+                    diagnostics,
+                );
+            }
+        }
+        PredicateSpec::Clock {
+            missed: Some(_), ..
+        } => diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PredicateUncomputable,
+            path,
+            "a clock under not cannot carry missed",
+            descriptor,
+        )),
+        PredicateSpec::Not { .. }
+        | PredicateSpec::Clock { missed: None, .. }
+        | PredicateSpec::TimelineActive { .. }
+        | PredicateSpec::ResourceProjection { .. }
+        | PredicateSpec::Fact { .. }
+        | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::DependencyCompleted { .. }
+        | PredicateSpec::Outcome { .. } => {}
     }
 }
 

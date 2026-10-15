@@ -782,7 +782,7 @@ impl Declaration<'_> {
         })?;
         let fields: &[&str] = match kind {
             "point" => &["kind", "x", "y"],
-            "long_press" | "long_tap" => &["kind", "x", "y", "duration_ms"],
+            "long_press" | "long_tap" => &["kind", "x", "y", "width", "height", "duration_ms"],
             "rect" | "specific_rect" => &["kind", "x", "y", "width", "height"],
             "offset" => &["kind", "target_id", "offset"],
             "target" | "target_center" => &["kind", "target_id", "offset"],
@@ -817,6 +817,15 @@ impl Declaration<'_> {
         };
         let object = self.object(value, pointer, fields)?;
         for field in fields.iter().filter(|field| **field != "kind") {
+            // Workflow #390 lpbox: a long press's click box, `width` and `height` together; a
+            // long press without either holds its point.
+            if matches!(kind, "long_press" | "long_tap")
+                && matches!(*field, "width" | "height")
+                && !object.contains_key("width")
+                && !object.contains_key("height")
+            {
+                continue;
+            }
             if (*field == "target_id" && kind == "offset")
                 || (*field == "offset" && kind != "offset")
             {

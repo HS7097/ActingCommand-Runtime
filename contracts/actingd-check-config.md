@@ -342,11 +342,17 @@ revision.
     not settable) for an instance that names `device`, and nothing for one that does
     not (see "Devices"). Workflow #369 S6a adds `instance.<instance_id>.start_emulator`
     (boolean, `explicit`, not settable) for an instance that names `start_emulator`, and
-    nothing for one that does not (default `none`: off). They form
+    nothing for one that does not (default `none`: off). Workflow #398 RD-4 adds
+    `instance.<instance_id>.recovery_ladder_profile` (string, `explicit`, settable) for an
+    instance that names `recovery_ladder_profile`, the ladder profile it climbs by, and nothing
+    for one that does not; a name no profile of the `recovery_ladder` section has fails assembly
+    with `recovery_ladder_config_invalid`. They form
     the section `instance`, which with every other section counts against its own
     256-parameter bound ([runtime-config.md](runtime-config.md)). Workflow #387
     D1c adds, before the per-instance keys, the sections the mechanism resolves:
-    the 15 `recovery_ladder.*` keys and `host_claims.renewal_slack_ms` (settable,
+    the 18 `recovery_ladder.*` keys (Workflow #398 RD-4 adds
+    `rules.start_beyond_profile`, `profiles` and `kind_profiles`) and
+    `host_claims.renewal_slack_ms` (settable,
     `default` from `actingd.defaults.json` unless the file names them; a list is
     one parameter of canonical JSON text) and `standard_packs.root` when the
     file names it (not settable). A `recovery_ladder` section that breaks a rule

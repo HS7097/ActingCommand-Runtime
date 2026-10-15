@@ -60,6 +60,7 @@ use super::contained_task::{ConfiguredReturnHome, FailedTaskTerminal, PackageIde
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::{ClaimGrantSlot, HostClaim, HostClaimAdmission};
 use super::resource_fence::manual_claim;
+use super::runtime_config::ladder_profile;
 use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
 use crate::codes::HostCode;
@@ -78,8 +79,8 @@ use actingcommand_contract::{
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_runtime_config::{
     AlreadyRunning, ConfigCode, CooldownOpensOn, DeviceBounds, DirectRuns, EntryUnavailable,
-    LadderConfig, LadderRules, MatchedBy, PreparationSuperseded, RungConfig, TriggerItem,
-    TriggerVerdict, ladder_class_of,
+    LadderConfig, LadderProfile, LadderRules, MatchedBy, PreparationSuperseded, RungConfig,
+    TriggerItem, TriggerVerdict, ladder_class_of,
 };
 
 const LADDER_OPERATION: HostLocation = HostLocation::RunRecoveryLadder;
@@ -317,7 +318,11 @@ pub(super) struct PendingRecoveryLadder {
     holder_id: HolderId,
     /// Workflow #387 D1c (§4.7): the `recovery_ladder` section the ladder was admitted with.
     config: Arc<LadderConfig>,
-    /// The position in `config.rungs`, from 1, the climb starts at (§4.1).
+    /// Workflow #398 RD-4 (model-398 §6.2): the profile of `config` the instance climbs by,
+    /// taken at admission with the section; `None` for the section's `rungs`.
+    profile: Option<LadderProfile>,
+    /// The position in the rungs it climbs, from 1, its trigger starts the climb at (§4.1);
+    /// `rules.start_beyond_profile` says what one beyond them does (model-398 §6.6).
     start_rung: usize,
     /// Whether the cool-down window holds this ladder (§4.6).
     respect_cooldown: bool,
@@ -925,6 +930,7 @@ impl HostShared {
         {
             return Ok((event, None));
         }
+        let profile = ladder_profile(&resolved, &config)?;
         let issuer = self.events.issuer();
         let request_id = issuer
             .mint_request_id()
@@ -979,6 +985,7 @@ impl HostShared {
             respect_cooldown: item.respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            profile,
             drill: None,
         };
         Ok((event, self.admit_recovery_ladder(pending)?))
@@ -1014,6 +1021,7 @@ impl HostShared {
         {
             return Ok(None);
         }
+        let profile = ladder_profile(&resolved, &config)?;
         let issuer = self.events.issuer();
         let request_id = issuer
             .mint_request_id()
@@ -1065,6 +1073,7 @@ impl HostShared {
             respect_cooldown: config.default_respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            profile,
             drill: None,
         };
         self.admit_recovery_ladder(pending)
@@ -1110,6 +1119,7 @@ impl HostShared {
             {
                 continue;
             }
+            let profile = ladder_profile(&resolved, &burst.config)?;
             let issuer = self.events.issuer();
             let request_id = issuer
                 .mint_request_id()
@@ -1166,6 +1176,7 @@ impl HostShared {
                 respect_cooldown: item.respect_cooldown,
                 behind_ladder: false,
                 config: Arc::clone(&burst.config),
+                profile,
                 drill: None,
             };
             if let Some(ladder) = self.admit_recovery_ladder(pending)? {
@@ -1386,6 +1397,7 @@ impl HostShared {
                 }
             }
         };
+        let profile = ladder_profile(resolved, &config)?;
         let issuer = self.events.issuer();
         let request_id = issuer
             .mint_request_id()
@@ -1433,6 +1445,7 @@ impl HostShared {
             respect_cooldown: item.respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            profile,
             drill: None,
         };
         self.admit_recovery_ladder(pending)
@@ -1503,6 +1516,7 @@ impl HostShared {
                 ),
             ));
         }
+        let profile = ladder_profile(&resolved, &config)?;
         let issuer = self.events.issuer();
         let ladder_request_id = issuer
             .mint_request_id()
@@ -1553,6 +1567,7 @@ impl HostShared {
             respect_cooldown: config.default_respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            profile,
             drill: Some(mode),
         };
         let pending = match self.admit_or_suppress_ladder(pending)? {
@@ -1966,14 +1981,23 @@ impl HostShared {
             .is_some();
         // §4.1: the plan follows the configured rungs; the rungs before the start rung are
         // skipped, every other rung whose prerequisite is missing is skipped for that reason.
-        let plan = pending
+        // Workflow #398 RD-4 (model-398 §6.2, §6.6): the rungs are the instance's profile's when
+        // it has one, and a start beyond them is as `rules.start_beyond_profile` says: under
+        // `exhaust` every rung is before it, under `last_rung` the climb starts at the last one.
+        let configured = pending
+            .profile
+            .as_ref()
+            .map_or(&pending.config.rungs, |profile| &profile.rungs);
+        let start_rung = pending
             .config
-            .rungs
+            .start_beyond_profile
+            .start_rung(pending.start_rung, configured.len());
+        let plan = configured
             .iter()
             .enumerate()
             .map(|(index, rung)| {
                 let reason =
-                    if index + 1 < pending.start_rung {
+                    if index + 1 < start_rung {
                         Some(RecoveryRungSkipReason::BeforeStartRung)
                     } else {
                         match rung.action() {
@@ -2013,7 +2037,7 @@ impl HostShared {
                 trigger: pending.trigger.clone(),
                 rungs,
                 config_digest: pending.config.digest().to_owned(),
-                profile: None,
+                profile: pending.profile.as_ref().map(|profile| profile.name.clone()),
             },
         )?;
         let mut rungs_tried = 0_u8;
@@ -2763,7 +2787,9 @@ impl HostShared {
     /// preparation runs on the key and does not release it. Returns the current binding and the
     /// passing preparation event, or the rung's failure reason: `recovery_android_not_booted`
     /// when the window ends before the boot check ever passed (so no preparation ran, review
-    /// L-R4-2), otherwise `recovery_environment_not_ready`.
+    /// L-R4-2), otherwise `recovery_environment_not_ready`. The window, the backoff and every
+    /// poll's verdict read the host's `RuntimeClock` (test plan v2.2 section 3.10 H-1-rest,
+    /// HOST-I2); a poll still sleeps `readiness_poll_ms` and reads the clock when it wakes.
     fn await_recovery_readiness<'guard>(
         &self,
         pending: &PendingRecoveryLadder,
@@ -2772,7 +2798,8 @@ impl HostShared {
         held: MutexGuard<'guard, ()>,
         bounds: &EmulatorRestartBounds<'_>,
     ) -> RuntimeHostResult<Result<(RegisteredInstance, TerminalEvent), &'static str>> {
-        let deadline = Instant::now() + Duration::from_millis(bounds.readiness_window_ms);
+        let deadline_ms =
+            super::installation::deadline_after(self.monotonic_ms()?, bounds.readiness_window_ms)?;
         let margin_ms = pending.config.hold.margin_ms;
         let alias = pending.instance_alias.as_str();
         let mut held = Some(held);
@@ -2782,12 +2809,7 @@ impl HostShared {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return Ok(Err(reason));
             }
-            let window_ms = u64::try_from(
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis(),
-            )
-            .unwrap_or(u64::MAX);
+            let window_ms = deadline_ms.saturating_sub(self.monotonic_ms()?);
             if let Some(RungAttempt::Failed { reason, .. }) =
                 self.ladder_step_renewal(key, window_ms.saturating_add(margin_ms))?
             {
@@ -2833,11 +2855,12 @@ impl HostShared {
                 }
             }
             drop(held.take());
-            let wait = bounds
+            let wait_ms = bounds
                 .readiness_backoff_ms
                 .get(retries)
                 .or_else(|| bounds.readiness_backoff_ms.last())
-                .map_or(Duration::ZERO, |ms| Duration::from_millis(*ms));
+                .copied()
+                .unwrap_or(0);
             let not_ready = if prepared {
                 HostCode::RecoveryEnvironmentNotReady.as_str()
             } else {
@@ -2846,8 +2869,8 @@ impl HostShared {
             if let Some(reason) = self.await_recovery_retry(
                 pending,
                 key,
-                (wait, Duration::from_millis(bounds.readiness_poll_ms)),
-                deadline,
+                (wait_ms, Duration::from_millis(bounds.readiness_poll_ms)),
+                deadline_ms,
                 not_ready,
             )? {
                 return Ok(Err(reason));
@@ -2904,32 +2927,35 @@ impl HostShared {
     }
 
     /// Before the next readiness attempt: polls the ADB baseline every `poll` until it answers
-    /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait`; `timing` is
-    /// `(wait, poll)`, the configured backoff and poll. Both are bounded by `deadline`, and every
-    /// poll makes the ladder's holding check (review L1; Workflow #369 H-3, review2 L7: the
-    /// scheduling pause too). `Some(reason)` ends the rung: shutdown, drain, a pause, a lost key,
-    /// or no time left in the window (`not_ready`).
+    /// again, as `await_adb_baseline` does (review M-R4-1), then waits `wait_ms`; `timing` is
+    /// `(wait_ms, poll)`, the configured backoff and poll. Both are bounded by `deadline_ms` on
+    /// the host clock (HOST-I2), and every poll makes the ladder's holding check (review L1;
+    /// Workflow #369 H-3, review2 L7: the scheduling pause too). `Some(reason)` ends the rung:
+    /// shutdown, drain, a pause, a lost key, or no time left in the window (`not_ready`). The
+    /// ADB probe itself is bounded by the wall-clock instant of what remains of the window.
     fn await_recovery_retry(
         &self,
         pending: &PendingRecoveryLadder,
         key: &HostKey,
-        timing: (Duration, Duration),
-        deadline: Instant,
+        timing: (u64, Duration),
+        deadline_ms: u64,
         not_ready: &'static str,
     ) -> RuntimeHostResult<Option<&'static str>> {
-        let (wait, poll) = timing;
+        let (wait_ms, poll) = timing;
         let alias = pending.instance_alias.as_str();
         let stopped = || self.fatal.is_shutdown_requested();
         loop {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return Ok(Some(reason));
             }
-            if Instant::now() >= deadline {
+            let now_ms = self.monotonic_ms()?;
+            if now_ms >= deadline_ms {
                 return Ok(Some(not_ready));
             }
+            let probe_deadline = Instant::now() + Duration::from_millis(deadline_ms - now_ms);
             match self
                 .execution()?
-                .probe_adb_baseline_until(alias, deadline, &stopped)
+                .probe_adb_baseline_until(alias, probe_deadline, &stopped)
             {
                 Ok(()) => break,
                 Err(error) => {
@@ -2943,23 +2969,24 @@ impl HostShared {
                             )
                             .map(Some);
                     }
-                    thread::sleep(poll.min(deadline.saturating_duration_since(Instant::now())));
+                    let remaining_ms = deadline_ms.saturating_sub(self.monotonic_ms()?);
+                    thread::sleep(poll.min(Duration::from_millis(remaining_ms)));
                 }
             }
         }
-        let until = Instant::now() + wait;
-        if until >= deadline {
+        let until_ms = self.monotonic_ms()?.saturating_add(wait_ms);
+        if until_ms >= deadline_ms {
             return Ok(Some(not_ready));
         }
         loop {
             if let Some(reason) = self.ladder_hold_interrupted(pending, key)? {
                 return Ok(Some(reason));
             }
-            let now = Instant::now();
-            if now >= until {
+            let now_ms = self.monotonic_ms()?;
+            if now_ms >= until_ms {
                 return Ok(None);
             }
-            thread::sleep(poll.min(until - now));
+            thread::sleep(poll.min(Duration::from_millis(until_ms - now_ms)));
         }
     }
 
@@ -3242,8 +3269,22 @@ fn is_hold_interruption(reason: &str) -> bool {
 }
 
 /// The skip a rung package's entry refusal stands for: a known unavailable capture or input
-/// channel, or an ADB baseline that does not answer.
+/// channel, or an ADB baseline that does not answer. Workflow #398 RD-4 (model-398 §6.4, §6.5):
+/// a handset's device-state gate holding the run before its first step (a keyguard waiting for
+/// a person, heat, a low battery off power, another application in front) is the rung's entry
+/// held, `device_not_ready`, skipped or failed as `rules.entry_unavailable` says.
 fn recovery_entry_skip(code: &str) -> Option<RecoveryRungSkipReason> {
+    if spelled(
+        code,
+        &[
+            actingcommand_device::codes::DeviceStateCode::DeviceLocked.code(),
+            crate::codes::DeviceStateHostCode::ThermalHold.code(),
+            crate::codes::DeviceStateHostCode::BatteryLow.code(),
+            crate::codes::DeviceStateHostCode::InUse.code(),
+        ],
+    ) {
+        return Some(RecoveryRungSkipReason::DeviceNotReady);
+    }
     if spelled(code, &[HostCode::RecoveryCaptureUnavailable.code()]) {
         Some(RecoveryRungSkipReason::CaptureUnavailable)
     } else if spelled(code, &[HostCode::RecoveryInputUnavailable.code()]) {

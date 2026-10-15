@@ -13,7 +13,9 @@
 //!
 //! Workflow #372 K3 adds `clock_slots`: the clock-slot records of K2 (`goal_missed` planning
 //! signals whose `signal_id` starts with `signal:clock_slot:`) of the 48 h before the ledger's
-//! latest event, each with the fate its pair's next admitted dispatch settles.
+//! latest event, each with the fate its pair's next admitted dispatch settles. Workflow #372 K4
+//! adds the expired and superseded records, settled `expired` and `collapsed`; a refused or
+//! deferred record whose occurrence has an expired record settles `expired`.
 //!
 //! Workflow #386 SR-3 adds `packs`: the task packages the latest daemon start suspended and has
 //! not lifted, from the copies of its evaluation (`goal_missed` planning signals whose
@@ -43,7 +45,7 @@ use actingcommand_ledger::{
 use actingcommand_policy::{CatalogSources, compile_catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -840,6 +842,9 @@ struct ClockSlotRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     budget_dimension: Option<PolicyBudgetDimension>,
     occurrence_unix_ms: u64,
+    /// Workflow #372 K4: an expired record's grace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    grace_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     window_start_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -854,7 +859,9 @@ struct ClockSlotRecord {
 
 /// What became of a clock slot (model-372 §3.2, §3.3): a refused or deferred record's
 /// occurrence is served in the same window, served in the next one, collapsed into the next
-/// occurrence, or not known yet; an owed record's selection was served or absorbed.
+/// occurrence, or not known yet; an owed record's selection was served or absorbed. Workflow
+/// #372 K4: an expired occurrence was skipped by its clock's `missed` rule, and a superseded
+/// one collapsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SlotFate {
@@ -864,6 +871,7 @@ enum SlotFate {
     Pending,
     Served,
     Absorbed,
+    Expired,
 }
 
 #[derive(Serialize)]
@@ -923,6 +931,10 @@ impl ClockSlotRecord {
         let record = serde_json::from_value::<Self>(Value::Object(map)).ok()?;
         let complete = if record.code == HostCode::ClockSlotOwed.code() {
             record.window_start_unix_ms.is_some()
+        } else if record.code == HostCode::ClockSlotExpired.code() {
+            record.grace_ms.is_some()
+        } else if record.code == HostCode::ClockSlotSuperseded.code() {
+            record.next_occurrence_unix_ms.is_some()
         } else {
             (record.code == HostCode::ClockSlotRefused.code()
                 || record.code == HostCode::ClockSlotDeferred.code())
@@ -931,18 +943,32 @@ impl ClockSlotRecord {
         complete.then_some(record)
     }
 
+    /// The pair and occurrence the record names.
+    fn slot(&self) -> (&str, &str, u64) {
+        (&self.task_id, &self.instance_id, self.occurrence_unix_ms)
+    }
+
     /// The fate, and whether it is settled: by the pair's next admitted dispatch, or, without
     /// one, by the reference time reaching the next occurrence. An unsettled refused or deferred
-    /// record shows the fate its own `next_eligible_unix_ms` predicts.
+    /// record shows the fate its own `next_eligible_unix_ms` predicts. Workflow #372 K4: an
+    /// expired record, and a refused or deferred one whose occurrence has an expired record
+    /// (`expired`), are settled `expired`; a superseded record is settled `collapsed`.
     fn fate(
         &self,
         next_dispatch: Option<SlotDispatch>,
         reference_unix_ms: u64,
+        expired: bool,
     ) -> (SlotFate, bool) {
         let reaches_next = |time: u64| {
             self.next_occurrence_unix_ms
                 .is_some_and(|next_occurrence| time >= next_occurrence)
         };
+        if self.code == HostCode::ClockSlotExpired.code() || expired {
+            return (SlotFate::Expired, true);
+        }
+        if self.code == HostCode::ClockSlotSuperseded.code() {
+            return (SlotFate::Collapsed, true);
+        }
         if self.code == HostCode::ClockSlotOwed.code() {
             return match next_dispatch {
                 Some(dispatch) if reaches_next(dispatch.admitted_at_unix_ms) => {
@@ -976,16 +1002,28 @@ impl ClockSlotRecord {
     }
 }
 
+/// The (task, instance, occurrence) of every expired clock-slot record a report reads
+/// (Workflow #372 K4).
+pub(crate) type ExpiredSlots = BTreeSet<(String, String, u64)>;
+
 /// One `clock_slots` entry: the record with its fate, `next_dispatch` when the pair was
-/// admitted after it, or an unparsed entry that carries the outcome's code.
+/// admitted after it, or an unparsed entry that carries the outcome's code. A refused or
+/// deferred record whose (task, instance, occurrence) is in `expired` settles as `expired`.
 pub(crate) fn clock_slot_entry(
     signal: &SlotSignal<'_>,
     next_dispatch: Option<SlotDispatch>,
     reference_unix_ms: u64,
+    expired: &ExpiredSlots,
 ) -> Value {
     match ClockSlotRecord::parse(signal) {
         Some(record) => {
-            let (slot_fate, slot_fate_settled) = record.fate(next_dispatch, reference_unix_ms);
+            let (task_id, instance_id, occurrence) = record.slot();
+            let stopped = record.code == HostCode::ClockSlotRefused.code()
+                || record.code == HostCode::ClockSlotDeferred.code();
+            let lapsed = stopped
+                && expired.contains(&(task_id.to_owned(), instance_id.to_owned(), occurrence));
+            let (slot_fate, slot_fate_settled) =
+                record.fate(next_dispatch, reference_unix_ms, lapsed);
             wire(&ClockSlotEntry {
                 record,
                 slot_fate,
@@ -1041,12 +1079,9 @@ fn clock_slots(
                 });
         }
     }
-    let mut entries = Vec::new();
-    for event in snapshot
-        .query(in_window(EventType::PolicyPlanningSignalObserved))?
-        .iter()
-        .rev()
-    {
+    let events = snapshot.query(in_window(EventType::PolicyPlanningSignalObserved))?;
+    let mut signals = Vec::new();
+    for event in events.iter().rev() {
         let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) = event.payload()
         else {
             continue;
@@ -1075,8 +1110,25 @@ fn clock_slots(
             instance_id: payload.instance_id(),
             outcome: payload.outcome(),
         };
-        entries.push(clock_slot_entry(&signal, next_dispatch, reference_unix_ms));
+        signals.push((signal, next_dispatch));
     }
+    // Workflow #372 K4: the occurrences an expired record names settle their refused and
+    // deferred records as expired.
+    let expired = signals
+        .iter()
+        .filter_map(|(signal, _)| ClockSlotRecord::parse(signal))
+        .filter(|record| record.code == HostCode::ClockSlotExpired.code())
+        .map(|record| {
+            let (task_id, instance_id, occurrence) = record.slot();
+            (task_id.to_owned(), instance_id.to_owned(), occurrence)
+        })
+        .collect::<ExpiredSlots>();
+    let mut entries = signals
+        .iter()
+        .map(|(signal, next_dispatch)| {
+            clock_slot_entry(signal, *next_dispatch, reference_unix_ms, &expired)
+        })
+        .collect::<Vec<_>>();
     let total = entries.len();
     entries.truncate(CLOCK_SLOT_LIMIT);
     Ok((entries, (total > CLOCK_SLOT_LIMIT).then_some(total)))

@@ -822,10 +822,18 @@ fn a_unique_anchor_anchors_its_ocr_region_only_while_it_is_unique() {
     assert!(result.expect("one anchor").passed);
     assert_eq!(regions, [rect(70, 30, 80, 20)]);
 
+    // Workflow #390 R-10: the OCR target whose anchor did not pass did not pass, with its
+    // region evidence.
     let (result, regions) = read(&[(40, 30), (200, 150)]);
-    let error = result.expect_err("two anchors anchor nothing");
-    assert_eq!(error.code(), RecognitionPackErrorCode::RegionUnresolved);
-    let region = error.region().expect("region evidence");
+    let evaluation = result.expect("two anchors anchor nothing");
+    assert!(!evaluation.passed);
+    assert!(
+        evaluation
+            .failure
+            .as_ref()
+            .is_some_and(|failure| failure.is(RecognitionPackCode::OcrRegionUnresolved))
+    );
+    let region = &evaluation.ocr.as_ref().expect("region evidence").region;
     assert_eq!(
         region.unresolved,
         Some(OcrRegionUnresolvedReason::AnchorNotMatched)

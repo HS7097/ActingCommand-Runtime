@@ -3,7 +3,9 @@
 //! Workflow #372 K3 (model-372-skip v3 §4.5 and §9 K3): ac_diagnose's `clock_slots`. It keeps
 //! only the instance's rows of `actingd suspended` recorded since the window start, at most 10,
 //! the refused and deferred rows first, with `clock_slots_total`; under the output budget it
-//! cuts them before the errors page. Every expected value comes from the frozen model.
+//! cuts them before the errors page. Workflow #372 K4 (K372 addendum of 2026-10-15, K4.4):
+//! refused and superseded rows come first, then deferred and expired rows, then owed rows.
+//! Every expected value comes from the frozen model.
 
 use super::super::runs::Diagnosis;
 use super::super::tools::ToolError;
@@ -74,6 +76,39 @@ fn owed_row(alias: &str, index: u64, recorded_at_unix_ms: u64) -> Value {
         "recorded_sequence": 117_000 + index,
         "recorded_at_unix_ms": recorded_at_unix_ms,
         "next_dispatch": {"sequence": 117_100 + index, "admitted_at_unix_ms": recorded_at_unix_ms},
+    })
+}
+
+// An expired row (#372 K4), recorded `minutes` after the window start, at its occurrence's
+// grace of two hours.
+fn expired_row(alias: &str, index: u64, minutes: u64) -> Value {
+    json!({
+        "code": "clock_slot_expired",
+        "task_id": format!("fixture.slot.{index:02}"),
+        "instance_id": alias,
+        "occurrence_unix_ms": SINCE_UNIX_MS + (minutes - 120) * MINUTE_MS,
+        "grace_ms": 7_200_000,
+        "next_occurrence_unix_ms": SINCE_UNIX_MS + (minutes + 1_320) * MINUTE_MS,
+        "slot_fate": "expired",
+        "slot_fate_settled": true,
+        "recorded_sequence": 0,
+        "recorded_at_unix_ms": SINCE_UNIX_MS + minutes * MINUTE_MS,
+    })
+}
+
+// A superseded row (#372 K4), recorded `minutes` after the window start, ten minutes after the
+// occurrence that absorbed its own.
+fn superseded_row(alias: &str, index: u64, minutes: u64) -> Value {
+    json!({
+        "code": "clock_slot_superseded",
+        "task_id": format!("fixture.slot.{index:02}"),
+        "instance_id": alias,
+        "occurrence_unix_ms": SINCE_UNIX_MS + (minutes - 600) * MINUTE_MS,
+        "next_occurrence_unix_ms": SINCE_UNIX_MS + (minutes - 10) * MINUTE_MS,
+        "slot_fate": "collapsed",
+        "slot_fate_settled": true,
+        "recorded_sequence": 0,
+        "recorded_at_unix_ms": SINCE_UNIX_MS + minutes * MINUTE_MS,
     })
 }
 
@@ -218,16 +253,18 @@ fn ac_diagnose_keeps_ten_of_the_instances_clock_slots_in_its_window_refused_firs
 
     let (kept, total) = clock_slot_rows(&document, ALIAS, &json!(INSTANCE_ID), SINCE_UNIX_MS);
     assert_eq!(total, 14, "the instance's rows in the window");
-    // Newest first in each group: the refused and deferred rows, then the owed rows.
-    let mut stopped = sequences(&rows[8..]);
-    stopped.sort_unstable();
-    stopped.reverse();
-    let mut owed = sequences(&rows[..8]);
-    owed.sort_unstable();
-    owed.reverse();
-    let expected = stopped
+    // Newest first in each group: the refused rows, then the deferred rows (#372 K4), then
+    // the owed rows.
+    let newest_first = |rows: &[Value]| {
+        let mut sequences = sequences(rows);
+        sequences.sort_unstable();
+        sequences.reverse();
+        sequences
+    };
+    let expected = newest_first(&rows[8..12])
         .into_iter()
-        .chain(owed.into_iter().take(4))
+        .chain(newest_first(&rows[12..]))
+        .chain(newest_first(&rows[..8]).into_iter().take(4))
         .collect::<Vec<_>>();
     assert_eq!(sequences(&kept), expected);
     assert!(
@@ -281,4 +318,56 @@ fn ac_diagnose_cuts_clock_slots_first_and_keeps_a_full_errors_page() {
         &kept[..shown.len()],
         "the oldest rows go first"
     );
+}
+
+#[test]
+fn ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed() {
+    // Workflow #372 K4 (K4.4, row K4-T7, the ac_diagnose half): the instance's rows in the
+    // window, each recorded in ledger order at its minute: four owed runs in the morning, then
+    // expired, refused, deferred and superseded rows through the day.
+    let mut rows = (0..4)
+        .map(|index| owed_row(ALIAS, index, SINCE_UNIX_MS + (360 + index) * MINUTE_MS))
+        .collect::<Vec<_>>();
+    rows.extend([
+        refused_row(ALIAS, 4, 400),
+        expired_row(ALIAS, 5, 450),
+        deferred_row(ALIAS, 6, 500),
+        expired_row(ALIAS, 7, 600),
+        superseded_row(ALIAS, 8, 650),
+        refused_row(ALIAS, 9, 700),
+        deferred_row(ALIAS, 10, 800),
+        superseded_row(ALIAS, 11, 900),
+    ]);
+    for row in &mut rows {
+        let minutes = (row["recorded_at_unix_ms"]
+            .as_u64()
+            .expect("a recorded time")
+            - SINCE_UNIX_MS)
+            / MINUTE_MS;
+        row["recorded_sequence"] = json!(200_000 + minutes);
+    }
+    let document = report(rows.clone());
+
+    let (kept, total) = clock_slot_rows(&document, ALIAS, &json!(INSTANCE_ID), SINCE_UNIX_MS);
+    assert_eq!(total, 12, "the instance's rows in the window");
+    let minutes = |rows: &[Value]| {
+        rows.iter()
+            .map(|row| {
+                (row["recorded_at_unix_ms"]
+                    .as_u64()
+                    .expect("a recorded time")
+                    - SINCE_UNIX_MS)
+                    / MINUTE_MS
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        minutes(&kept),
+        [900, 700, 650, 400, 800, 600, 500, 450, 363, 362],
+        "refused and superseded, then deferred and expired, then owed, newest first in each"
+    );
+
+    let (result, _) = render(&diagnosis(Vec::new(), kept.clone(), total));
+    assert_eq!(result["clock_slots"], Value::Array(kept), "{result}");
+    assert_eq!(result["clock_slots_total"], json!(12), "{result}");
 }

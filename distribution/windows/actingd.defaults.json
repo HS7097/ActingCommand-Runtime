@@ -47,7 +47,8 @@
       "preparation_superseded": "suppress",
       "already_running": "suppress",
       "cooldown_opens_on": "admitted",
-      "entry_unavailable": "skip"
+      "entry_unavailable": "skip",
+      "start_beyond_profile": "exhaust"
     },
     "rungs": [
       {
@@ -71,6 +72,14 @@
     "hold": {
       "claim_ttl_ms": 120000,
       "margin_ms": 5000
+    },
+    "profiles": {
+      "handset": {
+        "rungs": [{"action": "return_home"}, {"action": "application_restart"}]
+      }
+    },
+    "kind_profiles": {
+      "handset": "handset"
     }
   },
   "host_claims": {

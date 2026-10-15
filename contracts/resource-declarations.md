@@ -85,6 +85,35 @@ graph and actinglab's navigation tools leave it out), since its click does not d
 comes. A `long_press` navigation click is read as a drag that does not move (one point held for
 its `duration_ms`).
 
+Workflow #390 lpbox (coordinator ruling 6 of wave 16, from Alice's rule of 10-09 that pack taps
+use click boxes, never fixed points): a `long_press` (alias `long_tap`) click, in a task
+operation and in a navigation edge, is either a click box `{"kind", "x", "y", "width",
+"height", "duration_ms"}` or, as before, a point `{"kind", "x", "y", "duration_ms"}`. A box
+names both `width` and `height` (one without the other is `MissingField` at the absent one),
+each at least 1, and lies inside the task's resolution. The kernel holds a point of the box for
+`duration_ms`, drawn with the step's action seed as a `rect` click's tap point is, and records
+the seed and the box as the effect intent's one sampling region (`xorshift64_uniform_rect_v1`);
+without a seed it holds the box's center. A point long press holds its point and records no
+sampling. Drive navigation and actinglab's navigation tools hold a box's center, as they tap a
+`rect` click's; a guard synthesized from the click takes the box as its `expected_rect`. The
+whole box must be harmless on every frame the press can fire on: an author sizes it to the
+pressed control, and declares a point only for a target without a stable extent.
+
+Workflow #390 LAB-2 item 7: both navigation input readers, the kernel's drive reader and
+actinglab's, read an `offset` click `{"kind": "offset", "target_id", "offset": {"x", "y",
+"width", "height"}}`, the click a Lab recording generates for `--click` with `--click-follow`
+(Workflow #396 REC-4) and source compilation generates for a `rect_move`, of a navigation edge,
+a page operation or a control point. It presses the box at the top-left corner of the box its
+`target_id` matches plus the offset; for a template with `scales` each of the four numbers is
+scaled by the factor it matched at, as a task's `offset` click is (REC-5). An offset whose width
+or height is not positive, or a click without a string `target_id`, is refused by the reader.
+The online page observation, and so a carrier package of `observe` and `do`
+([lab-recording.md](lab-recording.md)), admits a package whose navigation holds one; its element
+resolves by `target_evaluation` to that box on the frame observed, a target that did not pass
+or matched no template box gives none, and its semantic input is listed as
+`{"type": "target_offset", "target_id", "offset"}` until it is resolved. A route passes it like
+a `target` edge: the target is evaluated on the current frame and the box's center is tapped.
+
 The named directories describe conventional resource layouts; explicitly selected
 pack/pages/navigation/projection filenames also use their native parsers at the
 root. Paths are relative to their actual repository or resource subroot. Nested self-owned
@@ -280,6 +309,20 @@ token). In `forbidden`, directly or through a check, it is refused at the page s
 would let the page match unseen; declare the opposite comparison in `required` instead. A value
 test is never clicked, locates nothing, and is refused as a candidate layout slot target or
 feature and with `target_consensus`.
+
+Workflow #390 R-10. An OCR target whose region is `template_relative` (`ocr-fields.md`) cannot
+be evaluated while its anchor template does not pass: wherever its pass or fail is asked (a page
+rule, a member of a check, `guard.target_id`, `guard.check`) it did not pass, with `failure`
+`ocr_region_unresolved` and its region evidence (`unresolved` `anchor_not_matched`), and calls
+no provider. In `required` its page does not match, in `any_of` it is one member that did not
+pass, and a guard on it refuses its input (`contained_task_guard_refused`); every other page of
+the frame is recognized as before. In `forbidden`, directly or as a member of a check, such a
+target is admitted only when its anchor template stands directly in the same page's
+`required`; otherwise it is refused at the page set's `/pages/<i>/forbidden/<j>`
+(`InvalidValue`), for the reason a value test is: without its anchor it would let the page match
+unseen. With the anchor required, a missing anchor rules the page out through `required`, and a
+present one evaluates the text as usual (the text present rules the page out). An anchor inside
+a required check does not count.
 
 A page recognition evaluates each page's immediate targets first, in the order `required`,
 `any_of`, `optional`, `forbidden`. Its lazy targets (located text, value tests and checks

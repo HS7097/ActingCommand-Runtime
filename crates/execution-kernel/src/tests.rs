@@ -26,6 +26,9 @@ mod gate_373_nav3b;
 // Workflow #387 D1c-F: a plan that fails to prepare is a Runtime-internal error.
 mod gate_387_d1cf;
 
+// Workflow #390 LAB-2 item 7 (exec key 77): navigation readers accept a REC-4 `offset` click.
+mod gate_390_navoffset;
+
 // Test plan v2.2 E-1 G8 (exec key 13): the failure-frame comparison.
 mod gate_e1_failure_frames;
 

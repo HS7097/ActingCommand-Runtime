@@ -38,7 +38,7 @@ pub(crate) use navigation_recovery::{
     reject_dangerous_semantic_id, reject_destructive_overlap, reject_destructive_overlap_input,
     required_string_field, required_value_field, run_current_page, run_detect_page, run_is_visible,
     run_locate, run_navigate, run_recognize, run_session_recover, run_tap_target,
-    semantic_input_json, target_eval_json, target_evaluation_rect,
+    semantic_input_json, target_eval_json, target_evaluation_rect, target_offset_rect,
 };
 #[cfg(test)]
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};

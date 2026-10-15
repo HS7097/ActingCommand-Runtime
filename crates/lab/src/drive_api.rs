@@ -104,6 +104,12 @@ pub enum SemanticInputResponse {
     },
     #[serde(rename = "target_center")]
     TargetCenter { target_id: String },
+    /// Workflow #390 LAB-2 item 7: an `offset` click before its target is matched.
+    #[serde(rename = "target_offset")]
+    TargetOffset {
+        target_id: String,
+        offset: crate::RectResponse,
+    },
     #[serde(rename = "drag")]
     Drag {
         from_rect: crate::RectResponse,
