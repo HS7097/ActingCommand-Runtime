@@ -260,7 +260,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -281,8 +281,9 @@ tests = [
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
     "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status",
 ]
-incident = ["#389"]
+incident = ["#389", "#385 P-m"]
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
@@ -603,3 +604,11 @@ tests = [
     "actingcommand-actingctl::gate::mcp_pkgs4::s4_t4_ac_run_pack_and_ac_pack_check_take_no_package_digest",
 ]
 incident = ["#336 PKG-S4"]
+# actingctl perf-status prints the shadow measurement's status (PerformanceStatus) with runtime_performance_reported, and without actingd it reports the Runtime's absence (runtime_info_unavailable) and exits 1; the overview's performance block is that status (Workflow #385 P-m, PERF §4.6, test row Tm-12)
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence",
+]
+incident = ["#385 P-m"]

@@ -379,9 +379,20 @@ fn performance_settings(
         Some(actingcommand_contract::FactScalar::DurationMs(ms)) => Duration::from_millis(*ms),
         _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
     };
+    // Workflow #385 P-m (PERF §3.4): how the GPU's engines make one utilisation.
+    let gpu_aggregate = match value(monitor::GPU_AGGREGATE) {
+        Some(actingcommand_contract::FactScalar::String(word)) if word == "max_engine_type" => {
+            actingcommand_runtime_host::GpuAggregate::MaxEngineType
+        }
+        Some(actingcommand_contract::FactScalar::String(word)) if word == "sum" => {
+            actingcommand_runtime_host::GpuAggregate::Sum
+        }
+        _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
+    };
     let monitor_config = PerformanceMonitorConfig::default()
         .with_pressure_start_samples(small(monitor::PRESSURE_START_SAMPLES)?)
-        .with_pressure_end_samples(small(monitor::PRESSURE_END_SAMPLES)?);
+        .with_pressure_end_samples(small(monitor::PRESSURE_END_SAMPLES)?)
+        .with_gpu_aggregate(gpu_aggregate);
     let control_config = PerformanceControlConfig::default()
         .with_clock_jump_threshold(clock_jump)
         .with_heavy_dispatch_limits(

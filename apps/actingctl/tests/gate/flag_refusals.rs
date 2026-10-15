@@ -180,6 +180,18 @@ const CLIENT: &[Subcommand] = &[
         &["--recover"],
         &["--state-root", ROOT],
     ),
+    // Workflow #385 P-m: `perf-status`, every row or one instance's.
+    result(
+        &[
+            "perf-status",
+            "--instance",
+            "neutral.instance",
+            "--state-root",
+            ROOT,
+        ],
+        &["--config"],
+        &["--instance", "neutral.instance"],
+    ),
     result(
         &[
             "monitor-set",

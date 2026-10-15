@@ -3,9 +3,9 @@
 //! Windows implementation of the host-counter boundary.
 
 use crate::{
-    ConnectivityReason, ForegroundSample, HostMetric, HostMetricsCode, HostSample, HostSampler,
-    NetworkConnectivity, ProcessLoadThresholds, ProcessMetricCoverage, ProcessOwnership,
-    ProcessSample,
+    ConnectivityReason, ForegroundSample, GpuAggregate, HostMetric, HostMetricsCode, HostSample,
+    HostSampler, NetworkConnectivity, ProcessLoadThresholds, ProcessMetricCoverage,
+    ProcessOwnership, ProcessSample, gpu_utilization_basis_points,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -215,15 +215,18 @@ pub(crate) struct WindowsHostSampler {
     previous_processes: BTreeMap<u32, ProcessCounters>,
     previous_observed_at_unix_ms: Option<u64>,
     pdh: PdhQuery,
+    /// Workflow #385 P-m: how the GPU's engines make one utilisation.
+    gpu: GpuAggregate,
 }
 
 impl WindowsHostSampler {
-    pub(crate) fn new() -> Result<Self, Code> {
+    pub(crate) fn new(gpu: GpuAggregate) -> Result<Self, Code> {
         Ok(Self {
             previous_system: system_times()?,
             previous_processes: BTreeMap::new(),
             previous_observed_at_unix_ms: None,
             pdh: PdhQuery::open()?,
+            gpu,
         })
     }
 }
@@ -345,19 +348,13 @@ impl HostSampler for WindowsHostSampler {
         if disk_latency_micros.is_none() {
             unavailable.insert(HostMetric::DiskLatency);
         }
+        // Workflow #385 P-m (PERF §3.4): by engine type, the busiest type (the default), or
+        // every engine summed.
         let gpu_basis_points = if pdh_collected {
             self.pdh
                 .gpu
                 .and_then(formatted_array)
-                .and_then(|values| {
-                    (!values.is_empty()).then(|| {
-                        values
-                            .into_iter()
-                            .map(|(_, value)| value.max(0.0))
-                            .sum::<f64>()
-                    })
-                })
-                .map(percent_to_basis_points)
+                .and_then(|values| gpu_utilization_basis_points(&values, self.gpu))
         } else {
             None
         };

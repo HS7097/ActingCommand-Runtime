@@ -50,6 +50,9 @@ mod interface;
 pub use interface::*;
 mod pack_registry;
 pub use pack_registry::*;
+// Workflow #385 P-m: the shadow measurement's status read (register §1.61 W14).
+mod performance_status;
+pub use performance_status::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
@@ -3384,6 +3387,10 @@ pub enum RuntimeOperation {
     InstanceFactSnapshot {
         instance: String,
     },
+    /// Reads the shadow measurement's state (Workflow #385 P-m, PERF §4.6; register §1.61 W14):
+    /// a general read from memory that reads and records nothing in the ledger. The answer is
+    /// `RuntimeResult::PerformanceStatus`.
+    PerformanceStatus,
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -3696,6 +3703,7 @@ impl RuntimeOperation {
             | Self::Status
             | Self::MonitorStatus
             | Self::RuntimeFactSnapshot
+            | Self::PerformanceStatus
             | Self::DiscoverInstances
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
@@ -3953,6 +3961,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::InstanceFactSnapshot { .. } => {
                 "RuntimeOperation::InstanceFactSnapshot(<redacted>)"
             }
+            Self::PerformanceStatus => "RuntimeOperation::PerformanceStatus",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -4843,6 +4852,11 @@ pub enum RuntimeResult {
         snapshot: Box<crate::InstanceFactView>,
         source: crate::RuntimeStateSource,
     },
+    /// `PerformanceStatus` (Workflow #385 P-m, register §1.61 W14): the shadow measurement's
+    /// host row and one row per registered instance, from memory.
+    PerformanceStatus {
+        status: Box<RuntimePerformanceStatus>,
+    },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
     },
@@ -5635,6 +5649,14 @@ impl RuntimeReceipt {
                 source.validate().map_err(|_| {
                     RuntimeContractError::new(RuntimeContractCode::InvalidRuntimeStateSource)
                 })?;
+            }
+            Some(RuntimeResult::PerformanceStatus { status }) => {
+                if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidPerformanceStatus,
+                    ));
+                }
+                status.validate()?;
             }
             Some(
                 RuntimeResult::MonitorConfigured { status }

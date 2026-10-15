@@ -388,6 +388,18 @@ impl EffectiveConfig {
         performance::check(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #385 P-m: what the shadow measurement reads from the `performance` section in
+    /// effect (PERF §3, §4, §10). The curve counts as a person's when its value in effect does
+    /// not come from the defaults file: then the learning view has no cap (§4.5.3).
+    pub fn performance_measurement(
+        &self,
+    ) -> Result<performance::PerformanceMeasurement, ConfigFailure> {
+        let user_curve = self
+            .setting(performance::pacing::CURVE)
+            .is_some_and(|setting| self.effective(setting).1 != ConfigParameterSource::Default);
+        performance::measurement(&|key: &str| self.value_or_shipped(key), user_curve)
+    }
+
     /// Workflow #386 SR-1: the `scheduling` section in effect, read and checked whole.
     pub fn scheduling(&self) -> Result<SchedulingConfig, ConfigFailure> {
         SchedulingConfig::parse(&|key: &str| self.value_or_shipped(key))

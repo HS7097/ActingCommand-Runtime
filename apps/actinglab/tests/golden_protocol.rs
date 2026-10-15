@@ -707,6 +707,10 @@ fn normalize_value(
             // Host-measured backend spans vary per run like evaluation_duration_ms.
             object.remove("capture_acquire_us");
             object.remove("touch_response_us");
+            // Workflow #385 MEM-1: a run's package load time varies per run; the golden keeps
+            // neither member of the measurement.
+            object.remove("package_load_ms");
+            object.remove("package_load_bytes");
             for (field, child) in object {
                 normalize_value(child, root, Some(field), configuration_artifacts);
             }

@@ -17354,6 +17354,40 @@
       "common_causes": "A client defect: a counter program named via for its own connection.",
       "handling": "Report the client defect. Only actinglab takes --via, from the counter that forwards the work."
     },
+    "request_performance_status_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A completed receipt of a PerformanceStatus request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #385 P-m adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "invalid_performance_status": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Runtime contract validation refused a value: a PerformanceStatus answer of the wrong shape (a responsiveness above 10000, a share above 1000, a factor below 1000, a share of 0 outside s4, a phase outside mode full, an instance twice or a non-warning among the warnings), or a receipt carrying it that is not completed (Workflow #385 P-m).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
+    },
     "request_drill_recovery_ladder_completed": {
       "category": "success",
       "ladder_class": "none",

@@ -952,3 +952,21 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_384_d2s4::d2s4_t33_a_package_that_no_longer_qualifies_is_refused_before_any_input",
 ]
 incident = ["#384"]
+# The shadow measurement (Workflow #385 P-m, PERF v1.4.2 §3, §4, §4.6, §10.3; rows Tm-1 to Tm-8, Tm-11, Tm-12 and Tc-3; Tm-6 is host-metrics' aggregation): each instance's responsiveness is its own; one late sample in a window moves no stage; a baseline is its initial value, then the median of calm samples, held at its clamp with perf_baseline_clamped; only samples at S0 without pressure teach it; timer oversleeps score by their allowance and a probe that cannot run leaves only its signal unknown with perf_probe_unavailable; the GPU is its busiest engine type; observe takes nothing into effect and still records perf_stage_changed; a drag's touch response is not scored; the learning and the normal view side by side with their allowed counts, in the status and in perf.summary; each curve gives its own stage and factor; PerformanceStatus answers from memory and appends nothing
+[[gate]]
+key = "87"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_1_a_slow_instance_lowers_only_its_own_responsiveness",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_2_one_late_sample_among_twenty_changes_no_stage",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_3_a_baseline_is_initial_then_the_median_and_held_at_its_clamp",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_4_only_calm_samples_teach_a_baseline",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_5_timer_oversleeps_score_by_the_formula_and_a_missing_probe_leaves_only_its_signal_unknown",
+    "actingcommand-host-metrics::lib::gate_385_pm::tm_6_a_3d_load_beside_a_video_decode_load_is_the_busiest_type_not_their_sum",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_7_observe_takes_nothing_into_effect_and_records_the_transition",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_8_a_drag_s_touch_response_is_not_scored_and_a_tap_s_is",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_11_the_learning_and_the_normal_view_side_by_side",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tc_3_two_curves_give_each_its_own_stage_and_factor",
+    "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_12_the_status_read_answers_from_memory_and_appends_nothing",
+]
+incident = ["#385 P-m"]

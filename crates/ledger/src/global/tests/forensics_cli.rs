@@ -121,6 +121,7 @@ fn b3_actingledger_projects_resource_samples_and_unknowns() {
         context,
         capacity: None,
         foreground: None,
+        pacing: None,
         owned_processes: vec![PerformanceProcessSummary {
             pid: 7,
             process_name: "neutral-process".to_owned(),

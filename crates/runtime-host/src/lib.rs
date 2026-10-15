@@ -70,6 +70,8 @@ pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
 pub use host::*;
 pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};
+// Workflow #385 P-m: how the GPU's engines make one utilisation (`PerformanceMonitorConfig`).
+pub use actingcommand_host_metrics::GpuAggregate;
 pub use performance_control::{
     InstanceArbitrationRank, PerformanceControlConfig, PerformanceControlDirective,
     PerformanceControlObservation, PerformanceControlWorkload,

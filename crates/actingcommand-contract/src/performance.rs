@@ -435,6 +435,9 @@ pub struct PerformanceSummaryEventData {
     pub third_party_high_load: Vec<PerformanceProcessSummary>,
     pub ledger_commits: Option<PerformanceLedgerSample>,
     pub capacity: Option<PerformanceCapacitySample>,
+    /// Workflow #385 P-m (register P4): the shadow measurement's pacing members, written by a
+    /// monitor that measures; absent otherwise.
+    pub pacing: Option<crate::PerformancePacingSummary>,
 }
 
 /// A window wider than one hour does not describe the periodic sampling cadence.
@@ -564,6 +567,9 @@ pub(crate) fn validate_performance_summary(
     data.context.validate()?;
     if let Some(capacity) = &data.capacity {
         capacity.validate()?;
+    }
+    if let Some(pacing) = &data.pacing {
+        pacing.validate()?;
     }
     if let Some(PerformanceLedgerSample::Available { window }) = &data.ledger_commits {
         window.validate()?;

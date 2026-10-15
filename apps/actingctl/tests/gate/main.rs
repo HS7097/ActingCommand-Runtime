@@ -37,6 +37,8 @@ mod mcp_observe_parity;
 // Workflow #389 MCP-8: `actingctl overview` ↔ `ac_overview`.
 mod mcp_overview_parity;
 mod mcp_packs;
+// Workflow #385 P-m: `actingctl perf-status` ↔ the `performance` block of `ac_overview`.
+mod mcp_performance_parity;
 // Workflow #336 PKG-S4: `ac_run_pack` and `ac_pack_check` take no package digest.
 mod mcp_pkgs4;
 // Workflow #389 MCP-6: `actingctl run evidence` ↔ `ac_run_evidence`.

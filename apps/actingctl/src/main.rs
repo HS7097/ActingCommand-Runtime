@@ -94,7 +94,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
@@ -522,6 +522,34 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             &client.monitor_status().map_err(ActingctlError::Runtime)?,
             success,
         ),
+        // Workflow #385 P-m (PERF §4.6): the shadow measurement's status, the object
+        // `ac_overview` answers as its `performance` block; `--instance` (alias, instance_id
+        // or ADB port) narrows its rows to one, resolved with one status read.
+        Command::PerformanceStatus => {
+            let selected = match optional_instance.as_deref() {
+                Some(selector) => {
+                    let status = client.status().map_err(ActingctlError::Runtime)?;
+                    let alias = instance_selector::select(status.instances(), selector)
+                        .map_err(|miss| match miss {
+                            SelectorMiss::Unknown => {
+                                ActingctlError::InstanceUnknown(selector.to_owned())
+                            }
+                            SelectorMiss::Ambiguous => {
+                                ActingctlError::InstanceAmbiguous(selector.to_owned())
+                            }
+                        })?
+                        .instance_alias()
+                        .to_owned();
+                    Some(alias)
+                }
+                None => None,
+            };
+            reported(
+                &overview::performance_block(&client, selected.as_deref())
+                    .map_err(ActingctlError::Runtime)?,
+                success,
+            )
+        }
         Command::MonitorSet { policy } => reported(
             &client
                 .configure_monitor(instance()?, policy)
@@ -1044,6 +1072,8 @@ enum Command {
         key_prefix: Option<String>,
     },
     MonitorStatus,
+    /// `perf-status [--instance <selector>]` (Workflow #385 P-m).
+    PerformanceStatus,
     MonitorSet {
         policy: RuntimeMonitorPolicy,
     },
@@ -1319,6 +1349,7 @@ impl Invocation {
                 (false, false) => return Err(ActingctlError::Usage),
             },
             "monitor-status" => Command::MonitorStatus,
+            "perf-status" => Command::PerformanceStatus,
             "monitor-set" => Command::MonitorSet {
                 policy: RuntimeMonitorPolicy::new(
                     interval_ms.unwrap_or(30_000),
@@ -1373,10 +1404,14 @@ impl Invocation {
             _ => return Err(ActingctlError::Usage),
         };
         // `task-offset` takes `--instance` optionally: without it the offset is task-level;
-        // `pause` / `resume` without it are global.
+        // `pause` / `resume` without it are global; `perf-status` without it reads every row
+        // (Workflow #385 P-m).
         if !matches!(
             command,
-            Command::TaskOffset { .. } | Command::Pause { .. } | Command::Resume
+            Command::TaskOffset { .. }
+                | Command::Pause { .. }
+                | Command::Resume
+                | Command::PerformanceStatus
         ) && command.requires_instance() != instance.is_some()
         {
             return Err(ActingctlError::Usage);
@@ -1409,6 +1444,7 @@ impl Command {
             Self::ProgramFacts { .. } => ActingctlCode::RuntimeFactsReported,
             Self::InstanceFacts { .. } => ActingctlCode::InstanceFactsReported,
             Self::MonitorStatus => ActingctlCode::MonitorStatusReported,
+            Self::PerformanceStatus => ActingctlCode::RuntimePerformanceReported,
             Self::MonitorSet { .. } => ActingctlCode::MonitorPolicySet,
             Self::MonitorClear => ActingctlCode::MonitorPolicyCleared,
             Self::EmulatorStatus => ActingctlCode::InstanceStatusReported,
@@ -1442,6 +1478,7 @@ impl Command {
                 | Self::ConfigureSettings { .. }
                 | Self::ProgramFacts { .. }
                 | Self::MonitorStatus
+                | Self::PerformanceStatus
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
                 | Self::InstallTransition { .. }
@@ -1509,6 +1546,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         "request-shutdown" => &["--state-root", "--wait"],
         "install-transition" => &["--state-root", "--action-json", "--wait"],
         "status" => &["--state-root", "--config"],
+        // Workflow #385 P-m: the shadow measurement's status, every row or one instance's.
+        "perf-status" => &["--state-root", "--instance"],
         "facts" => &["--state-root", "--program", "--instance", "--key-prefix"],
         // Workflow #390 DRILL-1: a ladder drill acts on the device only with `--device`.
         "ladder-drill" => &["--state-root", "--instance", "--device"],
@@ -1990,7 +2029,7 @@ mod tests {
     /// Runtime client failure is the client's outcome unchanged.
     #[test]
     fn every_command_has_its_success_code_and_every_failure_its_code() {
-        let commands: [(&[&str], &str); 25] = [
+        let commands: [(&[&str], &str); 26] = [
             (
                 &["agent-publish-facts", "--record-file", "observation.json"],
                 "agent_facts_published",
@@ -2040,6 +2079,7 @@ mod tests {
                 "instance_facts_reported",
             ),
             (&["monitor-status"], "monitor_status_reported"),
+            (&["perf-status"], "runtime_performance_reported"),
             (
                 &["monitor-set", "--instance", "neutral.instance"],
                 "monitor_policy_set",

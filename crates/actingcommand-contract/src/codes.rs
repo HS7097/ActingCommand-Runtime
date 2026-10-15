@@ -182,6 +182,8 @@ crate::outcome_codes! {
         BindChannelCompleted => "request_bind_channel_completed": success / none,
         // Workflow #390 DRILL-1: a ladder drill was admitted and queued.
         DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
+        // Workflow #385 P-m (register §1.61 W14).
+        PerformanceStatusCompleted => "request_performance_status_completed": success / none,
     }
 }
 
@@ -684,6 +686,8 @@ crate::outcome_codes! {
         InvalidConfigureSettings => "invalid_configure_settings": error / none,
         // Workflow #389 U-2: a `BindChannel` whose `via` is not on the Lab channel.
         InvalidBindChannel => "invalid_bind_channel": error / none,
+        // Workflow #385 P-m: a `PerformanceStatus` answer of the wrong shape.
+        InvalidPerformanceStatus => "invalid_performance_status": error / none,
     }
 }
 

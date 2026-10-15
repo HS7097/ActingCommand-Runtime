@@ -1258,6 +1258,19 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads the shadow measurement's status (`PerformanceStatus`, Workflow #385 P-m, PERF §4.6;
+    /// register §1.61 W14): the host row, one row per registered instance, both views and the
+    /// stage that takes effect. Read-only: the Runtime reads and records nothing in the ledger.
+    pub fn performance_status(
+        &self,
+    ) -> RuntimeClientResult<actingcommand_contract::RuntimePerformanceStatus> {
+        const OPERATION: Location = ClientLocation::RuntimePerformanceStatus.location();
+        match self.execute(OPERATION, RuntimeOperation::PerformanceStatus)? {
+            RuntimeResult::PerformanceStatus { status } => Ok(*status),
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     pub fn configure_monitor(
         &self,
         instance_alias: &str,

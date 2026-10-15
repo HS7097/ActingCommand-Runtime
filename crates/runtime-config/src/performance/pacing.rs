@@ -14,6 +14,10 @@ use super::{
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::table::{KeyRange, KeyRow, ValueType};
+use actingcommand_contract::{
+    PerformancePacingMode, PerformancePacingStage, PerformancePressureKind,
+    PerformancePressureSeverity,
+};
 use serde_json::Value;
 
 /// `observe` (measure and record only), `pace` (stretch, never pause) or `full`.
@@ -250,6 +254,7 @@ struct CurvePoint {
     r_bp: i64,
     stage_at: usize,
     factor_milli: i64,
+    extra_retries: i64,
     share_milli: i64,
 }
 
@@ -267,7 +272,6 @@ impl CurvePoint {
         let stage_at = stage_index(word)
             .filter(|at| *at <= LAST_CURVE_STAGE_AT)
             .ok_or_else(|| failure(CURVE, ConfigValueProblem::OutOfRange))?;
-        integer_within(CURVE, members.get(EXTRA_RETRIES), 0, i64::MAX)?;
         Ok(Self {
             r_bp: integer_within(CURVE, members.get(R_BP), CURVE_BOTTOM_BP, CURVE_TOP_BP)?,
             stage_at,
@@ -277,6 +281,7 @@ impl CurvePoint {
                 UNIT_FACTOR_MILLI,
                 max_factor_milli,
             )?,
+            extra_retries: integer_within(CURVE, members.get(EXTRA_RETRIES), 0, i64::MAX)?,
             share_milli: integer_within(CURVE, members.get(SHARE_MILLI), 0, FULL_SHARE_MILLI)?,
         })
     }
@@ -285,7 +290,7 @@ impl CurvePoint {
 /// §4.1: from `r_bp` 10 000 to 0, strictly falling; the factor never falls and the share never
 /// rises as R falls; the stages S0 to S3 never step back; no two neighbours drop the share from
 /// a full share straight to none ("不能一开始就直接停止"). At most [`MAX_CURVE_POINTS`] points.
-fn check_curve(curve: &Value, max_factor_milli: i64) -> Result<(), ConfigFailure> {
+fn check_curve(curve: &Value, max_factor_milli: i64) -> Result<Vec<CurvePoint>, ConfigFailure> {
     let points = curve
         .as_array()
         .ok_or_else(|| failure(CURVE, ConfigValueProblem::WrongType))?;
@@ -316,7 +321,7 @@ fn check_curve(curve: &Value, max_factor_milli: i64) -> Result<(), ConfigFailure
                 && (higher.share_milli != FULL_SHARE_MILLI || lower.share_milli != 0),
         )?;
     }
-    Ok(())
+    Ok(points)
 }
 
 /// The floor's kinds: known words, each once.
@@ -339,4 +344,149 @@ fn check_pressure_kinds(kinds: &Value) -> Result<(), ConfigFailure> {
         seen.push(kind);
     }
     Ok(())
+}
+
+/// Workflow #385 P-m (PERF §4.1): how a value between two curve points is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interpolation {
+    /// The factor and the share between the two points' values, by position.
+    Linear,
+    /// The factor and the share of the worse point.
+    Step,
+}
+
+/// Workflow #385 P-m: one point of the curve in effect (§4.1). Its stage is S0 to S3; S4 is
+/// computed from a share of 0, never a label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurvePointSettings {
+    pub r_bp: u16,
+    pub stage: PerformancePacingStage,
+    pub factor_milli: u32,
+    pub extra_retries: u32,
+    pub share_milli: u16,
+}
+
+/// Workflow #385 P-m (PERF §3.4): the stage-one floor that a pressure gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PressureFloorSettings {
+    pub kinds: Vec<PerformancePressureKind>,
+    pub min_severity: PerformancePressureSeverity,
+    pub factor_milli: u32,
+    pub extra_retries: u32,
+}
+
+/// Workflow #385 P-m: `performance.pacing.*` as the shadow measurement reads it (§4, §4.3,
+/// §4.6, §10.3). The hold, pause and gap keys are read by P-k, P-s and P-h.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacingSettings {
+    pub mode: PerformancePacingMode,
+    pub interpolate: Interpolation,
+    pub curve: Vec<CurvePointSettings>,
+    pub hysteresis_bp: u16,
+    pub degrade_sustain_ms: u64,
+    pub recover_sustain_ms: u64,
+    /// How long the learning view's emergency stop line must hold (§4.5.2).
+    pub pause_sustain_ms: u64,
+    pub clock_jump_ms: u64,
+    pub pressure_floor: PressureFloorSettings,
+}
+
+/// Workflow #385 P-m: the subsection in effect; the curve passes §4.1's rules again.
+pub(super) fn read(values: &Values<'_>) -> Result<PacingSettings, ConfigFailure> {
+    let mode = match values.word(MODE)?.as_str() {
+        OBSERVE => PerformancePacingMode::Observe,
+        "pace" => PerformancePacingMode::Pace,
+        "full" => PerformancePacingMode::Full,
+        _ => return Err(failure(MODE, ConfigValueProblem::OutOfRange)),
+    };
+    let interpolate = match values.word(INTERPOLATE)?.as_str() {
+        "linear" => Interpolation::Linear,
+        "step" => Interpolation::Step,
+        _ => return Err(failure(INTERPOLATE, ConfigValueProblem::OutOfRange)),
+    };
+    let curve = check_curve(&values.json(CURVE)?, values.integer(MAX_FACTOR_MILLI)?)?
+        .into_iter()
+        .map(|point| -> Result<CurvePointSettings, ConfigFailure> {
+            let narrow = |value: i64| {
+                u32::try_from(value).map_err(|_| failure(CURVE, ConfigValueProblem::OutOfRange))
+            };
+            Ok(CurvePointSettings {
+                r_bp: u16::try_from(point.r_bp)
+                    .map_err(|_| failure(CURVE, ConfigValueProblem::OutOfRange))?,
+                stage: curve_stage(point.stage_at)?,
+                factor_milli: narrow(point.factor_milli)?,
+                extra_retries: narrow(point.extra_retries)?,
+                share_milli: u16::try_from(point.share_milli)
+                    .map_err(|_| failure(CURVE, ConfigValueProblem::OutOfRange))?,
+            })
+        })
+        .collect::<Result<Vec<_>, ConfigFailure>>()?;
+    let kinds = values.json(PRESSURE_FLOOR_KINDS)?;
+    check_pressure_kinds(&kinds)?;
+    let kinds = kinds
+        .as_array()
+        .map(|kinds| {
+            kinds
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(pressure_kind)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let min_severity = match values
+        .word("performance.pacing.pressure_floor.min_severity")?
+        .as_str()
+    {
+        "elevated" => PerformancePressureSeverity::Elevated,
+        "high" => PerformancePressureSeverity::High,
+        "critical" => PerformancePressureSeverity::Critical,
+        _ => {
+            return Err(failure(
+                "performance.pacing.pressure_floor.min_severity",
+                ConfigValueProblem::OutOfRange,
+            ));
+        }
+    };
+    Ok(PacingSettings {
+        mode,
+        interpolate,
+        curve,
+        hysteresis_bp: values.unsigned("performance.pacing.hysteresis_bp")?,
+        degrade_sustain_ms: values.unsigned("performance.pacing.degrade_sustain_ms")?,
+        recover_sustain_ms: values.unsigned("performance.pacing.recover_sustain_ms")?,
+        pause_sustain_ms: values.unsigned("performance.pacing.pause_sustain_ms")?,
+        clock_jump_ms: values.unsigned(CLOCK_JUMP_MS)?,
+        pressure_floor: PressureFloorSettings {
+            kinds,
+            min_severity,
+            factor_milli: values.unsigned("performance.pacing.pressure_floor.factor_milli")?,
+            extra_retries: values.unsigned("performance.pacing.pressure_floor.extra_retries")?,
+        },
+    })
+}
+
+/// The stage of a curve point's position in the stage words (S0 to S3).
+fn curve_stage(stage_at: usize) -> Result<PerformancePacingStage, ConfigFailure> {
+    match stage_at {
+        0 => Ok(PerformancePacingStage::S0),
+        1 => Ok(PerformancePacingStage::S1),
+        2 => Ok(PerformancePacingStage::S2),
+        3 => Ok(PerformancePacingStage::S3),
+        _ => Err(failure(CURVE, ConfigValueProblem::OutOfRange)),
+    }
+}
+
+/// The pressure kind a floor word names.
+fn pressure_kind(word: &str) -> Option<PerformancePressureKind> {
+    match word {
+        "cpu" => Some(PerformancePressureKind::Cpu),
+        "ram" => Some(PerformancePressureKind::Ram),
+        "gpu" => Some(PerformancePressureKind::Gpu),
+        "disk_io" => Some(PerformancePressureKind::DiskIo),
+        "disk_capacity" => Some(PerformancePressureKind::DiskCapacity),
+        "third_party" => Some(PerformancePressureKind::ThirdParty),
+        "fullscreen_contention" => Some(PerformancePressureKind::FullscreenContention),
+        "ledger_backlog" => Some(PerformancePressureKind::LedgerBacklog),
+        _ => None,
+    }
 }
