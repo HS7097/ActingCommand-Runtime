@@ -3140,7 +3140,6 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
         "release_failure_fact_undurable",
         "resource_close_instance_missing",
         "resource_targets_record_invalid",
-        "return_home_package_unbound",
         "run_id_issue_failed",
         "runtime_component_already_prepared",
         "runtime_component_not_prepared",
