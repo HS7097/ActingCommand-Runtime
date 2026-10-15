@@ -2315,10 +2315,10 @@ pub(crate) struct ContainedTaskRunOptions {
 enum ApplicationEntryRun {
     /// Slice #316-B3: the run takes its initial frame first; the effect runs only when that
     /// frame shows no page of the package.
-    #[default]
     AfterInitialFrame,
     /// R24, in a run the host starts itself (a startup package, a recovery ladder rung): the
     /// effect runs first, before any capture, as a `linear_steps` application entry's does.
+    #[default]
     First,
 }
 
