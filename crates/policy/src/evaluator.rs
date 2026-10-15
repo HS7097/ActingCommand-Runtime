@@ -2240,7 +2240,7 @@ fn apply_priority_selection(
                 let task_target_milli =
                     i64::try_from(applied.task_target_milli).map_err(|_| overflow())?;
                 match applied.mode {
-                    TargetMode::Adjust => base_milli.checked_add(task_target_milli),
+                    TargetMode::Adjust => base_milli.checked_add(task_target_milli / 2),
                     TargetMode::Override => utility.utility_milli.checked_add(task_target_milli),
                 }
                 .ok_or_else(overflow)?
