@@ -4757,8 +4757,28 @@ pub(super) fn prepare_contained_task(
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     deadline: Instant,
 ) -> Result<PreparedContainedTask, RequestFailure> {
-    prepare_measured_contained_task(instance_alias, request, vision_provider, deadline)
-        .map(|(prepared, _)| prepared)
+    let path = contained_task_package_path(request)?;
+    // Workflow #336 PKG-S1 (option 丙): the path chooses the loader; the request's reference is
+    // recorded as the caller gave it and compared with nothing.
+    PreparedContainedTask::load_path(
+        instance_alias,
+        path,
+        request.expected_sha256(),
+        vision_provider,
+        deadline,
+    )
+    .map_err(contained_task_declaration_failure)
+}
+
+/// The package path a contained-task request names, refused unless it is absolute.
+fn contained_task_package_path(request: &ContainedTaskRequest) -> Result<&Path, RequestFailure> {
+    let path = Path::new(request.package_path());
+    if !path.is_absolute() {
+        return Err(contained_task_package_failure(
+            HostCode::ContainedTaskPathNotAbsolute,
+        ));
+    }
+    Ok(path)
 }
 
 /// Workflow #385 MEM-1 (ADD §1.6, register P8): how long a run's package took to load and the
@@ -4769,19 +4789,17 @@ pub(super) struct PackageLoad {
     pub(super) bytes: u64,
 }
 
-/// [`prepare_contained_task`] with the package load it measured (Workflow #385 MEM-1).
+/// [`prepare_contained_task`] with the package load it measured (Workflow #385 MEM-1): the same
+/// admission by path, with the same recorded reference, through the kernel's
+/// `PreparedContainedTask::load_path` twin that also answers the admitted bundle's resident
+/// bytes.
 pub(super) fn prepare_measured_contained_task(
     instance_alias: &str,
     request: &ContainedTaskRequest,
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     deadline: Instant,
 ) -> Result<(PreparedContainedTask, PackageLoad), RequestFailure> {
-    let path = Path::new(request.package_path());
-    if !path.is_absolute() {
-        return Err(contained_task_package_failure(
-            HostCode::ContainedTaskPathNotAbsolute,
-        ));
-    }
+    let path = contained_task_package_path(request)?;
     // Workflow #336 PKG-S1 (option 丙): the path chooses the loader; the request's reference is
     // recorded as the caller gave it and compared with nothing.
     let started = Instant::now();
