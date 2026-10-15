@@ -1044,3 +1044,23 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_pool1::pool1_a_package_reading_is_the_pool_s_base_without_input_invalidations",
 ]
 incident = ["#390 POOL-1"]
+
+# Workflow #398 RD-4 (model-398 v1.1 §6.2-§6.6, option B; §12 rows RD-4-T1 to T7; register §1.81): under the defaults a handset climbs the profile handset (return home, application restart, no emulator restart) and its recovery_ladder_started names it, while an emulator climbs the section's rungs; an instance's recovery_ladder_profile comes before the kind table; a profile changed while a ladder waits applies to the next trigger only; a profile name no profile has or a profile's rungs outside their schema refuse the section; a handset's start gate holding a rung's run skips it device_not_ready and the next rung runs; a start rung beyond a profile ends exhausted with no rung run and one release under exhaust (the default), climbs the last rung under last_rung, and is refused at start, in check-config and by instruction under refuse (start_rung_out_of_range naming the profile)
+[[gate]]
+key = "96"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t1_a_handset_climbs_the_default_profile_without_an_emulator_restart",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t2_an_instance_key_naming_a_three_rung_profile_skips_the_emulator_restart_as_today",
+    "actingcommand-runtime-config::lib::rd4_tests::rd4_t3_a_profile_no_one_has_or_profile_rungs_out_of_bounds_refuse_the_section",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t4_the_handset_plan_follows_its_profile_and_an_emulator_keeps_the_section_s_rungs",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t5_a_queued_ladder_keeps_the_profile_and_digest_it_was_admitted_with",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t6_a_device_state_hold_at_rung_one_skips_it_device_not_ready_and_rung_two_runs",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_under_exhaust_a_start_beyond_the_handset_profile_runs_no_rung",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_under_last_rung_a_start_beyond_the_handset_profile_climbs_its_last_rung",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_an_emulator_climbs_the_section_s_rungs_under_each_value",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_refuse_is_refused_at_start_and_by_instruction_and_the_configuration_stays",
+    "actingcommand-runtime-config::lib::rd4_tests::rd4_t7_the_rule_is_configured_and_refuse_checks_every_start_rung_against_every_profile",
+    "actingcommand-actingd::process::rd4_t7_refuse_with_a_start_beyond_a_profile_refuses_check_config_and_the_start",
+]
+incident = ["#398 RD-4"]

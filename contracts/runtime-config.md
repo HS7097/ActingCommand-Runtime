@@ -64,8 +64,11 @@ question 2: change it in the file, commit, restart) and the per-instance `stuck_
 `section:recovery_ladder.enabled` and `section:recovery_ladder.cooldown_secs` (D1c). D1c's rows:
 the `recovery_ladder` and `host_claims` sections below (all settable, default `file`) and
 `standard_packs.root` (Workflow #373 NAV-6, moved here: string, default `none`, not settable,
-read once at assembly). P-c's rows: the `performance` section below. Workflow #386 SR-1's rows:
-the `scheduling` section below. Workflow #383 AO-1's rows: the `ledger_observer` section below.
+read once at assembly); Workflow #398 RD-4 adds `recovery_ladder.rules.start_beyond_profile`,
+`recovery_ladder.profiles` and `recovery_ladder.kind_profiles` to the section and the
+per-instance `recovery_ladder_profile` (string, default `none`, settable). P-c's rows: the
+`performance` section below. Workflow #386 SR-1's rows: the `scheduling` section below.
+Workflow #383 AO-1's rows: the `ledger_observer` section below.
 Workflow #398 RD-1b's row: the per-instance `device_kind` (string
 `emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
 at assembly; [device-binding.md](device-binding.md)), present only for an instance that names
@@ -107,9 +110,12 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.rules.already_running` | `suppress` \| `queue` | `suppress` |
 | `recovery_ladder.rules.cooldown_opens_on` | `admitted` \| `triggered` | `admitted` |
 | `recovery_ladder.rules.entry_unavailable` | `skip` \| `fail` | `skip` |
+| `recovery_ladder.rules.start_beyond_profile` | `exhaust` \| `last_rung` \| `refuse` (Workflow #398 RD-4) | `exhaust` |
 | `recovery_ladder.rungs` | list of `{action, <bounds>}`, one to three, no action twice | return home (`configured_package_deadline_ms` 1 800 000), application restart (`adb_probe_ms` 30 000, `entry_hold_ms` 90 000), emulator restart (`stop_bound_ms` 210 000, `start_bound_ms` 220 000, `readiness_window_ms` 120 000, `readiness_backoff_ms` [5 000, 10 000, 20 000], `readiness_poll_ms` 500) |
 | `recovery_ladder.hold.claim_ttl_ms` | milliseconds | `120000` |
 | `recovery_ladder.hold.margin_ms` | milliseconds | `5000` |
+| `recovery_ladder.profiles` | object, profile name to `{rungs}` (Workflow #398 RD-4) | `handset`: return home, application restart (each rung's bounds the defaults file's of its action) |
+| `recovery_ladder.kind_profiles` | object, device kind (`emulator`, `handset`) to profile name (Workflow #398 RD-4) | `handset` → `handset` |
 
 The whole-section check (`recovery_ladder_config_invalid`, `config_key` and
 `config_value_problem`): trigger ids are tokens and unique (`duplicate_id`); an item names one or
@@ -129,6 +135,21 @@ the longest renewal, a task's longest deadline plus the heartbeat bound (`renewa
 margin (`claim_ttl_out_of_range`). Elements a list leaves out take their schema values: a
 trigger item's `start`, `start_rung` and `respect_cooldown` from `trigger_defaults`, a rung's
 bounds from the defaults file's rung of the same action.
+
+Workflow #398 RD-4 (model-398 v1.1 §6.2, §6.6; [emulator-control.md](emulator-control.md),
+"Ladder profiles") adds to the check: a profile name is a token (1 to 64 bytes of lowercase
+letters, digits and `_`, starting with a letter; `wrong_type` on `recovery_ladder.profiles`), each
+profile is `{rungs}` and its rungs pass every rule of `rungs` above, a refusal naming the profile
+as `recovery_ladder.profiles.<name>`; every member of `kind_profiles` is a device kind naming one
+of the profiles (`out_of_range`); each instance's `recovery_ladder_profile` names one of the
+profiles (`out_of_range` on `instance.<instance id>.recovery_ladder_profile`, so a change of the
+per-instance section checks this section too); and under `rules.start_beyond_profile = refuse`
+every trigger item's start rung and `trigger_defaults.start_rung` lie within every profile's
+rungs (`start_rung_out_of_range` on `recovery_ladder.profiles.<name>`). A profile set or object
+the file names replaces the default whole, as a list does, so a file whose `profiles` leave out
+`handset` is refused unless its `kind_profiles` no longer name it. The per-instance `recovery_ladder_profile` (string, the
+entry's member, default `none`: reported only for an instance that names it) is settable; a
+ladder takes the instance's profile with the section's snapshot when it is admitted.
 
 The digest a ladder records (`recovery_ladder_started` `config_digest`) is the SHA-256 of the
 canonical JSON of the section's values in effect when the ladder was admitted; a ladder climbs by

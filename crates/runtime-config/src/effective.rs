@@ -372,9 +372,19 @@ impl EffectiveConfig {
     }
 
     /// Workflow #387 D1c: the `recovery_ladder` section in effect, read and checked whole
-    /// (§5.3) with the facts of other crates in `context`.
+    /// (§5.3) with the facts of other crates in `context`. Workflow #398 RD-4 (model-398 §6.2):
+    /// with each instance's `recovery_ladder_profile` in effect, which must name one of the
+    /// section's profiles.
     pub fn recovery_ladder(&self, context: &CheckContext) -> Result<LadderConfig, ConfigFailure> {
-        LadderConfig::parse(&|key: &str| self.value_or_shipped(key), context)
+        let mut ladder = LadderConfig::parse(&|key: &str| self.value_or_shipped(key), context)?;
+        for setting in &self.settings {
+            if setting.row.name == KeyName::PerInstance(instance::RECOVERY_LADDER_PROFILE)
+                && let Some(instance) = setting.instance.as_deref()
+            {
+                ladder.bind_instance_profile(instance, self.effective(setting).0)?;
+            }
+        }
+        Ok(ladder)
     }
 
     /// Workflow #387 D1c: `host_claims.renewal_slack_ms` in effect, in milliseconds.
@@ -556,13 +566,15 @@ impl EffectiveConfig {
     /// `host_claims` slack (D1c), the `performance` section whole (Workflow #385 P-c), the
     /// `scheduling` section whole (Workflow #386 SR-1), the `ledger_observer` section whole
     /// (Workflow #383 AO-1) and each
-    /// instance of the per-instance section (D1b).
+    /// instance of the per-instance section (D1b). Workflow #398 RD-4: a change of the
+    /// per-instance section checks the `recovery_ladder` section too, which reads each
+    /// instance's `recovery_ladder_profile`.
     fn check_sections(
         &self,
         sections: &BTreeSet<String>,
         context: &CheckContext,
     ) -> Result<(), ConfigFailure> {
-        if sections.contains(recovery_ladder::SECTION) {
+        if sections.contains(recovery_ladder::SECTION) || sections.contains(INSTANCE_SECTION) {
             self.recovery_ladder(context)?;
         }
         if sections.contains(host_claims::SECTION) {

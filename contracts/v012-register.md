@@ -1333,6 +1333,25 @@ and [ocr-fields.md](ocr-fields.md) (the unresolved-region paragraph) are the con
 | R10-1 | a target evaluation (the task diagnostic `target` row and its `ocr` row) of an OCR target with a `template_relative` region whose anchor did not pass | new rule of existing members (shapes unchanged) | R-10 | R-10 | `passed: false`, `failure` `ocr_region_unresolved` (no values), the `ocr` row's `region` with `unresolved: anchor_not_matched` and no `roi`, empty `raw_text` and `derived_text`, no `confidence`, `block_count` 0, and no provider call; in a page rule, a check member, `guard.target_id` and `guard.check` alike (a guard refuses its input with `contained_task_guard_refused`, its `cause=` token `ocr_region_unresolved` when the guard target is the OCR target). `out_of_frame` and `coordinate_overflow` stay evaluation errors; fields and readings keep `region_unresolved` |
 | R10-2 | the page set's `forbidden` (`recognition.pages.json`): an OCR target with a `template_relative` region, directly or as a member of a check | new admission rule (resource file format) | R-10 | — | admitted only when its anchor template is directly in the same page's `required`; otherwise `resource_declaration_invalid` at `/pages/<i>/forbidden/<j>` (`InvalidValue`). No pack in the three resource repositories at their 10-15 heads names such a target in a page rule |
 
+### 1.81 Wave 16 slice RD-4 (#398 model-398 v1.1 §6, option B; coordinator ruling 3 of wave 16)
+
+RD-4 gives the recovery ladder per-device profiles and the rule for a trigger's start rung beyond
+a profile's rungs (model-398 §6.6, option B, coordinator ruling of 2026-10-15: default
+`exhaust`). [emulator-control.md](emulator-control.md), "Ladder profiles", and
+[runtime-config.md](runtime-config.md), "The recovery ladder section", are the contract. No
+code, location, vocabulary value, event type or record member is added: the member `profile`
+(LD3) and the skip reason `device_not_ready` with `recovery_rung_skipped_device_not_ready` (LD4)
+exist since D1c, and RD-4 is their first writer. `mechanism_sections()` keeps its sections: the
+keys join the existing `recovery_ladder` and per-instance sections.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RD4-1 | `recovery_ladder.profiles` (object, profile name to `{rungs}`), `recovery_ladder.kind_profiles` (object, device kind to profile name), `recovery_ladder.rules.start_beyond_profile` (`exhaust` / `last_rung` / `refuse`) | new configuration keys (§5) | RD-4 | RD-4 | defaults `{"handset": {"rungs": [return_home, application_restart]}}`, `{"handset": "handset"}`, `exhaust`; settable, in the section's digest, checked with the section (a profile's rungs as `rungs`, refusals naming `recovery_ladder.profiles.<name>`; a kind or name that does not resolve `out_of_range`; under `refuse` every start rung within every profile, else `start_rung_out_of_range`) |
+| RD4-2 | `instance.<instance id>.recovery_ladder_profile` (the `instances[]` entry's `recovery_ladder_profile`) | new per-instance configuration key (§5) | RD-4 | RD-4 | default `none` (no row unless the entry names it); settable; it must name a profile (`recovery_ladder_config_invalid` at start and in check-config, `config_value_invalid` by instruction, `out_of_range`); it comes before `kind_profiles` |
+| RD4-3 | `recovery_ladder_started` `profile` | first writer of an existing member (LD3) | D1c | RD-4 | the name of the profile the instance climbs by, taken at admission with the section's snapshot; absent when it climbs the section's `rungs` (every emulator under the defaults) |
+| RD4-4 | `recovery_rung_finished` `skipped` with `recovery_rung_skipped_device_not_ready` | first writer of an existing skip reason and code (LD4) | D1c | RD-4 | a handset's start gate held the rung's run before its first step (`device_locked`, `device_thermal_hold`, `device_battery_low`, `device_in_use`) under `rules.entry_unavailable = skip`; under `fail` the rung fails with that code, and after the application restart's stop it fails |
+| RD4-5 | the plan of `recovery_ladder_started` for a start beyond a profile | new rule of an existing member | RD-4 | RD-4 | `exhaust`: every rung `before_start_rung`, then `recovery_ladder_finished` `exhausted` with `rungs_tried` 0 as any all-skipped climb; `last_rung`: the rungs before the profile's last `before_start_rung`, the last one climbs |
+
 ### 1.82 Wave 16 slice lpbox: a long press takes a click box (#390; coordinator ruling 6 of wave 16; Alice 2026-10-09)
 
 Alice's rule of 10-09 is that pack taps use click boxes (a point picked inside a box sized to
@@ -1457,9 +1476,10 @@ when it takes effect.
 | Section | Keys | Defaults and meaning | Parsed by | Read by (takes effect) |
 |---|---|---|---|---|
 | `ledger_observer.*` | the 21 keys of [ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer) | there | AO-1 (built, §1.26) | AO-1, AO-2 (v0.12.0); AO-5, AO-8 (0.12.x) |
-| `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms` | M387 §7.1 | D1c | D1c (v0.12.0) |
+| `recovery_ladder.*` | `enabled`, `cooldown_secs`, `trigger_defaults.start`, `.start_rung`, `.respect_cooldown`, `triggers`, `exclude_codes`, `rules.direct_runs`, `.preparation_superseded`, `.already_running`, `.cooldown_opens_on`, `.entry_unavailable`, `rungs`, `hold.claim_ttl_ms`, `hold.margin_ms`; Workflow #398 RD-4: `rules.start_beyond_profile`, `profiles`, `kind_profiles` | M387 §7.1; model-398 §6.3, §6.6 (`exhaust`, the `handset` profile of return home and application restart for the kind `handset`) | D1c; RD-4 (§1.81) | D1c (v0.12.0); RD-4 (v0.12.0) |
 | `host_claims.*` | `renewal_slack_ms` | 1 000 | D1c | D1c |
 | per instance | `stuck_recovery`, `stuck_recovery_cooldown_secs` (existing keys, defaults now from the section) | M387 §5.5 | D1b | D1c |
+| per instance | `recovery_ladder_profile` | model-398 §6.2: default `none` (the kind table, then the section's `rungs`); must name a profile; settable | RD-4 (§1.81) | RD-4 (v0.12.0) |
 | `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
