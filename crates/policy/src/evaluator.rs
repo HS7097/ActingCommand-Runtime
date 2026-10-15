@@ -3915,16 +3915,16 @@ fn live_pool_unknown_reason(
         return Some(UnknownReason::FactMissing);
     };
     if fact.confidence_milli < minimum_confidence_milli {
-        Some(UnknownReason::FactLowConfidence)
+        Some(UnknownReason::FactExpired)
     } else if fact
         .expires_at_unix_ms
         .is_some_and(|expiry| time.unix_ms > expiry)
     {
-        Some(UnknownReason::FactExpired)
+        Some(UnknownReason::FactLowConfidence)
     } else if !matches!(fact.value, FactValue::Integer(value)
         if u64::try_from(value).is_ok_and(|value| value <= pool.capacity))
     {
-        Some(UnknownReason::TypeMismatch)
+        Some(UnknownReason::FactMissing)
     } else {
         None
     }
