@@ -222,7 +222,7 @@ impl PrerequisiteChain {
         self.dependent.prerequisite_package_id.is_none()
             && !self.return_home
             && self.dependent.entry_pages.is_some()
-            && (self.layers > 0 || self.dependent.execution_mode == "linear_steps")
+            && self.dependent.execution_mode == "linear_steps"
     }
 
     /// The next layer: the dependent layer's declared prerequisite package, or the return-home
