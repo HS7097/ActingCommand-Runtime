@@ -5,11 +5,13 @@
 //! task, control and resources documents, the guard of every click, and the timeouts with
 //! their clamp warnings. Everything here is computed in memory; nothing is written.
 
+use super::follow::follow_invalid;
 use super::model::{
-    LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame, RecordedMark,
-    RecordingDefaults, RecordingStep, SelfTestMargin, StepOptional, StepTransition,
+    ClickFollowForm, LabRecording, MarkFamily, RecordRect, RecordSize, RecordedFrame, RecordedMark,
+    RecordingDefaults, RecordingStep, SelfTestMargin, StepClick, StepOptional, StepTransition,
 };
 use super::store::{blocked, invalid, with_details};
+use crate::codes::ClickFollowProblem;
 use actingcommand_contract::{LabError, LabResult};
 use actingcommand_execution_kernel::{linear_main_interface, prerequisite_package_id_valid};
 use serde_json::{Map, Value, json};
@@ -971,7 +973,8 @@ fn guard_rect(plan: &Plan, mark: &RecordedMark) -> LabResult<RecordRect> {
 /// The guard target of a click step (section 4.3), only from the page's required marks:
 /// the declared click guard, the click source (not OCR), the first template, the first color
 /// or color digest, the first check. `None` when the page has only OCR marks: the click is
-/// then a trusted coordinate.
+/// then a trusted coordinate. Workflow #396 REC-4: a click that follows a template is guarded
+/// by that template, which the kernel requires of a `target` or `offset` click.
 pub(crate) fn guard_target<'p>(
     plan: &'p Plan,
     step: &PlanStep,
@@ -981,6 +984,35 @@ pub(crate) fn guard_target<'p>(
         .iter()
         .map(|id| plan.mark(id))
         .collect::<LabResult<Vec<_>>>()?;
+    if let Some(follow) = step
+        .step
+        .click
+        .as_ref()
+        .and_then(|click| click.follow.as_ref())
+    {
+        let id = follow.mark_id.as_str();
+        return match required.iter().copied().find(|mark| mark.id == id) {
+            Some(mark) if mark.family == MarkFamily::Template => Ok(Some(mark)),
+            Some(_) => Err(follow_invalid(
+                step.step.index,
+                id,
+                ClickFollowProblem::NotTemplate,
+                format!(
+                    "step {} follows '{id}', which is not a template",
+                    step.step.index
+                ),
+            )),
+            None => Err(follow_invalid(
+                step.step.index,
+                id,
+                ClickFollowProblem::NotRequired,
+                format!(
+                    "step {} follows '{id}', which is not a required mark of its page",
+                    step.step.index
+                ),
+            )),
+        };
+    }
     let guardable = |mark: &&RecordedMark| mark.family != MarkFamily::Ocr;
     let named = |id: Option<&String>| {
         id.and_then(|id| required.iter().copied().find(|mark| &mark.id == id))
@@ -1154,24 +1186,26 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
         );
     }
     if let Some(click) = &step.step.click {
-        entry.insert(
-            "click".into(),
-            json!({
-                "rect": rect_json(click.rect),
-                "source": click.source,
-                "from": click.from,
-                "retry": click.retry.as_ref().map(|retry| json!({
-                    "max_attempts": retry.max_attempts, "interval_ms": retry.interval_ms
-                })),
-                "executed": click.execution.as_ref().map(|execution| json!({
-                    "point": {"x": execution.point.x, "y": execution.point.y},
-                    "point_rule": execution.point_rule,
-                    "effect": execution.effect
-                })),
-                "attempts": click.attempts.len(),
-                "needs_review": click.needs_review
-            }),
-        );
+        let mut provenance = json!({
+            "rect": rect_json(click.rect),
+            "source": click.source,
+            "from": click.from,
+            "retry": click.retry.as_ref().map(|retry| json!({
+                "max_attempts": retry.max_attempts, "interval_ms": retry.interval_ms
+            })),
+            "executed": click.execution.as_ref().map(|execution| json!({
+                "point": {"x": execution.point.x, "y": execution.point.y},
+                "point_rule": execution.point_rule,
+                "effect": execution.effect
+            })),
+            "attempts": click.attempts.len(),
+            "needs_review": click.needs_review
+        });
+        // Workflow #396 REC-4: only a click that follows a template records it.
+        if let (Some(follow), Some(object)) = (&click.follow, provenance.as_object_mut()) {
+            object.insert("follow".into(), json!(follow));
+        }
+        entry.insert("click".into(), provenance);
     }
     if let Some(application) = &step.step.application {
         entry.insert(
@@ -1297,6 +1331,16 @@ fn target_families(plan: &Plan) -> LabResult<Map<String, Value>> {
                 );
                 if let Some(threshold) = mark.threshold {
                     target.insert("threshold".into(), json!(threshold));
+                }
+                // Workflow #396 REC-4: the task 0.9 members of REC-5, REC-7 and REC-2.
+                if let Some(scales) = &mark.scales {
+                    target.insert("scales".into(), json!(scales));
+                }
+                if let Some(mask) = &mark.mask {
+                    target.insert("mask".into(), json!(mask));
+                }
+                if let Some(unique) = &mark.unique {
+                    target.insert("unique".into(), json!(unique));
                 }
                 target.insert("provenance".into(), mark_provenance(plan, mark));
                 templates.push(Value::Object(target));
@@ -1446,16 +1490,7 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
         );
         operation.insert("from".into(), json!(page));
         operation.insert("to".into(), json!(next_page));
-        operation.insert(
-            "click".into(),
-            json!({
-                "kind": "rect",
-                "x": click.rect.x,
-                "y": click.rect.y,
-                "width": click.rect.width,
-                "height": click.rect.height
-            }),
-        );
+        operation.insert("click".into(), click_json(click)?);
         match guard_json(plan, step, &page)? {
             Some(guard) => {
                 operation.insert("guard".into(), guard);
@@ -1489,6 +1524,39 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
     }
     operation.insert("provenance".into(), Value::Object(provenance));
     Ok(Value::Object(operation))
+}
+
+/// The click of a click step: the recorded rectangle, or (Workflow #396 REC-4) the box of the
+/// template it follows (`target`) or that box's corner plus the recorded offset (`offset`).
+/// Never `target_center`, which clicks one fixed point.
+fn click_json(click: &StepClick) -> LabResult<Value> {
+    let Some(follow) = &click.follow else {
+        return Ok(json!({
+            "kind": "rect",
+            "x": click.rect.x,
+            "y": click.rect.y,
+            "width": click.rect.width,
+            "height": click.rect.height
+        }));
+    };
+    match (follow.form, follow.offset) {
+        (ClickFollowForm::Target, None) => {
+            Ok(json!({"kind": "target", "target_id": follow.mark_id}))
+        }
+        (ClickFollowForm::Offset, Some(offset)) => Ok(json!({
+            "kind": "offset",
+            "target_id": follow.mark_id,
+            "offset": rect_json(offset)
+        })),
+        _ => Err(invalid(
+            "validation_failed",
+            format!(
+                "the click following '{}' has a target form with an offset, or an offset form \
+                 without one",
+                follow.mark_id
+            ),
+        )),
+    }
 }
 
 fn page_rules(plan: &Plan) -> Map<String, Value> {

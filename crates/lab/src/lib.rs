@@ -19,6 +19,9 @@ mod drive;
 mod drive_api;
 mod env_api;
 mod env_detection;
+// Workflow #396 REC-4 (exec key 65): a Lab recording's click follows a template mark.
+#[cfg(test)]
+mod gate_396_rec4;
 // Test plan v2.2 E-5 G6 (exec key 35): record stop over a synthetic recording.
 #[cfg(test)]
 mod gate_e5_record_stop;

@@ -123,6 +123,7 @@ impl Recorded {
                     height: 4,
                 }),
                 from: None,
+                follow: None,
             }),
             ..MarkRequest::default()
         };

@@ -5,8 +5,8 @@
 
 use super::frames::{LoadedFrame, crop_png, rect_contains, rect_inside};
 use super::model::{
-    MarkCrop, MarkFamily, MarkSpec, OcrSpec, RecordRect, RecordedMark, RecordingDefaults, SelfTest,
-    SelfTestMargin, SelfTestStatus,
+    MarkCrop, MarkFamily, MarkSpec, OcrSpec, RecordRect, RecordSize, RecordedMark,
+    RecordingDefaults, SelfTest, SelfTestMargin, SelfTestStatus,
 };
 use super::store::{blocked, hex_sha256, invalid};
 use crate::LabOcr;
@@ -17,7 +17,8 @@ use actingcommand_recognition::color_digest::{
 };
 use actingcommand_recognition::{MatchMetric, Rect};
 use actingcommand_recognition_pack::{
-    FsAssetResolver, RecognitionEvaluator, VisionProvider, load_pack_from_json_str,
+    AssetResolver, FsAssetResolver, RecognitionEvaluator, RecognitionPackError,
+    RecognitionPackResult, TargetEvaluation, VisionProvider, load_pack_from_json_str,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -185,6 +186,15 @@ fn not_check(spec: &MarkSpec) -> [(&'static str, bool); 2] {
     ]
 }
 
+/// Workflow #396 REC-4: only a template mark declares factors, a mask or uniqueness.
+fn not_exact_template(spec: &MarkSpec) -> [(&'static str, bool); 3] {
+    [
+        ("scales", spec.scales.is_some()),
+        ("mask", spec.mask.is_some()),
+        ("unique", spec.unique.is_some()),
+    ]
+}
+
 fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) -> RecordedMark {
     RecordedMark {
         id: spec.id.clone(),
@@ -207,6 +217,9 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
         ocr: None,
         all_of: None,
         any_of: None,
+        scales: None,
+        mask: None,
+        unique: None,
         self_test: SelfTest {
             status: SelfTestStatus::NotEvaluated,
             reason: None,
@@ -220,6 +233,7 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
             mean_milli: None,
             max_cell: None,
             members: None,
+            matched_scales_milli: None,
         },
         created_at_unix_ms: now,
     }
@@ -249,6 +263,7 @@ pub(crate) fn prepare_mark(
         )?;
         reject_fields(spec, &not_digest(spec))?;
         reject_fields(spec, &not_ocr(spec))?;
+        reject_fields(spec, &not_exact_template(spec))?;
         let members = match (&spec.all_of, &spec.any_of) {
             (Some(members), None) => {
                 mark.all_of = Some(members.clone());
@@ -321,6 +336,10 @@ pub(crate) fn prepare_mark(
             mark.search = Some(search);
             mark.threshold = spec.threshold;
             mark.metric = Some(defaults.match_metric.clone());
+            // Workflow #396 REC-4: the self-test checks these as the Runtime admits them.
+            mark.scales = spec.scales.clone();
+            mark.mask = spec.mask;
+            mark.unique = spec.unique;
             mark.crop = Some(MarkCrop {
                 path: String::new(),
                 sha256,
@@ -337,6 +356,7 @@ pub(crate) fn prepare_mark(
             reject_fields(spec, &not_template(spec))?;
             reject_fields(spec, &not_digest(spec))?;
             reject_fields(spec, &not_ocr(spec))?;
+            reject_fields(spec, &not_exact_template(spec))?;
             if let Some(distance) = spec.max_distance
                 && (!distance.is_finite() || distance < 0.0)
             {
@@ -365,6 +385,7 @@ pub(crate) fn prepare_mark(
             reject_fields(spec, &not_template(spec))?;
             reject_fields(spec, &not_color(spec))?;
             reject_fields(spec, &not_ocr(spec))?;
+            reject_fields(spec, &not_exact_template(spec))?;
             let (Some(columns), Some(rows), Some(max_mean_milli)) =
                 (spec.columns, spec.rows, spec.max_mean_milli)
             else {
@@ -414,6 +435,7 @@ pub(crate) fn prepare_mark(
             reject_fields(spec, &not_template(spec))?;
             reject_fields(spec, &not_color(spec))?;
             reject_fields(spec, &not_digest(spec))?;
+            reject_fields(spec, &not_exact_template(spec))?;
             mark.ocr = Some(ocr_spec(spec)?);
             Ok(Ok(PreparedMark {
                 mark,
@@ -496,6 +518,7 @@ fn self_test(status: SelfTestStatus, frames: u32) -> SelfTest {
         mean_milli: None,
         max_cell: None,
         members: None,
+        matched_scales_milli: None,
     }
 }
 
@@ -554,6 +577,9 @@ fn evaluate_template(
             format!("template '{}' has no crop", mark.id),
         )
     })?;
+    if mark.declares_exact_template() {
+        return evaluate_declared_template(mark, png, frames, defaults, count);
+    }
     let metric_name = mark
         .metric
         .clone()
@@ -609,6 +635,207 @@ fn evaluate_template(
         ));
     }
     test.location_ambiguous = Some(ambiguous);
+    Ok((test, failure))
+}
+
+/// The asset path of a template mark's crop in the pack its evaluator loads.
+const MARK_TEMPLATE_ASSET: &str = "template.png";
+
+/// The crop of one template mark, the only asset of the pack its evaluator loads.
+#[derive(Debug)]
+struct MarkTemplateAsset(Vec<u8>);
+
+impl AssetResolver for MarkTemplateAsset {
+    fn read_asset(&self, path: &str) -> RecognitionPackResult<Vec<u8>> {
+        if path == MARK_TEMPLATE_ASSET {
+            return Ok(self.0.clone());
+        }
+        Err(RecognitionPackError::fatal(format!(
+            "a template mark's pack has no asset '{path}'"
+        )))
+    }
+}
+
+/// Workflow #396 REC-4: the recognition evaluator of the template target the package declares
+/// for `mark` (its search area, threshold and metric, and its factors, mask and margin of
+/// uniqueness), over frames of `size`. Loading it applies the Runtime's rules for these
+/// declarations; a declaration they refuse is `validation_failed`.
+pub(crate) fn template_evaluator(
+    mark: &RecordedMark,
+    template_png: &[u8],
+    defaults: &RecordingDefaults,
+    size: RecordSize,
+) -> LabResult<RecognitionEvaluator> {
+    let region = region_of(mark)?;
+    let search = mark.search.unwrap_or(region);
+    let metric = mark
+        .metric
+        .clone()
+        .unwrap_or_else(|| defaults.match_metric.clone());
+    match_metric(&metric)?;
+    let mut target = json!({
+        "type": "template",
+        "id": mark.id,
+        "template_path": MARK_TEMPLATE_ASSET,
+        "region": {"x": search.x, "y": search.y, "width": search.width, "height": search.height}
+    });
+    if let Some(threshold) = mark.threshold {
+        target["threshold"] = json!(threshold);
+    }
+    if let Some(scales) = &mark.scales {
+        target["scales"] = json!(scales);
+    }
+    if let Some(mask) = &mark.mask {
+        target["mask"] = json!(mask);
+    }
+    if let Some(unique) = &mark.unique {
+        target["unique"] = json!(unique);
+    }
+    let pack = json!({
+        "schema_version": "0.7",
+        "coordinate_space": {"width": size.width, "height": size.height},
+        "defaults": {"template_threshold": defaults.template_threshold, "match_metric": metric},
+        "targets": [target]
+    });
+    load_pack_from_json_str(&pack.to_string())
+        .and_then(|pack| {
+            RecognitionEvaluator::with_asset_resolver(
+                pack,
+                Arc::new(MarkTemplateAsset(template_png.to_vec())),
+            )
+        })
+        // The rules a package's admission applies with the template bytes (REC-7's mask minimum
+        // and threshold floor, REC-5's resampled sizes), so the mark is refused when it is
+        // recorded rather than at `record stop`.
+        .and_then(|evaluator| evaluator.admit_template_assets().map(|()| evaluator))
+        .map_err(|error| {
+            invalid(
+                "validation_failed",
+                format!("template '{}' cannot be evaluated: {error}", mark.id),
+            )
+        })
+}
+
+/// Workflow #396 REC-4: a template mark evaluated on one frame as the Runtime evaluates the
+/// target the package declares for it; an evaluation error keeps its text.
+pub(crate) struct FrameTemplateEvaluation<'a> {
+    pub(crate) frame_id: &'a str,
+    pub(crate) size: RecordSize,
+    pub(crate) evaluation: Result<TargetEvaluation, String>,
+}
+
+/// Workflow #396 REC-4: `mark` evaluated on every frame with [`template_evaluator`].
+pub(crate) fn template_frame_evaluations<'a>(
+    mark: &RecordedMark,
+    template_png: &[u8],
+    frames: &[EvalFrame<'a>],
+    defaults: &RecordingDefaults,
+) -> LabResult<Vec<FrameTemplateEvaluation<'a>>> {
+    let Some(first) = frames.first() else {
+        return Ok(Vec::new());
+    };
+    let evaluator = template_evaluator(mark, template_png, defaults, first.frame.size())?;
+    Ok(frames
+        .iter()
+        .map(|eval| FrameTemplateEvaluation {
+            frame_id: eval.id,
+            size: eval.frame.size(),
+            evaluation: evaluator
+                .evaluate_target(&eval.frame.scene, &mark.id)
+                .map_err(|error| error.to_string()),
+        })
+        .collect())
+}
+
+/// Workflow #396 REC-4: the self-test of a template mark that declares factors (REC-5), a mask
+/// (REC-7) or uniqueness (REC-2), with the Runtime's evaluation of its target on every frame.
+/// Every frame must pass; a second place within the margin fails the frame and the failure
+/// names it (`uniqueness`). `matched_scales_milli` lists the factors it passed at.
+fn evaluate_declared_template(
+    mark: &RecordedMark,
+    template_png: &[u8],
+    frames: &[EvalFrame<'_>],
+    defaults: &RecordingDefaults,
+    count: u32,
+) -> LabResult<(SelfTest, Option<Value>)> {
+    let region = region_of(mark)?;
+    let threshold = mark.threshold.unwrap_or(defaults.template_threshold) as f32;
+    let mut test = self_test(SelfTestStatus::Passed, count);
+    let mut min_score: Option<f32> = None;
+    let mut ambiguous = false;
+    let mut failure = None;
+    let mut matched = std::collections::BTreeSet::new();
+    let evaluations = template_frame_evaluations(mark, template_png, frames, defaults)?;
+    for (index, frame) in evaluations.iter().enumerate() {
+        let evaluation = match &frame.evaluation {
+            Ok(evaluation) => evaluation,
+            Err(error) => {
+                test.status = SelfTestStatus::Failed;
+                test.reason = Some("self_test_error".to_string());
+                failure.get_or_insert(json!({
+                    "frame_id": frame.frame_id,
+                    "error": error,
+                    "threshold": threshold
+                }));
+                continue;
+            }
+        };
+        let Some(template) = evaluation.template else {
+            test.status = SelfTestStatus::Failed;
+            test.reason = Some("self_test_error".to_string());
+            failure.get_or_insert(json!({
+                "frame_id": frame.frame_id,
+                "threshold": threshold
+            }));
+            continue;
+        };
+        if index == 0 {
+            test.matched_rect = Some(RecordRect {
+                x: template.x,
+                y: template.y,
+                width: template.width,
+                height: template.height,
+            });
+        }
+        ambiguous |= template.x != region.x || template.y != region.y;
+        min_score = Some(min_score.map_or(template.score, |score| score.min(template.score)));
+        if evaluation.passed {
+            matched.extend(template.scale_milli);
+            continue;
+        }
+        test.status = SelfTestStatus::Failed;
+        test.reason = Some("self_test_failed".to_string());
+        let mut detail = json!({
+            "frame_id": frame.frame_id,
+            "score": template.score,
+            "threshold": template.threshold
+        });
+        if let Some(scale_milli) = template.scale_milli {
+            detail["scale_milli"] = json!(scale_milli);
+        }
+        // REC-2: the second place within the margin, so that the author can set the margin.
+        if let Some(uniqueness) = &evaluation.uniqueness {
+            detail["uniqueness"] = json!(uniqueness);
+        }
+        failure.get_or_insert(detail);
+    }
+    if let Some(score) = min_score {
+        test.min_score = Some(f64::from(score));
+        test.margin = Some(SelfTestMargin::Value(
+            f64::from(score) - f64::from(threshold),
+        ));
+    }
+    test.location_ambiguous = Some(ambiguous);
+    if let Some(scales) = &mark.scales {
+        test.matched_scales_milli = Some(
+            scales
+                .factors_milli
+                .iter()
+                .copied()
+                .filter(|factor| matched.contains(factor))
+                .collect(),
+        );
+    }
     Ok((test, failure))
 }
 

@@ -157,6 +157,9 @@ outcome_keys! {
     value_side: vocab(value_side),
     value_problem: vocab(value_problem),
     value_op: vocab(value_op),
+    // Workflow #396 REC-4.
+    mark_id: id,
+    follow_problem: vocab(follow_problem),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),

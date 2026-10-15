@@ -13,8 +13,8 @@ use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_lab::{
     ApplicationSpec, ClickRetry, ClickSpec, LAB_RECORD_MARK_SCHEMA, MarkFamily, MarkRequest,
     MarkSpec, RecordRect, RecordStartOptions, RecordStopOptions, RecordingLock, StepAction,
-    StepActionKind, TransitionSpec, record_instance_check, record_mark, record_start,
-    record_start_defaults, record_status, record_stop, record_stop_close,
+    StepActionKind, TemplateScalesSpec, TransitionSpec, record_instance_check, record_mark,
+    record_start, record_start_defaults, record_status, record_stop, record_stop_close,
 };
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect};
 use actingcommand_resource_tooling::canonical_locale;
@@ -2585,11 +2585,13 @@ const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--sample",
     "--page",
     "--template",
+    "--scales",
     "--color",
     "--reuse",
     "--remove",
     "--click",
     "--click-from",
+    "--click-follow",
     "--click-guard",
     "--click-retry",
     "--replace-click",
@@ -2695,6 +2697,14 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             })
             .transpose()
     };
+    // Workflow #396 REC-4 (REC-5): `--scales f,...` declares the factors of every `--template` of
+    // the command.
+    let scales = record_flag_value(flags, "--scales")?
+        .map(|value| parse_record_mark_scales(&value))
+        .transpose()?;
+    if scales.is_some() && flags.values("--template").is_empty() {
+        return Err(CliError::usage("--scales needs --template"));
+    }
     let mut add = Vec::new();
     for (name, family) in [
         ("--template", MarkFamily::Template),
@@ -2704,21 +2714,28 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             let (id, rect) = value.rsplit_once('=').ok_or_else(|| {
                 CliError::usage(format!("{name} must be <id>=x,y,w,h, got {value}"))
             })?;
-            add.push(MarkSpec::region_only(
-                id.to_string(),
-                family,
-                parse_record_mark_rect(rect, name)?,
-            ));
+            let mut spec =
+                MarkSpec::region_only(id.to_string(), family, parse_record_mark_rect(rect, name)?);
+            if family == MarkFamily::Template {
+                spec.scales = scales.clone();
+            }
+            add.push(spec);
         }
     }
     let click_rect = record_flag_value(flags, "--click")?
         .map(|value| parse_record_mark_rect(&value, "--click"))
         .transpose()?;
     let click_from = record_flag_value(flags, "--click-from")?;
-    let click = (click_rect.is_some() || click_from.is_some()).then_some(ClickSpec {
-        region: click_rect,
-        from: click_from,
-    });
+    // Workflow #396 REC-4: the package's click follows a template mark, alone (`target`) or
+    // with `--click` (`offset`).
+    let click_follow = record_flag_value(flags, "--click-follow")?;
+    let click = (click_rect.is_some() || click_from.is_some() || click_follow.is_some()).then_some(
+        ClickSpec {
+            region: click_rect,
+            from: click_from,
+            follow: click_follow,
+        },
+    );
     let retry = number("--click-retry")?.map(|max_attempts| ClickRetry {
         max_attempts,
         interval_ms: 1000,
@@ -2833,6 +2850,21 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
     }
     request.step_action = actions.pop();
     Ok(request)
+}
+
+/// Workflow #396 REC-4: `--scales f,...`, the factors in milli of a template mark (REC-5); the
+/// Lab's self-test applies the Runtime's rules for them.
+fn parse_record_mark_scales(value: &str) -> CliOutcome<TemplateScalesSpec> {
+    let factors_milli = value
+        .split(',')
+        .map(str::trim)
+        .map(|text| {
+            text.parse::<u32>().map_err(|error| {
+                CliError::usage(format!("--scales factor '{text}' is not milli: {error}"))
+            })
+        })
+        .collect::<CliOutcome<Vec<_>>>()?;
+    Ok(TemplateScalesSpec { factors_milli })
 }
 
 /// `x,y,w,h` with integer fields.

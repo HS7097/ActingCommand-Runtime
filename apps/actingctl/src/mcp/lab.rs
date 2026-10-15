@@ -1534,4 +1534,6 @@ mod tests {
     mod gate_mcpt1;
     // Workflow #389 MCP-13a: ac_app runs actinglab `session app` with the same arguments.
     mod gate_mcp13a;
+    // Workflow #396 REC-4: ac_record_mark hands a click.follow request to actinglab unchanged.
+    mod gate_rec4;
 }
