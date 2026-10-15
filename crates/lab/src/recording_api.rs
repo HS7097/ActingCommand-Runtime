@@ -457,6 +457,7 @@ pub fn record_stop(
         &plan.package_id,
         plan.requires.as_deref(),
         &package_path,
+        registry_entry_example(&plan.package_id, &plan.game, &plan.server, &plan.task_id),
     );
     lab.insert(
         "binding_requires".to_string(),
@@ -513,22 +514,44 @@ fn absolute_display(path: &Path) -> String {
         .to_string()
 }
 
-/// `binding_example`, `task_run_example`, `prerequisite_entry_example` and
-/// `catalog_on_failure_example` (section 4.8 with a15, a20 and R22). Workflow #336 PKG-S5
-/// (option 丙): each names the package by its path and its `package_id`, never a digest.
+/// Where the package sits in its game's standard-pack registry, the one place another package
+/// finds it as a prerequisite package (Workflow #373 NAV-3a, M-373 §4.3; the retired actingd
+/// key `prerequisite_packages` is no such place): the game root's `bundle.json` lists it with
+/// this `packs[]` entry (`package bundle` writes it and adds `file_count` and `byte_count`), and
+/// its directory is the game root plus its `package_id`. The configured root stays a placeholder.
+fn registry_entry_example(
+    package_id: &str,
+    game: &str,
+    server: &str,
+    entry_task_id: &str,
+) -> Value {
+    json!({
+        "bundle": format!("<standard_packs.root>/{game}/bundle.json"),
+        "pack": {
+            "package_id": package_id,
+            "server": server,
+            "entry_task_id": entry_task_id,
+            "path": format!("packs/{package_id}")
+        },
+        "directory": format!("<standard_packs.root>/{game}/{package_id}")
+    })
+}
+
+/// `binding_example`, `task_run_example`, `prerequisite_entry_example` (its registry entry,
+/// [`registry_entry_example`]) and `catalog_on_failure_example` (section 4.8 with a15, a20 and
+/// R22). Workflow #336 PKG-S5 (option 丙): each names the package by its path and its
+/// `package_id`, never a digest.
 fn insert_binding(
     lab: &mut Map<String, Value>,
     package_id: &str,
     requires: Option<&str>,
     package_path: &str,
+    prerequisite_entry_example: Value,
 ) {
     lab.insert("requires".to_string(), json!(requires));
     lab.insert(
         "prerequisite_entry_example".to_string(),
-        json!({
-            "package_id": package_id,
-            "package_path": package_path
-        }),
+        prerequisite_entry_example,
     );
     lab.insert(
         "binding_example".to_string(),
@@ -796,11 +819,18 @@ fn stop_already_generated(
         "generated_at_unix_ms".to_string(),
         json!(artifact.generated_at_unix_ms),
     );
+    // A stopped recording's artifact names the game and server it was generated for.
     insert_binding(
         &mut lab,
         &artifact.package_id,
         artifact.requires.as_deref(),
         &package_path,
+        registry_entry_example(
+            &artifact.package_id,
+            artifact.game.as_deref().unwrap_or("<game>"),
+            artifact.server.as_deref().unwrap_or("<server>"),
+            &recording.task_id,
+        ),
     );
     Ok(RecordStopOutcome {
         lab_status: Some("already_generated".to_string()),

@@ -1025,3 +1025,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_page_graph_entry_recovery_failure_is_in_its_package_layer_scope",
 ]
 incident = ["#390"]
+
+# Workflow #373 NAV-3a follow-up (M-373 v1.1 §3.8, §4.3; test row N3a-9, the Runtime half; wave 14 rulings, NAV-3a items 4 and 5; register §1.67 N3A-4, §1.73): a game root whose bundle.json declares the retired maintenance use prerequisite is no registry: the Runtime records it at startup as standard_pack_root_invalid (malformed, its bundle.json) and refuses a run that resolves a prerequisite package of that game with that code in its preparation, with no task record and no input; the same root with the entry's return_home use alone is read by the next run without a restart and the run goes through its prerequisite package
+[[gate]]
+key = "94"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3a::n3a_9_a_game_root_whose_bundle_declares_the_prerequisite_use_refuses_the_run",
+]
+incident = ["#373 NAV-3a"]

@@ -184,11 +184,14 @@ pub fn package_id_names_one_path_segment(package_id: &str) -> bool {
     package_id != "." && !package_id.contains('/') && safe_source_path(package_id)
 }
 
+/// What a maintenance declaration makes of its pack. Workflow #373 NAV-3a (M-373 §3.8): the use
+/// `prerequisite` is retired, since every pack of a game root's `bundle.json` is a prerequisite
+/// package of that game's registry; a declaration that still names it is an unknown use and is
+/// refused, with no compatibility reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaintenanceUse {
     Startup,
-    Prerequisite,
     ReturnHome,
     /// Workflow #384 D2-S2: the standard package's recognition maintenance package, the one
     /// package the scheduler runs to read an instance's facts (at most one per server).
@@ -253,7 +256,7 @@ pub fn validate_bundle_maintenance_declarations(
             ));
         }
         for purpose in &entry.uses {
-            if *purpose != MaintenanceUse::Prerequisite && !roles.insert((&entry.server, purpose)) {
+            if !roles.insert((&entry.server, purpose)) {
                 return Err(RuntimeContractError::new(
                     RuntimeContractCode::DuplicateBundleMaintenanceRole,
                 ));
@@ -380,7 +383,8 @@ pub(crate) fn bundle_text(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-// Workflow #336 PKG-S5 (exec key 66): bundle v4, tests S5-T2 and S5-T6.
+// Workflow #336 PKG-S5 (exec key 66): bundle v4, tests S5-T2 and S5-T6; Workflow #373 NAV-3a
+// test row N3a-9 (exec key 71): v4 refuses the retired `prerequisite` use.
 #[cfg(test)]
 #[path = "package_tests.rs"]
 mod tests;

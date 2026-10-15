@@ -101,7 +101,6 @@ impl TaskPackageDescriptor {
     pub fn use_incompatibility(&self, purpose: MaintenanceUse) -> Option<&'static str> {
         match purpose {
             MaintenanceUse::Startup => self.startup_incompatibility,
-            MaintenanceUse::Prerequisite => self.prerequisite_incompatibility,
             MaintenanceUse::ReturnHome => self.prerequisite_incompatibility.or_else(|| {
                 self.prerequisite_package_id
                     .is_some()
@@ -303,9 +302,11 @@ impl PrerequisiteChain {
 }
 
 /// Validate each pack's identity `(package_id, server, entry_task_id)`, every declared use and
-/// the complete chains against precisely the bindings this bundle will supply. Pure and shared
-/// with installers; descriptors must be obtained from each admitted pack in this index. A pack
-/// is matched by its identity alone (Workflow #336 PKG-S5: bundle v4 carries no digest).
+/// the complete chains against the registry this bundle becomes: every pack it holds binds a
+/// prerequisite package (Workflow #373 NAV-3a, M-373 §3.8, §4.3: no declaration binds one) and
+/// its `return_home` entries bind each server's fallback. Pure and shared with installers;
+/// descriptors must be obtained from each admitted pack in this index. A pack is matched by its
+/// identity alone (Workflow #336 PKG-S5: bundle v4 carries no digest).
 pub fn validate_bundle_maintenance(
     index: &BundleIndex,
     packages: &[TaskPackageDescriptor],
@@ -342,7 +343,6 @@ pub fn validate_bundle_maintenance(
             )));
         }
     }
-    let mut bindings = BTreeSet::new();
     let mut return_home = BTreeMap::new();
     for entry in index.maintenance() {
         let actual = by_id[entry.package_id.as_str()];
@@ -353,12 +353,6 @@ pub fn validate_bundle_maintenance(
                     entry.package_id
                 )));
             }
-            if matches!(
-                purpose,
-                MaintenanceUse::Prerequisite | MaintenanceUse::ReturnHome
-            ) {
-                bindings.insert(entry.package_id.as_str());
-            }
             if *purpose == MaintenanceUse::ReturnHome {
                 return_home.insert(entry.server.as_str(), entry.package_id.as_str());
             }
@@ -367,7 +361,7 @@ pub fn validate_bundle_maintenance(
     for root in packages {
         let mut chain = PrerequisiteChain::new(root.clone());
         while let Some(link) = chain.next(return_home.get(chain.dependent().server()).copied()) {
-            chain.begin(&link, bindings.contains(link.package_id.as_str()))?;
+            chain.begin(&link, by_id.contains_key(link.package_id.as_str()))?;
             chain.admit(&link, by_id[link.package_id.as_str()].clone())?;
         }
         chain.finish()?;

@@ -656,9 +656,10 @@ with no configuration change and no restart. The top-level keys
 `prerequisite_packages` and `return_home_packages` (Workflow #336 L2b, L2c) are
 retired with no compatibility: a configuration that still carries either fails
 `config_decode_failed` at stage `config_load`, and their eleven assembly codes
-are gone. A Lab recording's `record stop` still prints a
-`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output") until its
-output is changed.
+are gone. A Lab recording's `record stop` prints, as its
+`prerequisite_entry_example` (`contracts/lab-recording.md`, "Output"), where its
+package goes in this registry: the game root's `bundle.json` that lists it, its
+`packs[]` entry and its directory; it names no configuration entry.
 
 A scheduled task paused by a failure is lifted once the content hash of a
 package its paused run went through changes (Workflow #336 PKG-S3, option 丙):

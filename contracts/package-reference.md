@@ -298,7 +298,7 @@ is a JSON array of the shared `BundleMaintenance` entries, for example:
 
 ```json
 [{"package_id":"neutral.test.start","server":"test","uses":["startup"]},
- {"package_id":"neutral.test.home","server":"test","uses":["prerequisite","return_home"]}]
+ {"package_id":"neutral.test.home","server":"test","uses":["return_home"]}]
 ```
 
 The bundle index then carries the required declarations as `maintenance`; an explicitly empty
@@ -315,9 +315,15 @@ pack material. The bundle index validator reuses those same rules and adds index
 generation then checks actual material and full chains through the kernel.
 
 Each entry has exactly `package_id`, `server` and `uses`. Uses are a nonempty set of at
-most the four values `startup`, `prerequisite`, `return_home`, `recognition` (Workflow #384
+most the three values `startup`, `return_home`, `recognition` (Workflow #384
 D2-S2: the standard package's recognition maintenance package,
-[resource-readings.md](resource-readings.md), "Recognition maintenance packages"). A reference
+[resource-readings.md](resource-readings.md), "Recognition maintenance packages"). The use
+`prerequisite` is retired (Workflow #373 NAV-3a, M-373 §3.8): every pack of a bundle is a
+prerequisite package of its game's registry ("Standard package root" below), so no
+declaration names one. An entry that still names it is an unknown use and is refused, with no
+compatibility reading: `package bundle --maintenance` and `resource validate` refuse the
+declaration file, and a game root whose `bundle.json` holds it is `standard_pack_root_invalid`
+with `standard_pack_problem` `malformed`. A reference
 must name a pack in this index with the same server; the package/server pair is unique. Each
 server has at most one startup, one return-home and one recognition entry. Unknown versions, fields or uses,
 duplicate uses or roles and missing references fail explicitly. There are at most as
@@ -336,9 +342,11 @@ application names or index labels. This does not prove execution or recognition 
 
 `validate_bundle_maintenance(&index, &descriptors)` checks that the admitted material set
 matches every indexed identity `(package_id, server, entry_task_id)` and the index's game
-(the index carries no digest, Workflow #336 PKG-S5). It then checks each use
-and
-complete prerequisite chain against the bindings supplied by the declaration. Startup
+(the index carries no digest, Workflow #336 PKG-S5). It then checks each use, and every
+complete prerequisite chain against the registry the bundle becomes (Workflow #373 NAV-3a):
+every pack of the bundle binds a prerequisite package, a declared prerequisite the bundle
+does not hold is `contained_task_prerequisite_unbound`, and `return_home` binds each server's
+fallback. Startup
 uses ordinary task admission and rejects resource readings through
 `PreparedContainedTask::startup_incompatibility`, the same predicate used by Host before
 its startup lease. Prerequisites retain the existing exclusions for
@@ -361,8 +369,8 @@ supplies the instance's existing `startup_package`; `recognition` supplies the i
 §4.3): the Runtime itself reads an installed bundle as its game's registry ("Standard package
 root" below), so every listed package can be a prerequisite package and `return_home` names
 the game/server return-home package there; neither is copied into the configuration any more
-(the keys `prerequisite_packages` and `return_home_packages` are retired), and `prerequisite`
-derives nothing. Configuration conflict handling and application belong to the installer. No declaration triggers a
+(the keys `prerequisite_packages` and `return_home_packages` are retired), and the use
+`prerequisite` is gone. Configuration conflict handling and application belong to the installer. No declaration triggers a
 task directly or adds a Runtime execution mode, ledger field or persistent authority.
 
 Publication callers requesting maintenance must require the machine-readable result's
