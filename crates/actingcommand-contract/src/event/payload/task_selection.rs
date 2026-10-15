@@ -987,7 +987,7 @@ impl TaskSelectionRecord {
             }
             TaskSelectionConfirmation::PickMoved {
                 pick_set_sha256, ..
-            } => !scan && previous.is_none() && is_candidate_set_sha256(pick_set_sha256),
+            } => !scan && is_candidate_set_sha256(pick_set_sha256),
             TaskSelectionConfirmation::PageChanged
             | TaskSelectionConfirmation::GuardFailed { .. }
             | TaskSelectionConfirmation::CaptureFailed { .. } => scan || previous.is_none(),
