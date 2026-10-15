@@ -970,3 +970,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_12_the_status_read_answers_from_memory_and_appends_nothing",
 ]
 incident = ["#385 P-m"]
+# Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 2 and 5, §11, rows T12, T13 and T31; coordinator ruling 4 of wave 14): check-config lists a package admission refuses with a suspend code as a pack_admission_suspended note and stays ok; the admission after start runs in the background, outside the start, and suspends it; the evaluation copies the suspension as a goal_missed planning signal, with no direct write; actingd suspended lists it under packs and ac_diagnose carries the instance's packs rows, codes and ids only
+[[gate]]
+key = "92"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::process::sr3_t12_check_config_lists_a_package_refused_with_a_suspend_code_and_stays_ok",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t13_actingd_suspended_lists_the_suspended_package_under_packs",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_386_sr3::sr3_t13_ac_diagnose_carries_the_instances_suspended_packages_as_codes_and_ids",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t31_the_admission_after_start_suspends_in_the_background_and_the_evaluation_copies_it",
+]
+incident = ["#386 SR-3"]

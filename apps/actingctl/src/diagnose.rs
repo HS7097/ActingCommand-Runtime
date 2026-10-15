@@ -312,6 +312,7 @@ pub(crate) fn read(
         continuable: task_id.is_none(),
         repeating: report.repeating,
         suspended: report.suspended,
+        packs: report.packs,
         lift: report.lift,
         report_warnings: report.warnings,
         report_status: report.status,
@@ -761,6 +762,9 @@ pub(crate) struct Diagnosis {
     pub(crate) continuable: bool,
     pub(crate) repeating: Vec<Value>,
     pub(crate) suspended: Vec<Value>,
+    /// Workflow #386 SR-3: the report's suspended task packages that defer the instance's pairs
+    /// (every one without an instance).
+    pub(crate) packs: Vec<Value>,
     pub(crate) lift: Vec<Value>,
     pub(crate) report_warnings: Vec<Value>,
     /// The report status's data members: `{status, …}`.
@@ -785,6 +789,7 @@ pub(crate) struct Kept {
     pub(crate) errors: usize,
     pub(crate) repeating: usize,
     pub(crate) suspended: usize,
+    pub(crate) packs: usize,
     pub(crate) lift: usize,
     pub(crate) report_warnings: usize,
     pub(crate) clock_slots: usize,
@@ -800,6 +805,7 @@ impl Diagnosis {
             errors: self.errors.len(),
             repeating: self.repeating.len(),
             suspended: self.suspended.len(),
+            packs: self.packs.len(),
             lift: self.lift.len(),
             report_warnings: self.report_warnings.len(),
             clock_slots: self.clock_slots.len(),
@@ -825,6 +831,7 @@ impl Diagnosis {
         list_into(&mut result, "runs", &self.runs, kept.runs);
         result.insert("errors_page".to_owned(), errors_page);
         list_into(&mut result, "suspended", &self.suspended, kept.suspended);
+        list_into(&mut result, "packs", &self.packs, kept.packs);
         list_into(&mut result, "lift", &self.lift, kept.lift);
         list_into(&mut result, "repeating", &self.repeating, kept.repeating);
         list_into(
@@ -928,6 +935,7 @@ fn list_into(result: &mut Map<String, Value>, name: &str, items: &[Value], kept:
 struct SuspensionRows {
     complete: bool,
     suspended: Vec<Value>,
+    packs: Vec<Value>,
     lift: Vec<Value>,
     repeating: Vec<Value>,
     warnings: Vec<Value>,
@@ -944,6 +952,7 @@ impl SuspensionRows {
         Self {
             complete: false,
             suspended: Vec::new(),
+            packs: Vec::new(),
             lift: Vec::new(),
             repeating: Vec::new(),
             warnings: Vec::new(),
@@ -1019,6 +1028,29 @@ fn of_instance(row: &Value, instance: Option<(&str, &Value)>) -> bool {
     };
     row.get("instance_id")
         .is_some_and(|id| id.as_str() == Some(alias) || id == instance_id)
+}
+
+/// Workflow #386 SR-3: the report's `packs` rows whose suspension defers a pair of the instance
+/// (its alias is among the row's `instances`), or every row when no instance is diagnosed.
+pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+    document
+        .get("packs")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| {
+                    instance.is_none_or(|(alias, _)| {
+                        row.get("instances")
+                            .and_then(Value::as_array)
+                            .is_some_and(|instances| {
+                                instances.iter().any(|entry| entry.as_str() == Some(alias))
+                            })
+                    })
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The instance's `clock_slots` rows of the report recorded since `since_unix_ms` (#372 K3):
@@ -1163,6 +1195,7 @@ impl SuspensionReport {
                 SuspensionRows {
                     complete: true,
                     suspended: rows("suspended"),
+                    packs: pack_rows(&document, instance),
                     lift: rows("lifted"),
                     repeating: rows("repeating"),
                     warnings: document

@@ -19980,9 +19980,9 @@
       "uncertain": false,
       "values": {
         "package_id": "required",
-        "actual_digest": "required",
+        "actual_digest": "optional",
         "failure_code": "required",
-        "runtime_commit": "required",
+        "runtime_commit": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -19992,7 +19992,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task package was suspended because admission refused it with a code of scheduling.pack_admission.suspend_codes (failure_code) under the Runtime build runtime_commit; actual_digest is the package's content hash measured after the refusal. Every task bound to the package, on every instance, is deferred with this code and never prepared again until the content hash or the build changes. Other task packages of the same standard package are unaffected; a standard package is never suspended as a whole.",
+      "description": "A task package was suspended because admission refused it with a code of scheduling.pack_admission.suspend_codes (failure_code) under the Runtime build runtime_commit (absent for a build without a known commit); actual_digest is the package's content hash measured right after the refusal (absent when it could not be measured, M-PKG D18). Every task bound to the package, on every instance, is deferred with this code and never prepared again until the content hash or the build changes. Other task packages of the same standard package are unaffected; a standard package is never suspended as a whole. The evaluation copies it once per instance it defers as a goal_missed planning signal (Workflow #386 SR-3); check-config lists it as a note.",
       "common_causes": "A package that needs more sampling time than its timeouts allow (recognition_sample_budget_invalid), typically after a Runtime upgrade with an unchanged package.",
       "handling": "Fix and replace the package; the suspension lifts when its content hash changes. A Runtime build that accepts it lifts it too."
     },
@@ -20005,7 +20005,7 @@
       "values": {
         "package_id": "required",
         "actual_digest": "required",
-        "runtime_commit": "required",
+        "runtime_commit": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -20015,7 +20015,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task package suspension was lifted because the package's content hash (actual_digest, as measured now) or the Runtime build (runtime_commit) changed. The next preparation tries the package once; the same refusal under the same content hash and build suspends it again.",
+      "description": "A task package suspension was lifted because the package's content hash (actual_digest, as measured now) changed; a Runtime build that differs starts without the suspension. The next preparation tries the package once; the same refusal under the same content hash and build suspends it again. runtime_commit is absent for a build without a known commit. Copied once per instance the suspension was copied for, as a goal_missed planning signal.",
       "common_causes": "The package was replaced or the Runtime upgraded.",
       "handling": "Nothing to repair."
     },
@@ -21413,6 +21413,26 @@
       "description": "A drill of an instance's stuck-recovery ladder was refused because the instance's cool-down window is open and recovery_ladder.trigger_defaults.respect_cooldown holds the drill (Workflow #390 DRILL-1). next_eligible_unix_ms is the window's end; its recovery_ladder_suppressed, tagged drill, says cooldown.",
       "common_causes": "A ladder got the instance's key within the cool-down window (recovery_ladder.cooldown_secs or the instance's stuck_recovery_cooldown_secs), or a device drill did.",
       "handling": "Ask again from next_eligible_unix_ms, or set recovery_ladder.trigger_defaults.respect_cooldown to false for the drill."
+    },
+    "runtime_pack_admission_spawn_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The Runtime host could not start the thread of the task package admission after start (Workflow #386 SR-3); the start fails.",
+      "common_causes": "The operating system refused a new thread.",
+      "handling": "Start actingd again; free system resources if it recurs."
     }
   },
   "locations": {
@@ -28200,6 +28220,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: a person's drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
+    },
+    "check_pack_admission": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: the task package admission after start and the suspension of a task package admission refused with a suspend code (Workflow #386 SR-3)."
+    },
+    "join_runtime_pack_admission": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: join the thread of the task package admission after start (Workflow #386 SR-3)."
     }
   }
 }

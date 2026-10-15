@@ -909,12 +909,13 @@ fn pkg_s1_package_admission_computes_and_compares_no_package_digest() {
 }
 
 // Workflow #336 PKG-S3, model M-PKG v1.1 §3.3 and §4.4 S3-T6: a package's content hash is
-// measured in two kinds of place only: when a scheduled failure is settled (the failure
-// identity's hashes; SR-3 adds its suspension point) and at a suspension's lift check (the live
-// check and `actingd suspended`). Containment's `measure_content_hash` has one caller, the
-// Runtime host's `measure_package_hash`, and that one is called only by the settlement and the
-// lift check; admission (containment's loading, the kernel's ingress, the host's preparation)
-// never measures it.
+// measured in two kinds of place only: at a suspension (the failure identity's hashes when a
+// scheduled failure is settled; Workflow #386 SR-3's suspension of a task package right after
+// admission refused it, note-800) and at a suspension's lift check (the live check and
+// `actingd suspended`). Containment's `measure_content_hash` has one caller, the Runtime host's
+// `measure_package_hash`, and that one is called only by the settlement, SR-3's suspension point
+// (`pack_admission.rs`) and the lift check; admission (containment's loading, the kernel's
+// ingress, the host's preparation) never measures it.
 #[test]
 fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
     let root = workspace_root();
@@ -957,9 +958,10 @@ fn pkg_s3_the_content_hash_is_measured_only_at_suspension_and_at_lift_checks() {
         wrapping,
         [
             "crates/runtime-host/src/host/failure_settlement.rs",
+            "crates/runtime-host/src/pack_admission.rs",
             "crates/runtime-host/src/suspension_lift.rs",
         ],
-        "a package's content hash is measured outside the settlement and the lift check"
+        "a package's content hash is measured outside the settlement, the task package \n         suspension and the lift check"
     );
     let lift = fs::read_to_string(root.join("crates/runtime-host/src/suspension_lift.rs"))
         .expect("read the lift check");

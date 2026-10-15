@@ -296,7 +296,10 @@ stdout is one JSON object:
    "gate_code":"policy_budget_exhausted","budget_dimension":"task_daily",
    "occurrence_unix_ms":0,"window_end_unix_ms":0,"next_eligible_unix_ms":0,"next_occurrence_unix_ms":0,
    "slot_fate":"next_window","slot_fate_settled":true,
-   "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}]}
+   "recorded_sequence":0,"recorded_at_unix_ms":0,"next_dispatch":{"sequence":0,"admitted_at_unix_ms":0}}],
+ "packs":[{"package_id":"...","failure_code":"recognition_sample_budget_invalid",
+   "runtime_commit":"...","paused_hash_prefix":"...","current_hash_prefix":"...",
+   "instances":["..."]}]}
 ```
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
@@ -350,6 +353,18 @@ stdout is one JSON object:
     `{"parse_state":"unparsed","signal_id":"...","code":"..."}`, `code` being the outcome's
     code, and no warning.
 
+- `packs` (Workflow #386 SR-3): the task packages suspended since the latest daemon start (the
+  `daemon_started_at_unix_ms` above; every record when it is unknown) and not lifted, by
+  `package_id`, read from the evaluation's copies (`policy.planning_signal_observed` of kind
+  `goal_missed` whose `signal_id` starts with `signal:pack_admission:`; "Task package
+  suspension"). A suspension is memory of one daemon process, so copies from before its start
+  are not read. `failure_code` and `runtime_commit` are the latest copy's (`null` when absent),
+  `paused_hash_prefix` the first twelve hex digits of its `actual_digest` (`null` when the
+  package could not be measured), `current_hash_prefix` the package measured now at the location
+  the copied task's procedure binds (`null` when it cannot be measured or the task is not in the
+  catalog), and `instances` the instances it was copied for and not lifted on. Each member is a
+  code, an id or a hash, never a sentence.
+
 Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 `FATAL actingd: <code>` on stderr; once the configuration is loaded, stdout also carries
 `{"schema_version":"actingcommand.actingd.suspended.v1","status":"failed","code":...,
@@ -375,9 +390,9 @@ Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
 ## Task package suspension (Workflow #386 SR-3)
 
 **Status.** Written ahead of its code (documentation slice SR-0, scheduling model v1.4.2 §2.4
-with option 丙 of board #336); slice SR-3 implements it, after PKG-S3 provides the content
-hash. Until then a package that admission refuses is prepared and refused again at every due
-dispatch.
+with option 丙 of board #336) and implemented by slice SR-3 (register §1.69), with PKG-S3's
+content hash. The not-running reason of `ac_overview` and of the instance status comes with
+slice SR-6b (Workflow #369 S7); the LoadPack lift check with Workflow #389 U-3.
 
 **What is suspended.** When admission refuses a task package with a code listed in
 `scheduling.pack_admission.suspend_codes` (default only `recognition_sample_budget_invalid`:
@@ -387,7 +402,9 @@ refused it. Admission depends only on the package's content and the kernel, so t
 neither a (task, instance) pair nor a standard package: a standard package is always installed
 and activated whole. Right after the refusal the Runtime measures the package's content hash
 once (the `content-directory.v1` computation, or the SHA-256 of the file for a legacy assembled
-ZIP). Admission itself never computes it.
+ZIP). Admission itself never computes it. The suspension is memory of the daemon process: a
+restart, and so another build, starts without it, and the background check after start judges
+the packages again.
 
 **Where it is found.** One rule, three places:
 
@@ -403,9 +420,12 @@ ZIP). Admission itself never computes it.
 
 **While suspended.** Every task bound to the package, on every instance, is deferred in the
 evaluation with `pack_admission_suspended` (third in the order of deferrals,
-`scheduling-blackout.md`): no intent and no further preparation. The other task packages of the
-same standard package are scheduled as usual. The refused dispatch keeps its execution record;
-no record shape changes.
+`scheduling-blackout.md`): no intent and no further preparation. A task is bound to the package
+when its procedure's binding locates a package whose `package_id` is the suspended one (the
+`package_id` admission read at that location). The other task packages of the same standard
+package are scheduled as usual. The refused dispatch keeps its execution record; no record shape
+changes. For the clock-slot records of Workflow #372 K2 the code is a persistent gate
+(`clock_slot_refused`).
 
 **Lifting.** A suspension lifts when the package's content hash differs from the recorded one
 (the package was fixed in place) or the Runtime build differs. The hash is measured again after
@@ -413,9 +433,10 @@ actingd starts (in the background), when the package is loaded (Workflow #389 Lo
 when the evaluation finds a task of the package due while it is suspended, at most once per
 package per minimum interval (a configuration key that Workflow #383 AO-0 registers, default
 60 s). No restart is needed. A package that cannot be measured at a check (removed, being
-replaced, unreadable) stays suspended, reports the warning `lift_check_hash_unmeasured`
-(`package_id`; M-PKG D18; spelling proposed here, registered by PKG-S3 with the lift check) and
-is checked again. After a lift the next preparation tries the package once; the same refusal
+replaced, unreadable) stays suspended, links the warning `lift_check_hash_unmeasured` (`path`,
+`package_id`, `caused_by` the read's refusal; M-PKG D18) as a note of the
+`pack_admission_suspended` reason, and is checked again. A package whose hash could not be
+measured right after the refusal lifts at the first check that measures it. After a lift the next preparation tries the package once; the same refusal
 under the same content hash and build suspends it again, so nothing loops. There is no manual
 lift.
 
@@ -423,19 +444,28 @@ lift.
 
 - `actingd suspended` gains the top-level list `packs` (an addition; `schema_version` is
   unchanged): one entry per suspended package with `package_id`, `failure_code`,
-  `runtime_commit`, `paused_hash_prefix` and `current_hash_prefix`;
-- MCP `ac_diagnose` carries the `packs` that concern the instance, and the not-running reason of
-  `ac_overview` and of the instance status shows `pack_admission_suspended`;
+  `runtime_commit`, `paused_hash_prefix`, `current_hash_prefix` and `instances` (see
+  "`actingd suspended`");
+- MCP `ac_diagnose` (and `actingctl diagnose`) carries the `packs` rows whose `instances` name
+  the diagnosed instance (every row without one); the not-running reason of `ac_overview` and of
+  the instance status shows `pack_admission_suspended` once SR-6b adds that reason;
 - the UI console shows it in the instance's status line (UI slice UI-1).
 
 **Ledger.** The probes copy what happened; there is no direct write. A suspension found by
-dispatch preparation is visible as that dispatch's execution record. One found by the
-background check is copied by the evaluation probe as one `pack_admission_suspended` outcome
-(`package_id`, `actual_digest` holding the content hash, `failure_code`, `runtime_commit`), and a
-lift as `pack_admission_lifted` (`package_id`, `actual_digest`, `runtime_commit`); which existing
-record type carries them is decided before SR-3 is dispatched. The suspension is an `error`: a
-person has to change the package, and the rest of the Runtime works on. It never triggers the
-recovery ladder.
+dispatch preparation is also visible as that dispatch's execution record. The evaluation, the
+policy-decision choke point the G5 probe copies (`ledger-observer.md`), copies each suspension it
+defers a pair of as a `pack_admission_suspended` outcome (`package_id`, `actual_digest` holding
+the content hash, `failure_code`, `runtime_commit`), once per instance, and each lift as
+`pack_admission_lifted` (`package_id`, `actual_digest` measured now, `runtime_commit`), once per
+instance the suspension was copied for. The record type is the existing
+`policy.planning_signal_observed` of kind `goal_missed` (coordinator ruling 4 of wave 14; the
+same carrier as the clock-slot records of Workflow #372 K2): `instance_id` is the instance, a
+suspension's `task_id` the task whose pair it deferred first there (a lift's is absent), its
+outcome the copied code, and its `signal_id` `signal:pack_admission:<suspended|lifted>:<hex>`,
+unique per copy. Like every planning signal it consumes no failure tax, advances no streak and
+wakes no agent. `actual_digest` is absent when the hash could not be measured, `runtime_commit`
+for a build without a known commit. The suspension is an `error`: a person has to change the
+package, and the rest of the Runtime works on. It never triggers the recovery ladder.
 
 **Unlike `paused_task`.** The per-pair pause above needs every pair to fail on its own; this
 suspension holds every pair of the package at once.

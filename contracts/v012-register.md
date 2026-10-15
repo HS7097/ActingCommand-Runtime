@@ -1038,6 +1038,27 @@ configuration key.
 | DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
 | DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
 
+### 1.69 Wave 14 slice SR-3 (#386 SCHED v1.4.2 §2.4, §10, §11, §12; M-PKG v1.1 §3.3, §3.4, §5.2; coordinator ruling 4 of wave 14)
+
+SR-3 suspends a task package that admission refuses with a code of
+`scheduling.pack_admission.suspend_codes`, by its `package_id` under the Runtime build, with the
+content hash PKG-S3's `measure_package_hash` measures right after the refusal (the S3-T6 guard
+lists the suspension point). The suspension is memory of the daemon process; no record type
+and no persisted member is new. [policy-suspension.md](policy-suspension.md), "Task package
+suspension", is the contract. The code `runtime_pack_admission_spawn_failed` (runtime-host,
+error, ladder class `none`), the locations `check_pack_admission` and
+`join_runtime_pack_admission`, and `actual_digest` and `runtime_commit` of
+`pack_admission_suspended` and `pack_admission_lifted` turning optional (pending entries: absent
+for a package that could not be measured, M-PKG D18, and for a build without a known commit)
+are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SR3-1 | `policy.planning_signal_observed` of kind `goal_missed` whose outcome is `pack_admission_suspended` or `pack_admission_lifted` | new values of existing members (shape unchanged) | SR-3 | SR-3 | the evaluation's copy (the G5 choke point, no direct write): a suspension once per instance it defers a pair of (`task_id` the pair's task), a lift once per instance the suspension was copied for (no `task_id`); `signal_id` `signal:pack_admission:<suspended\|lifted>:<hex>`, `<hex>` the SHA-256 of the package, the instance, the evaluation time and the process's count of copies, so each copy has its own; values `package_id`, `actual_digest` (`sha256:<content hash>`), `failure_code` (a suspension only), `runtime_commit`; selected by kind and prefix, never by outcome, like the clock-slot records |
+| SR3-2 | `actingd suspended` (`actingcommand.actingd.suspended.v2`) top-level `packs[{package_id, failure_code, runtime_commit, paused_hash_prefix, current_hash_prefix, instances}]` | new report member (not persisted; `schema_version` unchanged) | SR-3 | SR-3 | read from the SR3-1 copies since the latest daemon start, a lift removing its instance; `current_hash_prefix` measured read-only at the location the copied task's procedure binds |
+| SR3-3 | `actingctl diagnose` and `ac_diagnose` member `packs` (with `packs_truncated` when cut) | new output member (A5's shapes kept; parity with the CLI unchanged) | SR-3 | SR-3 | the SR3-2 rows whose `instances` name the diagnosed instance, every row without one, verbatim; cut after `suspended`, before `report_warnings` |
+| SR3-4 | `config.parameters.scheduling`: `scheduling.pack_admission.check_in_check_config`, `.check_after_start`, `.suspend_codes` | new configuration rows (keys of the existing `scheduling` section, no new section) | SR-3 | SR-3 | boolean, boolean, list of codes the catalog lists and has not retired; defaults `true`, `true`, `["recognition_sample_budget_invalid"]` (`actingd.defaults.json`); settable, read where they are used (check-config, the background admission after start, each refusal of a scheduled run's preparation) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1128,7 +1149,7 @@ when it takes effect.
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
-| `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
+| `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |

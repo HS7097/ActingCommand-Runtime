@@ -147,8 +147,9 @@ impl LiftChecks {
     }
 
     /// The content hash of the package at `path` as of `time`: the latest measurement while it
-    /// is younger than the interval, else a new one.
-    fn current(
+    /// is younger than the interval, else a new one. Workflow #386 SR-3: a suspended task
+    /// package's lift check reads it too.
+    pub(crate) fn current(
         &self,
         path: &str,
         time: LiftCheckTime,

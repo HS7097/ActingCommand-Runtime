@@ -236,9 +236,12 @@ fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
         .copied()
         .find(|code| reason.is(*code))?;
     let class = match code {
+        // Workflow #386 SR-3 (scheduling model §5.4): a suspended task package is a persistent
+        // gate.
         HostCode::PolicyBudgetExhausted
         | HostCode::PolicyActivityWindowClosed
-        | HostCode::PolicyTaskPaused => GateClass::Persistent,
+        | HostCode::PolicyTaskPaused
+        | HostCode::PackAdmissionSuspended => GateClass::Persistent,
         HostCode::DispatchPausedGlobal | HostCode::DispatchPausedInstance => {
             GateClass::OperatorPause
         }

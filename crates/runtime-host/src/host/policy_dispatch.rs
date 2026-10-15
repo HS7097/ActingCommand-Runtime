@@ -807,6 +807,7 @@ impl HostShared {
                     },
                     instance_occupancy: &|instance_alias| occupancy.get(instance_alias).copied(),
                     suspension_lift: &suspension_lift,
+                    pack_admission: &self.pack_admission,
                     fact_refresh: FactRefreshContext {
                         settings: fact_refresh_settings,
                         bindings: &self.fact_refresh_bindings,
@@ -837,6 +838,11 @@ impl HostShared {
         }
         for signal in &cycle.clock_slot_signals {
             self.record_policy_planning_signal(signal.clone())?;
+        }
+        // Workflow #386 SR-3 (scheduling model §11): the suspensions and lifts of task packages
+        // this evaluation acted on, each copied once per instance.
+        for signal in self.pack_admission.take_signals()? {
+            self.record_policy_planning_signal(signal)?;
         }
         lock(
             &self.trusted_policy_dispatches,

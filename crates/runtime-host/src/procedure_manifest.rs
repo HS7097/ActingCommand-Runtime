@@ -136,6 +136,12 @@ impl ProcedureManifest {
         self.bindings.get(procedure_ref)
     }
 
+    /// Every binding, by procedure alias (Workflow #386 SR-3: the package locations the task
+    /// package admission reads).
+    pub(crate) fn bindings(&self) -> impl Iterator<Item = &ProcedureBinding> {
+        self.bindings.values()
+    }
+
     pub(crate) fn bind_evaluation(
         &self,
         evaluation: &mut PolicyEvaluation,

@@ -110,7 +110,10 @@ and the latest-run lookup consume this projection directly. Beside the runs, `ac
 carries at most 10 of the instance's `clock_slots` rows of `actingd suspended` recorded in its
 window, refused and deferred rows before owed ones, newest first in each, with
 `clock_slots_total` when fewer are kept; to fit its output budget it cuts them before any
-other list but the two groups below (Workflow #372 K3, `policy-suspension.md`).
+other list but the two groups below (Workflow #372 K3, `policy-suspension.md`). It also carries
+the `packs` rows of `actingd suspended` whose `instances` name the instance (every row without
+one), verbatim; under its output budget they are cut after `suspended` and before the report's
+warnings (Workflow #386 SR-3, `policy-suspension.md`, "Task package suspension").
 
 `actingctl diagnose` and `ac_diagnose` (Workflow #389 MCP-7) take the instance as optional:
 without it they diagnose every instance, with the 10 most recent runs from the first page of

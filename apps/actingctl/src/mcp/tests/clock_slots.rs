@@ -120,6 +120,7 @@ fn diagnosis(errors: Vec<Value>, clock_slots: Vec<Value>, clock_slots_total: usi
         continuable: false,
         repeating: Vec::new(),
         suspended: Vec::new(),
+        packs: Vec::new(),
         lift: Vec::new(),
         report_warnings: Vec::new(),
         report_status: json!({"status": "ok", "through_sequence": 121_000}),

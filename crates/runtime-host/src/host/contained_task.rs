@@ -4822,7 +4822,27 @@ pub(super) fn prepare_measured_contained_task(
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     deadline: Instant,
 ) -> Result<(PreparedContainedTask, PackageLoad), RequestFailure> {
-    let path = contained_task_package_path(request)?;
+    prepare_measured_naming_refusal(instance_alias, request, vision_provider, deadline)
+        .map_err(|(failure, _)| failure)
+}
+
+/// Workflow #386 SR-3: what a refused package admission names for the suspension rule: the
+/// refusal's registered code and the `package_id` the package's control declares.
+pub(super) struct RefusedPackage {
+    pub(super) code: Code,
+    pub(super) package_id: String,
+}
+
+/// [`prepare_measured_contained_task`], whose refusal also names the refused package when the
+/// kernel read its `package_id` and the refusal's code is registered (Workflow #386 SR-3: a
+/// scheduled run's preparation suspends it at a suspend code).
+pub(super) fn prepare_measured_naming_refusal(
+    instance_alias: &str,
+    request: &ContainedTaskRequest,
+    vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
+    deadline: Instant,
+) -> Result<(PreparedContainedTask, PackageLoad), (RequestFailure, Option<Box<RefusedPackage>>)> {
+    let path = contained_task_package_path(request).map_err(|failure| (failure, None))?;
     // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
     // structural only; the request names no digest, so the package carries no reference.
     let started = Instant::now();
@@ -4833,7 +4853,12 @@ pub(super) fn prepare_measured_contained_task(
         vision_provider,
         deadline,
     )
-    .map_err(contained_task_declaration_failure)?;
+    .map_err(|error| {
+        let refused = Code::relayed(error.code().as_str())
+            .zip(error.package_id().map(str::to_owned))
+            .map(|(code, package_id)| Box::new(RefusedPackage { code, package_id }));
+        (contained_task_declaration_failure(error), refused)
+    })?;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     Ok((prepared, PackageLoad { elapsed_ms, bytes }))
 }

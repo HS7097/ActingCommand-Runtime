@@ -14,6 +14,9 @@
 //! dispatches, read by the host at every policy cycle. Workflow #336 PKG-S3:
 //! `suspension.lift_check_min_interval_ms`, the least time between two measurements of one
 //! package's content hash by the suspension lift checks, read by the host at each check.
+//! Workflow #386 SR-3: `pack_admission.check_in_check_config`, `check_after_start` and
+//! `suspend_codes`, the task package admission check of `check-config` and of the background
+//! after start, and the admission codes that suspend a task package, read where they are used.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! host blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, and
@@ -99,6 +102,16 @@ pub const FACT_REFRESH_MAX_CONSECUTIVE_FAILURES: &str =
 pub const SUSPENSION_LIFT_CHECK_MIN_INTERVAL_MS: &str =
     "scheduling.suspension.lift_check_min_interval_ms";
 
+/// Workflow #386 SR-3 (§2.4 item 2): whether `check-config` admits every package of
+/// `policy.procedure_manifest` with this Runtime's kernel.
+pub const PACK_ADMISSION_CHECK_IN_CHECK_CONFIG: &str =
+    "scheduling.pack_admission.check_in_check_config";
+/// Workflow #386 SR-3 (§2.4 item 2): whether the daemon admits them in the background after its
+/// start.
+pub const PACK_ADMISSION_CHECK_AFTER_START: &str = "scheduling.pack_admission.check_after_start";
+/// Workflow #386 SR-3 (§2.4 item 3): the admission codes that suspend a task package (a list).
+pub const PACK_ADMISSION_SUSPEND_CODES: &str = "scheduling.pack_admission.suspend_codes";
+
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
 const MAX_RANDOM_DELAY_MS: i64 = 86_400_000;
@@ -157,6 +170,8 @@ pub struct SchedulingFile {
     fact_refresh: Option<FactRefreshFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     suspension: Option<SuspensionFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pack_admission: Option<PackAdmissionFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -211,6 +226,14 @@ file_struct!(
     /// Workflow #336 PKG-S3: the suspension lift checks.
     SuspensionFile {
         lift_check_min_interval_ms
+    }
+);
+file_struct!(
+    /// Workflow #386 SR-3: the task package admission check and its suspend codes.
+    PackAdmissionFile {
+        check_in_check_config,
+        check_after_start,
+        suspend_codes,
     }
 );
 file_struct!(
@@ -373,6 +396,24 @@ pub(crate) static ROWS: &[KeyRow] = &[
         KeyRange::Any,
         "PKG-S3",
     ),
+    row(
+        PACK_ADMISSION_CHECK_IN_CHECK_CONFIG,
+        ValueType::Boolean,
+        KeyRange::Any,
+        "SR-3",
+    ),
+    row(
+        PACK_ADMISSION_CHECK_AFTER_START,
+        ValueType::Boolean,
+        KeyRange::Any,
+        "SR-3",
+    ),
+    row(
+        PACK_ADMISSION_SUSPEND_CODES,
+        ValueType::List,
+        KeyRange::Any,
+        "SR-3",
+    ),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -471,6 +512,15 @@ pub struct FactRefreshConfig {
     pub max_consecutive_failures: u32,
 }
 
+/// Workflow #386 SR-3 (§2.4): the task package admission check of `check-config` and of the
+/// background after start, and the admission codes that suspend a task package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackAdmissionConfig {
+    pub check_in_check_config: bool,
+    pub check_after_start: bool,
+    pub suspend_codes: Vec<String>,
+}
+
 /// The `scheduling` section in effect, read and checked whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingConfig {
@@ -482,6 +532,7 @@ pub struct SchedulingConfig {
     pub not_run_diagnose_rows: u32,
     pub random_delay: RandomDelay,
     pub fact_refresh: FactRefreshConfig,
+    pub pack_admission: PackAdmissionConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -713,8 +764,27 @@ impl SchedulingConfig {
                 ],
             )?,
             fact_refresh: fact_refresh_from(&reader)?,
+            pack_admission: pack_admission_from(&reader)?,
         })
     }
+}
+
+/// Workflow #386 SR-3: the `pack_admission` keys from `reader`; a suspend code the catalog does
+/// not list is `code_unknown`, a retired one `code_retired`.
+fn pack_admission_from(reader: &Reader<'_>) -> Result<PackAdmissionConfig, ConfigFailure> {
+    Ok(PackAdmissionConfig {
+        check_in_check_config: reader.boolean(PACK_ADMISSION_CHECK_IN_CHECK_CONFIG)?,
+        check_after_start: reader.boolean(PACK_ADMISSION_CHECK_AFTER_START)?,
+        suspend_codes: reader.codes(PACK_ADMISSION_SUSPEND_CODES)?,
+    })
+}
+
+/// Workflow #386 SR-3: the `pack_admission` keys in effect, read alone (the host reads them at
+/// each admission refusal and at its background check; `check-config` reads them once).
+pub(crate) fn pack_admission(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<PackAdmissionConfig, ConfigFailure> {
+    pack_admission_from(&Reader { value })
 }
 
 /// Workflow #384 D2-S4: the fact refresh keys from `reader`, each by the key table's type and
