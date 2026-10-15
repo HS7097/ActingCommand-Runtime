@@ -703,6 +703,26 @@ fn explicit_home_contained_task_package(
     home_color: [u8; 3],
     other_color: [u8; 3],
 ) -> Vec<u8> {
+    explicit_home_contained_task_package_paced(
+        physical_task_geometry,
+        package_id,
+        home_color,
+        other_color,
+        1,
+    )
+}
+
+// The explicit Home package capturing every `capture_interval_ms`. Test plan E-3 (§3.10): on a
+// `ManualRuntimeClock` a capture spends no Runtime time and each kernel wait moves the clock by
+// the capture interval, so a wait of `step_timeout_ms` captures about
+// `step_timeout_ms / capture_interval_ms` frames.
+fn explicit_home_contained_task_package_paced(
+    physical_task_geometry: bool,
+    package_id: &str,
+    home_color: [u8; 3],
+    other_color: [u8; 3],
+    capture_interval_ms: u64,
+) -> Vec<u8> {
     let (width, height) = if physical_task_geometry {
         (16, 9)
     } else {
@@ -768,7 +788,7 @@ fn explicit_home_contained_task_package(
         "server": "test",
         "resolution": {"width": width, "height": height},
         "entry_task_id": "task",
-        "capture_interval_ms": 1,
+        "capture_interval_ms": capture_interval_ms,
         "step_timeout_ms": 500,
         "timeout_ms": 5000,
         "max_steps": 2
