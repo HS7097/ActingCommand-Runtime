@@ -198,6 +198,6 @@ fn resolve_instance_port(
         ));
     }
     query.instance_id = None;
-    query.instance_ids = resolved.clone();
+    query.instance_ids = resolved.iter().rev().take(1).copied().collect();
     Ok(())
 }
