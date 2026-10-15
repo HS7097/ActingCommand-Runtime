@@ -3738,13 +3738,20 @@ impl PreparedContainedTask {
                         ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
                     })?
             } else {
-                // Workflow #390 EXEC-1: a candidate whose `when` does not hold is withdrawn.
-                self.next_candidate_directive(
-                    runtime,
-                    &mut machine,
-                    &candidates,
-                    observation.as_ref(),
-                )?
+                // Workflow #390 EXEC-1: the execution-owned transition dispatches the page's
+                // candidates in order; one whose `when` does not hold on the frame is withdrawn
+                // before its step starts, and the transition dispatches the next.
+                loop {
+                    let decision = machine.next_directive(&candidates);
+                    if let Some(directive) = self.candidate_directive(
+                        runtime,
+                        &mut machine,
+                        decision,
+                        observation.as_ref(),
+                    )? {
+                        break directive;
+                    }
+                }
             };
             match directive {
                 RunDirective::AwaitPage => {

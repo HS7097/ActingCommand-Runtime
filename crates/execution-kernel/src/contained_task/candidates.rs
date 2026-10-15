@@ -22,7 +22,7 @@ use super::{
     ContainedTaskTrace, PageObservation, PreparedContainedTask, TaskOperation, TaskProgram,
 };
 use crate::codes::ExecutionKernelCode;
-use crate::{RunDirective, RunOperationCandidate, RunStateMachine};
+use crate::{RunDecisionError, RunDirective, RunStateMachine};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_recognition_pack::{RecognitionEvaluator, TargetKind};
@@ -156,70 +156,65 @@ impl TaskProgram {
 }
 
 impl PreparedContainedTask {
-    /// Workflow #390 EXEC-1: the run's next directive on the frame of `observation`. An
-    /// operation it dispatches whose `when` does not hold on that frame is withdrawn before its
-    /// step starts, and the page's next candidate is taken. A page whose candidates were all
-    /// passed over on the frame ends the run with `contained_task_operation_candidates_exhausted`
-    /// (`page_id`, and `count` the candidates passed over); any other refused decision is
-    /// `contained_task_state_invalid`, as before.
-    pub(super) fn next_candidate_directive<R: ContainedTaskRuntime>(
+    /// Workflow #390 EXEC-1: judges `decision`, the execution-owned transition's next directive
+    /// (`RunStateMachine::next_directive`) on the frame of `observation`. An operation it
+    /// dispatches whose `when` does not hold on that frame is withdrawn before its step starts
+    /// (`None`: the caller asks the transition again, and the page's next candidate is
+    /// dispatched). A page whose candidates were all passed over on the frame ends the run with
+    /// `contained_task_operation_candidates_exhausted` (`page_id`, and `count` the candidates
+    /// passed over); any other refused decision is `contained_task_state_invalid`, as before.
+    pub(super) fn candidate_directive<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         machine: &mut RunStateMachine,
-        candidates: &[RunOperationCandidate],
+        decision: Result<RunDirective, RunDecisionError>,
         observation: Option<&PageObservation>,
-    ) -> Result<RunDirective, ContainedTaskRunError<R::Error>> {
-        loop {
-            let directive = match machine.next_directive(candidates) {
-                Ok(directive) => directive,
-                Err(error)
-                    if error.code().as_str()
-                        == ExecutionKernelCode::ContainedTaskOperationCandidatesExhausted
-                            .as_str() =>
-                {
-                    return Err(candidates_exhausted(
-                        machine.current_page().unwrap_or_default(),
-                        machine.passed_over().len(),
-                        error.message(),
-                    )
-                    .into());
-                }
-                Err(_) => {
-                    return Err(ContainedTaskError::new(
-                        SharedCode::ContainedTaskStateInvalid.code(),
-                    )
-                    .into());
-                }
-            };
-            let operation_id = match directive {
-                RunDirective::ExecuteOperation {
-                    ref operation_id, ..
-                } => operation_id.clone(),
-                other => return Ok(other),
-            };
-            let operation = self
-                .program
-                .operations
-                .iter()
-                .find(|operation| operation.id == operation_id)
-                .ok_or_else(|| {
-                    ContainedTaskError::new(
-                        ExecutionKernelCode::ContainedTaskOperationMissing.code(),
-                    )
-                })?;
-            if operation.when.is_none() {
-                return Ok(directive);
+    ) -> Result<Option<RunDirective>, ContainedTaskRunError<R::Error>> {
+        let directive = match decision {
+            Ok(directive) => directive,
+            Err(error)
+                if error.code().as_str()
+                    == ExecutionKernelCode::ContainedTaskOperationCandidatesExhausted.as_str() =>
+            {
+                return Err(candidates_exhausted(
+                    machine.current_page().unwrap_or_default(),
+                    machine.passed_over().len(),
+                    error.message(),
+                )
+                .into());
             }
-            let observed = observation.ok_or_else(|| {
-                ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
-            })?;
-            if self.when_holds(runtime, operation, &observed.scene)? {
-                return Ok(directive);
+            Err(_) => {
+                return Err(
+                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
+                );
             }
-            machine.operation_withdrawn(&operation_id).map_err(|_| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+        };
+        let operation_id = match directive {
+            RunDirective::ExecuteOperation {
+                ref operation_id, ..
+            } => operation_id.clone(),
+            other => return Ok(Some(other)),
+        };
+        let operation = self
+            .program
+            .operations
+            .iter()
+            .find(|operation| operation.id == operation_id)
+            .ok_or_else(|| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationMissing.code())
             })?;
+        if operation.when.is_none() {
+            return Ok(Some(directive));
         }
+        let observed = observation
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code()))?;
+        if self.when_holds(runtime, operation, &observed.scene)? {
+            return Ok(Some(directive));
+        }
+        machine
+            .operation_withdrawn(&operation_id)
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        Ok(None)
     }
 
     /// Workflow #390 EXEC-1: whether `operation`'s `when` holds on `scene`, the frame its step
