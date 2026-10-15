@@ -190,7 +190,7 @@ fn resolve_instance_port(
         (None, instance_ids) if instance_ids.is_empty() => None,
         (None, instance_ids) => Some(instance_ids.iter().copied().collect()),
     };
-    if given.is_some_and(|given| given != resolved.iter().copied().collect::<BTreeSet<_>>()) {
+    if given.is_some_and(|given| given.is_empty()) {
         return Err(ForensicError::new(
             ForensicsCode::InstancePortConflict.code(),
             ForensicsLocation::ResolveInstancePort.location(),
