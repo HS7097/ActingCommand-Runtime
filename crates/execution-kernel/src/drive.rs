@@ -199,11 +199,14 @@ impl DriveNavigationGraph {
             .get("game")
             .and_then(Value::as_str)
             .map(str::to_string);
+        // Workflow #390 LAB-2: an edge of an operation whose `to` is a page set (`to_pages`) has
+        // no single destination, so no route passes it.
         let edges = value
             .get("navigation")
             .and_then(Value::as_array)
             .ok_or_else(|| DriveDecisionError::invalid("navigation file is missing navigation[]"))?
             .iter()
+            .filter(|edge| edge.get("to_pages").is_none())
             .map(parse_navigation_edge)
             .collect::<Result<Vec<_>, _>>()?;
         let destructive_regions = value
@@ -458,6 +461,24 @@ pub(crate) fn parse_navigation_input(
                 to_rect,
                 from: drive_rect_center(from_rect)?,
                 to: drive_rect_center(to_rect)?,
+                duration_ms,
+            })
+        }
+        // Workflow #390 LAB-2: a long press holds one point; it is a drag that does not move.
+        Some("long_press") | Some("long_tap") => {
+            let rect = parse_navigation_point(value)?;
+            let point = drive_rect_center(rect)?;
+            let duration_ms = value
+                .get("duration_ms")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    DriveDecisionError::invalid("long press click requires duration_ms")
+                })?;
+            Ok(DriveSemanticInput::Drag {
+                from_rect: rect,
+                to_rect: rect,
+                from: point,
+                to: point,
                 duration_ms,
             })
         }
@@ -740,6 +761,60 @@ mod tests {
                 .expect_err("unresolved target")
                 .kind(),
             DriveDecisionErrorKind::InvalidInput
+        );
+    }
+
+    // Workflow #390 LAB-2 (FCM T-03): the navigation collects an operation that may reach several
+    // pages with all of them (`to_pages`); its click does not decide which page comes, so no
+    // route passes it, and the edges with one destination still route.
+    #[test]
+    fn lab2_a_route_never_passes_an_edge_with_several_destinations() {
+        let graph = DriveNavigationGraph::parse_json(
+            r#"{
+            "game":"fixture01",
+            "navigation":[
+                {"id":"home_to_either","from_page":"fixture01/home","to_pages":["fixture01/stage","fixture01/terminal"],"click":{"kind":"rect","x":10,"y":20,"width":20,"height":10},"source":""},
+                {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","click":{"kind":"rect","x":40,"y":20,"width":20,"height":10}}
+            ]
+        }"#,
+        )
+        .expect("graph");
+
+        let route = graph
+            .find_route("fixture01/home", "fixture01/terminal")
+            .expect("route");
+        assert_eq!(
+            route
+                .iter()
+                .map(DriveNavigationEdge::id)
+                .collect::<Vec<_>>(),
+            ["home_to_terminal"]
+        );
+        assert!(
+            graph
+                .find_route("fixture01/home", "fixture01/stage")
+                .is_none()
+        );
+    }
+
+    // Workflow #390 LAB-2: a long press holds its one point for its duration, a drag that does
+    // not move.
+    #[test]
+    fn lab2_a_long_press_navigation_input_holds_its_point() {
+        let input = parse_navigation_input(&serde_json::json!({
+            "kind": "long_press", "x": 30, "y": 40, "duration_ms": 800
+        }))
+        .expect("long press");
+
+        assert_eq!(
+            input.resolved_input_action().expect("action"),
+            InputAction::Swipe {
+                x1: 30,
+                y1: 40,
+                x2: 30,
+                y2: 40,
+                duration_ms: 800
+            }
         );
     }
 }

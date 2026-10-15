@@ -306,7 +306,7 @@ impl Declaration<'_> {
                     for (index, entry) in self.array(value, &pointer)?.iter().enumerate() {
                         let pointer = child(&pointer, &index.to_string());
                         let fields: &[&str] = if field == "navigation" {
-                            &["id", "from_page", "to_page", "click", "source"]
+                            &["id", "from_page", "to_page", "to_pages", "click", "source"]
                         } else {
                             &[
                                 "task_id",
@@ -322,11 +322,44 @@ impl Declaration<'_> {
                         };
                         let entry = self.object(entry, &pointer, fields)?;
                         if field == "navigation" {
-                            for name in ["id", "from_page", "to_page"] {
+                            for name in ["id", "from_page"] {
                                 self.string(
                                     self.required(entry, &pointer, name)?,
                                     &child(&pointer, name),
                                 )?;
+                            }
+                            // Workflow #390 LAB-2: an edge has one destination (`to_page`) or,
+                            // for an operation whose `to` is a page set, every page it may
+                            // reach (`to_pages`, at least one), never both.
+                            match (entry.get("to_page"), entry.get("to_pages")) {
+                                (Some(_), Some(_)) => {
+                                    return Err(self.error(
+                                        &child(&pointer, "to_pages"),
+                                        ResourceDeclarationReason::UnknownField,
+                                    ));
+                                }
+                                (None, Some(pages)) => {
+                                    let pages_pointer = child(&pointer, "to_pages");
+                                    let pages = self.array(pages, &pages_pointer)?;
+                                    if pages.is_empty() {
+                                        return Err(self.error(
+                                            &pages_pointer,
+                                            ResourceDeclarationReason::InvalidValue,
+                                        ));
+                                    }
+                                    for (index, page) in pages.iter().enumerate() {
+                                        self.string(
+                                            page,
+                                            &child(&pages_pointer, &index.to_string()),
+                                        )?;
+                                    }
+                                }
+                                _ => {
+                                    self.string(
+                                        self.required(entry, &pointer, "to_page")?,
+                                        &child(&pointer, "to_page"),
+                                    )?;
+                                }
                             }
                         }
                         if field == "navigation" || field == "destructive_actions" {
@@ -336,6 +369,8 @@ impl Declaration<'_> {
                             let pointer = child(&pointer, field);
                             match field.as_str() {
                                 "click" => self.navigation_click(value, &pointer)?,
+                                // Workflow #390 LAB-2: checked above.
+                                "to_pages" => {}
                                 "consumes" | "produces" => self.strings(value, &pointer)?,
                                 "expect_after" if !value.is_null() => {
                                     let expected = self.object(
@@ -3860,6 +3895,59 @@ mod tests {
             let error = task(schema)
                 .operation(&operation(member, value), "/operations/0", true)
                 .expect_err("the declaration is refused");
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(issue["field_path"], pointer);
+            assert_eq!(issue["reason"], refusal);
+        }
+    }
+
+    // Workflow #390 LAB-2 (FCM T-03): a navigation edge names its one destination (`to_page`) or
+    // every page its operation may reach (`to_pages`, at least one page), never both and never
+    // neither.
+    #[test]
+    fn lab2_a_navigation_edge_names_one_destination_or_every_page_it_may_reach() {
+        let validate = |edge: Value| {
+            validate_navigation_declarations(
+                Path::new("navigation.json"),
+                &serde_json::json!({"schema_version": "1.0", "navigation": [edge]}),
+            )
+        };
+        let edge = |destination: Option<(&str, Value)>| {
+            let mut edge = serde_json::json!({
+                "id": "open", "from_page": "neutral/home",
+                "click": {"kind": "rect", "x": 1, "y": 1, "width": 2, "height": 2},
+                "source": ""
+            });
+            if let Some((name, value)) = destination {
+                edge[name] = value;
+            }
+            edge
+        };
+        validate(edge(Some((
+            "to_pages",
+            serde_json::json!(["neutral/first", "neutral/second"]),
+        ))))
+        .expect("an edge with every page it may reach");
+        validate(edge(Some(("to_page", serde_json::json!("neutral/first")))))
+            .expect("an edge with one destination");
+        let mut both = edge(Some(("to_page", serde_json::json!("neutral/first"))));
+        both["to_pages"] = serde_json::json!(["neutral/second"]);
+        for (edge, pointer, refusal) in [
+            (both, "/navigation/0/to_pages", "unknown_field"),
+            (
+                edge(Some(("to_pages", serde_json::json!([])))),
+                "/navigation/0/to_pages",
+                "invalid_value",
+            ),
+            (
+                edge(Some(("to_pages", serde_json::json!(["neutral/first", 7])))),
+                "/navigation/0/to_pages/1",
+                "invalid_type",
+            ),
+            (edge(None), "/navigation/0/to_page", "missing_field"),
+        ] {
+            let error = validate(edge).expect_err("the edge is refused");
             assert_eq!(error.code, "resource_declaration_invalid");
             let issue = error.details.expect("declaration issue");
             assert_eq!(issue["field_path"], pointer);

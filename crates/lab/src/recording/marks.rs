@@ -5,8 +5,8 @@
 
 use super::frames::{LoadedFrame, crop_png, rect_contains, rect_inside};
 use super::model::{
-    MarkCrop, MarkFamily, MarkSpec, OcrSpec, RecordRect, RecordSize, RecordedMark,
-    RecordingDefaults, SelfTest, SelfTestMargin, SelfTestStatus,
+    LAB_RECORDING_DEFAULT_SEARCH_MARGIN, MarkCrop, MarkFamily, MarkSpec, OcrSpec, RecordRect,
+    RecordSize, RecordedMark, RecordingDefaults, SelfTest, SelfTestMargin, SelfTestStatus,
 };
 use super::store::{blocked, hex_sha256, invalid};
 use crate::LabOcr;
@@ -241,6 +241,25 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
 
 /// Shape rules (exit 2) and the values taken from the primary frame. Region problems are
 /// rejections of the batch, not shape errors.
+/// Workflow #390 LAB-2: the search area of a template mark that declares none: its crop grown by
+/// `LAB_RECORDING_DEFAULT_SEARCH_MARGIN` pixels on each side and clamped to the frame, so that a
+/// control that moved a little still matches; a declared `search` replaces it.
+pub(crate) fn default_search(region: RecordRect, size: RecordSize) -> RecordRect {
+    let margin = i64::from(LAB_RECORDING_DEFAULT_SEARCH_MARGIN);
+    let left = (i64::from(region.x) - margin).max(0);
+    let top = (i64::from(region.y) - margin).max(0);
+    let right = (i64::from(region.x) + i64::from(region.width) + margin).min(i64::from(size.width));
+    let bottom =
+        (i64::from(region.y) + i64::from(region.height) + margin).min(i64::from(size.height));
+    let field = |value: i64| i32::try_from(value).unwrap_or(i32::MAX);
+    RecordRect {
+        x: field(left),
+        y: field(top),
+        width: field(right - left),
+        height: field(bottom - top),
+    }
+}
+
 pub(crate) fn prepare_mark(
     spec: &MarkSpec,
     primary: &LoadedFrame,
@@ -323,7 +342,10 @@ pub(crate) fn prepare_mark(
                     format!("template '{}' threshold must be in 0..=1", spec.id),
                 ));
             }
-            let search = spec.search.unwrap_or(region);
+            // Workflow #390 LAB-2: without a declared search area, the crop with a margin.
+            let search = spec
+                .search
+                .unwrap_or_else(|| default_search(region, primary.size()));
             if !rect_inside(search, primary.size()) || !rect_contains(search, region) {
                 return Ok(Err(MarkRejection::new(
                     &spec.id,

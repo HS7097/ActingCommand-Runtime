@@ -5,8 +5,8 @@ use actingcommand_contract::{
     ContainedLabOperationRequest, LabArrivalCondition, LabOperationSelection, LabProjectionHint,
 };
 use actingcommand_lab::{
-    ClickEffect, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest, RecordPoint,
-    RecordingLock, record_commit_click, record_plan_click,
+    ClickEffect, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest, PlannedSwipe,
+    RecordPoint, RecordingLock, record_commit_click, record_plan_click,
 };
 
 pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -19,10 +19,23 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         None
     };
     let selection = match &recording {
-        Some((_, plan)) => LabOperationSelection::Coordinates {
-            action: InputAction::Tap {
-                x: plan.point.x,
-                y: plan.point.y,
+        // Workflow #390 LAB-2: a step's drag or long press is one swipe from its point to its
+        // end point over its duration (a long press ends where it began).
+        Some((_, plan)) => match (plan.gesture, plan.to_point) {
+            (Some(gesture), Some(to)) => LabOperationSelection::Coordinates {
+                action: InputAction::Swipe {
+                    x1: plan.point.x,
+                    y1: plan.point.y,
+                    x2: to.x,
+                    y2: to.y,
+                    duration_ms: gesture.duration_ms(),
+                },
+            },
+            _ => LabOperationSelection::Coordinates {
+                action: InputAction::Tap {
+                    x: plan.point.x,
+                    y: plan.point.y,
+                },
             },
         },
         None => selection(flags)?,
@@ -252,9 +265,51 @@ fn begin_record_click(
         }
         _ => return Err(CliError::usage("--tap may be given once")),
     };
+    // Workflow #390 LAB-2: `--swipe x1,y1,x2,y2,ms` executes the open step's declared drag.
+    let swipe = match flags.values("--swipe").as_slice() {
+        [] => None,
+        [value] => {
+            let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+            let [x1, y1, x2, y2, duration] = parts.as_slice() else {
+                return Err(CliError::usage(format!(
+                    "--swipe must be x1,y1,x2,y2,duration-ms, got {value}"
+                )));
+            };
+            let coordinate = |text: &str| {
+                text.parse::<i32>()
+                    .map_err(|_| CliError::usage("Lab coordinates must be i32 integers"))
+            };
+            Some(PlannedSwipe {
+                from: RecordPoint {
+                    x: coordinate(x1)?,
+                    y: coordinate(y1)?,
+                },
+                to: RecordPoint {
+                    x: coordinate(x2)?,
+                    y: coordinate(y2)?,
+                },
+                duration_ms: duration.parse::<u64>().map_err(|_| {
+                    CliError::usage("swipe duration must be a positive millisecond integer")
+                })?,
+            })
+        }
+        _ => return Err(CliError::usage("--swipe may be given once")),
+    };
+    if swipe.is_some() && (tap.is_some() || tap_rect.is_some()) {
+        return Err(CliError::usage(
+            "do --capture --record takes --swipe or --tap/--tap-rect, not both",
+        ));
+    }
     let lock =
         crate::commands::record_flag_begin(global, flags, &instance, "do --capture --record")?;
-    let plan = record_plan_click(&lock, &PlanClickRequest { tap, tap_rect })?;
+    let plan = record_plan_click(
+        &lock,
+        &PlanClickRequest {
+            tap,
+            tap_rect,
+            swipe,
+        },
+    )?;
     Ok((lock, plan))
 }
 

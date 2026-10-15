@@ -13,10 +13,11 @@ use super::marks::{
     EvalFrame, MarkRejection, derive_check, evaluate_mark, prepare_mark, validate_mark_id,
 };
 use super::model::{
-    ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm,
-    LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE, LAB_RECORDING_DEFAULT_MATCH_METRIC,
-    LAB_RECORDING_DEFAULT_SETTLE_MS, LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD,
-    LAB_RECORDING_SCHEMA, LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect,
+    ApplicationAttempt, ClickExecution, ClickFollow, ClickFollowForm, ClickGesture, ClickSpec,
+    ForbiddenMarkView, LAB_RECORDING_DEFAULT_COLOR_MAX_DISTANCE,
+    LAB_RECORDING_DEFAULT_MATCH_METRIC, LAB_RECORDING_DEFAULT_SETTLE_MS,
+    LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
+    LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordSize,
     RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, SelfTestStatus, StepApplication,
     StepClick, StepOptional, StepTransition,
 };
@@ -44,6 +45,10 @@ pub(crate) struct Session {
     /// The number of the next frame id (`f0001`, …): every frame admitted in this command
     /// takes and advances it, so frames admitted together never share an id.
     pub(crate) next_frame: u32,
+    /// Workflow #390 LAB-2: a stopped recording opened by `record mark` to mark its steps again;
+    /// nothing that needs an active recording (a new step, a step operation, an application
+    /// operation, a device command) is accepted on it.
+    pub(crate) stopped: bool,
 }
 
 pub(crate) fn default_recording_defaults() -> RecordingDefaults {
@@ -92,12 +97,35 @@ pub(crate) fn new_recording(
         updated_at_unix_ms: now,
         steps: Vec::new(),
         artifact: None,
+        amended_at_unix_ms: None,
     }
 }
 
 /// The active recording of the lock's instance; a v0.9.0 session without a Lab recording
 /// gets one lazily, with the default settings.
 pub(crate) fn open_session(lock: &RecordingLock) -> LabResult<Session> {
+    open_session_with(lock, false)
+}
+
+/// Workflow #390 LAB-2: `record mark` also opens a stopped recording whose package was
+/// generated (`stopped`), to mark its steps again before `record stop` generates it again.
+pub(crate) fn open_session_for_marks(lock: &RecordingLock) -> LabResult<Session> {
+    open_session_with(lock, true)
+}
+
+/// Workflow #390 LAB-2: a change a stopped recording does not take: it needs an active recording.
+pub(crate) fn stopped_change(change: &str) -> LabError {
+    with_details(
+        not_active(format!(
+            "the recording is stopped: {change} needs an active recording. A stopped recording \
+             takes marks, samples, pages, clicks, transitions and optional steps on its existing \
+             steps; record stop then generates its package again"
+        )),
+        json!({"reason": "recording_stopped", "change": change}),
+    )
+}
+
+fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Session> {
     let state_dir = lock.state_dir().to_path_buf();
     let Some(old) = read_old_record(&state_dir, lock.instance())? else {
         return Err(with_details(
@@ -108,6 +136,24 @@ pub(crate) fn open_session(lock: &RecordingLock) -> LabResult<Session> {
             json!({"state_root": state_dir.display().to_string()}),
         ));
     };
+    if allow_stopped
+        && old.status == "stopped"
+        && old.instance == lock.instance()
+        && let LabFile::Ready(recording) = load_lab(&state_dir, &old)?
+        && recording.status == "stopped"
+        && recording.artifact.is_some()
+    {
+        return Ok(Session {
+            lab_dir: lab_dir(&state_dir, &old.record_id),
+            next_frame: highest_frame_number(&recording).saturating_add(1),
+            state_dir,
+            recording: *recording,
+            created: false,
+            pending: Vec::new(),
+            cache: BTreeMap::new(),
+            stopped: true,
+        });
+    }
     if old.status != "active" {
         return Err(with_details(
             not_active(format!(
@@ -155,6 +201,7 @@ pub(crate) fn open_session(lock: &RecordingLock) -> LabResult<Session> {
         created,
         pending: Vec::new(),
         cache: BTreeMap::new(),
+        stopped: false,
     })
 }
 
@@ -497,6 +544,8 @@ fn new_step(index: u32, frames: Vec<RecordedFrame>) -> RecordingStep {
         click_guard: None,
         application: None,
         optional: None,
+        forbidden: Vec::new(),
+        anchor: None,
         transition: None,
         closed: false,
         closed_by: None,
@@ -877,6 +926,7 @@ fn add_reuse(
 }
 
 /// Ids of own marks of `index` that other steps or transitions reuse or that checks name.
+/// Workflow #390 LAB-2: a mark another step's page forbids is in use too.
 fn reused_elsewhere(recording: &LabRecording, index: u32, ids: &BTreeSet<String>) -> Vec<String> {
     let mut used = BTreeSet::new();
     for step in recording.steps.iter().filter(|step| step.is_effective()) {
@@ -885,7 +935,12 @@ fn reused_elsewhere(recording: &LabRecording, index: u32, ids: &BTreeSet<String>
             _ => &[][..],
         };
         if step.index != index {
-            for id in step.reused.iter().chain(transition_reused) {
+            for id in step
+                .reused
+                .iter()
+                .chain(transition_reused)
+                .chain(&step.forbidden)
+            {
                 if ids.contains(id) {
                     used.insert(id.clone());
                 }
@@ -955,6 +1010,221 @@ pub(crate) struct MarkApplied {
     pub(crate) added: Vec<RecordedMark>,
     pub(crate) reused: Vec<RecordedMark>,
     pub(crate) removed: Vec<String>,
+    /// Workflow #390 LAB-2: the marks the step's page forbids, tested on its live frames.
+    pub(crate) forbidden: Vec<ForbiddenMarkView>,
+}
+
+/// Workflow #390 LAB-2: the marks the step's page forbids after this command: the step's list
+/// without the ones `remove` takes off, then each `forbid` id in its order. A forbidden mark is an
+/// own mark of another effective step, as a reused one is (`forbidden_source_missing`
+/// otherwise), and never a mark the page also requires (an own or reused mark of the step).
+fn forbidden_after(
+    session: &Session,
+    target: u32,
+    existing: &[String],
+    removed: &[String],
+    added: &[String],
+    batch: &MarkBatch,
+) -> LabResult<Vec<String>> {
+    let mut list = existing
+        .iter()
+        .filter(|id| !removed.contains(id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let required_here =
+        |id: &String| batch.own.iter().any(|mark| &mark.id == id) || batch.reused.contains(id);
+    for id in added {
+        let owner = session
+            .recording
+            .steps
+            .iter()
+            .filter(|step| step.is_effective())
+            .find(|step| step.marks.iter().any(|mark| &mark.id == id));
+        match owner {
+            _ if required_here(id) => {
+                return Err(invalid(
+                    "validation_failed",
+                    format!(
+                        "mark '{id}' is a mark of this step; its page requires it and cannot also \
+                         forbid it"
+                    ),
+                ));
+            }
+            Some(step) if step.index != target => {
+                if !list.contains(id) {
+                    list.push(id.clone());
+                }
+            }
+            Some(_) => {
+                return Err(invalid(
+                    "validation_failed",
+                    format!("mark '{id}' belongs to this step; its page cannot forbid it"),
+                ));
+            }
+            None => {
+                return Err(with_details(
+                    blocked(
+                        "record_mark_rejected",
+                        format!("mark '{id}' is not a step mark of this recording"),
+                    ),
+                    json!({"marks": [{"id": id, "reason": "forbidden_source_missing"}]}),
+                ));
+            }
+        }
+    }
+    if let Some(id) = list.iter().find(|id| required_here(id)) {
+        return Err(invalid(
+            "validation_failed",
+            format!(
+                "mark '{id}' is forbidden on this step's page; it cannot be reused here as well"
+            ),
+        ));
+    }
+    Ok(list)
+}
+
+/// Workflow #390 LAB-2: whether `mark` passes on one live frame, as its self-test evaluates it
+/// (a check from its members on that frame), with the error of an evaluation that failed.
+fn mark_on_frame(
+    session: &Session,
+    mark: &RecordedMark,
+    frame: &EvalFrame<'_>,
+    ocr: &LabOcr,
+) -> LabResult<(SelfTestStatus, Option<Value>)> {
+    if mark.family == MarkFamily::Check {
+        let mut members = BTreeMap::new();
+        for member in mark.check_members() {
+            let member_mark = find_step_mark(&session.recording, member).ok_or_else(|| {
+                invalid(
+                    "validation_failed",
+                    format!(
+                        "check '{}' names '{member}', which is not a step mark",
+                        mark.id
+                    ),
+                )
+            })?;
+            let (status, error) = mark_on_frame(session, &member_mark, frame, ocr)?;
+            if error.is_some() {
+                return Ok((status, error));
+            }
+            members.insert(member.clone(), status);
+        }
+        return Ok((derive_check(mark, &members, 1).0.status, None));
+    }
+    let crop = stored_crop(mark)?;
+    let (test, failure) = evaluate_mark(
+        mark,
+        crop.as_deref(),
+        std::slice::from_ref(frame),
+        &session.recording.defaults,
+        ocr,
+    )?;
+    let error =
+        (test.reason.as_deref() == Some("self_test_error")).then(|| failure.unwrap_or(Value::Null));
+    Ok((test.status, error))
+}
+
+/// Workflow #390 LAB-2: every forbidden mark on every live frame of the step. One that passes on a
+/// frame is refused (`forbidden_mark_passes`, naming the frame), as is one whose evaluation failed
+/// (`self_test_error`); one that cannot be evaluated (OCR without a model) is `not_evaluated`.
+fn evaluate_forbidden(
+    session: &Session,
+    forbidden: &[String],
+    live: &[RecordedFrame],
+    ocr: &LabOcr,
+) -> LabResult<(Vec<ForbiddenMarkView>, Vec<MarkRejection>)> {
+    let frames = live
+        .iter()
+        .map(|entry| {
+            session
+                .cache
+                .get(&entry.sha256)
+                .map(|frame| EvalFrame {
+                    id: entry.frame_id.as_str(),
+                    frame,
+                })
+                .ok_or_else(|| invalid("validation_failed", "frame was not loaded"))
+        })
+        .collect::<LabResult<Vec<_>>>()?;
+    let mut views = Vec::new();
+    let mut rejections = Vec::new();
+    for id in forbidden {
+        let mark = find_step_mark(&session.recording, id).ok_or_else(|| {
+            with_details(
+                blocked(
+                    "record_mark_rejected",
+                    format!("mark '{id}' is not a step mark of this recording"),
+                ),
+                json!({"marks": [{"id": id, "reason": "forbidden_source_missing"}]}),
+            )
+        })?;
+        let mut not_evaluated = false;
+        for frame in &frames {
+            match mark_on_frame(session, &mark, frame, ocr)? {
+                (_, Some(error)) => {
+                    rejections.push(MarkRejection::new(
+                        id,
+                        "self_test_error",
+                        json!({"frame_id": frame.id, "error": error, "forbidden": true}),
+                    ));
+                    break;
+                }
+                (SelfTestStatus::Passed, None) => {
+                    rejections.push(MarkRejection::new(
+                        id,
+                        "forbidden_mark_passes",
+                        json!({"frame_id": frame.id}),
+                    ));
+                    break;
+                }
+                (SelfTestStatus::NotEvaluated, None) => not_evaluated = true,
+                (SelfTestStatus::Failed, None) => {}
+            }
+        }
+        views.push(ForbiddenMarkView {
+            id: id.clone(),
+            family: mark.family,
+            status: if not_evaluated {
+                "not_evaluated"
+            } else {
+                "absent"
+            }
+            .to_string(),
+            frames: u32::try_from(frames.len()).unwrap_or(u32::MAX),
+        });
+    }
+    Ok((views, rejections))
+}
+
+/// Workflow #390 LAB-2: the step's anchor after this command must be an own template mark of the
+/// step that its page requires (not only a member of an `any_of` check), or the batch is refused
+/// with `anchor_invalid`.
+fn anchor_rejection(
+    anchor: Option<&String>,
+    own: &[RecordedMark],
+    reused: &[RecordedMark],
+) -> Option<MarkRejection> {
+    let id = anchor?;
+    let problem = match own.iter().find(|mark| &mark.id == id) {
+        Some(mark) if mark.family != MarkFamily::Template => "not_own_template",
+        None => "not_own_template",
+        Some(_)
+            if own
+                .iter()
+                .chain(reused)
+                .filter_map(|mark| mark.any_of.as_ref())
+                .flatten()
+                .any(|member| member == id) =>
+        {
+            "not_required"
+        }
+        Some(_) => return None,
+    };
+    Some(MarkRejection::new(
+        id,
+        "anchor_invalid",
+        json!({"problem": problem}),
+    ))
 }
 
 pub(crate) fn apply_marks(
@@ -995,6 +1265,10 @@ pub(crate) fn apply_marks(
                     .is_some_and(|sha256| sha256 == loaded.sha256);
                 match open.filter(|_| same_as_open) {
                     Some(index) => index,
+                    // Workflow #390 LAB-2: a stopped recording takes no new step.
+                    None if session.stopped => {
+                        return Err(stopped_change("a frame that opens a new step"));
+                    }
                     None => {
                         let arrival = arrive(session, loaded, ArrivalMode::Offline, &local, path)?;
                         opened = arrival.opened;
@@ -1027,6 +1301,9 @@ pub(crate) fn apply_marks(
             || request.click.is_some()
             || request.click_guard.is_some()
             || request.retry.is_some()
+            || !request.forbid.is_empty()
+            || request.anchor.is_some()
+            || request.clear_anchor
             || (request.application.is_none() && request.optional.is_none());
         if needs_frame {
             return Err(with_details(
@@ -1051,6 +1328,7 @@ pub(crate) fn apply_marks(
             added: Vec::new(),
             reused: Vec::new(),
             removed: Vec::new(),
+            forbidden: Vec::new(),
         });
     }
     if let Some(page) = &request.page {
@@ -1059,7 +1337,17 @@ pub(crate) fn apply_marks(
 
     // remove
     let mut removed = Vec::new();
+    // Workflow #390 LAB-2: `remove` also takes a forbidden mark off the page.
+    let mut removed_forbidden = Vec::new();
     let mut rejections = Vec::new();
+    let anchor = if request.clear_anchor {
+        None
+    } else {
+        request
+            .anchor
+            .clone()
+            .or_else(|| step_ref(&session.recording, target).and_then(|step| step.anchor.clone()))
+    };
     {
         let recording = &session.recording;
         let step = effective_step(recording, target)?;
@@ -1070,6 +1358,10 @@ pub(crate) fn apply_marks(
             .collect::<BTreeSet<_>>();
         let elsewhere = reused_elsewhere(recording, target, &own_ids);
         for id in &request.remove {
+            if step.forbidden.contains(id) {
+                removed_forbidden.push(id.clone());
+                continue;
+            }
             let in_step = own_ids.contains(id) || step.reused.contains(id);
             if !in_step {
                 rejections.push(MarkRejection::new(id, "mark_not_in_step", json!({})));
@@ -1083,14 +1375,16 @@ pub(crate) fn apply_marks(
                     .click
                     .as_ref()
                     .and_then(|click| click.follow.as_ref())
-                    .is_some_and(|follow| &follow.mark_id == id);
+                    .is_some_and(|follow| &follow.mark_id == id)
+                || anchor.as_ref() == Some(id);
             if elsewhere.contains(id) || named_by_check || guard {
                 return Err(with_details(
                     blocked(
                         "record_mark_in_use",
                         format!(
-                            "mark '{id}' is reused by another step, named by a check, is the click \
-                             guard or is the template the click follows"
+                            "mark '{id}' is reused or forbidden by another step, named by a check, \
+                             is the click guard, is the template the click follows or anchors the \
+                             page"
                         ),
                     ),
                     json!({"id": id}),
@@ -1146,6 +1440,18 @@ pub(crate) fn apply_marks(
         &mut rejections,
     )?;
     add_reuse(session, &mut batch, &request.reuse, Some(target))?;
+    // Workflow #390 LAB-2: the marks the page forbids after this command.
+    let existing_forbidden = effective_step(&session.recording, target)?
+        .forbidden
+        .clone();
+    let forbidden = forbidden_after(
+        session,
+        target,
+        &existing_forbidden,
+        &removed_forbidden,
+        &request.forbid,
+        &batch,
+    )?;
 
     // samples
     let mut samples = Vec::new();
@@ -1165,12 +1471,19 @@ pub(crate) fn apply_marks(
     apply_optional(&mut session.recording, request, target)?;
 
     // self-test
-    let total = batch.own.len() + batch.reused.len();
+    let total = batch.own.len() + batch.reused.len() + forbidden.len();
     let result = evaluate_batch(session, &batch, &live, ocr)?;
     // Workflow #396 REC-4: a click that follows a template holds on every live frame.
     let follow_rejection = follow_frames(session, &batch, &result, target, &live)?;
+    // Workflow #390 LAB-2: the anchor is a required own template mark, and no forbidden mark
+    // passes on a live frame of the step.
+    let anchor_problem = anchor_rejection(anchor.as_ref(), &result.own, &result.reused);
+    let (forbidden_views, forbidden_rejections) =
+        evaluate_forbidden(session, &forbidden, &live, ocr)?;
     rejections.extend(result.rejections);
     rejections.extend(follow_rejection);
+    rejections.extend(anchor_problem);
+    rejections.extend(forbidden_rejections);
     if !rejections.is_empty() {
         return Err(rejected(&rejections, total));
     }
@@ -1185,6 +1498,9 @@ pub(crate) fn apply_marks(
     step.marks = result.own;
     step.reused = batch.reused;
     step.frames.extend(samples.iter().cloned());
+    step.forbidden = forbidden;
+    step.anchor = anchor;
+    removed.extend(removed_forbidden);
     Ok(MarkApplied {
         step: target,
         opened,
@@ -1194,7 +1510,81 @@ pub(crate) fn apply_marks(
         added,
         reused: result.reused,
         removed,
+        forbidden: forbidden_views,
     })
+}
+
+/// Workflow #390 LAB-2: the click declaration names a drag or a long press.
+fn gesture_declared(spec: &ClickSpec) -> bool {
+    spec.drag_to.is_some() || spec.long_press.is_some() || spec.duration_ms.is_some()
+}
+
+/// Workflow #390 LAB-2: a drag (`region` to `drag_to`) or a long press (the point `long_press`,
+/// recorded as a 1x1 rectangle), each over `duration_ms` (1..=60000), with every rectangle inside
+/// the frame; it takes no source mark and follows no template.
+fn gesture_declaration(
+    spec: &ClickSpec,
+    size: Option<RecordSize>,
+) -> LabResult<(RecordRect, ClickGesture)> {
+    let inside = |rect: RecordRect| size.is_some_and(|size| rect_inside(rect, size));
+    let duration = |duration_ms: u64| -> LabResult<u64> {
+        if !(1..=LAB_RECORDING_MAX_GESTURE_MS).contains(&duration_ms) {
+            return Err(with_details(
+                invalid(
+                    "validation_failed",
+                    format!(
+                        "--duration-ms must be in 1..={LAB_RECORDING_MAX_GESTURE_MS}, got \
+                         {duration_ms}"
+                    ),
+                ),
+                json!({"duration_ms": duration_ms, "max_duration_ms": LAB_RECORDING_MAX_GESTURE_MS}),
+            ));
+        }
+        Ok(duration_ms)
+    };
+    let source_free = spec.from.is_none() && spec.follow.is_none();
+    match (spec.region, spec.drag_to, spec.long_press, spec.duration_ms) {
+        (Some(from), Some(to), None, Some(duration_ms)) if source_free => {
+            if !inside(from) || !inside(to) {
+                return Err(invalid(
+                    "validation_failed",
+                    "a drag's two rectangles must lie inside the frame with width and height >= 1",
+                ));
+            }
+            Ok((
+                from,
+                ClickGesture::Drag {
+                    to,
+                    duration_ms: duration(duration_ms)?,
+                },
+            ))
+        }
+        (None, None, Some(point), Some(duration_ms)) if source_free => {
+            let rect = RecordRect {
+                x: point.x,
+                y: point.y,
+                width: 1,
+                height: 1,
+            };
+            if !inside(rect) {
+                return Err(invalid(
+                    "validation_failed",
+                    "the long press point must lie inside the frame",
+                ));
+            }
+            Ok((
+                rect,
+                ClickGesture::LongPress {
+                    duration_ms: duration(duration_ms)?,
+                },
+            ))
+        }
+        _ => Err(invalid(
+            "validation_failed",
+            "a drag needs --click x,y,w,h, --drag-to x,y,w,h and --duration-ms; a long press needs \
+             --long-press x,y and --duration-ms; neither takes --click-from or --click-follow",
+        )),
+    }
 }
 
 fn apply_click(
@@ -1221,6 +1611,11 @@ fn apply_click(
     };
     let declared = match &request.click {
         None => None,
+        // Workflow #390 LAB-2: a drag or a long press.
+        Some(spec) if gesture_declared(spec) => {
+            let (rect, gesture) = gesture_declaration(spec, size)?;
+            Some((rect, "declared", None, None, Some(gesture)))
+        }
         Some(spec) => {
             let declared_rect = |rect: &RecordRect| -> LabResult<RecordRect> {
                 if !size.is_some_and(|size| rect_inside(*rect, size)) {
@@ -1297,7 +1692,7 @@ fn apply_click(
                     ));
                 }
             };
-            Some((rect, source, from, follow))
+            Some((rect, source, from, follow, None))
         }
     };
     let guard = match &request.click_guard {
@@ -1342,7 +1737,7 @@ fn apply_click(
             ));
         }
     }
-    if let Some((rect, source, from, follow)) = declared {
+    if let Some((rect, source, from, follow, gesture)) = declared {
         step.application = None;
         let attempts = match &step.click {
             Some(existing) if existing.execution.is_some() => {
@@ -1381,6 +1776,7 @@ fn apply_click(
             source: source.to_string(),
             from,
             follow,
+            gesture,
             retry,
             declared_at_unix_ms: now_unix_ms(),
             execution: None,
@@ -1915,7 +2311,12 @@ pub(crate) fn apply_step_action(
                         Some(StepTransition::Page { reused, .. }) => reused.as_slice(),
                         _ => &[][..],
                     };
-                    other.reused.iter().chain(transition_reused)
+                    // Workflow #390 LAB-2: a page that forbids a mark uses it too.
+                    other
+                        .reused
+                        .iter()
+                        .chain(transition_reused)
+                        .chain(&other.forbidden)
                 })
                 .filter(|id| ids.contains(*id))
                 .cloned()
@@ -2014,6 +2415,11 @@ fn to_transition(recording: &mut LabRecording, index: u32) -> LabResult<()> {
     if step.optional.is_some() {
         return Err(to_transition_invalid(index, "optional"));
     }
+    // Workflow #390 LAB-2: a page transition only requires its marks; it forbids nothing and has
+    // no anchor.
+    if !step.forbidden.is_empty() || step.anchor.is_some() {
+        return Err(to_transition_invalid(index, "page_rule"));
+    }
     if !has_marks(step) {
         return Err(to_transition_invalid(index, "step_has_no_marks"));
     }
@@ -2110,6 +2516,35 @@ pub(crate) fn plan_click(
             json!({"step": index}),
         ));
     }
+    // Workflow #390 LAB-2: a step that declares a drag or a long press is executed as one swipe.
+    if let Some((click, gesture)) = step
+        .click
+        .as_ref()
+        .and_then(|click| click.gesture.map(|gesture| (click, gesture)))
+    {
+        return plan_gesture(recording, index, click, gesture, request);
+    }
+    if request.swipe.is_some() {
+        return Err(match &step.click {
+            None => with_details(
+                blocked(
+                    "record_step_click_missing",
+                    format!(
+                        "step {index} declares no drag; declare it with `record mark --click \
+                         x,y,w,h --drag-to x,y,w,h --duration-ms <ms>` first"
+                    ),
+                ),
+                json!({"step": index}),
+            ),
+            Some(click) => with_details(
+                blocked(
+                    "record_click_rect_conflict",
+                    format!("step {index} declares a tap; --swipe executes a declared drag"),
+                ),
+                json!({"step": index, "declared": click.rect}),
+            ),
+        });
+    }
     let (rect, source, declares_click) = match (request.tap_rect, &step.click) {
         (Some(rect), None) => {
             if !recording
@@ -2166,6 +2601,99 @@ pub(crate) fn plan_click(
         point_rule: point_rule.to_string(),
         source,
         declares_click,
+        gesture: None,
+        to_point: None,
+    })
+}
+
+fn point_inside(point: RecordPoint, rect: RecordRect) -> bool {
+    i64::from(point.x) >= i64::from(rect.x)
+        && i64::from(point.y) >= i64::from(rect.y)
+        && i64::from(point.x) < i64::from(rect.x) + i64::from(rect.width)
+        && i64::from(point.y) < i64::from(rect.y) + i64::from(rect.height)
+}
+
+/// Workflow #390 LAB-2: `do --capture --record` on a step that declares a drag or a long press.
+/// A drag goes from a point of its rectangle to a point of `to` (their centers, or `--swipe`'s
+/// points, which must lie inside them, with the declared duration); a long press holds its one
+/// point. `--tap` and `--tap-rect` press a tap and are refused here.
+fn plan_gesture(
+    recording: &LabRecording,
+    index: u32,
+    click: &StepClick,
+    gesture: ClickGesture,
+    request: &super::model::PlanClickRequest,
+) -> LabResult<super::model::ClickPlan> {
+    let conflict = |message: String, details: Value| {
+        with_details(blocked("record_click_rect_conflict", message), details)
+    };
+    if request.tap.is_some() || request.tap_rect.is_some() {
+        return Err(conflict(
+            format!(
+                "step {index} declares a {}; --tap and --tap-rect press a tap",
+                gesture.kind()
+            ),
+            json!({"step": index, "gesture": gesture}),
+        ));
+    }
+    let rect = click.rect;
+    let (point, to_point, rule) = match (gesture, request.swipe) {
+        (ClickGesture::Drag { to, duration_ms }, Some(swipe)) => {
+            if !point_inside(swipe.from, rect) || !point_inside(swipe.to, to) {
+                return Err(with_details(
+                    blocked(
+                        "record_click_outside_step_rect",
+                        format!(
+                            "--swipe {},{},{},{} does not start in the drag's rectangle and end in \
+                             its destination of step {index}",
+                            swipe.from.x, swipe.from.y, swipe.to.x, swipe.to.y
+                        ),
+                    ),
+                    json!({"step": index, "rect": rect, "to": to, "swipe_from": swipe.from, "swipe_to": swipe.to}),
+                ));
+            }
+            if swipe.duration_ms != duration_ms {
+                return Err(conflict(
+                    format!(
+                        "--swipe lasts {} ms; the drag of step {index} declares {duration_ms} ms",
+                        swipe.duration_ms
+                    ),
+                    json!({
+                        "step": index,
+                        "declared_duration_ms": duration_ms,
+                        "swipe_duration_ms": swipe.duration_ms
+                    }),
+                ));
+            }
+            (swipe.from, swipe.to, "explicit")
+        }
+        (ClickGesture::Drag { to, .. }, None) => {
+            (rect_center(rect), rect_center(to), "rect_center")
+        }
+        (ClickGesture::LongPress { .. }, None) => {
+            let point = RecordPoint {
+                x: rect.x,
+                y: rect.y,
+            };
+            (point, point, "declared_point")
+        }
+        (ClickGesture::LongPress { .. }, Some(_)) => {
+            return Err(conflict(
+                format!("step {index} declares a long press; --swipe executes a declared drag"),
+                json!({"step": index, "gesture": gesture}),
+            ));
+        }
+    };
+    Ok(super::model::ClickPlan {
+        record_id: recording.record_id.clone(),
+        step: index,
+        rect,
+        point,
+        point_rule: rule.to_string(),
+        source: click.source.clone(),
+        declares_click: false,
+        gesture: Some(gesture),
+        to_point: Some(to_point),
     })
 }
 
@@ -2193,6 +2721,7 @@ pub(crate) fn commit_click(
             source: plan.source.clone(),
             from: None,
             follow: None,
+            gesture: None,
             retry: None,
             declared_at_unix_ms: now,
             execution: None,
@@ -2223,6 +2752,8 @@ pub(crate) fn commit_click(
         before: request.before.clone(),
         after: request.after.clone(),
         executed_at_unix_ms: now,
+        to_point: plan.to_point,
+        duration_ms: plan.gesture.map(ClickGesture::duration_ms),
     });
     if performed {
         click.needs_review = request.has_failure;

@@ -1220,6 +1220,31 @@ declarations", and [lab-recording.md](lab-recording.md), "Output", are the contr
 | N3F-2 | `validate_bundle_maintenance` (`package bundle --maintenance`, installers): the chains of a bundle are checked against every pack it holds | rule | NAV-3a follow-up | — | the bundle is its game's registry (M-373 §4.3): every pack binds a prerequisite package and no declaration binds one; a declared prerequisite the bundle does not hold is `contained_task_prerequisite_unbound`; `return_home` binds each server's fallback, as before |
 | N3F-3 | `record stop` answer member `prerequisite_entry_example`: `{bundle: "<standard_packs.root>/<game>/bundle.json", pack: {package_id, server, entry_task_id, path: "packs/<package_id>"}, directory: "<standard_packs.root>/<game>/<package_id>"}` | changed output member (Lab), replaces §1.64 P5-5's `{package_id, package_path}` | NAV-3a follow-up | NAV-3a follow-up | the package's registry entry (`package bundle` adds `file_count` and `byte_count` to `pack`); `<standard_packs.root>` stays a placeholder. MCP `ac_record_stop` and `ac_binding_draft` pass it on verbatim, unchanged |
 
+### 1.74 Wave 15 slice LAB-2 (#390, forced-compromises mapping row LAB-2; compromises L-02, T-03)
+
+LAB-2 completes the Lab recording's generated package and the navigation projection. It writes
+no ledger record, wire shape or configuration key: the rows are the Lab state file, the Lab's
+tool input and output, and the resource files the tools write.
+[lab-recording.md](lab-recording.md) ("Forbidden marks and anchors", "Drags and long presses",
+"Marking after stop", "`--record` on device commands", "Pages and documents") and
+[resource-declarations.md](resource-declarations.md) (the navigation paragraph) are the
+contract. No code is new: the refusals reuse `validation_failed`, `record_mark_rejected` (new
+reasons `forbidden_source_missing`, `forbidden_mark_passes`, `anchor_invalid` with `problem`
+`not_own_template` or `not_required`), `record_mark_in_use`, `record_to_transition_invalid`
+(new reason `page_rule`), `record_click_rect_conflict`, `record_click_outside_step_rect`,
+`record_step_click_missing` and `record_session_not_active` (new `details.reason`
+`recording_stopped`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L2-1 | Lab recording state (`actingcommand.lab-recording.v1`): step `forbidden: [ids]` and `anchor`, click `gesture` (`{"kind": "drag", "to", "duration_ms"}` \| `{"kind": "long_press", "duration_ms"}`), execution `to_point` and `duration_ms`, recording `amended_at_unix_ms` | new members (Lab state file, not the ledger) | LAB-2 | LAB-2 | absent when unused, so a recording without them is written as before; a template mark recorded without a search area keeps the default one it was given (L2-2) |
+| L2-2 | `record mark` input: `--template <id>=x,y,w,h@x,y,w,h`; `--forbid <id>`; `--anchor <id>` \| `--no-anchor`; `--click x,y,w,h --drag-to x,y,w,h --duration-ms <ms>`; `--long-press x,y --duration-ms <ms>`; request members `forbid`, `anchor`, `clear_anchor`, `click.drag_to`, `click.long_press`, `click.duration_ms` (`actingcommand.lab-record-mark.v1`) | tool input (MCP `ac_record_mark` hands the request on unchanged) | LAB-2 | LAB-2 | a template mark without a declared search area searches its crop grown by 48 px on each side, clamped to the frame (coordinator input of 10-15: a game update shifted a menu bar by about 40 px and every search area equal to its template box failed); durations 1..=60000 ms |
+| L2-3 | `record mark` output `forbidden[{id, family, status: "absent" \| "not_evaluated", frames}]`, `after_stop`, `step_state{forbidden?, anchor?}`; `record status` steps `forbidden?`, `anchor?`, click `gesture?`, `amended_at_unix_ms?` | output members (no persisted record) | LAB-2 | LAB-2 | absent when unused |
+| L2-4 | the package `record stop` generates: page rule `forbidden`; the anchoring template as `anchors[] {id: <page>, …}` (target `page/<page>`, named by every reference); clicks `{"kind": "drag", "from", "to", "duration_ms"}` and `{"kind": "long_press", "x", "y", "duration_ms"}`; the default task timeout counting a gesture's duration | resource file format the tool writes (task schema `0.9`, unchanged grammar) | LAB-2 | LAB-2 | a recording that uses none of them generates the same bytes as before |
+| L2-5 | `record stop` on a stopped recording marked again: generated again, `lab.status: "regenerated"` | output value and rule | LAB-2 | LAB-2 | options not given keep the generated package's values, except the task timeout, computed again; `--lab-dir` is written only when given |
+| L2-6 | `do --capture --record --swipe x1,y1,x2,y2,ms`, and `do --capture --record` on a drag or long press step (one swipe; the plan's `gesture` and `to_point`) | tool input and output | LAB-2 | LAB-2 | was `record_flag_unsupported`; the Runtime operation is the existing coordinates swipe |
+| L2-7 | the generated navigation's edge `{id, from_page, to_pages: [...], click, source}` for an operation whose `to` is a page set | resource file format (`navigation`, schema `0.6` unchanged) | LAB-2 | LAB-2 (source compilation) | exactly one of `to_page` and `to_pages`; a catalog navigation action and page projection element like any edge; the drive graph and actinglab's route tools leave it out; a `long_press` navigation click reads as a drag that does not move |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
