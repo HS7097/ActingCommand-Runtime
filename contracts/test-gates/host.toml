@@ -868,3 +868,26 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_308_l3b::l3b_the_host_performs_a_drag_with_a_pause_and_a_brake_as_one_prepared_plan",
 ]
 incident = ["#308"]
+
+# Workflow #398 RD-5b (model-398 v1.1 §7, §10.1, §12 rows RD-5b-T1 to T7, T9 and T10): before the first step of a package run on a handset, a dark screen gets one wake key and the configured settle wait, a keyguard without a credential one dismissal under dismiss, and a keyguard waiting for a person is device_locked; a hot handset (thermal hysteresis), an unplugged low battery and (under in_use_gate) another application in front hold the run with their codes and withdraw the availability under device_state:<hold>, and the next sample lifts each hold with device_hold_lifted; no refusal sends an input; an input late by the screen-off timeout less the margin checks the screen first; an emulator gets no device-state command; a sample writes the device.* facts with the configured TTL and names no device; the device_state keys carry the model defaults and refuse broken values
+[[gate]]
+key = "85"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t1_a_dark_screen_is_woken_once_before_the_run_or_the_run_does_not_start",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t2_a_keyguard_without_a_credential_is_dismissed_once_or_left_to_a_person",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t3_a_locked_handset_waits_for_a_person_and_the_next_sample_after_the_unlock_restores_it",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t4_a_hot_handset_holds_its_runs_until_it_cools_below_the_resume_level",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t5_an_unplugged_low_battery_holds_and_plugging_it_in_lifts_the_hold",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t6_another_application_in_front_holds_the_run_only_under_the_in_use_gate",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t7_an_emulator_gets_no_device_state_command",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t10_a_sample_writes_the_device_facts_with_the_configured_ttl",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t3_a_locked_handset_holds_until_a_sample_finds_no_keyguard",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t4_the_thermal_hold_starts_at_its_level_and_lifts_only_below_the_resume_level",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t5_a_low_battery_holds_only_on_no_power_source",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t6_another_application_holds_until_a_look_after_the_backoff_finds_none",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t9_an_input_late_by_the_timeout_less_the_margin_checks_the_screen_first",
+    "actingcommand-runtime-config::lib::device_state_tests::rd5b_keys_every_device_state_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::device_state_tests::rd5b_keys_device_state_values_that_break_a_rule_are_refused",
+]
+incident = ["#398"]

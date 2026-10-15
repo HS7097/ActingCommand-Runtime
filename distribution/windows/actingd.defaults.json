@@ -354,5 +354,17 @@
     "settle_ms": 3000,
     "offline_action": "wait",
     "restore_retry_ms": [5000, 15000, 60000]
+  },
+  "device_state": {
+    "sample_interval_ms": 60000,
+    "fact_ttl_ms": 180000,
+    "wake_settle_ms": 1000,
+    "keepalive_margin_ms": 60000,
+    "keyguard_insecure": "dismiss",
+    "battery_min_percent": 15,
+    "thermal_hold_at": "severe",
+    "thermal_resume_below": "moderate",
+    "in_use_gate": false,
+    "in_use_backoff_ms": 300000
   }
 }

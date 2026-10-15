@@ -410,6 +410,11 @@ outcome_keys! {
     // device-link watch.
     device_link_state: vocab(device_link_state),
     device_watch_problem: vocab(device_watch_problem),
+    // Workflow #398 RD-5b: the hold of a handset's device state, its thermal status and its
+    // battery level.
+    device_hold: vocab(device_hold),
+    thermal_status: vocab(thermal_status),
+    battery_percent: integer,
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
     // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin ----

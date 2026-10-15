@@ -476,6 +476,14 @@ impl HostShared {
             }
             return self.publish_device_link_unavailable(&instance_alias, state.as_str());
         }
+        // Workflow #398 RD-5b (model-398 v1.1 §7.6): a handset under a device-state hold stays
+        // unavailable, under its first hold, whatever its self-check says.
+        if let Some(hold) = self.device_state_hold(instance_id)? {
+            if Self::withdrawn_for_device_state(active.as_ref(), hold.as_str()) {
+                return Ok(());
+            }
+            return self.publish_device_state_unavailable(&instance_alias, hold.as_str());
+        }
         // Workflow #403: a fenced instance stays unavailable whatever its self-check says,
         // until a passing preparation lifts the fence.
         if seed_available
@@ -483,12 +491,14 @@ impl HostShared {
             && !self.resource_fenced(instance_id)?
         {
             // Workflow #398 RD-2: a device-link withdrawal ends the same way, once the link is
-            // `device` again and a preparation passed (model-398 §4.2, §4.3).
+            // `device` again and a preparation passed (model-398 §4.2, §4.3); Workflow #398
+            // RD-5b: so does a device-state withdrawal once no hold is left (§7.4).
             let withdrawn_by_selfcheck = active.as_ref().is_some_and(|record| {
                 record
                     .source_snapshot_id
                     .starts_with(BACKEND_SELFCHECK_AVAILABILITY_SNAPSHOT_PREFIX)
                     || Self::withdrawn_by_device_link(Some(record))
+                    || Self::withdrawn_by_device_state(Some(record))
             });
             if withdrawn_by_selfcheck && active_value != Some(true) {
                 self.restore_policy_instance_availability(&instance_alias, seed_available)?;

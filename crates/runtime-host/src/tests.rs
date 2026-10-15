@@ -177,6 +177,8 @@ mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.
 mod gate_398_rd2;
+// Workflow #398 RD-5b: a handset's device state, its holds and the start gate through the host.
+mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
 mod gate_epoch_close;

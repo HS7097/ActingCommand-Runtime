@@ -1610,6 +1610,20 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         ))
     }
 
+    /// Workflow #398 RD-5b (model-398 v1.1 §7.1-§7.3): hands `work` the device-state shell of
+    /// the bound handset `instance_alias` (the closed sets of read-only reads and screen-check
+    /// actions of Workflow #398 RD-5a, `adb -s <serial> shell ...` through the installation's
+    /// adb) and the instance's configured application id, outside any session. `Ok(false)` when
+    /// the instance is not a bound handset: `work` does not run and no command is sent (§7.2:
+    /// an emulator gets none). Providers without handsets keep this default.
+    fn with_handset_state(
+        &self,
+        _instance_alias: &str,
+        _work: &mut dyn FnMut(&mut dyn actingcommand_device::DeviceStateShell, &str),
+    ) -> DeviceResult<bool> {
+        Ok(false)
+    }
+
     fn observe_monitor(
         &self,
         _instance_alias: &str,

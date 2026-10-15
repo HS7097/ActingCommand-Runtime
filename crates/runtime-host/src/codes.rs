@@ -2247,6 +2247,8 @@ pub(crate) mod test_spellings {
             // Workflow #398 RD-2: a test hands the device-link watch's events and timers in.
             DeviceLinkEventForTest => "device_link_event_for_test",
             DeviceLinkTickForTest => "device_link_tick_for_test",
+            // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
+            DeviceStateSampleForTest => "device_state_sample_for_test",
         }
     }
 }
@@ -2381,3 +2383,66 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #384 D2-S3: end ----
+
+// ---- Workflow #398 RD-5b (a handset's device state): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of a handset's device state (Workflow #398 RD-5b, model-398 v1.1 §7,
+    /// §10.1): the holds its sampling or its start gate finds, their lifting, the wake key, and
+    /// the sampling itself. The three screen-check codes (`device_wake_failed`,
+    /// `device_keyguard_dismiss_failed`, `device_locked`) and `device_state_unreadable` are the
+    /// device layer's (`actingcommand_device::DeviceStateCode`, RD-5a).
+    pub(crate) enum DeviceStateHostCode {
+        /// Warning. The handset's thermal status reached `device_state.thermal_hold_at`: it is
+        /// unavailable (`device_state:thermal`) until the status falls below
+        /// `device_state.thermal_resume_below`; at a run's start the run does not start (keys
+        /// `thermal_status`, `device_label`).
+        ThermalHold => "device_thermal_hold": warning / planned_stop,
+        /// Warning. The handset is on no power source and its battery is below
+        /// `device_state.battery_min_percent`: it is unavailable (`device_state:battery_low`)
+        /// until it is plugged in or charged; at a run's start the run does not start (keys
+        /// `battery_percent`, `device_label`).
+        BatteryLow => "device_battery_low": warning / planned_stop,
+        /// Warning. At a run's start another application was in the handset's foreground
+        /// (`device_state.in_use_gate`): the run does not start, and the handset is unavailable
+        /// (`device_state:in_use`) until a sample after `device_state.in_use_backoff_ms` finds
+        /// the instance's application, the home screen or nothing there (keys `device_label`).
+        InUse => "device_in_use": warning / planned_stop,
+        /// Info. The start gate, or the check before an input, lit the handset's screen with the
+        /// wake key (keys `device_label`).
+        ScreenWoken => "device_screen_woken": info / none,
+        /// Info. A hold of the handset lifted; with no hold left it is available again as its
+        /// self-check and its link allow (keys `device_hold`, `device_label`).
+        HoldLifted => "device_hold_lifted": info / none,
+        /// Error. The device-state sampling of the handsets could not start; the Runtime does not
+        /// run without it.
+        SamplingFailed => "device_state_sampling_failed": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// What holds a handset (vocabulary `device_hold`, model-398 §7.3-§7.5, §10.1), in the order
+    /// its availability names the first of them (`device_state:<hold>`).
+    pub enum DeviceHold: "device_hold" {
+        /// A keyguard waits for a person (`device_locked`).
+        Locked => "locked",
+        /// The thermal status reached the hold level (`device_thermal_hold`).
+        Thermal => "thermal",
+        /// On no power source, below the battery level (`device_battery_low`).
+        BatteryLow => "battery_low",
+        /// Another application was in the foreground at a run's start (`device_in_use`).
+        InUse => "in_use",
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of a handset's device state (Workflow #398 RD-5b).
+    pub(crate) enum DeviceStateLocation {
+        Gate => "device_state_gate",
+        Sample => "device_state_sample",
+        Keepalive => "device_state_keepalive",
+        Read => "device_state_read",
+        Apply => "device_state_apply",
+        Step => "device_state_step",
+    }
+}
+// ---- Workflow #398 RD-5b: end ----

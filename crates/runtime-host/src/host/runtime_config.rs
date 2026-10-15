@@ -413,6 +413,23 @@ impl HostShared {
             })
     }
 
+    /// Workflow #398 RD-5b: the `device_state` section in effect (model-398 §7.8), read at every
+    /// sample, start gate and input of a handset.
+    pub(super) fn device_state_config(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::DeviceStateConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .device_state()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
     /// each step of a contained run (the kernel's `step_pacing()`).
     pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {

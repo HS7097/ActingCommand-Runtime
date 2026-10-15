@@ -23,6 +23,11 @@ const DEVICE_LINK_AVAILABILITY_DETECTOR: &str = "runtime.device-link";
 const DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX: &str = "device_link:";
 /// The device-link state of a handset the private binding file binds no device to.
 pub(super) const DEVICE_LINK_UNBOUND: &str = "unbound";
+/// Workflow #398 RD-5b (model-398 v1.1 §7.6): `source_detector` and `source_snapshot_id` prefix
+/// of the `session.instance.available = false` records a handset's device-state hold publishes,
+/// `device_state:<hold>`, beside `backend_selfcheck:` and `device_link:`.
+const DEVICE_STATE_AVAILABILITY_DETECTOR: &str = "runtime.device-state";
+const DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX: &str = "device_state:";
 
 // Workflow #392 DA-A (model 392 v1.1, section 8.1): the instance's display, recorded and never
 // checked. `display.aspect` has no reader in the Runtime (architecture guard DA-A-T3).
@@ -656,6 +661,50 @@ impl HostShared {
                     .source_snapshot_id
                     .strip_prefix(DEVICE_LINK_AVAILABILITY_SNAPSHOT_PREFIX)
                     == Some(state)
+                && matches!(
+                    record.content,
+                    FactContent::Inline {
+                        value: ContractFactValue::Boolean(false)
+                    }
+                )
+        })
+    }
+
+    /// Workflow #398 RD-5b (model-398 v1.1 §7.3-§7.6): withdraws the policy availability of a
+    /// handset instance for its device-state `hold` (`device_state:<hold>`), through
+    /// [`Self::publish_fact`].
+    pub(super) fn publish_device_state_unavailable(
+        &self,
+        instance_alias: &str,
+        hold: &str,
+    ) -> RuntimeHostResult<()> {
+        self.publish_policy_instance_availability(
+            instance_alias,
+            false,
+            DEVICE_STATE_AVAILABILITY_DETECTOR,
+            |_| format!("{DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX}{hold}"),
+        )
+    }
+
+    /// Workflow #398 RD-5b: whether `record` is a withdrawal a device-state hold published,
+    /// whatever the hold.
+    pub(super) fn withdrawn_by_device_state(record: Option<&FactRecord>) -> bool {
+        record.is_some_and(|record| {
+            record.source_detector == DEVICE_STATE_AVAILABILITY_DETECTOR
+                && record
+                    .source_snapshot_id
+                    .starts_with(DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX)
+        })
+    }
+
+    /// Workflow #398 RD-5b: whether `record` is a withdrawal for the device-state `hold`.
+    pub(super) fn withdrawn_for_device_state(record: Option<&FactRecord>, hold: &str) -> bool {
+        record.is_some_and(|record| {
+            record.source_detector == DEVICE_STATE_AVAILABILITY_DETECTOR
+                && record
+                    .source_snapshot_id
+                    .strip_prefix(DEVICE_STATE_AVAILABILITY_SNAPSHOT_PREFIX)
+                    == Some(hold)
                 && matches!(
                     record.content,
                     FactContent::Inline {
