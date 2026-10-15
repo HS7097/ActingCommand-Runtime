@@ -15,7 +15,13 @@ The controller's `clock_jump_threshold` and its heavy-dispatch limits come from
 the configuration (Workflow #385 P-c): `performance.pacing.clock_jump_ms`
 (default 30 000) and `performance.pacing.heavy_dispatch_limit.normal` /
 `.paused` (defaults 2 and 1), read once when actingd assembles the host
-([runtime-config.md](runtime-config.md), "The performance section"). The
+([runtime-config.md](runtime-config.md), "The performance section"). So does
+`performance.load.heavy_threshold_milli` (default 1 500; Workflow #385 PM-CFG):
+a weighted workload whose `cpu_milli + gpu_milli + io_milli` reaches it counts
+as heavy. The controller and the policy evaluator both use this key: the
+controller counts the admitted heavy dispatches by it, and its resource overlay
+hands it to the evaluator with each host's heavy-dispatch budget, so a
+candidate is heavy by the same value. Heavy work has no other threshold. The
 escalation and recovery samples and the transition cooldown stay the
 controller's own values.
 
@@ -26,8 +32,9 @@ Host responsiveness measures execution spans: `recognition_latency_ms`
 (100,000 us) and `capture_acquire_us` (250,000 us). Each measured span scores
 10,000 at or below its target and `floor(target * 10,000 / actual)` above it;
 the monitor uses the lowest score from fresh signals within the latest 64
-pipeline entries. Freshness remains twice the sample interval, and consumed or
-expired signals do not supply another observation.
+pipeline entries. Freshness is `performance.monitor.control_freshness_multiplier`
+sample intervals (default 2; Workflow #385 PM-CFG), and consumed or expired
+signals do not supply another observation.
 
 `frame_gap_ms` describes frame arrival cadence, including declared observation
 waits and time without work. `capture_latency_ms` is the event-to-event capture
@@ -46,8 +53,9 @@ idle-recovery, controller and admission rules below continue to apply.
 
 Every performance tick reaches the controller. A tick without a fresh sample
 changes no level and no transition evidence while the Runtime has owned work:
-a pipeline sample within the control freshness window (twice the sample
-interval), a lease held on any instance, or an admitted policy dispatch.
+a pipeline sample within the control freshness window
+(`control_freshness_multiplier` sample intervals), a lease held on any
+instance, or an admitted policy dispatch.
 Without owned work, and while the global level or any instance level is above
 Normal, such a tick counts as one recovery sample toward Normal under the same
 `recovery_samples`, transition cooldown, one level per transition and one
@@ -130,7 +138,9 @@ evaluator.
 
 Capacity admission follows an allowed gate unchanged. The resource overlay
 (`apply_to_resources`) does not scale the host budgets by the level: they only
-express capacity. Its heavy-dispatch cap by the global level is unchanged.
+express capacity. Its heavy-dispatch cap by the global level is unchanged. It
+also sets each host's heavy threshold, `performance.load.heavy_threshold_milli`,
+which the evaluator applies to a candidate's load (Workflow #385 PM-CFG).
 
 ## Lease admission
 

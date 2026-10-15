@@ -583,3 +583,247 @@ fn a_curve_of_seventy_points_is_accepted_and_seventy_one_are_refused_by_file_and
         )
     );
 }
+
+// Workflow #385 PM-CFG (wave-17 ruling 10; register §5 "Read by P-m"): every key of PERF
+// §10.1's row, as the monitor, its sampler and the controller read it.
+
+// The row as §10.1 gives its defaults.
+fn model_monitor_settings() -> crate::performance::monitor::MonitorSettings {
+    use crate::performance::monitor::{
+        GpuAggregate, MonitorSettings, PressureSeverity, PressureThresholds,
+    };
+    MonitorSettings {
+        sample_interval_ms: 2_000,
+        context_window_ms: 30_000,
+        summary_interval_ms: 60_000,
+        max_pipeline_samples: 4_096,
+        process_coverage_min_bp: 9_900,
+        max_system_samples: 64,
+        max_consecutive_failures: 3,
+        control_freshness_multiplier: 2,
+        stutter_frame_gap_ms: 1_000,
+        heavy_threshold_milli: 1_500,
+        pressure_start_samples: 3,
+        pressure_end_samples: 3,
+        thresholds: PressureThresholds {
+            cpu_bp: (8_500, 7_000),
+            ram_bp: (9_000, 8_000),
+            gpu_bp: (9_000, 7_500),
+            disk_queue_milli: (4_000, 2_000),
+            disk_latency_us: (50_000, 25_000),
+            process_cpu_bp: 4_000,
+            process_io_bps: 67_108_864,
+        },
+        severity: PressureSeverity {
+            critical_bp: 9_700,
+            elevated_bp: 9_200,
+            third_party_critical: (3, 8_000),
+            third_party_elevated: (2, 6_000),
+        },
+        gpu_aggregate: GpuAggregate::MaxEngineType,
+    }
+}
+
+// A `performance` section that names every key of the row with another value a person could
+// choose.
+fn named_monitor_section() -> Value {
+    json!({
+        "monitor": {
+            "sample_interval_ms": 3_000, "context_window_ms": 45_000,
+            "summary_interval_ms": 90_000, "max_pipeline_samples": 2_048,
+            "process_coverage_min_bp": 9_800, "max_system_samples": 32,
+            "max_consecutive_failures": 5, "control_freshness_multiplier": 3,
+            "stutter_frame_gap_ms": 800
+        },
+        "load": {"heavy_threshold_milli": 1_200},
+        "pressure_start_samples": 4,
+        "pressure_end_samples": 5,
+        "pressure": {
+            "thresholds": {"cpu": [7_500, 6_000], "ram": [8_000, 7_000], "gpu": [8_000, 6_500],
+                           "disk_queue_milli": [2_500, 1_500],
+                           "disk_latency_us": [30_000, 20_000],
+                           "process_cpu_bp": 3_000, "process_io_bps": 33_554_432},
+            "severity": {"critical_bp": 9_400, "elevated_bp": 8_800,
+                         "third_party_critical": [4, 9_000], "third_party_elevated": [3, 7_000]},
+            "gpu_aggregate": "sum"
+        }
+    })
+}
+
+// The row with the values of [`named_monitor_section`].
+fn named_monitor_settings() -> crate::performance::monitor::MonitorSettings {
+    use crate::performance::monitor::{
+        GpuAggregate, MonitorSettings, PressureSeverity, PressureThresholds,
+    };
+    MonitorSettings {
+        sample_interval_ms: 3_000,
+        context_window_ms: 45_000,
+        summary_interval_ms: 90_000,
+        max_pipeline_samples: 2_048,
+        process_coverage_min_bp: 9_800,
+        max_system_samples: 32,
+        max_consecutive_failures: 5,
+        control_freshness_multiplier: 3,
+        stutter_frame_gap_ms: 800,
+        heavy_threshold_milli: 1_200,
+        pressure_start_samples: 4,
+        pressure_end_samples: 5,
+        thresholds: PressureThresholds {
+            cpu_bp: (7_500, 6_000),
+            ram_bp: (8_000, 7_000),
+            gpu_bp: (8_000, 6_500),
+            disk_queue_milli: (2_500, 1_500),
+            disk_latency_us: (30_000, 20_000),
+            process_cpu_bp: 3_000,
+            process_io_bps: 33_554_432,
+        },
+        severity: PressureSeverity {
+            critical_bp: 9_400,
+            elevated_bp: 8_800,
+            third_party_critical: (4, 9_000),
+            third_party_elevated: (3, 7_000),
+        },
+        gpu_aggregate: GpuAggregate::Sum,
+    }
+}
+
+// The row as a start reads it from the rows it rendered.
+fn monitor_settings(
+    parameters: &[actingcommand_contract::ConfigParameter],
+) -> Result<crate::performance::monitor::MonitorSettings, ConfigFailure> {
+    crate::performance::monitor::MonitorSettings::parse(&|key: &str| {
+        parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .map(|parameter| parameter.value.clone())
+    })
+}
+
+#[test]
+fn pmcfg_the_monitor_row_in_effect_is_the_model_defaults_or_the_file_s_values() {
+    // A configuration that names no performance key reads §10.1's defaults.
+    assert_eq!(
+        monitor_settings(&rendered(json!({}))),
+        Ok(model_monitor_settings())
+    );
+    // A configuration that names every key of the row reads the file's values.
+    assert_eq!(
+        monitor_settings(&rendered(named_monitor_section())),
+        Ok(named_monitor_settings())
+    );
+}
+
+#[test]
+fn pmcfg_a_monitor_value_out_of_range_or_against_a_rule_is_refused_naming_the_key() {
+    // A value outside its key's range is refused while the rows are rendered: the key and why.
+    for (case, section, config_key) in [
+        (
+            "a sampling period under one second",
+            json!({"monitor": {"sample_interval_ms": 500}}),
+            "performance.monitor.sample_interval_ms",
+        ),
+        (
+            "no failure allowed before stopping",
+            json!({"monitor": {"max_consecutive_failures": 0}}),
+            "performance.monitor.max_consecutive_failures",
+        ),
+        (
+            "a coverage above all processes",
+            json!({"monitor": {"process_coverage_min_bp": 10_001}}),
+            "performance.monitor.process_coverage_min_bp",
+        ),
+        (
+            "a freshness of no sampling period",
+            json!({"monitor": {"control_freshness_multiplier": 0}}),
+            "performance.monitor.control_freshness_multiplier",
+        ),
+        (
+            "a stutter at any frame gap",
+            json!({"monitor": {"stutter_frame_gap_ms": 0}}),
+            "performance.monitor.stutter_frame_gap_ms",
+        ),
+        (
+            "no host sample kept",
+            json!({"monitor": {"max_system_samples": 0}}),
+            "performance.monitor.max_system_samples",
+        ),
+        (
+            "no pipeline sample kept",
+            json!({"monitor": {"max_pipeline_samples": 0}}),
+            "performance.monitor.max_pipeline_samples",
+        ),
+        (
+            "every workload heavy",
+            json!({"load": {"heavy_threshold_milli": 0}}),
+            "performance.load.heavy_threshold_milli",
+        ),
+        (
+            "an aggregate the sampler does not know",
+            json!({"pressure": {"gpu_aggregate": "average"}}),
+            "performance.pressure.gpu_aggregate",
+        ),
+    ] {
+        let failure = render_parameters(
+            &mechanism_rows(),
+            &[],
+            &shipped(),
+            &json!({ "performance": section }),
+            &|_| None,
+        )
+        .expect_err(case);
+        assert_eq!(
+            (
+                failure.failure_code(),
+                failure.config_key(),
+                failure.problem()
+            ),
+            (
+                ConfigCode::ConfigValueInvalid,
+                config_key,
+                Some(ConfigValueProblem::OutOfRange)
+            ),
+            "{case}"
+        );
+    }
+
+    // A value that breaks a rule of §10.1 is `perf_config_invalid` naming the key, from the
+    // whole-section check and from the reader alike.
+    let mut thresholds = named_monitor_section()["pressure"]["thresholds"].clone();
+    thresholds["cpu"] = json!([7_000, 7_500]);
+    let mut severity = named_monitor_section()["pressure"]["severity"].clone();
+    severity["elevated_bp"] = json!(9_500);
+    for (case, section, config_key) in [
+        (
+            "a context window shorter than the sampling period",
+            json!({"monitor": {"context_window_ms": 1_500}}),
+            "performance.monitor.context_window_ms",
+        ),
+        (
+            "a summary more often than the sampling period",
+            json!({"monitor": {"summary_interval_ms": 1_000}}),
+            "performance.monitor.summary_interval_ms",
+        ),
+        (
+            "a CPU pressure that ends above where it starts",
+            json!({"pressure": {"thresholds": thresholds}}),
+            "performance.pressure.thresholds",
+        ),
+        (
+            "an elevated level above the critical one",
+            json!({"pressure": {"severity": severity}}),
+            "performance.pressure.severity",
+        ),
+    ] {
+        assert_eq!(
+            refused(section.clone()),
+            (ConfigCode::PerfConfigInvalid, config_key.to_owned()),
+            "{case}"
+        );
+        let failure = monitor_settings(&rendered(section)).expect_err(case);
+        assert_eq!(
+            (failure.failure_code(), failure.config_key()),
+            (ConfigCode::PerfConfigInvalid, config_key),
+            "{case}"
+        );
+    }
+}
