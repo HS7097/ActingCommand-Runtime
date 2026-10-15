@@ -177,6 +177,9 @@ mod gate_390_out1;
 // Workflow #390 EXEC-1 (forced compromise E-04): a guard refusal falls to the page's next
 // candidate operation.
 mod gate_390_exec1;
+// Workflow #390 EXEC-3 (forced compromise E-02): a page-graph task is rerun at once by its
+// failure identity.
+mod gate_390_exec3;
 // Workflow #390 OUT-2 (forced compromises O-01, O-02, S-01): designated effect sets, their
 // counts and caps.
 mod gate_390_out2;

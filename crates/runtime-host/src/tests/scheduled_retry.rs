@@ -146,7 +146,14 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
         panic!("expected one final failed policy outcome")
     };
     assert_eq!(failure.outcome.code().as_str(), error.code());
-    assert_eq!(failure.failure_identity, None);
+    // Workflow #390 EXEC-3: a page-graph run's failure records its failure identity (format v2,
+    // its base the failure code).
+    assert!(
+        failure
+            .failure_identity
+            .as_deref()
+            .is_some_and(|identity| identity.starts_with(&format!("{}~v2~", error.code())))
+    );
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);

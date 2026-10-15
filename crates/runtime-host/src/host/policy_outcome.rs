@@ -1094,7 +1094,8 @@ impl HostShared {
         }
         self.ensure_scheduled_policy_lease_released(context)?;
         let input = self.scheduled_policy_failure_input(context, failure)?;
-        // Workflow #336 L6 (§12.4): a `linear_steps` run's failure is its failure identity.
+        // Workflow #336 L6 (§12.4): a run's failure is its failure identity (a `linear_steps`
+        // or, Workflow #390 EXEC-3, a page-graph run's).
         let input = self.scheduled_failure_identity(context, failure, input)?;
         let execution = self.record_policy_dispatch_outcome_under_gate(
             context.decision_id(),

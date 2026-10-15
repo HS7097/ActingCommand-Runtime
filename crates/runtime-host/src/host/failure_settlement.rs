@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Workflow #336 L6 (§12.4-§12.6, R21, R22, R25; `contracts/policy-suspension.md`): the failure
-//! identity a scheduled `linear_steps` run's live settlement writes as its
-//! `policy.execution_recorded` `failure.failure_identity`, beside the failure's `outcome`
-//! (Workflow #378 A2-P).
+//! identity a scheduled run's live settlement writes as its `policy.execution_recorded`
+//! `failure.failure_identity`, beside the failure's `outcome` (Workflow #378 A2-P): a
+//! `linear_steps` run's, and since Workflow #390 EXEC-3 (FCM E-02) a page-graph run's.
 //!
 //! The scheduled path records, by decision id, what preparation resolved: whether the main
 //! package was admitted and is `linear_steps`, its game, and the prerequisite chain layer by
@@ -22,8 +22,9 @@ use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, RERUN_ONLY_BACKEND_FAILURES,
-    encode_failure_base, failure_accumulates, failure_detail_fingerprint, failure_key,
-    failure_rows, failure_step, identifier_text, in_restart_segment, locate_error_frame,
+    encode_failure_base, entry_checked, failure_accumulates, failure_detail_fingerprint,
+    failure_key, failure_rows, failure_step, identifier_text, in_restart_segment,
+    locate_error_frame,
 };
 use crate::suspension_lift::{LiftCheckTime, SuspensionLiftView, measure_package_hash};
 use actingcommand_contract::outcome::Outcome;
@@ -159,8 +160,9 @@ impl HostShared {
         Ok(())
     }
 
-    /// The policy execution input of a failed scheduled run (§12.4): a `linear_steps` run's
-    /// failure identity, or the original input for any other run. A fatal error is marked.
+    /// The policy execution input of a failed scheduled run (§12.4): the failure identity of a
+    /// run whose main package was admitted (`linear_steps` or, Workflow #390 EXEC-3, page
+    /// graph), or the original input for any other run. A fatal error is marked.
     pub(super) fn scheduled_failure_identity(
         &self,
         context: &PolicyRunContext,
@@ -229,9 +231,10 @@ impl HostShared {
             )?;
             return Ok(failed(None));
         };
-        // A main package that was not admitted (its mode is unknown) or is a page-graph
-        // package records no identity.
-        let Some(main) = resolution.main.filter(|main| main.linear) else {
+        // A main package that was not admitted (its mode is unknown) records no identity.
+        // Workflow #390 EXEC-3 (FCM E-02): a page-graph package records one as a `linear_steps`
+        // package does, so its failure is rerun at once (R22) by the same rules.
+        let Some(main) = resolution.main else {
             return Ok(failed(None));
         };
         let query = |query: EventQuery| {
@@ -241,18 +244,22 @@ impl HostShared {
         };
         let (rows, scope, operation) = if main.resolved {
             let rows = failure_rows(context.run_id(), query)?;
-            let (scope, operation) = failure_step(&rows, !main.layers.is_empty());
+            // A page-graph run's entry check is its gate, and its entry recovery package its
+            // layer (EXEC-3).
+            let gated = !main.layers.is_empty() || (!main.linear && entry_checked(&rows));
+            let (scope, operation) = failure_step(&rows, gated);
             (rows, scope, operation)
         } else {
             (Vec::new(), "prepare".to_owned(), "prepare".to_owned())
         };
-        let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game);
+        let restart_segment = scope == "main" && in_restart_segment(&rows, &main.game, main.linear);
         // R25-2: an adb backend failure of a linear task that did not poison the run is rerun
         // only. Its class is already `Recoverable`: the terminal's `failure_severe` folds the
         // rule in where the failure arose, so the startup recovery and the ledger read the same
         // class (Workflow #378 A3 ruling 9).
-        let rerun_only_backend =
-            RERUN_ONLY_BACKEND_FAILURES.contains(&code.as_str()) && !failure.poison_runtime;
+        let rerun_only_backend = main.linear
+            && RERUN_ONLY_BACKEND_FAILURES.contains(&code.as_str())
+            && !failure.poison_runtime;
         let detail = failure_detail_fingerprint(
             failure
                 .error

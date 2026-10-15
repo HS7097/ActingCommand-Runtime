@@ -970,3 +970,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_385_pm::tm_12_the_status_read_answers_from_memory_and_appends_nothing",
 ]
 incident = ["#385 P-m"]
+
+# Workflow #390 EXEC-3 (FCM E-02; register §1.70): the live settlement of a scheduled page-graph run writes its failure identity (format v2: the failure code as its base, the run's package_id as its main package), so a failure scheduled for a retry is admitted again at the next evaluation after its backoff as failure_retry_immediate, before its trigger is due (R22), as a linear_steps task's is
+[[gate]]
+key = "93"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec3::exec3_a_scheduled_page_graph_failure_records_its_identity_and_is_rerun_at_once",
+]
+incident = ["#390"]

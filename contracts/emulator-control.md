@@ -666,7 +666,9 @@ known failed capture/input channel makes an entry that needs it unavailable
 (`capture_unavailable` or `input_unavailable`); an actual failed ADB baseline required by
 application actions makes it unavailable with `adb_unavailable`; such a rung is skipped, or
 fails under `rules.entry_unavailable = fail`. An `any` linear application entry needs neither
-capture nor input before its application action. A page entry still needs capture for its
+capture nor input before its application action, and neither does a page-graph application
+entry, which a rung runs first (Workflow #390 EXEC-3, [Application
+lifecycle](application-lifecycle.md)). A page entry still needs capture for its
 entry/prerequisite gate. Missing/unknown channel observations are attempted through the normal
 provider path. Input unavailability never establishes ADB unavailability. A rung is tried at
 most once.

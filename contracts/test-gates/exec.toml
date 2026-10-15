@@ -1043,3 +1043,14 @@ tests = [
     "actingcommand-resource-tooling::lib::package_validate::tests::s4_package_validate_takes_no_hash_and_reports_none",
 ]
 incident = ["#336 PKG-S4"]
+
+# Workflow #390 EXEC-3 (FCM E-02; register §1.70): in a run the host starts itself (a startup package, a recovery ladder rung), a page-graph package whose entry_page is any and whose first operation is a from-any application effect begins with that effect before any capture, as a linear_steps application entry does (R24): a page already shown, the terminal page included, does not skip it, and such a rung needs neither capture nor input before it; every other run takes its initial frame first and an already terminal page ends it without the effect (#316-B3)
+[[gate]]
+key = "68"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_a_host_package_run_begins_with_its_application_entry_whatever_the_screen_shows",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_another_run_keeps_the_initial_frame_before_the_application_entry",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec3::exec3_a_rung_needs_no_capture_before_a_page_graph_application_entry",
+]
+incident = ["#390"]

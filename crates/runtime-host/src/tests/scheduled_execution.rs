@@ -373,9 +373,14 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
                     EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
                         if matches!(
                             payload.policy_result(),
+                            // Workflow #390 EXEC-3: a page-graph run's failure records its
+                            // failure identity (format v2, its base the failure code).
                             PolicyExecutionOutcome::Failed { failure }
                                 if failure.outcome.code().as_str() == error.code()
-                                    && failure.failure_identity.is_none()
+                                    && failure.failure_identity.as_deref().is_some_and(
+                                        |identity| identity
+                                            .starts_with(&format!("{}~v2~", error.code()))
+                                    )
                                     && failure.original_class
                                         == PolicyFailureClass::Recoverable
                         )
@@ -501,9 +506,14 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
                     EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
                         if matches!(
                             payload.policy_result(),
+                            // Workflow #390 EXEC-3: a page-graph run's failure records its
+                            // failure identity (format v2, its base the failure code).
                             PolicyExecutionOutcome::Failed { failure }
                                 if failure.outcome.code().as_str() == expected_code
-                                    && failure.failure_identity.is_none()
+                                    && failure.failure_identity.as_deref().is_some_and(
+                                        |identity| identity
+                                            .starts_with(&format!("{expected_code}~v2~"))
+                                    )
                                     && failure.original_class
                                         == PolicyFailureClass::Recoverable
                         )
