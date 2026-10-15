@@ -57,45 +57,50 @@ fn bounded_capture_sequence_returns_unique_verified_observations_without_input()
                 .starts_with(b"\x89PNG\r\n\x1a\n")
         );
     }
-    let events = event_types_for_correlation(&mut client, correlation_id);
-    assert_eq!(
-        events,
-        [
-            EventType::CliCommand,
-            EventType::CommandReceived,
-            EventType::CommandValidated,
-            EventType::SchedulerAdmitted,
-            EventType::CaptureRequested,
-            EventType::RecognitionRequested,
-            EventType::RuntimeLifecycleObserved,
-            EventType::CapturePolicyChanged,
-            EventType::ArtifactCreated,
-            EventType::ArtifactVerified,
-            EventType::ArtifactPinRecorded,
-            EventType::CaptureCompleted,
-            EventType::RecognitionCompleted,
-        ]
-        .into_iter()
-        .chain(
-            [
-                EventType::CaptureRequested,
-                EventType::RecognitionRequested,
-                EventType::CapturePolicyChanged,
-                EventType::ArtifactCreated,
-                EventType::ArtifactVerified,
-                EventType::ArtifactPinRecorded,
-                // Workflow #375 R5c: the marker of an identical observe frame, linked to the
-                // previous frame of this request.
-                EventType::CaptureDedupWindow,
-                EventType::CaptureCompleted,
-                EventType::RecognitionCompleted,
-            ]
-            .into_iter()
-            .cycle()
-            .take(18),
-        )
-        .collect::<Vec<_>>()
+    // Test plan v2.2 §4 #22: each frame's typed records in order under the one correlation (the
+    // markers of identical frames are checked below), and one terminal: the receipt names the
+    // last frame's recognition completion (C0 freeze §6.1), one completion per frame and no
+    // `capture.failed`. A read-only sequence holds no key (m369 Q-1;
+    // contracts/emulator-control.md:58-60).
+    let projected = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
     );
+    let events = projected
+        .iter()
+        .map(|event| event.event_type)
+        .collect::<Vec<_>>();
+    let frame = [
+        EventType::CaptureRequested,
+        EventType::RecognitionRequested,
+        EventType::ArtifactCreated,
+        EventType::ArtifactVerified,
+        EventType::CaptureCompleted,
+        EventType::RecognitionCompleted,
+    ];
+    assert_events_in_order(
+        &events,
+        &std::iter::once(EventType::SchedulerAdmitted)
+            .chain(frame.into_iter().cycle().take(frame.len() * 3))
+            .collect::<Vec<_>>(),
+    );
+    let completions = projected
+        .iter()
+        .filter(|event| event.event_type == EventType::RecognitionCompleted)
+        .collect::<Vec<_>>();
+    assert_eq!(completions.len(), 3, "{events:?}");
+    let last = completions.last().expect("the last frame's completion");
+    let terminal = completed.terminal().expect("sequence terminal");
+    assert_eq!(
+        (last.sequence, last.event_id),
+        (terminal.sequence, terminal.event_id)
+    );
+    for forbidden in [EventType::CaptureFailed, EventType::LeaseRequested] {
+        assert!(!events.contains(&forbidden), "{forbidden:?} in {events:?}");
+    }
     // Workflow #375 R5c: the first frame after the start is not marked; each later identical
     // frame is marked against its predecessor, so the middle frame is interior.
     let frames = sequence
