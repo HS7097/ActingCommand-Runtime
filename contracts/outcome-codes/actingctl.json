@@ -2769,6 +2769,20 @@
       "description": "actingwatch cannot run the watchdog tick (<root>\\runtime\\actingctl.exe).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "runtime_performance_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl perf-status: the shadow measurement's status (PerformanceStatus) was printed, as ac_overview answers its performance block (Workflow #385 P-m).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

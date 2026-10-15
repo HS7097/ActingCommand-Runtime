@@ -31,6 +31,8 @@ mod mcp_observe_parity;
 // Workflow #389 MCP-8: `actingctl overview` ↔ `ac_overview`.
 mod mcp_overview_parity;
 mod mcp_packs;
+// Workflow #385 P-m: `actingctl perf-status` ↔ the `performance` block of `ac_overview`.
+mod mcp_performance_parity;
 // Workflow #389 MCP-6: `actingctl run evidence` ↔ `ac_run_evidence`.
 mod mcp_run_evidence_parity;
 mod mcp_runs_parity;

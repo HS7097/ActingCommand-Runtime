@@ -241,7 +241,7 @@ use lifecycle::{
 };
 use monitor_control::monitor_probe_loop;
 use observation::CompletedReadonlyObservation;
-use performance::{CapacityUse, performance_monitor_loop};
+use performance::{CapacityUse, performance_monitor_loop, performance_probe_loop};
 use planning::planning_request_failure;
 use policy_dispatch::{SchedulingPauseTable, TrustedPolicyDispatchStore};
 #[cfg(test)]
@@ -1089,6 +1089,8 @@ pub struct RuntimeHost {
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    /// Workflow #385 P-m: the host timer probe of the shadow measurement (PERF §3.2).
+    performance_probe_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     /// Workflow #381 R6: the timing this start printed as `actingd startup_recovery`.
     #[cfg(test)]
     startup_recovery: StartupRecoveryTiming,
@@ -1662,6 +1664,7 @@ impl RuntimeHost {
             sweep_thread: None,
             monitor_thread: None,
             performance_thread: None,
+            performance_probe_thread: None,
             #[cfg(test)]
             startup_recovery: StartupRecoveryTiming::default(),
         };
@@ -1969,6 +1972,25 @@ impl RuntimeHost {
                             )
                         })?,
                 );
+            }
+            // Workflow #385 P-m (PERF §3.2): the host timer probe, beside an enabled monitor.
+            // A probe that cannot start leaves its signal unknown and the status read
+            // carries `perf_probe_unavailable`; the Runtime starts all the same.
+            if let Some(probe) = shared.timer_probe_settings()? {
+                let probe_shared = Arc::clone(&shared);
+                match thread::Builder::new()
+                    .name("actingcommand-runtime-performance-probe".to_string())
+                    .spawn(move || performance_probe_loop(probe_shared, probe))
+                {
+                    Ok(handle) => host.performance_probe_thread = Some(handle),
+                    Err(error) => shared.performance_probe_unavailable(
+                        crate::codes::ProbeKind::Timer,
+                        Outcome::from_io_error(
+                            &error,
+                            actingcommand_contract::outcome::IoOp::Spawn,
+                        ),
+                    )?,
+                }
             }
             shared.finish_install_preparation()?;
             if !held_startup {
@@ -3787,6 +3809,14 @@ impl RuntimeHost {
             join_runtime_thread(
                 self.performance_thread.take(),
                 HostLocation::JoinRuntimePerformance,
+            ),
+        );
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            join_runtime_thread(
+                self.performance_probe_thread.take(),
+                HostLocation::JoinRuntimePerformanceProbe,
             ),
         );
         if let Err(error) = fs::remove_file(&self.info_path)

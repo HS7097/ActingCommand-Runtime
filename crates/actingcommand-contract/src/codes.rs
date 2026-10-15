@@ -180,6 +180,8 @@ crate::outcome_codes! {
         InstanceFactSnapshotCompleted => "request_instance_fact_snapshot_completed": success / none,
         // Workflow #389 U-2 (register W11: the success code comes with the behaviour).
         BindChannelCompleted => "request_bind_channel_completed": success / none,
+        // Workflow #385 P-m (register §1.61 W14).
+        PerformanceStatusCompleted => "request_performance_status_completed": success / none,
     }
 }
 
@@ -686,6 +688,8 @@ crate::outcome_codes! {
         InvalidConfigureSettings => "invalid_configure_settings": error / none,
         // Workflow #389 U-2: a `BindChannel` whose `via` is not on the Lab channel.
         InvalidBindChannel => "invalid_bind_channel": error / none,
+        // Workflow #385 P-m: a `PerformanceStatus` answer of the wrong shape.
+        InvalidPerformanceStatus => "invalid_performance_status": error / none,
     }
 }
 

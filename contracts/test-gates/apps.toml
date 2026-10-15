@@ -261,7 +261,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -277,8 +277,9 @@ tests = [
     "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
     "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
+    "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status",
 ]
-incident = ["#389"]
+incident = ["#389", "#385 P-m"]
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
@@ -412,3 +413,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
 ]
 incident = ["#378 A7"]
+
+# actingctl perf-status prints the shadow measurement's status (PerformanceStatus) with runtime_performance_reported, and without actingd it reports the Runtime's absence (runtime_info_unavailable) and exits 1; the overview's performance block is that status (Workflow #385 P-m, PERF §4.6, test row Tm-12)
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence",
+]
+incident = ["#385 P-m"]

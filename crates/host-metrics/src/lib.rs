@@ -179,12 +179,55 @@ pub trait HostSampler: Send {
     ) -> Result<HostSample, Code>;
 }
 
+/// Workflow #385 P-m (PERF §3.4, `performance.pressure.gpu_aggregate`): how the utilisations of
+/// the GPU's engines make one value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GpuAggregate {
+    /// The engines of each engine type summed, then the busiest type, as the task manager shows
+    /// it.
+    #[default]
+    MaxEngineType,
+    /// Every engine summed (the measurement before P-m).
+    Sum,
+}
+
+/// Workflow #385 P-m (PERF §3.4): one GPU utilisation, in basis points (at most 10 000), from
+/// the per-engine percentages of the `GPU Engine` counter, named by their counter instance
+/// (`…_engtype_<type>`); `None` without any engine. An instance whose name has no engine type
+/// counts as a type of its own kind.
+pub fn gpu_utilization_basis_points(
+    engines: &[(String, f64)],
+    aggregate: GpuAggregate,
+) -> Option<u16> {
+    if engines.is_empty() {
+        return None;
+    }
+    let percent = match aggregate {
+        GpuAggregate::Sum => engines.iter().map(|(_, value)| value.max(0.0)).sum::<f64>(),
+        GpuAggregate::MaxEngineType => {
+            let mut by_type = BTreeMap::<&str, f64>::new();
+            for (instance, value) in engines {
+                let engine_type = instance
+                    .rsplit_once("engtype_")
+                    .map_or("", |(_, engine_type)| engine_type);
+                *by_type.entry(engine_type).or_insert(0.0) += value.max(0.0);
+            }
+            by_type.into_values().fold(0.0, f64::max)
+        }
+    };
+    Some(percent.clamp(0.0, 100.0).mul_add(100.0, 0.0).round() as u16)
+}
+
+// Workflow #385 P-m: test row Tm-6.
+#[cfg(test)]
+mod gate_385_pm;
+
 #[cfg(windows)]
-pub fn system_sampler() -> Result<Box<dyn HostSampler>, Code> {
-    windows::WindowsHostSampler::new().map(|sampler| Box::new(sampler) as Box<dyn HostSampler>)
+pub fn system_sampler(gpu: GpuAggregate) -> Result<Box<dyn HostSampler>, Code> {
+    windows::WindowsHostSampler::new(gpu).map(|sampler| Box::new(sampler) as Box<dyn HostSampler>)
 }
 
 #[cfg(not(windows))]
-pub fn system_sampler() -> Result<Box<dyn HostSampler>, Code> {
+pub fn system_sampler(_gpu: GpuAggregate) -> Result<Box<dyn HostSampler>, Code> {
     Err(HostMetricsCode::PerformanceSamplerUnsupported.code())
 }

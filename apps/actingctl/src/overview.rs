@@ -16,6 +16,10 @@
 //!
 //! Workflow #378 A5: the line also carries `outcome`: `runtime_overview_reported`, or the failure
 //! alone.
+//!
+//! Workflow #385 P-m: the block `performance` is the shadow measurement's status
+//! (`PerformanceStatus`, PERF §4.6), the object `actingctl perf-status` prints; `--instance`
+//! narrows its rows as it narrows the instance rows.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -24,7 +28,7 @@ use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     EventActor, EventSource, InstalledProcess, RuntimeControlPlaneStatus, RuntimeErrorCode,
-    RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
+    RuntimeInstanceStatus, RuntimeMonitorInstanceStatus, RuntimePerformanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Map, Value, json};
@@ -35,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install (default all); daemon and incomplete are always answered";
+const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance (default all); daemon and incomplete are always answered";
 /// The run window: the last 24 h.
 const RUN_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
@@ -55,15 +59,19 @@ pub(crate) enum Section {
     RunWindow,
     LabTool,
     Install,
+    /// Workflow #385 P-m (PERF §4.6): the shadow measurement's status, as `perf-status`
+    /// prints it.
+    Performance,
 }
 
 impl Section {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::GlobalPause,
         Self::Instances,
         Self::RunWindow,
         Self::LabTool,
         Self::Install,
+        Self::Performance,
     ];
 
     /// The block's member name in the answer.
@@ -74,6 +82,7 @@ impl Section {
             Self::RunWindow => "run_window",
             Self::LabTool => "lab_tool",
             Self::Install => "install",
+            Self::Performance => "performance",
         }
     }
 
@@ -84,21 +93,22 @@ impl Section {
             Self::RunWindow => 2,
             Self::LabTool => 3,
             Self::Install => 4,
+            Self::Performance => 5,
         }
     }
 }
 
 /// The blocks one overview answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sections([bool; 5]);
+pub(crate) struct Sections([bool; 6]);
 
 impl Sections {
     /// Every block: `--sections` / `sections` omitted.
-    pub(crate) const ALL: Self = Self([true; 5]);
+    pub(crate) const ALL: Self = Self([true; 6]);
 
     /// The blocks `names` names, each once or more; `None` when one of them names no block.
     pub(crate) fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
-        let mut sections = [false; 5];
+        let mut sections = [false; 6];
         for name in names {
             let section = Section::ALL
                 .into_iter()
@@ -274,10 +284,37 @@ pub(crate) fn read(
     );
     insert(&mut result, Section::LabTool, lab_tool);
     insert(&mut result, Section::Install, install);
+    // Workflow #385 P-m (PERF §4.6): the shadow measurement's status; a read that fails
+    // leaves a warning and no block, never an empty one.
+    if sections.contains(Section::Performance) {
+        match performance_block(client, selected) {
+            Ok(status) => {
+                result.insert(Section::Performance.name().to_owned(), json!(status));
+            }
+            Err(error) => {
+                warnings.push(Warning::Runtime(error));
+                incomplete = true;
+            }
+        }
+    }
     if incomplete {
         result.insert("incomplete".to_owned(), json!(true));
     }
     Ok(Overview { result, warnings })
+}
+
+/// Workflow #385 P-m (PERF §4.6): the shadow measurement's status (`PerformanceStatus`), its
+/// rows narrowed to the instance `selected` names (an alias) when given. `perf-status` prints
+/// it and `ac_overview` answers it as its `performance` block.
+pub(crate) fn performance_block(
+    client: &RuntimeClient,
+    selected: Option<&str>,
+) -> Result<RuntimePerformanceStatus, RuntimeClientError> {
+    let mut status = client.performance_status()?;
+    if let Some(alias) = selected {
+        status.instances.retain(|row| row.instance_alias == alias);
+    }
+    Ok(status)
 }
 
 fn insert(result: &mut Map<String, Value>, section: Section, block: Option<Value>) {

@@ -70,14 +70,14 @@ and the feature locks `session.feature.<key>` are ordinary `fact.published` reco
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| P1 | `perf.pacing_changed` | new event type, family `performance`, action `performance.observe`, observation | SH-1 | P-m | the stage transition record (`perf_stage_changed`) |
+| P1 | `perf.pacing_changed` | new event type, family `performance`, action `performance.observe`, observation | SH-1 | P-m | the stage transition record (`perf_stage_changed`); **written (P-m):** §1.61 PM1 |
 | P2 | `perf.dispatch_share_changed` | new event type, decision | SH-1 | P-s | `perf_scheduling_paused` / `perf_scheduling_resumed` |
 | P3 | `perf.run_hold` | new event type, decision | SH-1 | P-h | held and resumed at `pace_checkpoint` |
-| P4 | `perf.summary` | new members | SH-1 | P-m | `responsiveness_bp`, `host_responsiveness_bp`, `emulator_responsiveness_bp`, `pacing_stage`, `factor_milli`, `dispatch_share_milli`, `pacing_mode`, `learning`; host and per instance: `learning_view_stage`, `learning_view_share_milli`, `learning_view_allowed`, `normal_view_stage`, `normal_view_share_milli`, `normal_view_allowed`; `pacing_phase` (`learning`, `normal`; only when `mode = full`); `learn_days`, `learn_active_ms` |
+| P4 | `perf.summary` | new members | SH-1 | P-m | `responsiveness_bp`, `host_responsiveness_bp`, `emulator_responsiveness_bp`, `pacing_stage`, `factor_milli`, `dispatch_share_milli`, `pacing_mode`, `learning`; host and per instance: `learning_view_stage`, `learning_view_share_milli`, `learning_view_allowed`, `normal_view_stage`, `normal_view_share_milli`, `normal_view_allowed`; `pacing_phase` (`learning`, `normal`; only when `mode = full`); `learn_days`, `learn_active_ms`; **written (P-m):** §1.61 PM2 |
 | P5 | task timing evidence, per step | new members | SH-1 | P-m (`page_settle_ms`, `pacing_band`, `pressure_level`), P-k (`pacing_factor_milli`, `extra_wait_rounds`) | `page_settle_ms` keyed by (instance, `package_id`, step index) |
 | P6 | policy execution record | new members | SH-1 | P-k | `wall_elapsed_ms`, `budget_elapsed_ms` |
 | P7 | `ContainedTaskCancellationReason::PerformanceYield` | new enum value | SH-1 (runtime-client 2) | P-k / P-h | `from_failure_code`: `perf_run_yielded`, `perf_hold_expired` → `PerformanceYield` (one revision with S2) |
-| P8 | task timing evidence, per run (MEM-1, ADD §1.6) | reserved members | SH-1 | P-m | `package_load_ms`, `package_load_bytes`, only if the run record does not already carry them |
+| P8 | task timing evidence, per run (MEM-1, ADD §1.6) | reserved members | SH-1 | P-m | `package_load_ms`, `package_load_bytes`, only if the run record does not already carry them; **written (P-m, MEM-1):** §1.61 PM3 |
 
 The calibration statistics, curve and phase are workbench keys (`host.perf_calibration.stats`,
 `.curve`, `.phase`) written as `runtime.fact_recorded`; no `perf.calibration_*` event type exists.
@@ -869,6 +869,26 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.61 Wave 13 slice P-m with MEM-1 (#385 PERF v1.4.2 §3, §4, §4.6, §10.3, §12; ADD §1.6)
+
+P-m brings the shadow measurement ([performance-control.md](performance-control.md), "Shadow
+measurement"): it writes `perf.pacing_changed` (P1) and the `pacing` members of `perf.summary`
+(P4), and MEM-1 the run's package load in the task timing evidence (P8: the run record did not
+carry it). It adds the read kind and the read output below; neither is a ledger shape. No action
+takes effect: `performance.pacing.mode` stays `observe` (coordinator ruling 7 of wave 13).
+Not written by this slice: the baselines' keys of §4 (`health.perf_baseline.*`,
+`host.perf_baseline.*`) wait for AO-5 and AO-6 (PERF §3.5: until then in memory); the hourly
+`host.perf_calibration.stats` and P5's per-step members (`page_settle_ms`, `pacing_band`,
+`pressure_level`) are left to a later slice (see the PR).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| W14 | `RuntimeOperation::PerformanceStatus` → `RuntimeResult::PerformanceStatus { status }` | runtime-client 2 (§3) | P-m | P-m | a general read from memory that reads and records nothing in the ledger (U-1 row: general read, no G14 copy); `status` is a `RuntimePerformanceStatus {observed_at_unix_ms, pacing_mode, pacing_phase? (only under full), learning, monitor_health, host, instances (one per registered instance, at most 256), warnings (at most 64 warning outcomes: perf_probe_unavailable, perf_baseline_clamped)}`; `host` = `{host_responsiveness_bp?, responsiveness_bp, pacing_stage, factor_milli, learning_view, learning_view_allowed (count), normal_view, normal_view_allowed (count), effective_stage, effective_factor_milli}`; an instance row = `{instance_alias, emulator_responsiveness_bp?, responsiveness_bp, pacing_stage, factor_milli, learning_view, learning_view_allowed (bool), normal_view, normal_view_allowed (bool), effective_stage, effective_factor_milli}`; a view = `{pacing_stage, share_milli, dwell_24h, dwell_total, stops_24h, stops_total}`, a dwell = `{s0_ms, s1_ms, s2_ms, s3_ms, s4_ms}`; a completed receipt carries `request_performance_status_completed`; a wrong shape is `invalid_performance_status` |
+| W15 | `actingctl perf-status [--instance <alias\|instance_id\|ADB port>]` ↔ `ac_overview` block `performance` (`sections` gains `performance`) | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | P-m | P-m | the W14 status, its `instances` narrowed to the selected one; CLI success `runtime_performance_reported`; actingd absent: the client's failure, exit 1; in `ac_overview` a failed read leaves a warning and `incomplete`, never an empty block; the block's place in the cut order was registered by MCP-8 |
+| PM1 | `perf.pacing_changed` (P1) | first writer | SH-1 | P-m | outcome `perf_stage_changed` (info): `pacing_stage_from`, `pacing_stage_to`, `responsiveness_bp`, `factor_milli`, `pacing_cause`, `pacing_mode`, optional `instance_id` (alias), `host_responsiveness_bp`, `emulator_responsiveness_bp`, `pacing_learning_capped`; one record per change of a scope's stage, none for a factor change within a stage (PERF §12.1) |
+| PM2 | `perf.summary` `pacing` (P4) | first writer | SH-1 | P-m | the last evaluation's: `responsiveness_bp` the host's `R_eff`, `host_responsiveness_bp` `R_host`, `emulator_responsiveness_bp` the lowest instance `R_emu`, the host's curve stage, factor and normal share, `pacing_mode`, `learning` (under `full` while the learning view caps), both views with their `allowed`, `pacing_phase` only under `full`, `learn_days`/`learn_active_ms` absent (P-a), one row per instance (at most 64) |
+| PM3 | task timing evidence `package_load_ms`, `package_load_bytes` (P8, MEM-1) | first writer | SH-1 | P-m | the run's main package: the time `prepare` took to read and admit it, and the bytes it holds in memory (the loaded bundle's resident bytes); a prerequisite or recovery package is not counted |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -908,6 +928,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4); **done (U-2):** `BindChannel` answers `ChannelBound` with `request_bind_channel_completed` (§1.46 U2-3) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
 | W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
+| W14 | `RuntimeOperation::PerformanceStatus` → `RuntimeResult::PerformanceStatus { status }` | runtime-client 2 | P-m | the shadow measurement's status read; **done (P-m):** §1.61 W14, with its read output W15 |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).

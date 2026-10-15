@@ -1005,6 +1005,7 @@ fn p4_perf_summary_pacing_members_read_back() {
             PerformanceSummaryEventData {
                 context: PerformanceContext::unavailable(AT_MS),
                 foreground: None,
+                pacing: None,
                 owned_processes: Vec::new(),
                 third_party_high_load: Vec::new(),
                 ledger_commits: None,

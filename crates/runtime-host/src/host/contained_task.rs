@@ -488,6 +488,8 @@ pub(super) struct ContainedRunControl {
     /// Workflow #369 H-1 (review M-1): set only by the policy-run path; its failed lease end
     /// hands the key to a ladder.
     ladder_source: std::sync::OnceLock<super::recovery_ladder::LadderSource>,
+    /// Workflow #385 MEM-1: the run's main package load, set once by its preparation.
+    package_load: std::sync::OnceLock<PackageLoad>,
 }
 
 /// Workflow #336 L2d: a prepared package's `control.json` game, server and resolution, which a
@@ -533,7 +535,19 @@ impl ContainedRunControl {
             failed_terminal: Mutex::new(None),
             package: std::sync::OnceLock::new(),
             ladder_source: std::sync::OnceLock::new(),
+            package_load: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Workflow #385 MEM-1: the run's main package load, noted once after its preparation; a
+    /// second note keeps the first.
+    pub(super) fn note_package_load(&self, load: PackageLoad) {
+        let _ = self.package_load.set(load);
+    }
+
+    /// Workflow #385 MEM-1: the run's main package load, when its preparation measured it.
+    pub(super) fn package_load(&self) -> Option<PackageLoad> {
+        self.package_load.get().copied()
     }
 
     /// Workflow #369 H-1: marks this run as a policy run whose failed lease end may hand the
@@ -4743,6 +4757,25 @@ pub(super) fn prepare_contained_task(
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     deadline: Instant,
 ) -> Result<PreparedContainedTask, RequestFailure> {
+    prepare_measured_contained_task(instance_alias, request, vision_provider, deadline)
+        .map(|(prepared, _)| prepared)
+}
+
+/// Workflow #385 MEM-1 (ADD §1.6, register P8): how long a run's package took to load and the
+/// bytes it holds in memory; the run's task timing evidence carries both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PackageLoad {
+    pub(super) elapsed_ms: u64,
+    pub(super) bytes: u64,
+}
+
+/// [`prepare_contained_task`] with the package load it measured (Workflow #385 MEM-1).
+pub(super) fn prepare_measured_contained_task(
+    instance_alias: &str,
+    request: &ContainedTaskRequest,
+    vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
+    deadline: Instant,
+) -> Result<(PreparedContainedTask, PackageLoad), RequestFailure> {
     let path = Path::new(request.package_path());
     if !path.is_absolute() {
         return Err(contained_task_package_failure(
@@ -4751,14 +4784,17 @@ pub(super) fn prepare_contained_task(
     }
     // Workflow #336 PKG-S1 (option 丙): the path chooses the loader; the request's reference is
     // recorded as the caller gave it and compared with nothing.
-    PreparedContainedTask::load_path(
+    let started = Instant::now();
+    let (prepared, bytes) = PreparedContainedTask::load_path_with_resident_bytes(
         instance_alias,
         path,
         request.expected_sha256(),
         vision_provider,
         deadline,
     )
-    .map_err(contained_task_declaration_failure)
+    .map_err(contained_task_declaration_failure)?;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    Ok((prepared, PackageLoad { elapsed_ms, bytes }))
 }
 
 fn contained_task_declaration_failure(
@@ -5454,12 +5490,13 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?,
             )
             .map_err(RequestFailure::poison_without_terminal)?;
-        let prepared = prepare_contained_task(
+        let (prepared, package_load) = prepare_measured_contained_task(
             instance_alias,
             task_request,
             self.execution()?.vision_provider(),
             self.package_material_deadline(active_run.control.deadline())?,
         )?;
+        active_run.control.note_package_load(package_load);
         let prerequisites = self.resolve_prerequisite_chain(instance_alias, &prepared, || {
             self.package_material_deadline(active_run.control.deadline())
         })?;
@@ -5723,7 +5760,7 @@ impl HostShared {
             )
             .map_err(RequestFailure::poison_without_terminal)?;
         let material_deadline = self.package_material_deadline(active_run.control.deadline())?;
-        let prepared = prepare_contained_task(
+        let (prepared, package_load) = prepare_measured_contained_task(
             instance_alias,
             task_request,
             self.execution()?.vision_provider(),
@@ -5735,6 +5772,7 @@ impl HostShared {
             }
             startup_package::HostPackageRun::ReturnHome => failure,
         })?;
+        active_run.control.note_package_load(package_load);
         // Workflow #336 L2d: a configured return-home package on the ladder's first rung passes
         // the checks of a return-home chain layer against the failed package and declares no
         // prerequisite package, before its chain and any lease.
@@ -6113,7 +6151,7 @@ impl HostShared {
             .control
             .set_deadline(source_deadline)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let (prepared, prerequisites) = match prepared {
+        let (prepared, prerequisites, package_load) = match prepared {
             Some(prepared) => prepared,
             None => self.prepare_scheduled_package(
                 context.decision_id(),
@@ -6123,6 +6161,7 @@ impl HostShared {
                 prerequisite_deadline,
             )?,
         };
+        active_run.control.note_package_load(package_load);
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
         let interrupts = self.prepare_run_interrupts(&prepared)?;
         let expected_outcome_keys = lock(
@@ -6317,6 +6356,12 @@ impl HostShared {
                 request.correlation_id(),
                 *task_id.transport(),
                 *run_id.transport(),
+            )
+            // Workflow #385 MEM-1: the run's package load, when its preparation measured it.
+            .with_package_load(
+                control
+                    .package_load()
+                    .map(|load| (load.elapsed_ms, load.bytes)),
             ),
             diagnostic_step: None,
             diagnostic_physical: None,

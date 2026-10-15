@@ -272,6 +272,9 @@ impl HostShared {
                 }
             }
             RuntimeOperation::MonitorStatus => self.monitor_status(),
+            // Workflow #385 P-m (register §1.61 W14): the shadow measurement's status, a general
+            // read from memory that records nothing.
+            RuntimeOperation::PerformanceStatus => self.performance_status_read(),
             RuntimeOperation::RuntimeFactSnapshot => {
                 let snapshot = self.runtime_fact_snapshot().map_err(|error| {
                     if error.is_fatal() {

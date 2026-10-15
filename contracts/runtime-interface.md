@@ -301,7 +301,8 @@ U-6 deletes the source gates.
 | `InstanceFactSnapshot{instance}` (#389 MCP-4) | general | read (one instance's facts, from memory) | cli `facts --instance`; mcp `ac_facts` (scope instance) | no |
 | `LoadPack`, `UnloadPack` | option two | operation (pack load and unload) | actinglab `pack load`, `pack unload` (new) | yes |
 | `ClearKeptFolder` (#375 R5e, planned) | option two | operation (clear kept frames) | actinglab `clear-kept` (moved from the planned actingctl command) | yes |
-| D2 S5 transition query, `performance_status` | general | read | cli, mcp | no |
+| D2 S5 transition query | general | read | cli, mcp | no |
+| `PerformanceStatus` (#385 P-m; register §1.61 W14) | general | read (the shadow measurement's status, from memory; nothing read from or written to the ledger) | cli `perf-status`; mcp `ac_overview` (block `performance`) | no |
 | a later #369 same-queue request, if any | option two | operation (lease family) | actinglab | yes |
 
 Until U-6 the new option-two kinds `LoadPack` and `UnloadPack` accept only a
@@ -491,12 +492,13 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `selfcheck` | SelfCheckInstance | option two | retires → actinglab `emulator selfcheck` |
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
-| new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything) | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
+| new: `overview [--instance <alias\|instance_id\|ADB port>] [--sections <block>[,<block>…]] [--root <install root>]` (#389 MCP-8, before U-3) | Status + MonitorStatus + QueryEvents (none records anything); #385 P-m: + PerformanceStatus for the block `performance` | general read | actingctl; `ac_overview`; the answer is `ac_overview`'s, with every block whole; success `runtime_overview_reported` |
+| new: `perf-status [--instance <alias\|instance_id\|ADB port>]` (#385 P-m) | PerformanceStatus (records nothing); a given `--instance` is resolved with one Status read | general read | actingctl; `ac_overview` answers the same object as its block `performance`; the status' `instances` narrowed to the one instance; actingd absent: the client's failure, exit 1; success `runtime_performance_reported` |
 | new: `packs` (#389 MCP-11, before U-3) | not a request: reads the selected configuration generation (`install\active.json` → its configuration file); from U-3 also the loaded-pack table through RuntimeFactSnapshot | general read (offline, no `--state-root`) | actingctl; `ac_packs` (new) |
 | new: `codes <code>`, `codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]` (#389 MCP-14, before U-3) | not a request: reads the outcome catalog the build embeds | general read (offline, no `--state-root`) | actingctl; `ac_outcome_code` (new); one code answers its catalog entry as the catalog holds it with its `code`, the list `{codes: [{code, category, ladder_class, status}], next_cursor?}` in name order; success `outcome_codes_reported`; refusals `outcome_code_unknown`, `cursor_invalid`, `outcome_catalog_unreadable` |
 | new: `run evidence (--request-id <id> \| --run-id <id>) [--from-step <n>] [--limit <1-100>]` (#389 MCP-6, before U-3) | QueryEvents (Forensic) by the run's request_id, after the run is found as `ac_get_run` finds it; the frames and the overlay are material refs read with ReadMaterial (`ac_material`) | general read | actingctl; `ac_run_evidence` (new); `{request_id, run_id?, task_id?, steps: [{step_index, page, targets: [{target, matched, box?}], action?: {kind, point?, rect?}, frames: [{ref}]}], final: {page?, frame_ref?}, next_step?, overlay?: {ref}}`; the output shape is the client's only; success `run_evidence_reported`; refusals `run_unknown`, `actingctl_usage_invalid` |
 | new: `--wait <s>` on `emulator start`, `stop`, `restart` and `task-run` (#389 MCP-21, before U-3) | as the command | as the command | `--wait` 1–3600 s; without it the command waits for its receipt as before; a wait that ends first prints `{request_id?, correlation_id, state: "in_progress"}` with `command_wait_expired` (`operation`, `request_id` when the command knows it, `waited_ms`) and exits 1, and the request goes on in the Runtime (it is served on its connection's thread whether the client still waits or not); no MCP argument (`ac_emulator`, `ac_run_pack` answer within their call budget or with a handle); moves with the commands to actinglab at U-3 |
-| planned: `pack-schedule set`, `pack-schedule get` (SR-11), `perf-status` (#385), the D2 S5 query, the SR-5a entry | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
+| planned: `pack-schedule set`, `pack-schedule get` (SR-11), the D2 S5 query, the SR-5a entry (`perf-status` is built, #385 P-m, above) | PublishFacts, reads | general | actingctl; MCP and console as their slices define |
 | planned: `clear-kept` (#375 R5e) | ClearKeptFolder | option two | actinglab `clear-kept` instead |
 | `watchdog *`, `mcp-config` | not requests | — | stay; `mcp-config`'s example drops `--tier` |
 
@@ -507,7 +509,7 @@ two.
 
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|
-| `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
+| `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install` and, from #385 P-m, `performance`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
 | `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `exclude_event_types`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1). Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design) | general |
 | `ac_get_run` | read | `actingctl run get` | `handle` or `run_id` ↔ `--handle` or `--run-id`; `wait_s` is presentation | general |
 | `ac_material` | read | `actingctl material` | `ref`, `mode`, `offset`, `max_bytes` ↔ same flags | general |
@@ -545,6 +547,9 @@ two.
   row's identity, `pause`, `lease_active` and `queued`, and `incomplete` are never cut; an
   answer that still does not fit is `output_budget_exceeded`. A slice that adds an overview
   block adds its name to `--sections` and registers its place in this order in the same PR.
+- The block `performance` (#385 P-m) is the shadow measurement's status, the object
+  `actingctl perf-status` prints (PerformanceStatus, register §1.61 W14), its rows narrowed by
+  `instance` too. A read that fails leaves a warning and `incomplete`, never an empty block.
 - `ac_run_pack` mints the request id and correlation id itself and returns `handle` =
   that request id at once (valid across restarts, as today); its job runs
   `actinglab --json run start … --request-id <id> --correlation-id <id> --via mcp` with

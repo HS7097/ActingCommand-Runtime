@@ -165,6 +165,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeDiagnosisReported => "runtime_diagnosis_reported": success / none,
         // Workflow #389 MCP-8: `overview`.
         RuntimeOverviewReported => "runtime_overview_reported": success / none,
+        // Workflow #385 P-m: `perf-status`.
+        RuntimePerformanceReported => "runtime_performance_reported": success / none,
         PackageBindingsReported => "package_bindings_reported": success / none,
         StartRuntimeStarted => "start_runtime_started": success / none,
         StartRuntimeRestarted => "start_runtime_restarted": success / none,

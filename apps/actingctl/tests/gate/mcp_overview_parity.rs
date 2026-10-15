@@ -9,7 +9,8 @@
 // ac_overview result are the same object, apart from the start of the run window, which each
 // read takes from its own clock. Every answer fits the output budget, so §2.2 leaves no other
 // difference and nothing is marked truncated. Without `sections` every block is answered
-// (daemon, instances, run_window, lab_tool, install); with `sections` only those named and the
+// (daemon, instances, run_window, lab_tool, install and, from Workflow #385 P-m, performance,
+// whose read time is its own like the run window's start); with `sections` only those named and the
 // daemon. The instance is named by its alias and by its instance_id (D4). Workflow #378 A5: the
 // CLI line carries `runtime_overview_reported` beside the overview.
 //
@@ -51,7 +52,14 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same
     for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
         assert_eq!(
             members(answer),
-            BTreeSet::from(["daemon", "install", "instances", "lab_tool", "run_window"]),
+            BTreeSet::from([
+                "daemon",
+                "install",
+                "instances",
+                "lab_tool",
+                "performance",
+                "run_window"
+            ]),
             "{side}: {answer}"
         );
         assert_daemon(side, answer);
@@ -245,11 +253,15 @@ fn assert_rows(side: &str, answer: &Value) {
     );
 }
 
-// The answer without the start of the run window: each read takes it from its own clock.
+// The answer without the start of the run window and the time of the performance read (Workflow
+// #385 P-m): each read takes them from its own clock.
 fn without_window_start(answer: &Value) -> Value {
     let mut answer = answer.clone();
     if let Some(window) = answer.get_mut("run_window").and_then(Value::as_object_mut) {
         window.remove("since_unix_ms");
+    }
+    if let Some(performance) = answer.get_mut("performance").and_then(Value::as_object_mut) {
+        performance.remove("observed_at_unix_ms");
     }
     answer
 }

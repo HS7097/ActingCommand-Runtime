@@ -14,6 +14,7 @@ use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder::{Listed, listed};
 use crate::table::{KeyRange, KeyRow, ValueType};
+use actingcommand_contract::PerformancePacingStage;
 use serde_json::Value;
 
 /// The codes of a step that counts as trouble (a list, §4.5.1 item 1).
@@ -130,6 +131,53 @@ pub(super) fn check(values: &Values<'_>) -> Result<(), ConfigFailure> {
     let deepest = stage_index(&deepest)
         .ok_or_else(|| failure(PRESSURE_MAX_STAGE, ConfigValueProblem::OutOfRange))?;
     rule(PRESSURE_MAX_STAGE, deepest <= PRESSURE_MAX_STAGE_AT)
+}
+
+/// Workflow #385 P-m (PERF §4.5.3): whether the self-calibration applies what it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalibrationApply {
+    Auto,
+    Propose,
+    /// No learning and no cap: the configured curve as it is.
+    Off,
+}
+
+/// Workflow #385 P-m (PERF §4.5.2, §4.6): what the learning view reads. The other keys are
+/// P-a's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LearningSettings {
+    pub apply: CalibrationApply,
+    /// The deepest stage the learning view gives (S4: no cap).
+    pub learning_max_stage: PerformancePacingStage,
+    /// The responsiveness at or below which, held for `pacing.pause_sustain_ms`, the learning
+    /// view stops the instance (0: never).
+    pub learning_backstop_bp: u16,
+}
+
+/// Workflow #385 P-m: the keys of the subsection the learning view reads, in effect.
+pub(super) fn read(values: &Values<'_>) -> Result<LearningSettings, ConfigFailure> {
+    const APPLY: &str = "performance.calibration.apply";
+    let apply = match values.word(APPLY)?.as_str() {
+        "auto" => CalibrationApply::Auto,
+        "propose" => CalibrationApply::Propose,
+        "off" => CalibrationApply::Off,
+        _ => return Err(failure(APPLY, ConfigValueProblem::OutOfRange)),
+    };
+    let learning_max_stage = match stage_index(&values.word(LEARNING_MAX_STAGE)?) {
+        Some(0) => PerformancePacingStage::S0,
+        Some(1) => PerformancePacingStage::S1,
+        Some(2) => PerformancePacingStage::S2,
+        Some(3) => PerformancePacingStage::S3,
+        Some(4) => PerformancePacingStage::S4,
+        _ => {
+            return Err(failure(LEARNING_MAX_STAGE, ConfigValueProblem::OutOfRange));
+        }
+    };
+    Ok(LearningSettings {
+        apply,
+        learning_max_stage,
+        learning_backstop_bp: values.unsigned("performance.calibration.learning_backstop_bp")?,
+    })
 }
 
 /// Each trouble code is an active code of the embedded catalog.

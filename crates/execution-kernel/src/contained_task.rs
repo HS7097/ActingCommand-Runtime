@@ -2359,6 +2359,28 @@ impl PreparedContainedTask {
         Self::from_bundle(bundle)
     }
 
+    /// Workflow #385 MEM-1 (ADD §1.6, register P8): `load_path`, with the bytes the admitted
+    /// package holds in memory (its entries as they were read).
+    pub fn load_path_with_resident_bytes(
+        instance_label: &str,
+        locator: &std::path::Path,
+        recorded: &actingcommand_contract::PackageRef,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+        deadline: std::time::Instant,
+    ) -> Result<(Self, u64), ContainedTaskError> {
+        let bundle = ExternallyVerifiedBundle::load_path(
+            instance_label,
+            locator,
+            recorded,
+            false,
+            vision_provider,
+            deadline,
+        )
+        .map_err(contained_task_admission_error)?;
+        let resident_bytes = bundle.loaded_bundle().resident_bytes();
+        Ok((Self::from_bundle(bundle)?, resident_bytes))
+    }
+
     /// Workflow #336: `load_path` for a content table already in memory; `recorded` is kept as
     /// `load_path` keeps it.
     pub fn load_content_entries(

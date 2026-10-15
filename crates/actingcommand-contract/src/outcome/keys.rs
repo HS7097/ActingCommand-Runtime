@@ -444,4 +444,19 @@ outcome_keys! {
     code_name: name,
     // Workflow #389 MCP-21: how long a command's `--wait` waited for its request.
     waited_ms: duration_ms,
+    // ---- Workflow #385 P-m (the shadow measurement's codes, PERF §11): begin ----
+    pacing_stage_from: vocab(pacing_stage),
+    pacing_stage_to: vocab(pacing_stage),
+    responsiveness_bp: integer,
+    host_responsiveness_bp: integer,
+    emulator_responsiveness_bp: integer,
+    factor_milli: integer,
+    pacing_cause: vocab(pacing_cause),
+    pacing_mode: vocab(pacing_mode),
+    pacing_learning_capped: boolean,
+    probe_kind: vocab(probe_kind),
+    signal_kind: vocab(signal_kind),
+    baseline_us: integer,
+    limit_us: integer,
+    // ---- Workflow #385 P-m: end ----
 }

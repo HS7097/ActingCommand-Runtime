@@ -138,6 +138,8 @@ mod gate_383_sh1;
 mod gate_384_d2s2;
 // Workflow #384 D2-S3: resource adjustments.
 mod gate_384_d2s3;
+// Workflow #385 P-m: the shadow measurement and its status read.
+mod gate_385_pm;
 // Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
 // suppressions a later build wrote.
 mod gate_386_sr2a;
