@@ -1423,15 +1423,17 @@ Every key of §5's `performance.monitor.*` / `.pressure.*` / `.load.*` row, pars
 defaulted since P-c (§1.24), now takes effect: the start-up assembly reads the row once
 (`MonitorSettings` in runtime-config, refusing a value that breaks a rule as `perf_config_invalid`
 naming the key) and hands it to the performance monitor, its host sampler and the performance
-controller. Each default is the constant the monitor ran with before, so a configuration that names
-none behaves as before; no pacing mode changes (`performance.pacing.mode` stays `observe`). No
-persisted record, wire shape, outcome code or configuration key changes;
+controller; the controller hands `load.heavy_threshold_milli` on to the policy evaluator, so both
+judge heavy work by that one key. Each default is the constant the monitor ran with before, so a
+configuration that names none behaves as before; no pacing mode changes
+(`performance.pacing.mode` stays `observe`). No persisted record, wire shape, outcome code or
+configuration key changes;
 [runtime-config.md](runtime-config.md) ("The performance section") and
 [performance-control.md](performance-control.md) are the contract.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated` |
+| PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`), whose resource overlay hands the heavy threshold to the policy evaluator (`HostResourceSnapshot.heavy_threshold_milli`, in memory only: no member of the resources document or a request) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated`; the controller and the evaluator judge heavy work by the one key (was the evaluator's own 1 500) |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

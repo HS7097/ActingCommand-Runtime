@@ -214,7 +214,8 @@ pub struct MonitorSettings {
     pub control_freshness_multiplier: u64,
     /// `performance.monitor.stutter_frame_gap_ms`.
     pub stutter_frame_gap_ms: u64,
-    /// `performance.load.heavy_threshold_milli`: read by the controller.
+    /// `performance.load.heavy_threshold_milli`: read by the controller, which hands it to the
+    /// policy evaluator.
     pub heavy_threshold_milli: u64,
     /// `performance.pressure_start_samples`.
     pub pressure_start_samples: u16,

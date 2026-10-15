@@ -1075,7 +1075,7 @@ tests = [
 ]
 incident = ["#398 RD-4"]
 
-# Workflow #385 PM-CFG (wave-17 ruling 10; PERF v1.4.2 §10.1; register §1.87): every key of the monitor's row (performance.monitor.*, .pressure.*, .load.*) is read from the configuration in effect, its default the constant the monitor ran with before, and a value outside its range or against a rule of §10.1 is refused naming the key (config_value_invalid while the rows are rendered, perf_config_invalid from the section check, the reader and the assembly); the assembly hands the row to the monitor, its host sampler and the controller; the monitor takes its sampling period, context window, sample bounds, summary period, failures in a row, controller freshness (sampling periods), stutter gap, pressure thresholds and severity levels from it, the sampler its process thresholds and coverage, the controller its heavy-load threshold
+# Workflow #385 PM-CFG (wave-17 ruling 10; PERF v1.4.2 §10.1; register §1.87): every key of the monitor's row (performance.monitor.*, .pressure.*, .load.*) is read from the configuration in effect, its default the constant the monitor ran with before, and a value outside its range or against a rule of §10.1 is refused naming the key (config_value_invalid while the rows are rendered, perf_config_invalid from the section check, the reader and the assembly); the assembly hands the row to the monitor, its host sampler and the controller; the monitor takes its sampling period, context window, sample bounds, summary period, failures in a row, controller freshness (sampling periods), stutter gap, pressure thresholds and severity levels from it, the sampler its process thresholds and coverage, the controller its heavy-load threshold, which its resource overlay hands to the policy evaluator, so a configured threshold moves the controller's count of admitted heavy work and the evaluator's heavy candidate together
 [[gate]]
 key = "98"
 coverage = "Y"
@@ -1090,6 +1090,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_a_pressure_s_severity_follows_the_configured_levels",
     "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_sampler_is_asked_for_the_configured_process_thresholds_and_coverage",
     "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_counts_heavy_work_from_the_configured_threshold",
+    "actingcommand-runtime-host::lib::tests::gate_385_pmcfg::pmcfg_the_controller_and_the_evaluator_judge_heavy_work_by_the_one_configured_threshold",
     "actingcommand-host-metrics::lib::windows::tests::pmcfg_process_metrics_count_from_the_configured_coverage",
 ]
 incident = ["#385 PM-CFG"]

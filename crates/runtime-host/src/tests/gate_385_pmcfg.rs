@@ -8,10 +8,16 @@
 // samples kept, the failures in a row that stop sampling, the controller's freshness window as
 // that many sampling periods, the frame gap of a stutter, where each pressure starts and ends,
 // how severe it is, the process thresholds and coverage the sampler is asked for, and the
-// summed load of a heavy workload. The settings are read from a configuration file's
-// `performance` section as a start reads them. Times are fixed Unix milliseconds; nothing here
-// sleeps or reads a clock.
+// summed load of a heavy workload, which the controller and the policy evaluator judge by the
+// same value (one case runs through the host's policy cycle). The settings are read from a
+// configuration file's `performance` section as a start reads them. Times are fixed Unix
+// milliseconds; nothing here sleeps or reads a clock (the host's Runtime clock is a manual one).
 
+use super::{
+    FakeProvider, FakeState, ManualRuntimeClock, POLICY_INSTANCE_ALIAS, POLICY_INSTANCE_ALIAS_B,
+    POLICY_NOW_UNIX_MS, TestClient, config, instance_id, pending_policy_facts,
+    pending_policy_sources, policy_context, policy_resources, record_policy_approval,
+};
 use crate::performance::{
     PerformanceMonitor, PerformanceMonitorConfig, PerformanceSemanticEvent,
     PipelinePerformanceSignal,
@@ -19,19 +25,25 @@ use crate::performance::{
 use crate::performance_control::{
     PerformanceBalanceController, PerformanceControlConfig, PerformanceControlWorkload,
 };
+use crate::{PolicyDispatchAdmission, PolicyTrigger, RuntimeHost};
 use actingcommand_contract::outcome::Code;
-use actingcommand_contract::{PerformancePressureKind, PerformancePressureSeverity};
+use actingcommand_contract::{
+    PerformancePressureKind, PerformancePressureSeverity, RuntimeOperation, RuntimeReceiptState,
+};
 use actingcommand_host_metrics::{
     GpuAggregate, HostMetric, HostMetricsCode, HostSample, HostSampler, ProcessLoadThresholds,
     ProcessMetricCoverage, ProcessOwnership, ProcessSample,
 };
-use actingcommand_policy::{HostResourceSnapshot, LoadProfile};
+use actingcommand_policy::{
+    EvaluationTime, HostResourceSnapshot, LoadProfile, SchedulingDecisionState,
+};
 use actingcommand_runtime_config::performance::monitor::MonitorSettings;
 use actingcommand_runtime_config::{DefaultsFile, mechanism_rows, render_parameters};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tempfile::TempDir;
 
 const ALIAS: &str = "neutral.instance";
 
@@ -611,6 +623,7 @@ fn pmcfg_the_controller_counts_heavy_work_from_the_configured_threshold() {
             third_party_pressure_basis_points: 0,
             heavy_dispatch_limit: 2,
             active_heavy_dispatches: 0,
+            heavy_threshold_milli: actingcommand_policy::DEFAULT_HEAVY_THRESHOLD_MILLI,
         }];
         controller
             .apply_to_resources(
@@ -627,5 +640,120 @@ fn pmcfg_the_controller_counts_heavy_work_from_the_configured_threshold() {
             )
             .expect("the overlay");
         assert_eq!(resources[0].active_heavy_dispatches, expected);
+    }
+}
+
+#[test]
+fn pmcfg_the_controller_and_the_evaluator_judge_heavy_work_by_the_one_configured_threshold() {
+    // End to end through the host. Two instances share one host whose heavy-dispatch budget is
+    // one (both limits 1). Each of the catalog's two tasks weighs 200 + 100 + 300 = 600 milli:
+    // light under the default 1 500, heavy from 600. A's dispatch is admitted while B is held,
+    // then B is released and the next cycle judges B's candidate. Under the default neither
+    // A's admitted work nor B's candidate is heavy, so B dispatches. At 600 the controller counts
+    // A's work as the host's one heavy dispatch and the evaluator calls B's candidate heavy, so
+    // B is blocked `heavy_scene_budget_exhausted`; if either judged by another threshold, B
+    // would dispatch.
+    for (section, b_dispatches) in [
+        (json!({}), true),
+        (json!({"load": {"heavy_threshold_milli": 600}}), false),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let control = PerformanceControlConfig::default()
+            .with_heavy_dispatch_limits(1, 1)
+            .with_heavy_threshold_milli(settings(section).heavy_threshold_milli);
+        // The host's Runtime clock stands at the fixture's time (board #71).
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)))
+                .with_performance_control(control),
+            Arc::new(FakeProvider::from_entries([
+                (
+                    POLICY_INSTANCE_ALIAS.to_owned(),
+                    instance_id(),
+                    Arc::new(FakeState::default()),
+                ),
+                (
+                    POLICY_INSTANCE_ALIAS_B.to_owned(),
+                    instance_id(),
+                    Arc::new(FakeState::default()),
+                ),
+            ])),
+        )
+        .expect("the two-instance host");
+        host.activate_policy_catalog(&pending_policy_sources(1))
+            .expect("the two-instance catalog");
+        // B runs on A's host, so the two share its heavy-dispatch budget.
+        let mut facts = pending_policy_facts();
+        for instance in &mut facts.instances {
+            instance.host_id = "fixture-host-a".to_owned();
+        }
+        let resources = policy_resources();
+        let evaluate = |trigger| {
+            host.evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &resources,
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                7,
+                trigger,
+            )
+            .expect("a policy cycle")
+        };
+
+        let mut holder = TestClient::connect(&host);
+        let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS_B);
+        let cycle = evaluate(PolicyTrigger::FactsChanged);
+        let evaluation = cycle.evaluation.as_ref().expect("the first evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+            .unwrap_or_else(|| panic!("A's dispatch intent: {evaluation:#?}"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("A's reason chain")
+            .clone();
+        record_policy_approval(&host, &intent);
+        assert!(matches!(
+            host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+                .expect("A's admission"),
+            PolicyDispatchAdmission::Granted { .. }
+        ));
+        let release = holder.request(RuntimeOperation::ReleaseLease { token });
+        assert_eq!(
+            holder.send(&release).state(),
+            RuntimeReceiptState::Completed
+        );
+
+        let cycle = evaluate(PolicyTrigger::Recovery);
+        let evaluation = cycle.evaluation.as_ref().expect("the second evaluation");
+        let decision = evaluation
+            .decisions
+            .iter()
+            .find(|decision| {
+                decision.task_id == "fixture.observe-b"
+                    && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS_B)
+            })
+            .unwrap_or_else(|| panic!("B's decision: {evaluation:#?}"));
+        let exhausted = decision
+            .reasons
+            .iter()
+            .any(|reason| reason.outcome.code().as_str() == "heavy_scene_budget_exhausted");
+        let b_intent = evaluation
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS_B);
+        assert_eq!(b_intent, b_dispatches, "{evaluation:#?}");
+        assert_eq!(exhausted, !b_dispatches, "{decision:#?}");
+        if !b_dispatches {
+            assert_eq!(decision.state, SchedulingDecisionState::Blocked);
+        }
+        drop(holder);
+        host.close().expect("close the host");
     }
 }

@@ -488,7 +488,6 @@ fn own_gate(
             wake: None,
         }));
     }
-    let load = ResourceLoad::from(&fact_refresh_task().load_profile);
     let host = context
         .hosts
         .get(instance.host_id.as_str())
@@ -498,6 +497,10 @@ fn own_gate(
                 instance.instance_id, instance.host_id
             ))
         })?;
+    let load = ResourceLoad::new(
+        &fact_refresh_task().load_profile,
+        host.heavy_threshold_milli,
+    );
     if !host.fits(load) {
         entry.reasons.push(reason(
             PolicyCode::HostCapacityInsufficient,
@@ -581,6 +584,15 @@ fn refresh_candidate(
             instance.instance_id
         ))
     })?;
+    let host = context
+        .hosts
+        .get(instance.host_id.as_str())
+        .ok_or_else(|| {
+            PolicyEvaluationError::invalid(format!(
+                "instance '{}' references missing host '{}'",
+                instance.instance_id, instance.host_id
+            ))
+        })?;
     Ok(PlacementCandidate {
         work_index,
         task_id: task.id.clone(),
@@ -591,7 +603,7 @@ fn refresh_candidate(
         expected_duration_ms: task.expected_duration_ms,
         yield_points: task.yield_points.clone(),
         load_profile: task.load_profile.clone(),
-        load: ResourceLoad::from(&task.load_profile),
+        load: ResourceLoad::new(&task.load_profile, host.heavy_threshold_milli),
         rank: inherited.clone(),
         affinity: false,
         promoted: false,
