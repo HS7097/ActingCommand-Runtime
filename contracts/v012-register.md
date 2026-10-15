@@ -869,6 +869,21 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.57 Wave 13 slice EXEC-1 (#390, forced-compromises mapping E-04, E-13)
+
+EXEC-1 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` candidate operations") is the contract. One page of a page-graph task may
+carry ordered candidate operations with a `when`, and a click may let a refusal of its guard fall
+to the page's next candidate. No new event type, no new member of a persisted record and no
+configuration key. The code `contained_task_operation_candidates_exhausted` (execution-kernel,
+error, `pack_logic_mismatch`; values `page_id`, `count`) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| EC1 | package format: task operation members `when` (`{"present": <target>}` or `{"absent": <target>}`) and `on_guard_refused` (`"next_candidate"`) (task schema `0.9`) | new members (resource file format, not a ledger shape) | EXEC-1 | resource side | `when` names a target judged on one frame (not `click_only`, not under target consensus), not on the entry application; `on_guard_refused` only on a click with a declared guard (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); the `package` interface revision is declared once by A8 |
+| EC2 | `task.step_finished` of a candidate passed over after its guard refused | new rule of an existing record (shape unchanged) | EXEC-1 | EXEC-1 | written right after the step's `task.step_started` and its guard evaluation, with no `task.effect_intent` or `task.effect_completed` between, `page_label` the page of the frame the guard refused on and no phase; the step stays counted in the run's executed steps, and the next candidate starts the next step index on the same frame |
+| EC3 | task diagnostic stream: the `target` and `error` rows' guard `phase` value `when` | new value of an existing member | EXEC-1 | EXEC-1 | the evaluation of a candidate's `when` target on the frame its step would start on, written before that step's `step_started` row (a withdrawn candidate starts no step) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

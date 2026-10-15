@@ -3056,6 +3056,10 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 .get("retryable")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            // Workflow #390 EXEC-1: a candidate the page's next one may run instead of.
+            may_be_passed_over: ["when", "on_guard_refused"]
+                .into_iter()
+                .any(|member| operation.get(member).is_some_and(|value| !value.is_null())),
         });
     }
     let game = bundle.data["game"].as_str().unwrap_or_default();

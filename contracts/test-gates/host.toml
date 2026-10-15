@@ -774,3 +774,12 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
 ]
 incident = ["#398", "#387 A9"]
+
+# Workflow #390 EXEC-1 (FCM E-04), end to end: a click whose guard refuses and that declares on_guard_refused next_candidate finishes its step on the page without an input (register EC2), the page's next candidate runs as the next step on the same frame, and the run succeeds with the passed-over step counted and the designated operation not completed
+[[gate]]
+key = "83"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec1::exec1_a_guard_refusal_falls_to_the_next_candidate_in_the_ledger",
+]
+incident = ["#390"]

@@ -1907,6 +1907,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_operation_candidates_exhausted": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #390 EXEC-1: on a frame of the page page_id, every candidate operation of a page-graph task was passed over, count of them: its when did not hold, or its guard refused before any input of its step and it declared on_guard_refused next_candidate. No candidate was left to run; no further input was made.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_step_unconfirmed": {
       "category": "error",
       "ladder_class": "pack_logic_mismatch",

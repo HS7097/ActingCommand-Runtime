@@ -83,6 +83,9 @@ pub struct TaskPhaseOperation<'a> {
     pub from: &'a str,
     pub destinations: Vec<String>,
     pub retryable: bool,
+    /// Workflow #390 EXEC-1: the operation declares `when` or `on_guard_refused`, so at run time
+    /// the page's next candidate may run instead of it.
+    pub may_be_passed_over: bool,
 }
 
 // --- Workflow #373 NAV-3b: entry page sets (begin) ---
@@ -229,7 +232,10 @@ pub fn validate_phased_route(
 /// Today's reachability check of a phased route, from one start. Workflow #390 OUT-2: the state
 /// carries the designated effects that completed on the way (a bit mask); a member of a
 /// designated effect set that may have reached its cap is passed over, and the stage's next
-/// operation from the page is followed too.
+/// operation from the page is followed too. Workflow #390 EXEC-1: so is a candidate that may be
+/// passed over (`when`, `on_guard_refused`); a page left without an operation after such
+/// candidates only ends that path (the run's `contained_task_operation_candidates_exhausted`),
+/// while one left without an operation once a member may be capped stays unreachable.
 fn validate_phased_route_from(
     entry: &TaskPhaseEntry<'_>,
     phases: &[TaskPhase],
@@ -268,12 +274,13 @@ fn validate_phased_route_from(
         }
         let phase = &phases[index];
         let mut passed_over: Vec<&str> = Vec::new();
+        let mut capped = false;
         loop {
             let eligible = |operation: &&TaskPhaseOperation<'_>| {
                 phase.operations.iter().any(|id| id == operation.id)
                     && !passed_over.contains(&operation.id)
             };
-            let operation = operations
+            let Some(operation) = operations
                 .iter()
                 .filter(eligible)
                 .find(|operation| operation.from != "any" && canonical(operation.from) == page)
@@ -283,7 +290,12 @@ fn validate_phased_route_from(
                         .filter(eligible)
                         .find(|operation| operation.from == "any")
                 })
-                .ok_or(TaskflowCode::TaskPhasesUnreachable.code())?;
+            else {
+                if passed_over.is_empty() || capped {
+                    return Err(TaskflowCode::TaskPhasesUnreachable.code());
+                }
+                break;
+            };
             let member = reach.index_of(operation.id);
             if let Some(member) = member
                 && reach.is_single(member)
@@ -311,12 +323,12 @@ fn validate_phased_route_from(
                     );
                 pending.push_back((next_index, destination, next_completed));
             }
-            match member {
-                Some(member) if reach.may_be_capped(member, completed) => {
-                    passed_over.push(operation.id);
-                }
-                _ => break,
+            let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
+            if !may_be_capped && !operation.may_be_passed_over {
+                break;
             }
+            capped |= may_be_capped;
+            passed_over.push(operation.id);
         }
     }
     if terminals == 0 {
