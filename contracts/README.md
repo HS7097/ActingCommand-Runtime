@@ -224,7 +224,11 @@ postconditions. The designated operation is nonretryable and cannot be reachable
 again after its effect. The members of a designated effect set (Workflow #390
 OUT-2, [resource-declarations.md](resource-declarations.md)) are nonretryable too;
 a member may be reached again up to its cap, and where it may have reached its cap
-the stage's next operation from the page is followed as well. Source parsing,
+the stage's next operation from the page is followed as well. So is the next
+candidate after one that declares `when` or `on_guard_refused` (Workflow #390
+EXEC-1, [resource-declarations.md](resource-declarations.md), "Task schema `0.9`
+candidate operations"); a stage page left without a candidate after such
+candidates only ends that path. Source parsing,
 build and Runtime admission share this check; the operation and control phase
 declarations must match exactly.
 

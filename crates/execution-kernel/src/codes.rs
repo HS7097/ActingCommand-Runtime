@@ -118,6 +118,9 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskInputOutOfBounds => "contained_task_input_out_of_bounds": error / declaration_error,
         ContainedTaskRecognitionConflict => "contained_task_recognition_conflict": error / pack_logic_mismatch,
         ContainedTaskGuardRefused => "contained_task_guard_refused": error / pack_logic_mismatch,
+        // Workflow #390 EXEC-1: every candidate operation of the page was passed over (keys
+        // `page_id`, `count`).
+        ContainedTaskOperationCandidatesExhausted => "contained_task_operation_candidates_exhausted": error / pack_logic_mismatch,
         ContainedTaskStepUnconfirmed => "contained_task_step_unconfirmed": error / pack_logic_mismatch,
         ContainedTaskErrorPageReached => "contained_task_error_page_reached": error / pack_logic_mismatch,
         ContainedTaskLinearIntermediateUnobserved => "contained_task_linear_intermediate_unobserved": error / pack_logic_mismatch,

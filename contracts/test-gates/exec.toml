@@ -976,3 +976,17 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_read1::read1_a_run_publishes_the_denominator_under_the_second_reading_key",
 ]
 incident = ["#390"]
+
+# Workflow #390 EXEC-1 (FCM E-04, E-13): one page may carry ordered candidate operations; a candidate whose `when` (a target present or absent) does not hold on the frame is withdrawn before its step starts, and a click that declares on_guard_refused next_candidate passes over to the next candidate on the same frame when its guard refuses before any input of its step, its step finishing without an input and staying counted; a page whose candidates were all passed over ends the run with contained_task_operation_candidates_exhausted (page_id, count) and no input; admission follows every candidate that may run in the page-graph and phased route checks; both are task schema 0.9 page-graph declarations
+[[gate]]
+key = "63"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_admission_takes_when_and_a_declared_fall_through_on_page_graph_operations",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_the_first_candidate_whose_when_holds_runs",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_a_declared_guard_refusal_falls_to_the_next_candidate_on_the_same_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_a_page_whose_candidates_all_fail_ends_the_run_without_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_admission_follows_every_candidate_that_may_run",
+    "actingcommand-pack-containment::lib::source::declarations::tests::exec1_when_and_on_guard_refused_declare_a_candidate_operation",
+]
+incident = ["#390"]

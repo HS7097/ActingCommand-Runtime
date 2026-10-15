@@ -604,3 +604,58 @@ ledger.
 Wherever another rule names a package's designated operation (a recognition package, a
 prerequisite package, a `linear_steps` task, a zero-input fields task), a designated effect set is
 refused the same way, with the same reason token (`designated_operation`).
+
+### Task schema `0.9` candidate operations
+
+Workflow #390 EXEC-1 (forced-compromises mapping, rows E-04 and E-13). One page of a page-graph
+task may carry several ordered candidate operations. An operation may declare `when`, the
+condition under which it is a candidate, and a click may declare `on_guard_refused`, so that a
+refusal of its guard falls to the page's next candidate instead of ending the run. An older task
+schema refuses either with `UnconsumedField`; a `linear_steps` task refuses either at admission
+(`contained_task_linear_invalid`, `reason=when` or `reason=on_guard_refused`,
+[Linear steps](linear-steps.md)). A task that declares neither runs as before.
+
+```json
+"when": {"present": "check/claim_ready"}
+"when": {"absent": "check/claim_ready"}
+"on_guard_refused": "next_candidate"
+```
+
+| Member | Declaration gate | Runtime admission (`contained_task_operation_invalid`) |
+| --- | --- | --- |
+| `when` | an object with exactly one member, `present` or `absent`, naming a target (a string, `InvalidType` otherwise); no member is `MissingField` at `when`, both are `InvalidValue` at `when`, another member `UnknownField` | the target is a target of the recognition package that is judged on one frame: not a `click_only` target and not one under target consensus; not declared on the entry application (the first operation, an `application` effect from `any`, which runs before any page is known); its text reads, one consumer, stay within the static budget of a guard's ([OCR fields](ocr-fields.md)), refused otherwise as a guard's are at `/operations/<i>/when` |
+| `on_guard_refused` | the string `next_candidate` (`InvalidValue` otherwise) | the operation is a click with a declared guard (not an `unguarded_trusted_coordinate` click, not an `application` effect, not a select step) |
+
+**Candidates.** The candidates of a page are the operations chosen as before, in order: those
+whose `from` names the page in the task's operation order, then those from `any`; within the
+stage of a phased route, and without the members of a designated effect set that reached their
+cap. The first candidate is taken.
+
+- **`when`.** Before its step starts, the candidate's target is evaluated on the frame the step
+  would start on, the frame the run is on: `present` holds when the target passes, `absent` when
+  it does not. A candidate whose `when` does not hold is withdrawn: no step starts and no step
+  index is taken, and the next candidate is taken on the same frame. The evaluation is recorded
+  as a guard evaluation is, with the diagnostic phase `when` ([Task diagnostic
+  stream](task-diagnostic-stream.md)); one that does not conclude ends the run with
+  `contained_task_recognition_failed`.
+- **`on_guard_refused: next_candidate`.** When the click's guard refuses
+  (`contained_task_guard_refused`) on its step's frame at the step's first attempt, before any
+  input of the step, the step finishes on the frame's page without an input (a `StepFinished`
+  with no `EffectIntent`), stays counted in the run's executed steps, and the next candidate is
+  taken on the same frame as the next step. A guard that could not be evaluated
+  (`contained_task_guard_evaluation_failed`), a sampling timeout (observe-only retries), a refusal
+  on a later attempt and a refusal of an input recheck (Workflow #390 EXEC-2) keep the operation's
+  failure decision.
+- A candidate passed over in either way is not taken again on that frame; the next frame of the
+  run starts the page's candidates again.
+- **No candidate left.** When every candidate of the page was passed over on the frame, the run
+  ends before any further input with `contained_task_operation_candidates_exhausted` (`page_id`
+  the frame's page, `count` the candidates passed over). A frame that matches more than one page
+  is still `contained_task_recognition_conflict`.
+
+**Static checks.** The page-graph reachability check of a scheduling outcome and the phased route
+check follow every candidate that may run: after a candidate that declares `when` or
+`on_guard_refused`, the page's next candidate is followed too, so each terminal page it reaches
+needs its mapping. A page left without a candidate after such candidates only ends that path (the
+run's `contained_task_operation_candidates_exhausted`); a page left without one once a member of a
+designated effect set may have reached its cap is refused as before.

@@ -321,7 +321,7 @@ their original evaluators.
 | Kind | Actual data |
 | --- | --- |
 | `page` | phase (`page` or `home_preflight`), native page index/ID, matched flag, group pass/total counts and message; errors carry the failed target and original typed cause |
-| `target` | target ID/kind, passed/message, actual template and color evaluation, source role/group/target index, guard phase or (v2) composite member; (Workflow #396) the typed `failure` reason and the `uniqueness` check when present; the template's `scale_milli` when its target declares `scales` (REC-5) |
+| `target` | target ID/kind, passed/message, actual template and color evaluation, source role/group/target index, guard phase (`guard`, `candidate_sample`, or Workflow #390 EXEC-1 `when` for the target of a candidate operation's `when`) or (v2) composite member; (Workflow #396) the typed `failure` reason and the `uniqueness` check when present; the template's `scale_milli` when its target declares `scales` (REC-5) |
 | `color_digest` | (v2) actual `color_digest.v1` evaluation of its parent target row: algorithm, grid, active cells, mean/max/worst cell, both thresholds and the observed digest |
 | `ocr` | requested/resolved region evidence, provider `raw_text`, business `derived_text`, aggregate confidence, actual selection/execution metadata and block count |
 | `ocr_block` | original text/confidence/rect with `source_index` and `derived_rank` |
