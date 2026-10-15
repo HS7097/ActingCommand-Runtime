@@ -333,11 +333,8 @@ impl RuntimeOwnerJournal {
             original.bytes,
             &original.sha256,
         )?;
-        let needed = full
-            .carried
-            .union(&full.block_starts)
-            .cloned()
-            .collect::<BTreeSet<_>>();
+        let _ = &full.block_starts;
+        let needed = full.carried.iter().cloned().collect::<BTreeSet<_>>();
         let checkpoint = OwnerJournalCheckpoint {
             schema_version: OWNER_JOURNAL_CHECKPOINT_SCHEMA.to_owned(),
             predecessor_bytes: original.bytes,
