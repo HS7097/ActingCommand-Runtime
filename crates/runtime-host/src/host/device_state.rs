@@ -31,11 +31,12 @@
 
 use super::*;
 use crate::codes::{DeviceHold, DeviceStateHostCode, DeviceStateLocation};
+use actingcommand_device::codes::DeviceStateCode;
 use actingcommand_device::{
-    BatteryPlugged, BatteryState, BatteryStatus, DeviceStateCode, DeviceStateProbe,
-    DeviceStateShell, InsecureKeyguardAction, KeyguardState, ScreenCheckPolicy, ScreenState,
-    ThermalStatus, check_screen, handset_label, read_battery, read_foreground, read_home,
-    read_keyguard, read_screen, read_screen_timeout, read_thermal,
+    BatteryPlugged, BatteryState, BatteryStatus, DeviceStateProbe, DeviceStateShell,
+    InsecureKeyguardAction, KeyguardState, ScreenCheckPolicy, ScreenState, ThermalStatus,
+    check_screen, handset_label, read_battery, read_foreground, read_home, read_keyguard,
+    read_screen, read_screen_timeout, read_thermal,
 };
 use actingcommand_runtime_config::{DeviceStateConfig, KeyguardInsecureAction, ThermalLevel};
 

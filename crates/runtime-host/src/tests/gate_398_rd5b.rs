@@ -16,7 +16,8 @@ use super::*;
 use crate::codes::{DeviceHold, DeviceStateHostCode};
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{FactScalar, RuntimeConfigManifest, RuntimeLifecyclePhase};
-use actingcommand_device::{DeviceStateAction, DeviceStateCode, DeviceStateRead, handset_label};
+use actingcommand_device::codes::DeviceStateCode;
+use actingcommand_device::{DeviceStateAction, DeviceStateRead, handset_label};
 use actingcommand_runtime_config::{
     DefaultsFile, annotate_settable, mechanism_rows, render_parameters,
 };
