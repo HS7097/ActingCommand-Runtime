@@ -387,6 +387,11 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
 | `selection.required_count` is `1`. | `/selection/required_count` | the policy |
 
+A select step whose policy declares more than one candidate is a multi select (Workflow #357,
+frozen model M-357b v1.0); it takes effect from slice DB-3b, and until then admission refuses
+it as above. Its record shape is already part of ledger revision 3 (section Records,
+`multi_select`).
+
 `actinglab resource validate` reports a policy document with the family `selection_policy`.
 
 Contained task admission then checks the step against the loaded package and refuses it before
@@ -517,8 +522,11 @@ A select step records its decision in the task ledger as the event
  "selection": { … }}
 ```
 
-Each select attempt that reaches a decision appends exactly one, before any input and before
-any failure return (section Select step). The host appends it linked to the step's action and
+Each select attempt that reaches a decision appends exactly one. A single select appends it
+before any input and before any failure return (section Select step). A multi select (section
+Multi select below) appends it once, when its tap sequence ends, at its first failure or where
+it stops, before the step's `task.effect_completed`; a decision with nothing to tap is appended
+after the decision, as for a single select. The host appends it linked to the step's action and
 to the last frame the attempt read. A package without a select step never produces the event.
 
 The record has the shape of a `policy.*` decision: identity hashes and a complete breakdown.
@@ -551,6 +559,78 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 
 A confirmation is attempted exactly when the outcome is `selected`. Together with the
 projection, a matched or mismatched record holds both candidate-set hashes.
+
+#### Multi select
+
+Workflow #357 (frozen model M-357b v1.0 §5, slice DB-3s): a step whose policy declares more
+than one candidate (2–16) chooses up to N of them in one attempt and records them in one
+`task.selection_evaluated`, with one confirmation per pick. DB-3s brings the shape, its
+readers and its rules; DB-3b (single frame) and DB-3c (scan) write it. A single select's record
+carries none of it and keeps its bytes.
+
+The record gains the optional member `multi_select`, after `unknown_check`:
+
+| Member | Meaning |
+| --- | --- |
+| `declared_count` | The policy's `selection.required_count`, 2–16. |
+| `required_count` | N, 1..=`declared_count`: min(`declared_count`, `free_slots`) when `free_slots` is present, else `declared_count`. |
+| `free_slots` | The free-slot fact's reading, 1–65535; absent when the policy declares none or the reading was unavailable. |
+| `order` | `rank` or `content`: the step's tap order. `selected` keeps the evaluator's rank order; the tap order is in `picks`. |
+| `mark_feature` | The step's mark feature, a feature name of the layout. |
+| `pick_set_sha256` | The decision frame's unmarked hash, 64 lowercase hex digits; present exactly with a v1 projection. Its definition is the writer's; a reader checks its presence and grammar and never recomputes it. |
+| `picks` | At most 16, in tap order: `{candidate_id, confirmation, tap_check?}`, the confirmation before the pick's tap and the check after it, present only when that check reached a result. |
+
+`confirmation` gains six kinds and `reposition_failed` the stage `tap_check`:
+
+| `kind` | Where | Meaning |
+| --- | --- | --- |
+| `pick_matched` `{frame_id}` | a v1 pick's confirmation | The frame confirmed the pick before its tap: F2 for the first pick, the previous pick's tap-check frame for every later one. |
+| `pick_moved` `{frame_id, pick_set_sha256}` | a v1 pick's first confirmation or any tap check | The frame's unmarked hash differs from the decision frame's: the list moved. |
+| `mark_unconfirmed` `{candidate_id, mark_expectation, mark_state, frame_id}` | a pick's confirmation or tap check | The mark of `candidate_id` (an actionable v1 candidate, or a selected v2 one) read `marked`, `unmarked` or `unknown` where `marked` or `unmarked` was required; never the reading required. |
+| `tap_marked` `{frame_id}` | a tap check | The tapped pick reads as marked. |
+| `picks_confirmed` `{count}` | the top level | Every pick was confirmed, tapped and checked. |
+| `picks_stopped` `{count}` | the top level | The sequence stopped outside the record (a deadline, the task timeout, an input failure, the run's end) after `count` picks were tapped and checked. |
+| `reposition_failed` stage `tap_check` | a v2 tap check | The frame after the tap did not align. |
+
+Rules M1–M8 (M-357b §5.2) hold beside the path rules; a violation is
+`invalid_task_selection_record` with the field named:
+
+- M1 (`multi_select`): the counts and N as above; the outcome is not `ambiguous`; `selected`
+  holds at most N and `insufficient.required` is at most N; `mark_feature` is a feature name;
+  `pick_set_sha256` as above.
+- M2 (`picks`): when the top-level confirmation was attempted, the picks are exactly
+  `selected`, each once, in `selected`'s order for `rank` and in increasing candidate index for
+  `content`.
+- M3 (`picks`): a v1 pick's first confirmation is `pick_matched`, `pick_moved`,
+  `mark_unconfirmed`, `page_changed`, `guard_failed`, `capture_failed` or `not_attempted`, and
+  every later one `pick_matched` on the previous pick's tap-check frame or `not_attempted`; a
+  v2 pick's confirmation is `identity_matched` naming the pick, `identity_unconfirmed`,
+  `reposition_failed` at `return` or `confirm`, `mark_unconfirmed`, `page_changed`,
+  `guard_failed`, `capture_failed` or `not_attempted`; a tap check is `tap_marked`,
+  `mark_unconfirmed`, `page_changed`, `guard_failed` or `capture_failed`, a v1 one also
+  `pick_moved` and a v2 one also `reposition_failed` at `tap_check`.
+- M4 (`picks`): the picks succeed (confirmed, then `tap_marked`) up to a first pick j whose
+  confirmation failed (no tap check), whose tap check failed, that was confirmed with no tap
+  check, or that was not attempted (no tap check); every pick after j was not attempted.
+- M5 (`confirmation`): the top level is `not_attempted` exactly when there is no pick; it is
+  `picks_confirmed` with the number of picks when every pick succeeded, a verbatim copy of j's
+  failed confirmation or tap check, or `picks_stopped` with j when j was confirmed with no tap
+  check or not attempted. A multi-select record's top level is never `matched`, `mismatched`,
+  `identity_matched`, `pick_matched` or `tap_marked`; a single select's never one of the six
+  kinds or the stage `tap_check`.
+- M6 (`path_rule_4`): `unknown_instances` blocks a partial `selected` (fewer than N) with an
+  unknown instance too.
+- M7 (`path_rule_5`): `outranked_possible` needs a full `selected` (N), and compares the bound
+  with the lowest selected score.
+- M8 (`path_rule_1`): an early-stopped scan holds a full `selected` and no
+  `selection_quota_unfilled` decision reason.
+- "A record with `unknown_check` chooses exactly one candidate" holds only without
+  `multi_select`.
+
+Each tap is one `task.effect_intent` linked to its pick's confirmation frame, before the
+record; a scan's moves between picks never link to a confirmation frame; the step has one
+`task.effect_completed`, after the record. The record's frame is the last tap-check or failing
+frame. No reader requires the record before the step's first intent.
 
 #### Evaluator mirror
 
@@ -599,11 +679,13 @@ A structural violation is `invalid_task_selection_record` with the field it conc
 the writer measures bytes, on the current encoding: the projection within its 32 KiB budget
 (`candidate_projection_budget_exceeded`) and the record's compact JSON within 64 KiB
 (`selection_record_too_large`). The producer runs the same check before any input, so an
-oversized record fails the task and nothing is truncated.
+oversized record fails the task and nothing is truncated; a multi select's producer runs it
+once before its first tap (M-357b §5.3), so that bound too fails before any input.
 
 #### Ledger placement
 
-- Durability: durable. It is the decision an input follows.
+- Durability: durable. A single select's record is the decision an input follows; a multi
+  select's is the decision and the confirmations of the taps that preceded it.
 - Views: the event stream, Errors by severity and Lab by request context. The Observation
   and Changes type lists are compiled into the stored view DDL and compared at every open,
   so the event joins them only together with a view schema upgrade.
@@ -615,3 +697,7 @@ oversized record fails the task and nothing is truncated.
   field, and every existing record re-serializes to the same bytes. A reader built before the
   variant rejects a ledger that contains it, so the UI and `actingledger` move to a Runtime
   that knows it before such a ledger reaches them.
+  The same holds for `multi_select` and the six multi-select kinds (M-357b §5.1): a reader
+  built before DB-3s rejects a ledger that holds one, so the UI build paired with v0.12.0
+  pins a Runtime revision that includes DB-3s, and so does `actingledger`. They join ledger
+  revision 3 because DB-3s merges before the v0.12.0 tag; 0.12.x adds no member to them.

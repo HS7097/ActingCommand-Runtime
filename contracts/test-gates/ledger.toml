@@ -546,3 +546,12 @@ tests = [
     "actingledger::gate::views::gate_views_instance_port_with_another_instance_condition_conflicts",
 ]
 incident = ["#382 L-4"]
+
+# Workflow #357 DB-3s (M-357b v1.0 §5.3, §5.4, §12.6 T16; register §1.66 MS5): a multi select's tap intents, each linked to its pick's confirmation frame, and a scan move come before its selection record, all under the step's one action, with one effect completion after; a formal root reads them back, so no reader requires the record before the step's first intent
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_357_db3s::db3s_t16_a_multi_select_record_follows_its_tap_intents_and_reads_back",
+]
+incident = ["#357 DB-3s"]

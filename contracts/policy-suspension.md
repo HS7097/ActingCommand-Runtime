@@ -43,8 +43,9 @@ scheduled for a retry and has a live retry round is treated by the evaluator as 
 next evaluation, instead of at the next clock occurrence. `actingd` evaluates again right after
 a cycle in which a scheduled run failed, so that evaluation, not the wake computed before the
 run, sets the next wake (the end of the backoff). The feedback stop, placement, the
-loop and activity budgets and the activity windows still apply, and every rerun consumes the
-budgets like any dispatch. A failure recorded without a failure identity keeps waiting for
+loop and activity budgets, the activity's sampled interval after its previous admission
+(`policy_activity_interval_active`) and the activity windows still apply, and every rerun
+consumes the budgets like any dispatch. A failure recorded without a failure identity keeps waiting for
 its trigger and cooldown. A page-graph task's failure carries one (Workflow #390 EXEC-3), so a
 page-graph task is rerun at once as a linear one is.
 
@@ -151,8 +152,11 @@ whole; no detail is empty. `attempts` is not kept, nor are `awaited` and `skip_t
 Only these failures can pause a task by repeating:
 
 - the `main` scope, outside the restart segment, with `page_confirmation_failed`,
-  `contained_task_linear_intermediate_unobserved` or `contained_task_guard_refused`: the main
-  package's own steps no longer match the screen;
+  `contained_task_linear_intermediate_unobserved`, `contained_task_step_unconfirmed` or
+  `contained_task_guard_refused`: the main package's own steps no longer match the screen. A
+  page-graph step unconfirmed after all its retries (`contained_task_step_unconfirmed`) is the
+  graph counterpart of a linear intermediate page not seen (Workflow #390 EXEC-3, wave 14
+  ruling 4);
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
   configuration problem (a missing mapping, a package id that does not match, an
   incompatible package).
