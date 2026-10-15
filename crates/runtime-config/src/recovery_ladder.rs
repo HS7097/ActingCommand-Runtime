@@ -1050,6 +1050,7 @@ fn starts_fit_profiles(
     }
     for profile in profiles {
         let count = profile.rungs.len();
+        let count = count + RecoveryRung::ALL.len();
         if default_start_rung > count || triggers.iter().any(|item| item.start_rung > count) {
             return Err(failure(
                 &profile_key(&profile.name),
