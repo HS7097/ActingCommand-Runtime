@@ -8,7 +8,8 @@
 // and no declared prerequisite selects it; the bundle check matches every indexed identity
 // `(package_id, server, entry_task_id)` and the index's game, checks each declared use (a
 // return-home package declares no prerequisite of its own) and every complete chain against the
-// bindings the declaration supplies. Requirement basis: rd-1009/tests/req-basis-el.md section E-1,
+// bundle's own packs (Workflow #373 NAV-3a: every pack is a prerequisite package of the registry
+// the bundle becomes). Requirement basis: rd-1009/tests/req-basis-el.md section E-1,
 // rows "G4a PrerequisiteChain" and "G4a validate_bundle_maintenance". Descriptions are built
 // directly; nothing is loaded.
 
@@ -386,12 +387,12 @@ fn gate_e1_bundle_maintenance_refuses_a_duplicate_role_or_a_missing_reference() 
             &packages,
             vec![
                 uses(ROOT, &[MaintenanceUse::Startup]),
-                uses(HOME, &[MaintenanceUse::Prerequisite]),
+                uses(HOME, &[MaintenanceUse::ReturnHome]),
             ],
         ),
         &packages,
     )
-    .expect("one startup entry and one prerequisite entry");
+    .expect("one startup entry and one return-home entry");
 
     let two_startups = index(
         &packages,
@@ -431,10 +432,7 @@ fn gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material() {
     let (code, detail) = bundle_refusal(
         &index(
             &home_with_prerequisite,
-            vec![
-                uses(HOME, &[MaintenanceUse::ReturnHome]),
-                uses(ROOT, &[MaintenanceUse::Prerequisite]),
-            ],
+            vec![uses(HOME, &[MaintenanceUse::ReturnHome])],
         ),
         &home_with_prerequisite,
     );
@@ -445,31 +443,28 @@ fn gate_e1_bundle_maintenance_checks_each_declared_use_on_the_material() {
     );
 }
 
-// package-reference.md: the bundle check "then checks each use and complete prerequisite chain
-// against the bindings supplied by the declaration": `prerequisite` and `return_home` supply the
-// bindings, `return_home` also the server's fallback. A declared prerequisite that no entry binds
-// is refused by the chain under its own code; bound, the chain and the fallback pass.
+// package-reference.md: the bundle check "then checks each use and complete prerequisite chain"
+// against the registry the bundle becomes (Workflow #373 NAV-3a, M-373 §3.8, §4.3: every pack of
+// the bundle is a prerequisite package of its game's registry, no declaration binds one;
+// `return_home` supplies the server's fallback). A declared prerequisite the bundle does not hold
+// is refused by the chain under its own code; one it holds, with no maintenance entry naming it,
+// is bound, and the chain and the fallback pass.
 #[test]
-fn gate_e1_bundle_maintenance_checks_every_chain_against_the_declared_bindings() {
-    let packages = [declaring(linear(ROOT), "p1"), linear("p1"), package(HOME)];
+fn gate_e1_bundle_maintenance_checks_every_chain_against_the_bundles_packs() {
+    let outside = [declaring(linear(ROOT), "p9"), package(HOME)];
     let (code, detail) = bundle_refusal(
-        &index(&packages, vec![uses(HOME, &[MaintenanceUse::ReturnHome])]),
-        &packages,
+        &index(&outside, vec![uses(HOME, &[MaintenanceUse::ReturnHome])]),
+        &outside,
     );
     assert_eq!(
         (code.as_str(), detail.as_str()),
-        (UNBOUND, "layer=1 package_id=p1")
+        (UNBOUND, "layer=1 package_id=p9")
     );
 
+    let packages = [declaring(linear(ROOT), "p1"), linear("p1"), package(HOME)];
     validate_bundle_maintenance(
-        &index(
-            &packages,
-            vec![
-                uses("p1", &[MaintenanceUse::Prerequisite]),
-                uses(HOME, &[MaintenanceUse::ReturnHome]),
-            ],
-        ),
+        &index(&packages, vec![uses(HOME, &[MaintenanceUse::ReturnHome])]),
         &packages,
     )
-    .expect("the declared prerequisite and the return-home fallback are bound");
+    .expect("the bundle's prerequisite package and the return-home fallback are bound");
 }

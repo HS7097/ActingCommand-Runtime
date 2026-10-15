@@ -7,7 +7,8 @@
 //!
 //! Every package is a `linear_steps` package of game `neutral`, server `test`, written as a
 //! source package directory: one click from `home` (first pixel red) to `list` (first pixel
-//! blue). A case is a set of such packages, the ones bound as prerequisite packages, and the
+//! blue). A case is a set of such packages, the ones bound as prerequisite packages (Workflow
+//! #373 NAV-3a: the packages the registry lists, that is the bundle beside [`ROOT`]), and the
 //! code with which the shared prerequisite chain refuses the run of [`ROOT`].
 
 use serde_json::{Value, json};

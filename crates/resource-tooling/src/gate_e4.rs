@@ -13,7 +13,7 @@
 mod exec_i6;
 
 use crate::{PackageBundleRequest, package_bundle};
-use actingcommand_contract::{BundleMaintenance, LabResult, MaintenanceUse};
+use actingcommand_contract::LabResult;
 use exec_i6::{GAME, I6Case, ROOT, SERVER};
 use serde_json::json;
 use std::fs;
@@ -23,8 +23,10 @@ const MAINTENANCE_INVALID: &str = "package_bundle_maintenance_invalid";
 // How a kernel refusal reads inside the bundle's message (`ContainedTaskError`'s display).
 const KERNEL_PREFIX: &str = "contained task error ";
 
-// Bundles `case` with a maintenance declaration that binds `case.bound` as prerequisite
-// packages, as a resource repository's `maintenance.json` would.
+// Bundles the root package of `case` and the packages of `case.bound`, with an empty maintenance
+// declaration (the full qualification). Workflow #373 NAV-3a (M-373 §3.8, §4.3): the bundle is its
+// game's registry, so the packages it holds are the bound ones, as runtime-host's `gate_e4` lists
+// them in the game root's `bundle.json`; the others are not in the bundle.
 fn bundle(case: &I6Case) -> (TempDir, LabResult<crate::PackageBundleResponse>) {
     let temp = TempDir::new().expect("temporary directory");
     let applications = temp.path().join("applications.json");
@@ -43,22 +45,17 @@ fn bundle(case: &I6Case) -> (TempDir, LabResult<crate::PackageBundleResponse>) {
     )
     .expect("applications table");
     let packs_root = temp.path().join("packs");
-    exec_i6::write_case(&packs_root, case);
-    let maintenance = case
-        .bound
-        .iter()
-        .map(|package_id| BundleMaintenance {
-            package_id: (*package_id).to_owned(),
-            server: SERVER.to_owned(),
-            uses: vec![MaintenanceUse::Prerequisite],
-        })
-        .collect();
+    for pack in &case.packs {
+        if pack.package_id == ROOT || case.bound.contains(&pack.package_id) {
+            exec_i6::write_pack(&packs_root.join(pack.package_id), pack);
+        }
+    }
     let result = package_bundle(PackageBundleRequest {
         applications,
         packs_root,
         out: temp.path().join("bundle"),
         source: None,
-        maintenance: Some(maintenance),
+        maintenance: Some(Vec::new()),
     });
     (temp, result)
 }
@@ -71,7 +68,7 @@ fn kernel_code(message: &str) -> Option<&str> {
 }
 
 // package-reference.md: the bundle check performs the Runtime's task preparation and checks
-// every complete chain against the declared bindings. The set whose root has one bound
+// every complete chain against the bundle's own packs. The set whose root has one bound
 // prerequisite package is written (bundle v4 with its maintenance declarations).
 #[test]
 fn gate_e4_bundle_v3_admits_the_fixture_set_the_runtime_admits() {

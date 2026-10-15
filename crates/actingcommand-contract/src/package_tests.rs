@@ -151,3 +151,46 @@ fn s5_t6_bundle_v4_reads_its_tables_list_and_refuses_a_pack_named_tables() {
         );
     }
 }
+
+// Workflow #373 NAV-3a, test row N3a-9 (M-373 v1.1 §3.8; wave 14 ruling NAV-3a item 5; exec key
+// 71): bundle v4's maintenance uses lose `prerequisite`, since every pack of a game root's
+// `bundle.json` is a prerequisite package of that game's registry, and v4 refuses an entry that
+// still names it, with no compatibility reading: the bundle index does not decode, a game root
+// holding it is `malformed`, and the source declaration array (`maintenance.json`, `package
+// bundle --maintenance`), which shares the entry shape, does not decode either. The same entry
+// with `return_home` alone is read and names the server's return-home package.
+#[test]
+fn n3a_9_bundle_v4_refuses_a_maintenance_entry_with_the_prerequisite_use() {
+    const HOME: &str = "neutral.test.home";
+    let declaring = |uses: Value| {
+        let mut value = bundle(&[PACKAGE, HOME]);
+        value["maintenance"] = json!([{"package_id": HOME, "server": "test", "uses": uses}]);
+        value
+    };
+    for uses in [
+        json!(["prerequisite"]),
+        json!(["prerequisite", "return_home"]),
+    ] {
+        let value = declaring(uses.clone());
+        assert!(
+            serde_json::from_value::<BundleIndex>(value.clone()).is_err(),
+            "{uses}: decodes as the bundle index"
+        );
+        assert_eq!(
+            read(&value).map(|_| ()),
+            refused(StandardPackProblem::Malformed),
+            "{uses}"
+        );
+        assert!(
+            serde_json::from_value::<Vec<BundleMaintenance>>(value["maintenance"].clone()).is_err(),
+            "{uses}: decodes as a source declaration"
+        );
+    }
+
+    let registry = read(&declaring(json!(["return_home"]))).expect("a return-home entry is read");
+    assert_eq!(registry.return_home_package("test"), Some(HOME));
+    assert!(
+        registry.get(HOME).is_some(),
+        "the return-home package is listed"
+    );
+}

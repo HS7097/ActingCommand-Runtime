@@ -4,6 +4,7 @@
 // key 90): a page-graph package declares a prerequisite package and gets the return-home
 // fallback, and every prerequisite and return-home package is found through the standard-pack
 // registry of its game (`<standard_packs.root>/<game>/bundle.json`), read when a run uses it.
+// The NAV-3a follow-up adds test row N3a-9's Runtime half (host key 94).
 //
 // A synthetic `neutral` game. The fake device's first pixel is the screen: red `away`, blue
 // `menu`, green `shop`, white `done`; each input moves the screen to the next one its test
@@ -850,4 +851,82 @@ fn n3a_7_the_ladder_first_rung_runs_the_registry_return_home_package() {
         )),
         "the rung ran the registry's return-home package"
     );
+}
+
+// ---- N3a-9, the Runtime half (the NAV-3a follow-up, host key 94).
+
+// N3a-9 (M-373 §3.8; wave 14 ruling NAV-3a items 4 and 5; register §1.67 N3A-4): bundle v4
+// refuses a maintenance entry with the retired use `prerequisite`, so a game root whose
+// `bundle.json` still declares it is no registry. The Runtime records it at startup as
+// `standard_pack_root_invalid` (`malformed`, its `bundle.json`), and a run that resolves a
+// prerequisite package of that game is refused in its preparation with that code: no task record,
+// no input. The same root with the entry's `return_home` use alone is read by the next run, with
+// no restart, and the package runs its prerequisite package.
+#[test]
+fn n3a_9_a_game_root_whose_bundle_declares_the_prerequisite_use_refuses_the_run() {
+    let state = Arc::new(FakeState::default());
+    screens(&state, vec![AWAY, MENU, DONE]);
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = StandardRoot::new(temp.path());
+    route(LEAD, "away", "menu", LEAD_STEPS, None).write(&root.list(LEAD));
+    root.return_home(LEAD);
+    root.write_bundle();
+    let bundle_path = root.game.join("bundle.json");
+    let mut bundle: Value =
+        serde_json::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle JSON");
+    bundle["maintenance"][0]["uses"] = json!(["prerequisite"]);
+    fs::write(
+        &bundle_path,
+        serde_json::to_vec_pretty(&bundle).expect("bundle JSON"),
+    )
+    .expect("write bundle");
+    let host = start(&temp, &state, Some(root.root.clone()));
+
+    let refused = run(&host, &temp, "refused", &main_pack(LEAD));
+    let reads = standard_pack_reads(&host);
+    root.write_bundle();
+    let admitted = run(&host, &temp, "admitted", &main_pack(LEAD));
+    host.close().expect("close runtime host");
+
+    let started = reads.first().expect("the start's record of the game root");
+    assert_eq!(started.code().as_str(), "standard_pack_root_invalid");
+    assert_eq!(
+        started
+            .value("standard_pack_problem")
+            .and_then(Value::as_str),
+        Some("malformed"),
+        "{started:?}"
+    );
+    assert!(
+        started
+            .value("path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| path.ends_with("bundle.json")),
+        "{started:?}"
+    );
+    assert_eq!(
+        refused.receipt.state(),
+        RuntimeReceiptState::Denied,
+        "{:?}",
+        refused.receipt
+    );
+    assert_eq!(
+        refused.receipt.outcome().code().as_str(),
+        "standard_pack_root_invalid"
+    );
+    assert_eq!(
+        refused
+            .receipt
+            .outcome()
+            .value("standard_pack_problem")
+            .and_then(Value::as_str),
+        Some("malformed"),
+        "{:?}",
+        refused.receipt
+    );
+    assert!(refused.facts().is_empty(), "no task record");
+
+    assert!(admitted.succeeded(), "{:?}", admitted.receipt);
+    assert_eq!(admitted.admitted(), vec![(LEAD.to_owned(), PREREQUISITE)]);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 2);
 }
