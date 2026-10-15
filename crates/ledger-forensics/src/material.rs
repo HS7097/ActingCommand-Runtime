@@ -329,8 +329,7 @@ pub fn read_material_to_per_phase<W: Write>(
             actual_length,
             total_length: result.request.byte_count,
             sha256: result.request.sha256.clone(),
-            is_last: offset.checked_add(u64::from(actual_length))
-                == Some(result.request.byte_count),
+            is_last: offset.checked_add(u64::from(actual_length)).is_none(),
             bytes,
         });
         Ok(())
