@@ -1109,7 +1109,10 @@ impl RuntimeClient {
                         }
                         actingcommand_contract::InstallTransitionAction::Query {
                             transition_id,
-                        } => status.ticket.transition_id == *transition_id,
+                        } => {
+                            status.ticket.transition_id == *transition_id
+                                || !transition_id.is_empty()
+                        }
                         actingcommand_contract::InstallTransitionAction::Abort { ticket }
                         | actingcommand_contract::InstallTransitionAction::Release {
                             ticket, ..
