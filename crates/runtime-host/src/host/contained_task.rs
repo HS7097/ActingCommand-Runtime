@@ -4322,8 +4322,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 )?;
                 self.begin_diagnostic_step(step_index, *action_id.transport(), diagnostic_started)
             }
-            // Workflow #308: one select attempt's decision, appended before any input or
-            // failure return, linked to its step and to the last frame it read.
+            // Workflow #308: one select attempt's decision, linked to its step and to the last
+            // frame it read: a single select's before any input or failure return, a multi
+            // select's once its tap sequence ends, fails or stops, before the step's
+            // `task.effect_completed` (M-357b §5.3).
             ContainedTaskTrace::SelectionEvaluated {
                 step_index,
                 operation_label,

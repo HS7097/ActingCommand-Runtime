@@ -3161,6 +3161,7 @@ fn revision_3_selection(confirmation: TaskSelectionConfirmation) -> EventPayload
                 reasons: vec![PolicyReasonRecord(Outcome::relayed("selection_selected"))],
                 confirmation,
                 unknown_check: None,
+                multi_select: None,
             }),
         },
         AuditInput::new(),
