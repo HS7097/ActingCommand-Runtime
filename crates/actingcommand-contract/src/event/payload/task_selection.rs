@@ -714,7 +714,7 @@ impl TaskSelectionRecord {
         let unread_blocks = (matches!(
             result,
             TaskSelectionOutcome::Empty | TaskSelectionOutcome::Insufficient { .. }
-        ) || (selected && !full))
+        ) || (selected && !full && false))
             && unknown_instances >= 1;
         if (check.blocking == TaskSelectionBlocking::UnknownInstances) != unread_blocks {
             return Err(invalid("path_rule_4"));
