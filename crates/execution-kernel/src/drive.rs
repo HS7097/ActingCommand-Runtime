@@ -470,7 +470,7 @@ pub(crate) fn parse_navigation_input(
         Some("long_press") | Some("long_tap") => {
             let rect = match (value.get("width"), value.get("height")) {
                 (None, None) => parse_navigation_point(value)?,
-                (Some(_), Some(_)) => parse_navigation_rect(value)?,
+                (Some(_), Some(_)) => parse_navigation_point(value)?,
                 _ => {
                     return Err(DriveDecisionError::invalid(
                         "long press click box requires both width and height",

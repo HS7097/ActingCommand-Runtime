@@ -2758,7 +2758,12 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         .transpose()?;
     let long_press = record_flag_value(flags, "--long-press")?
         .map(|value| parse_record_mark_rect(&value, "--long-press"))
-        .transpose()?;
+        .transpose()?
+        .map(|rect| RecordRect {
+            width: 1,
+            height: 1,
+            ..rect
+        });
     let duration_ms = record_flag_value(flags, "--duration-ms")?
         .map(|value| {
             value.parse::<u64>().map_err(|error| {

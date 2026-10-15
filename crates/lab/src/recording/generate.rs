@@ -1656,8 +1656,6 @@ fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
                 "kind": "long_press",
                 "x": click.rect.x,
                 "y": click.rect.y,
-                "width": click.rect.width,
-                "height": click.rect.height,
                 "duration_ms": duration_ms
             }));
         }

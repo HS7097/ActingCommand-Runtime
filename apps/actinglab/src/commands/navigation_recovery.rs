@@ -705,7 +705,7 @@ pub(crate) fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput>
         Some("long_press") | Some("long_tap") => {
             let rect = match (value.get("width"), value.get("height")) {
                 (None, None) => parse_navigation_point(value)?,
-                (Some(_), Some(_)) => parse_navigation_rect(value)?,
+                (Some(_), Some(_)) => parse_navigation_point(value)?,
                 _ => {
                     return Err(CliError::usage(
                         "long press click box requires both width and height",

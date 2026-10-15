@@ -4557,8 +4557,8 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
             ("kind", Value::String("long_press".to_string())),
             ("x", required_field(click, "x")?.clone()),
             ("y", required_field(click, "y")?.clone()),
-            ("width", required_field(click, "width")?.clone()),
-            ("height", required_field(click, "height")?.clone()),
+            ("width", Value::Number(1.into())),
+            ("height", Value::Number(1.into())),
             ("duration_ms", required_field(click, "duration_ms")?.clone()),
         ])),
         Some("long_press") | Some("long_tap") => Ok(ordered_object([

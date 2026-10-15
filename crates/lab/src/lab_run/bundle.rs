@@ -997,11 +997,12 @@ impl OperationClick {
                         &control.resolution,
                         control.allow_placeholder_coords.unwrap_or(false),
                     )?,
-                    _ => {
-                        return Err(CliError::package_invalid(
-                            "long_press click box needs both width and height",
-                        ));
-                    }
+                    _ => validate_click_point(
+                        x,
+                        y,
+                        &control.resolution,
+                        control.allow_placeholder_coords.unwrap_or(false),
+                    )?,
                 }
                 if self.duration_ms.unwrap_or(0) == 0 {
                     return Err(CliError::package_invalid(

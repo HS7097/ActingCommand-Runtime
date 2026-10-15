@@ -8515,7 +8515,7 @@ impl TaskClick {
                 match self.long_press_box()? {
                     Some(rect) => {
                         rect.validate(resolution)?;
-                        sampled_long_tap(rect, duration_ms, action_seed)?
+                        sampled_long_tap(rect, duration_ms, None)?
                     }
                     None => (
                         InputAction::LongTap {
@@ -8686,9 +8686,7 @@ impl TaskClick {
                 width,
                 height,
             })),
-            _ => Err(ContainedTaskError::new(
-                ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
-            )),
+            _ => Ok(None),
         }
     }
 }
