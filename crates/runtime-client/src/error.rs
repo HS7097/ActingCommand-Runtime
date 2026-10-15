@@ -102,7 +102,6 @@ const fn runtime_error_class(code: RuntimeErrorCode) -> RuntimeClientErrorClass 
         RuntimeErrorCode::CaptureFailed
         | RuntimeErrorCode::RecognitionFailed
         | RuntimeErrorCode::BackendOpenFailed
-        | RuntimeErrorCode::BackendOperationFailed
         | RuntimeErrorCode::ContainedTaskDeadlineExceeded
         | RuntimeErrorCode::ContainedTaskCancelled
         | RuntimeErrorCode::ContainedTaskPaused => Device,
@@ -113,7 +112,8 @@ const fn runtime_error_class(code: RuntimeErrorCode) -> RuntimeClientErrorClass 
         | RuntimeErrorCode::LedgerFailure
         | RuntimeErrorCode::RuntimeOwnerMismatch
         | RuntimeErrorCode::ProtocolInvalid
-        | RuntimeErrorCode::EvidenceExportFailed => Runtime,
+        | RuntimeErrorCode::EvidenceExportFailed
+        | RuntimeErrorCode::BackendOperationFailed => Runtime,
     }
 }
 
