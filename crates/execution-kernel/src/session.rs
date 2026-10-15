@@ -14,10 +14,10 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
-    DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, Frame, InputBackend,
-    InputExecutionContext, InputOperationCheck, NemuFrameGeometry, NemuSessionBackends,
-    PreparedSegmentedSwipePlan, SegmentedSwipeAction, prepare_segmented_swipe,
-    segmented_swipe_capability_error,
+    DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DragWithPauseAndBrakeAction, Frame,
+    InputBackend, InputExecutionContext, InputOperationCheck, NemuFrameGeometry,
+    NemuSessionBackends, PreparedSegmentedSwipePlan, SegmentedSwipeAction,
+    prepare_drag_with_pause_and_brake, prepare_segmented_swipe, segmented_swipe_capability_error,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -161,6 +161,31 @@ impl TryFrom<InputAction> for PreparedInputAction {
     type Error = ExecutionKernelError;
 
     fn try_from(action: InputAction) -> Result<Self, Self::Error> {
+        // Workflow #308 SEL-L3b (register §1.58): the drag with a pause and a brake is prepared
+        // as a segmented plan too, which every backend that performs segmented swipes performs.
+        if let InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            drag_duration_ms,
+            pause_ms,
+            x3,
+            y3,
+            brake_duration_ms,
+        } = action
+        {
+            let plan = prepare_drag_with_pause_and_brake(DragWithPauseAndBrakeAction {
+                points: [(x1, y1), (x2, y2), (x3, y3)],
+                drag_duration_ms,
+                pause_ms,
+                brake_duration_ms,
+            })
+            .map_err(|_| {
+                ExecutionKernelError::fatal(ExecutionKernelCode::InputPlanPreparationFailed.code())
+            })?;
+            return Ok(Self::SegmentedSwipe(plan));
+        }
         let InputAction::SingleTouchDragWithVerticalBrakeV1 {
             x1,
             y1,
@@ -1972,9 +1997,12 @@ fn execute_action(
         PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(witness, key),
         PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(witness, text),
         PreparedInputAction::Direct(InputAction::Reset) => backend.reset(witness),
-        PreparedInputAction::Direct(InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }) => Err(
-            DeviceError::fatal("segmented input action was not prepared"),
-        ),
+        PreparedInputAction::Direct(
+            InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+            | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. },
+        ) => Err(DeviceError::fatal(
+            "segmented input action was not prepared",
+        )),
         // Workflow #406 (register §1.18): reserved until T-3; the host refuses it first
         // (`input_action_unsupported`), and no backend performs it.
         PreparedInputAction::Direct(InputAction::SingleTouchPathDragV1 { .. }) => Err(

@@ -153,6 +153,7 @@ impl<F: InputBackendFactory> SemanticInputExecutor for PortSemanticInput<'_, F> 
             }
             InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
             | InputAction::SingleTouchPathDragV1 { .. }
+            | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
             | InputAction::Reset => {
                 return Err(LabError::usage(
                     "Lab input port performs only tap, long tap, swipe, key and text actions",

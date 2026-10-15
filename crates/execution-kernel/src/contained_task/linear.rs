@@ -609,6 +609,13 @@ impl TaskProgram {
             if operation.input_recheck.is_some() {
                 return Err(invalid("input_recheck", Some(operation)));
             }
+            // Workflow #390 EXEC-1: candidate operations are page-graph declarations.
+            if operation.when.is_some() {
+                return Err(invalid("when", Some(operation)));
+            }
+            if operation.on_guard_refused.is_some() {
+                return Err(invalid("on_guard_refused", Some(operation)));
+            }
             let effect = match (&operation.click, &operation.application) {
                 (Some(_), None) => LinearEffect::Click,
                 (None, Some(application)) => LinearEffect::Application(application.action),

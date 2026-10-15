@@ -63,6 +63,34 @@
       "description": "Workflow #396 LAB-3, a cause of lab_ocr_unavailable: the vision root has no usable ONNX Runtime library at path (ort\\onnxruntime.dll). Its caused_by link is the OS failure when the OS reported one.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "record_click_follow_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "mark_id": "required",
+        "follow_problem": "required",
+        "stage": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #396 REC-4: a click of a Lab recording step that follows a template mark (record mark --click-follow, a request's click.follow) does not hold; mark_id is the followed mark and follow_problem says why. A declaration that cannot hold (not_template, not_required, guard_conflict) refuses record mark with this code (exit 3) and nothing is written. A frame of the step on which the click does not hold (primary_mismatch on the primary frame, template_unmatched or click_outside_frame on any live frame) is a refused mark's reason inside record_mark_rejected, with the frame. The stage is record_click_follow_check.",
+      "common_causes": "The click follows a color, OCR or check mark, a template that only an any_of check names, or another guard was named; the template matches elsewhere on the primary frame, is not found on a sample frame, or the followed click box leaves a sample frame.",
+      "handling": "Follow a required template mark of the step and let it be the guard; crop the template so that its best match on the primary frame is the crop itself; give it a search area that covers every position it moves to, and a click box that stays inside the frame there."
+    }
+  },
+  "locations": {
+    "record_click_follow_check": {
+      "owner": "lab",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Checking a Lab recording click that follows a template mark: its declaration, and the followed template and its click box on every live frame of the step (Workflow #396 REC-4)."
     }
   }
 }

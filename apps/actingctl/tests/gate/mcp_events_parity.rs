@@ -13,9 +13,10 @@
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
+use actingcommand_contract::outcome::Detail as OutcomeDetail;
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, ProjectionProfile, SchedulingPauseReason,
-    SchedulingPauseScope,
+    EventActor, EventQuery, EventSource, EventType, ProjectionPayload, ProjectionProfile,
+    SchedulingPauseReason, SchedulingPauseScope, priority_offset_fact_key,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Map, Value, json};
@@ -167,6 +168,345 @@ fn gate_actingctl_events_prints_the_ac_events_result_of_the_same_parameters() {
     mcp.close_input();
     runtime.stop_clean();
     drop(mcp);
+}
+
+// Workflow #389 MCP-2 (MCP-0 command table v1.1 §2.3, §4.2): `event_types` and `fact_key`
+// through the same real CLI and MCP server on one c4 fake Runtime child. The expected pages are
+// §4.2's: `event_types` is a union, so the page holds every row of the range whose type is one
+// of the listed types and no other; `fact_key` keeps only the fact records that name the key,
+// here the one `fact.published` record of the first of two offsets the CLI published. For each,
+// the CLI's stdout JSON equals the ac_events result (both pages fit the output budget, so §2.2
+// leaves no presentation member).
+#[test]
+fn gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key() {
+    let root = TempDir::new().expect("tempdir");
+    write_sealed_frame(&root.path().join("sealed.png"));
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let ledger = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("connect a ledger client");
+    let before = ledger
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("read the ledger")
+        .last()
+        .map_or(0, |event| event.sequence);
+
+    // Two instance facts the CLI publishes (two manual priority offsets), then one instance
+    // pause, lifted again: fact records of two keys among rows of other types.
+    let tasks = ["neutral.task.a", "neutral.task.b"];
+    for (task, offset) in tasks.iter().zip(["250", "100"]) {
+        let line = actingctl_line(
+            root.path(),
+            &["task-offset", task, offset, "--instance", ALIAS],
+        );
+        assert_eq!(
+            line["outcome"]["code"],
+            json!("task_offset_published"),
+            "setup: actingctl task-offset {task} {offset}: {line}"
+        );
+    }
+    let scope = SchedulingPauseScope::Instance {
+        instance_alias: ALIAS.to_owned(),
+    };
+    ledger
+        .pause_scheduling(
+            scope.clone(),
+            SchedulingPauseReason::new("gate.parity").expect("the pause reason"),
+            60_000,
+        )
+        .expect("pause the instance");
+    ledger
+        .resume_scheduling(scope)
+        .expect("resume the instance");
+    let range = ledger
+        .query_events(
+            EventQuery {
+                from_sequence: Some(before + 1),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("read the range");
+    let through = range
+        .last()
+        .expect("setup: the offsets, the pause and the resume left no rows")
+        .sequence;
+
+    // The union: `fact.published` and the type of the range's last row of another type.
+    let other = range
+        .iter()
+        .rev()
+        .map(|event| event.event_type)
+        .find(|event_type| *event_type != EventType::FactPublished)
+        .expect("setup: every row of the range is a fact record");
+    let union = [EventType::FactPublished, other];
+    let expected = range
+        .iter()
+        .filter(|event| union.contains(&event.event_type))
+        .map(|event| json!(event.sequence))
+        .collect::<Vec<_>>();
+    assert!(
+        expected.len() < range.len(),
+        "setup: every row of the range has one of the two types"
+    );
+    // The fact key of the first offset: the one record of the range whose fact record names it.
+    let key = priority_offset_fact_key(tasks[0]);
+    let keyed = range
+        .iter()
+        .filter(|event| {
+            json!(event.payload)["payload"]["payload"]["data"]["record"]["key"] == json!(key)
+        })
+        .map(|event| json!(event.sequence))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keyed.len(),
+        1,
+        "setup: the range holds no single record of {key}"
+    );
+    // The in-memory selector (an unpaged read) answers the same rows as the paged one below.
+    for (query, rows) in [
+        (
+            EventQuery {
+                from_sequence: Some(before + 1),
+                to_sequence: Some(through),
+                event_types: union.to_vec(),
+                ..EventQuery::default()
+            },
+            &expected,
+        ),
+        (
+            EventQuery {
+                from_sequence: Some(before + 1),
+                to_sequence: Some(through),
+                fact_key: Some(key.clone()),
+                ..EventQuery::default()
+            },
+            &keyed,
+        ),
+    ] {
+        let read = ledger
+            .query_events(query.clone(), ProjectionProfile::Forensic)
+            .expect("read the range by the new filters");
+        assert_eq!(
+            &read
+                .iter()
+                .map(|event| json!(event.sequence))
+                .collect::<Vec<_>>(),
+            rows,
+            "an unpaged read of {query:?} answered other rows"
+        );
+    }
+    drop(ledger);
+    let parameters = [
+        ("after_sequence", json!(before)),
+        ("through_sequence", json!(through)),
+        ("event_types", json!(union)),
+        ("limit", json!(100)),
+    ];
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    let printed = cli_events(root.path(), &parameters);
+    let answer = mcp.call_tool(2, "ac_events", arguments_of(&parameters));
+    let result = accepted(&answer, "ac_events");
+    assert_eq!(
+        &printed, result,
+        "actingctl events printed another page than ac_events answered for event_types"
+    );
+    assert!(
+        result.get("next_cursor").is_none(),
+        "setup: the range does not fit one page: {answer}"
+    );
+    let rows = result["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ac_events answered no events member: {answer}"));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["seq"].clone())
+            .collect::<Vec<_>>(),
+        expected,
+        "event_types {union:?} did not answer exactly the rows of the range of those types: {answer}"
+    );
+
+    // The fact key of the first offset: its one fact record, not the second offset's.
+    let parameters = [
+        ("after_sequence", json!(before)),
+        ("through_sequence", json!(through)),
+        ("fact_key", json!(key)),
+        ("detail", json!("payload")),
+        ("limit", json!(100)),
+    ];
+    let printed = cli_events(root.path(), &parameters);
+    let answer = mcp.call_tool(3, "ac_events", arguments_of(&parameters));
+    let result = accepted(&answer, "ac_events");
+    assert_eq!(
+        &printed, result,
+        "actingctl events printed another page than ac_events answered for fact_key"
+    );
+    let rows = result["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ac_events answered no events member: {answer}"));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["seq"].clone())
+            .collect::<Vec<_>>(),
+        keyed,
+        "fact_key {key} did not answer exactly its one fact record: {answer}"
+    );
+    assert_eq!(
+        (
+            &rows[0]["type"],
+            &rows[0]["payload"]["payload"]["payload"]["data"]["record"]["key"]
+        ),
+        (&json!(EventType::FactPublished), &json!(key)),
+        "fact_key {key} answered another record than the one that publishes it: {answer}"
+    );
+
+    mcp.close_input();
+    runtime.stop_clean();
+    drop(mcp);
+}
+
+// Workflow #389 MCP-1 follow-up (MCP-0 command table v1.1 §2.3, §4.1; coordinator ruling Q4):
+// `detail` `summary` through the same real CLI and MCP server on one c4 fake Runtime child. The
+// expected page is §4.1's: each row is the brief row plus the outcome its record carries (ledger
+// revision 3, #378 A3), as the record's `actingcommand.outcome.v1` envelope, and a record that
+// carries none (a state change) has no `outcome` member. A second holder asking for the lease
+// another holder keeps is refused, which records a refusal with its outcome among records that
+// carry none. The CLI's stdout JSON equals the ac_events result (the page fits the output
+// budget, so §2.2 leaves no presentation member).
+#[test]
+fn gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome() {
+    let root = TempDir::new().expect("tempdir");
+    write_sealed_frame(&root.path().join("sealed.png"));
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let connect = || {
+        RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .expect("connect a Runtime client")
+    };
+    let holder = connect();
+    let before = holder
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("read the ledger")
+        .last()
+        .map_or(0, |event| event.sequence);
+    let token = holder.acquire_lease(ALIAS).expect("hold the instance");
+    let second = connect();
+    assert!(
+        second.acquire_lease(ALIAS).is_err(),
+        "setup: a second holder got the lease of a held instance"
+    );
+    drop(second);
+    holder.release_lease(&token).expect("release the instance");
+    let range = holder
+        .query_events(
+            EventQuery {
+                from_sequence: Some(before + 1),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("read the range");
+    drop(holder);
+    let through = range
+        .last()
+        .expect("setup: the lease requests left no rows")
+        .sequence;
+    // Each row's sequence and the envelope of the outcome its record carries, if any.
+    let expected = range
+        .iter()
+        .map(|event| {
+            let outcome = match &event.payload {
+                ProjectionPayload::Full(payload) => payload.outcome().map(|outcome| {
+                    serde_json::to_value(outcome.envelope(OutcomeDetail::Full))
+                        .expect("an outcome envelope serialises")
+                }),
+                _ => None,
+            };
+            (json!(event.sequence), outcome)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        expected.iter().any(|(_, outcome)| outcome.is_some())
+            && expected.iter().any(|(_, outcome)| outcome.is_none()),
+        "setup: the range does not hold both a record with an outcome and one without"
+    );
+
+    let parameters = [
+        ("after_sequence", json!(before)),
+        ("through_sequence", json!(through)),
+        ("detail", json!("summary")),
+        ("limit", json!(100)),
+    ];
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    let printed = cli_events(root.path(), &parameters);
+    let answer = mcp.call_tool(2, "ac_events", arguments_of(&parameters));
+    let result = accepted(&answer, "ac_events");
+    assert_eq!(
+        &printed, result,
+        "actingctl events printed another summary page than ac_events answered"
+    );
+    assert!(
+        result.get("next_cursor").is_none() && result.get("truncated").is_none(),
+        "setup: the range does not fit one page: {answer}"
+    );
+    let rows = result["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ac_events answered no events member: {answer}"));
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["seq"].clone(), row.get("outcome").cloned()))
+            .collect::<Vec<_>>(),
+        expected,
+        "a summary row does not carry exactly the outcome of its record: {answer}"
+    );
+    assert!(
+        rows.iter().all(|row| row.get("payload").is_none()),
+        "a summary row carries the payload: {answer}"
+    );
+
+    mcp.close_input();
+    runtime.stop_clean();
+    drop(mcp);
+}
+
+// The MCP arguments of `parameters`, by their names.
+fn arguments_of(parameters: &[(&str, Value)]) -> Value {
+    Value::Object(
+        parameters
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.clone()))
+            .collect::<Map<_, _>>(),
+    )
+}
+
+// `actingctl <words> --state-root <root>` and its one stdout JSON line.
+fn actingctl_line(state_root: &Path, words: &[&str]) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_actingctl"))
+        .args(words)
+        .arg("--state-root")
+        .arg(state_root)
+        .env_remove("ACTINGCOMMAND_DETAIL")
+        .output()
+        .expect("run actingctl");
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "actingctl {words:?} printed no JSON line ({error}): {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
 
 /// `actingctl events --state-root <root>` with `parameters` as flags; its stdout JSON without

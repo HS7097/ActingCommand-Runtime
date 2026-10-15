@@ -31,6 +31,14 @@ impl RunDecisionError {
         }
     }
 
+    /// Workflow #390 EXEC-1: every candidate operation of the current page was passed over.
+    fn candidates_exhausted(message: impl Into<String>) -> Self {
+        Self {
+            code: ExecutionKernelCode::ContainedTaskOperationCandidatesExhausted.code(),
+            message: message.into(),
+        }
+    }
+
     pub const fn code(&self) -> Code {
         self.code
     }
@@ -477,6 +485,10 @@ pub struct RunStateMachine {
     designated_effect_completed: bool,
     /// Workflow #390 OUT-2: how often each member of the designated effect set completed.
     designated_effect_counts: Vec<u32>,
+    /// Workflow #390 EXEC-1: the candidate operations passed over on the current frame, in the
+    /// order they were passed over (a `when` that did not hold, a guard that refused and declared
+    /// `on_guard_refused: next_candidate`). A new frame starts the page's candidates again.
+    passed_over: Vec<String>,
 }
 
 impl RunStateMachine {
@@ -501,6 +513,7 @@ impl RunStateMachine {
             phase_index: 0,
             designated_effect_completed: false,
             designated_effect_counts,
+            passed_over: Vec::new(),
         })
     }
 
@@ -536,6 +549,7 @@ impl RunStateMachine {
             ));
         }
         self.current_page = current_page;
+        self.passed_over.clear();
         Ok(())
     }
 
@@ -589,7 +603,7 @@ impl RunStateMachine {
             }));
         }
         // Workflow #390 OUT-2: a member of the designated effect set that reached its cap is
-        // passed over.
+        // passed over. Workflow #390 EXEC-1: so is a candidate passed over on this frame.
         let phase_operations = operations
             .iter()
             .filter(|operation| {
@@ -598,14 +612,22 @@ impl RunStateMachine {
                         .get(self.phase_index)
                         .is_some_and(|phase| phase.operations.contains(&operation.id))
                 }) && !self.designated_effect_capped(operation.id())
+                    && !self.passed_over.contains(&operation.id)
             })
             .cloned()
             .collect::<Vec<_>>();
         let operation = select_run_operation(&self.config.game, &current_page, &phase_operations)
             .ok_or_else(|| {
-            RunDecisionError::invalid(format!(
-                "no operation can continue from page '{current_page}'"
-            ))
+            if self.passed_over.is_empty() {
+                RunDecisionError::invalid(format!(
+                    "no operation can continue from page '{current_page}'"
+                ))
+            } else {
+                RunDecisionError::candidates_exhausted(format!(
+                    "page={current_page} passed_over={}",
+                    self.passed_over.join(",")
+                ))
+            }
         })?;
         if self.designated_effect_completed
             && self.config.designated_operation.as_deref() == Some(operation.id())
@@ -669,10 +691,54 @@ impl RunStateMachine {
         }
         self.executing_operation = None;
         self.current_page = current_page.clone();
+        self.passed_over.clear();
         Ok(match current_page {
             Some(current_page) => RunDirective::Continue { current_page },
             None => RunDirective::AwaitPage,
         })
+    }
+
+    /// Workflow #390 EXEC-1: the dispatched operation's `when` does not hold on the current
+    /// frame. It is withdrawn before its step starts: its step index goes to the page's next
+    /// candidate, and it is passed over until a new frame.
+    pub fn operation_withdrawn(&mut self, operation_id: &str) -> Result<(), RunDecisionError> {
+        self.require_executing(operation_id)?;
+        self.executing_operation = None;
+        self.completed_steps = self.completed_steps.checked_sub(1).ok_or_else(|| {
+            RunDecisionError::invalid_transition("withdrawn operation has no dispatched step")
+        })?;
+        self.passed_over.push(operation_id.to_owned());
+        Ok(())
+    }
+
+    /// Workflow #390 EXEC-1: the dispatched operation's guard refused on the frame of
+    /// `current_page` before any input of its step, and the operation declares
+    /// `on_guard_refused: next_candidate`. Its step ended without an input and stays counted;
+    /// the page's next candidate is dispatched on the same frame. A frame of another page starts
+    /// that page's candidates.
+    pub fn operation_passed_over(
+        &mut self,
+        operation_id: &str,
+        current_page: String,
+    ) -> Result<(), RunDecisionError> {
+        self.require_executing(operation_id)?;
+        self.executing_operation = None;
+        if self.current_page.as_deref() != Some(current_page.as_str()) {
+            self.current_page = Some(current_page);
+            self.passed_over.clear();
+        }
+        self.passed_over.push(operation_id.to_owned());
+        Ok(())
+    }
+
+    /// Workflow #390 EXEC-1: the candidates passed over on the current frame, in order.
+    pub fn passed_over(&self) -> &[String] {
+        &self.passed_over
+    }
+
+    /// The page of the current frame, when one is known.
+    pub fn current_page(&self) -> Option<&str> {
+        self.current_page.as_deref()
     }
 
     pub fn operation_needs_recovery(

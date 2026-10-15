@@ -382,6 +382,19 @@ the backend self-check facts (source `device-proxy` or `capture`).
   `device` gets its connection preparation on a self-check claim after
   `device_link.settle_ms` (a new trigger of the preparation phase, cause: the
   link was restored).
+- `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`,
+  `device.screen_off_timeout_ms` (Workflow #398 RD-5b, model-398 v1.1 §7.6) —
+  instance scope, a bound handset only, source `runtime`, each with the lifetime
+  `device_state.fact_ttl_ms`: what the device-state sampling read while the
+  link is `device`. `device.screen` is `awake`, `asleep`, `dozing` or
+  `dreaming`; `device.keyguard` is `none`, `insecure` or `secure`;
+  `device.battery` is one `record_list` row (`level` 0-100, `plugged`
+  `unplugged`/`ac`/`usb`/`wireless`/`dock`, `status`
+  `unknown`/`charging`/`discharging`/`not_charging`/`full`,
+  `temperature_deci_c`); `device.thermal` is a thermal status word;
+  `device.screen_off_timeout_ms` is a duration. A changed value is recorded at
+  once, an unchanged one when its record would expire before the next sample. A
+  read that failed writes nothing. No value names the device.
 - `application.foreground` (slice #316-B3) — instance scope, `string`: the
   package name Android reported as the resumed activity, read through ADB
   (`dumpsys activity activities`) by the foreground gate before every pointer

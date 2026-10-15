@@ -195,6 +195,10 @@ pub(super) struct ActingdConfigFile {
     /// each member optional; the defaults file holds every default.
     #[serde(default)]
     device_link: Option<actingcommand_runtime_config::DeviceLinkFile>,
+    /// Workflow #398 RD-5b: a handset's device state (`device_state.*`, model-398 §7.8), each
+    /// member optional; the defaults file holds every default.
+    #[serde(default)]
+    device_state: Option<actingcommand_runtime_config::DeviceStateFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1513,6 +1517,8 @@ impl ActingdConfigFile {
             "lab_module_authoring": self.lab_module_authoring,
             "lab_module_debugging": self.lab_module_debugging,
             "device_link": serde_json::to_value(&self.device_link)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "device_state": serde_json::to_value(&self.device_state)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self

@@ -21,6 +21,9 @@ pub(crate) mod decide;
 // Test-only: Workflow #381 A, test plan A-2 G3a-G3d and H-1 G2.
 #[cfg(test)]
 mod gate_381a;
+// Test-only: Workflow #382 A-4, test plan v2.2 APPS-G12 (a whole tick on the APPS-I3 seams).
+#[cfg(test)]
+mod gate_382_a4;
 mod log;
 pub(crate) mod observe;
 mod powershell;
@@ -38,6 +41,7 @@ use decide::{Decision, Journal, Observed, OwnerLock, OwnerRecord, Stage, StartPr
 use log::Level;
 use observe::{Installation, WriterProbe};
 use serde_json::{Map, Value, json};
+use start::TickSeams;
 use state::{Loaded, Recorded, StartRecord, WatchdogState};
 use std::ffi::OsString;
 use std::fmt;
@@ -312,7 +316,10 @@ impl Tick {
     }
 
     /// Rows 7a-7b. A free writer lock stays held shared in the returned guard (review L4).
-    fn probe_start(&mut self) -> Result<(StartProbes, Option<File>), Decision> {
+    fn probe_start(
+        &mut self,
+        seams: &dyn TickSeams,
+    ) -> Result<(StartProbes, Option<File>), Decision> {
         let guard =
             match observe::writer_lock(&self.installation.root).map_err(Decision::Misconfigured)? {
                 WriterProbe::Busy => {
@@ -347,8 +354,9 @@ impl Tick {
                 guard,
             ));
         }
-        let probe =
-            observe::host_probe(&self.installation.root_plain).map_err(Decision::StartFailed)?;
+        let probe = seams
+            .host_probe(&self.installation.root_plain)
+            .map_err(Decision::StartFailed)?;
         self.processes = Some(probe.processes.clone());
         Ok((
             StartProbes {
@@ -390,6 +398,29 @@ fn watchdog_log(directory: &Path) -> Value {
     )
 }
 
+/// Workflow #389 MCP-9a (MCP-0 command table v1.1 §4.10): the `watchdog` block of `actingctl
+/// overview` and `ac_overview`, read as [`status`] reads it (read-only; it writes nothing): the
+/// decision, the attention outcomes, each written as `envelope` writes an outcome, the watchdog's
+/// starts of the last 24 h and its last tick. A member the report does not hold is left out.
+pub(crate) fn overview_block(root: &Path, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
+    let report = status(root);
+    let mut block = Map::new();
+    block.insert("decision".to_owned(), envelope(&report.outcome));
+    block.insert(
+        "attention".to_owned(),
+        Value::Array(report.attention.iter().map(envelope).collect()),
+    );
+    for (member, from) in [
+        ("starts_24h", "watchdog_starts_24h"),
+        ("last_tick", "last_tick_unix_ms"),
+    ] {
+        if let Some(value) = report.data.get(from).filter(|value| !value.is_null()) {
+            block.insert(member.to_owned(), value.clone());
+        }
+    }
+    Value::Object(block)
+}
+
 /// `status`: read-only. It writes nothing and takes no lock but the momentary writer-lock
 /// probe, and only when a start would be considered. Its top is the decision; its attention
 /// outcomes (warnings, and the failures that kept something unread) leave the exit alone.
@@ -410,7 +441,7 @@ fn status(root: &Path) -> Report {
     };
     let decision = match decide::decide_observed(&tick.observed(), &state) {
         Stage::Decided(decision) => decision,
-        Stage::ConsiderStart => match tick.probe_start() {
+        Stage::ConsiderStart => match tick.probe_start(&start::system()) {
             Ok((probes, guard)) => {
                 drop(guard);
                 if let Some(until) = decide::grace_after_gap(
@@ -508,7 +539,12 @@ fn status(root: &Path) -> Report {
 
 /// `run-once`: one supervision tick (`contracts/runtime-watchdog.md`, "Decision").
 fn run_once(root: &Path, from_task: bool) -> Report {
-    let now = now_unix_ms();
+    run_once_with(&start::system(), root, from_task)
+}
+
+/// One tick on `seams` (Workflow #382 A-4, test plan v2.2 APPS-I3).
+fn run_once_with(seams: &dyn TickSeams, root: &Path, from_task: bool) -> Report {
+    let now = seams.now_unix_ms();
     let (root, directory) = match watchdog_dir(root) {
         Ok(paths) => paths,
         Err(failure) => return misconfigured_report(None, failure, true, from_task),
@@ -576,13 +612,13 @@ fn run_once(root: &Path, from_task: bool) -> Report {
     let previous = state.last_decision.clone();
     state.root = plain_root;
     state.last_tick_unix_ms = Some(now);
-    let (decision, tick, logged) = tick_once(&root, &directory, &mut state, now, from_task);
+    let (decision, tick, logged) = tick_once(seams, &root, &directory, &mut state, now, from_task);
     if let Err(failure) = record_decision(&directory, &mut state, &decision, previous, logged, now)
     {
         return misconfigured_report(Some(&directory), failure, true, from_task);
     }
     if from_task {
-        state.last_task_tick_end_unix_ms = Some(now_unix_ms());
+        state.last_task_tick_end_unix_ms = Some(seams.now_unix_ms());
     }
     if let Err(failure) = state::save(&directory, &state) {
         return misconfigured_report(Some(&directory), failure, true, from_task);
@@ -597,6 +633,7 @@ fn run_once(root: &Path, from_task: bool) -> Report {
 /// The decision of one tick, the start included. The bool says whether the start already
 /// wrote its log line.
 fn tick_once(
+    seams: &dyn TickSeams,
     root: &Path,
     directory: &Path,
     state: &mut WatchdogState,
@@ -610,7 +647,7 @@ fn tick_once(
     let decision = match decide::decide_observed(&tick.observed(), state) {
         Stage::Decided(decision) => decision,
         Stage::ConsiderStart => {
-            let (probes, guard) = match tick.probe_start() {
+            let (probes, guard) = match tick.probe_start(seams) {
                 Ok(probes) => probes,
                 Err(decision) => return (decision, Some(tick), false),
             };
@@ -644,7 +681,7 @@ fn tick_once(
                 decision => decision,
             };
             if decision == Decision::Start {
-                let started = start_runtime(&tick, directory, state, now, from_task);
+                let started = start_runtime(seams, &tick, directory, state, now, from_task);
                 drop(guard);
                 return match started {
                     Ok(decision) => (decision, Some(tick), true),
@@ -687,6 +724,7 @@ fn tick_once(
 /// result replaces `watchdog_start_pending`: `watchdog_started_runtime` or the start's failure,
 /// each with its values (state.json v2).
 fn start_runtime(
+    seams: &dyn TickSeams,
     tick: &Tick,
     directory: &Path,
     state: &mut WatchdogState,
@@ -704,8 +742,8 @@ fn start_runtime(
         ..StartRecord::default()
     });
     state::save(directory, state)?;
-    let attempt = start::start(installation, &start_log, now, from_task);
-    let finished = now_unix_ms();
+    let attempt = start::start(seams, installation, &start_log, now, from_task);
+    let finished = seams.now_unix_ms();
     // The record saved above; were it gone, the state is not what this tick wrote.
     let record = state
         .starts

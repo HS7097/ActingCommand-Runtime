@@ -850,3 +850,86 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::d1_l7_each_rule_that_stays_in_code_stops_a_ladder_whatever_the_configuration",
 ]
 incident = ["#398", "#387 A9"]
+
+# Workflow #390 EXEC-1 (FCM E-04), end to end: a click whose guard refuses and that declares on_guard_refused next_candidate finishes its step on the page without an input (register EC2), the page's next candidate runs as the next step on the same frame, and the run succeeds with the passed-over step counted and the designated operation not completed
+[[gate]]
+key = "83"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_exec1::exec1_a_guard_refusal_falls_to_the_next_candidate_in_the_ledger",
+]
+incident = ["#390"]
+
+# Workflow #308 SEL-L3b (register §1.58): an input request naming single_touch_drag_with_pause_and_brake_v1 is performed through the host and its input provider as one prepared segmented plan (press, drag, the pause's hold, the brake, release); the input intent keeps the action whole in its provenance and records no execution plan (the maa_2_0 record is the vertical-brake drag's); a drag with neither a pause nor a brake breaks the action's contract (invalid_segmented_swipe_contract) and is refused before any input
+[[gate]]
+key = "84"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_308_l3b::l3b_the_host_performs_a_drag_with_a_pause_and_a_brake_as_one_prepared_plan",
+]
+incident = ["#308"]
+
+# Workflow #398 RD-5b (model-398 v1.1 §7, §10.1, §12 rows RD-5b-T1 to T7, T9 and T10): before the first step of a package run on a handset, a dark screen gets one wake key and the configured settle wait, a keyguard without a credential one dismissal under dismiss, and a keyguard waiting for a person is device_locked; a hot handset (thermal hysteresis), an unplugged low battery and (under in_use_gate) another application in front hold the run with their codes and withdraw the availability under device_state:<hold>, and the next sample lifts each hold with device_hold_lifted; no refusal sends an input; an input late by the screen-off timeout less the margin checks the screen first; an emulator gets no device-state command; a sample writes the device.* facts with the configured TTL and names no device; the device_state keys carry the model defaults and refuse broken values
+[[gate]]
+key = "85"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t1_a_dark_screen_is_woken_once_before_the_run_or_the_run_does_not_start",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t2_a_keyguard_without_a_credential_is_dismissed_once_or_left_to_a_person",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t3_a_locked_handset_waits_for_a_person_and_the_next_sample_after_the_unlock_restores_it",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t4_a_hot_handset_holds_its_runs_until_it_cools_below_the_resume_level",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t5_an_unplugged_low_battery_holds_and_plugging_it_in_lifts_the_hold",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t6_another_application_in_front_holds_the_run_only_under_the_in_use_gate",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t7_an_emulator_gets_no_device_state_command",
+    "actingcommand-runtime-host::lib::tests::gate_398_rd5b::rd5b_t10_a_sample_writes_the_device_facts_with_the_configured_ttl",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t3_a_locked_handset_holds_until_a_sample_finds_no_keyguard",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t4_the_thermal_hold_starts_at_its_level_and_lifts_only_below_the_resume_level",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t5_a_low_battery_holds_only_on_no_power_source",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t6_another_application_holds_until_a_look_after_the_backoff_finds_none",
+    "actingcommand-runtime-host::lib::host::device_state::tests::rd5b_t9_an_input_late_by_the_timeout_less_the_margin_checks_the_screen_first",
+    "actingcommand-runtime-config::lib::device_state_tests::rd5b_keys_every_device_state_key_has_its_model_default",
+    "actingcommand-runtime-config::lib::device_state_tests::rd5b_keys_device_state_values_that_break_a_rule_are_refused",
+]
+incident = ["#398"]
+
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it waits queued as a gated entry from the first moment (never granted at once on the free instance, merge ledger :303) until the resume; a pause during the wait makes it queue again and release, so the pause completes; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
+[[gate]]
+key = "86"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_1_the_claim_holds_its_instance_from_the_enqueue",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_2_no_internet_then_internet_after_two_reads_starts_the_emulator",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_3_an_unknown_status_starts_at_once_with_one_line",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_4_no_internet_for_600_s_refuses_the_start_with_the_failure_pair",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_5_under_a_restored_pause_the_claim_waits_queued_until_the_resume",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_6_a_pause_during_the_wait_yields_and_the_pause_completes",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_7_a_cli_start_during_the_wait_supersedes_the_claim",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_8_a_failed_preparation_hands_the_key_to_the_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_9_two_instances_start_in_configuration_order_and_the_waiting_claim_renews",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6c::s6c_a_start_whose_provider_step_fails_cancels_the_queued_startup_claim",
+    "actingcommand-scheduler::lib::tests::s6c_a_routine_claim_under_a_held_gate_is_never_granted_at_once",
+]
+incident = ["#369", "#361"]
+
+# A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9)
+[[gate]]
+key = "88"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::drill1_a_drill_trigger_names_nothing_but_its_code_and_a_planned_end_tries_nothing",
+    "actingcommand-contract::lib::event::payload::recovery_ladder::tests::drill1_only_a_ladder_s_own_phases_carry_the_drill_tag",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_is_recorded_like_a_ladder_tagged_drill_and_never_acts_on_the_device",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_device_drill_climbs_its_rungs_on_the_instance_like_a_real_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_leaves_the_cool_down_and_a_device_drill_opens_it_as_a_real_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent",
+]
+incident = ["#390 DRILL-1"]
+
+# The program fact config.catalog names the active policy catalog generation: its id, version and hash, the record that made it active, the latest approval decision about it and the generation it replaced; none before a generation is active; it follows each activation and approval decision, and a start records it again (Workflow #389 MCP-9a, register A5; host key 89, the next free one above 88, since this test lives in runtime-host)
+[[gate]]
+key = "89"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_389_mcp9a::mcp9a_config_catalog_names_the_active_generation_its_record_approval_and_predecessor",
+]
+incident = ["#389 MCP-9a"]

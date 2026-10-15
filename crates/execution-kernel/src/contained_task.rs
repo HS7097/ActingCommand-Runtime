@@ -51,6 +51,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+// Workflow #390 EXEC-1: ordered candidate operations on one page.
+mod candidates;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 mod linear;
@@ -82,9 +84,15 @@ mod gate_308_l6a;
 // Workflow #308 SEL-L3.
 #[cfg(test)]
 mod gate_308_l3;
+// Workflow #308 SEL-L3b: the horizontal axis, the held drag and the page flip of a scan.
+#[cfg(test)]
+mod gate_308_l3b;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
+// Workflow #390 EXEC-1.
+#[cfg(test)]
+mod gate_390_exec1;
 // Workflow #390 EXEC-2.
 #[cfg(test)]
 mod gate_390_exec2;
@@ -1965,6 +1973,8 @@ pub enum ContainedTaskGuardEvaluation {
     TrustedCoordinate,
     /// The observed page is not the guard's page, so the guard target is not evaluated.
     PageMismatch,
+    /// Workflow #390 EXEC-1: the target of a candidate operation's `when` was evaluated.
+    When,
 }
 
 impl ContainedTaskGuardEvaluation {
@@ -1973,14 +1983,15 @@ impl ContainedTaskGuardEvaluation {
         match self {
             Self::CandidateSample => "candidate_sample",
             Self::Evaluated | Self::TrustedCoordinate | Self::PageMismatch => "guard",
+            Self::When => "when",
         }
     }
 
     /// Why the guard target was not evaluated: a code for the two evaluations that evaluate no
-    /// target, `None` for the two that evaluate one.
+    /// target, `None` for those that evaluate one.
     pub const fn unexecuted_code(self) -> Option<Code> {
         match self {
-            Self::CandidateSample | Self::Evaluated => None,
+            Self::CandidateSample | Self::Evaluated | Self::When => None,
             Self::TrustedCoordinate => Some(ExecutionKernelCode::ContainedTaskGuardSkipped.code()),
             Self::PageMismatch => Some(ExecutionKernelCode::ContainedTaskGuardPageMismatch.code()),
         }
@@ -2480,6 +2491,7 @@ impl PreparedContainedTask {
             })?;
         program.validate(&control, &bundle, &detector)?;
         program.validate_text_reads(bundle.operation_path(), &evaluator)?;
+        program.validate_when_targets(bundle.operation_path(), &evaluator)?;
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
         let admission_limit = control
             .step_timeout()
@@ -3723,13 +3735,28 @@ impl PreparedContainedTask {
                             ExecutionKernelCode::ContainedTaskOperationMissing.code(),
                         )
                     })?;
-                machine.initial_application_directive(candidate)
+                machine
+                    .initial_application_directive(candidate)
+                    .map_err(|_| {
+                        ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+                    })?
             } else {
-                machine.next_directive(&candidates)
+                // Workflow #390 EXEC-1: the execution-owned transition dispatches the page's
+                // candidates in order; one whose `when` does not hold on the frame is withdrawn
+                // before its step starts, and the transition dispatches the next.
+                loop {
+                    let decision = machine.next_directive(&candidates);
+                    if let Some(directive) = self.candidate_directive(
+                        runtime,
+                        &mut machine,
+                        decision,
+                        observation.as_ref(),
+                    )? {
+                        break directive;
+                    }
+                }
             };
-            match directive.map_err(|_| {
-                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
-            })? {
+            match directive {
                 RunDirective::AwaitPage => {
                     observation = Some(self.capture_until_page(
                         runtime,
@@ -3884,6 +3911,26 @@ impl PreparedContainedTask {
                                             // Spent retries end the run with the timeout (§2.1
                                             // item 6), not through the pack's failure decision.
                                             Err(failure) if timed_out => return Err(failure),
+                                            // Workflow #390 EXEC-1: a guard that refused on
+                                            // the step's frame before any input of the step
+                                            // passes over to the page's next candidate when the
+                                            // operation declares it.
+                                            Err(ContainedTaskRunError::Task(error))
+                                                if attempt == 1
+                                                    && operation.on_guard_refused.is_some()
+                                                    && error.code().as_str()
+                                                        == ExecutionKernelCode::ContainedTaskGuardRefused
+                                                            .as_str() =>
+                                            {
+                                                Self::pass_over(
+                                                    runtime,
+                                                    &mut machine,
+                                                    step_index,
+                                                    &operation_id,
+                                                    &observed.page_label,
+                                                )?;
+                                                break 'attempt;
+                                            }
                                             Err(ContainedTaskRunError::Task(error)) => {
                                                 Self::refuse_before_input::<R::Error>(
                                                     operation,
@@ -6467,6 +6514,7 @@ impl TaskProgram {
                     from: &operation.from,
                     destinations: operation.destination_pages()?,
                     retryable: operation.retryable.unwrap_or(false),
+                    may_be_passed_over: operation.may_be_passed_over(),
                 })
             })
             .collect::<Result<Vec<_>, ContainedTaskError>>()
@@ -7332,8 +7380,11 @@ fn validate_scheduling_outcome_coverage(
         }
         // Workflow #390 OUT-2: a member of a designated effect set that may have reached its
         // cap is passed over at run time, so the page's next operation is followed too; a page
-        // left without one is refused.
+        // left without one is refused. Workflow #390 EXEC-1: so is a candidate that declares
+        // `when` or `on_guard_refused`; a page left without one after such candidates only ends
+        // the run with `contained_task_operation_candidates_exhausted`, and the path ends there.
         let mut passed_over: Vec<&str> = Vec::new();
+        let mut capped = false;
         loop {
             let eligible = candidates
                 .iter()
@@ -7341,7 +7392,7 @@ fn validate_scheduling_outcome_coverage(
                 .cloned()
                 .collect::<Vec<_>>();
             let Some(selected) = select_run_operation(game, &page, &eligible) else {
-                if passed_over.is_empty() {
+                if !capped {
                     break;
                 }
                 return Err(ContainedTaskError::with_detail(
@@ -7401,12 +7452,12 @@ fn validate_scheduling_outcome_coverage(
                 };
                 pending.push_back(((*concrete_page).clone(), next_completed));
             }
-            match member {
-                Some(member) if reach.may_be_capped(member, completed) => {
-                    passed_over.push(operation.id.as_str());
-                }
-                _ => break,
+            let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
+            if !may_be_capped && !operation.may_be_passed_over() {
+                break;
             }
+            capped |= may_be_capped;
+            passed_over.push(operation.id.as_str());
         }
     }
 
@@ -7684,6 +7735,14 @@ struct TaskOperation {
     /// schema `0.9`, page-graph tasks only.
     #[serde(default)]
     input_recheck: Option<observation_window::TaskInputRecheck>,
+    /// Workflow #390 EXEC-1: the operation is a candidate only while a target passes or does
+    /// not pass on its step's frame; task schema `0.9`, page-graph tasks only.
+    #[serde(default)]
+    when: Option<candidates::TaskWhen>,
+    /// Workflow #390 EXEC-1: a guard refusal on the step's frame passes over to the page's next
+    /// candidate; task schema `0.9`, page-graph clicks with a declared guard only.
+    #[serde(default)]
+    on_guard_refused: Option<candidates::TaskGuardRefusal>,
 }
 
 impl TaskOperation {
@@ -7761,6 +7820,7 @@ impl TaskOperation {
             ));
         }
         observation_window::validate_operation(self, control, schema_version)?;
+        candidates::validate_operation(self, schema_version)?;
         match (&self.click, &self.application, &self.select) {
             (Some(click), None, None) => {
                 match (&self.guard, self.unguarded_trusted_coordinate) {
@@ -8774,6 +8834,70 @@ fn sampled_segmented_swipe(
     ))
 }
 
+/// Workflow #308 SEL-L3b (register §1.58): a drag between random points of `from` and `to` that
+/// holds still `pause_ms` at its end and then, with a brake, moves by `brake` (its displacement
+/// and duration) before the release: `single_touch_drag_with_pause_and_brake_v1`. The press and
+/// the drag's end are sampled as a swipe's are, with the same two sampling regions; the brake's
+/// end follows from the drag's end. Without a seed both points are their rectangles' centres.
+fn sampled_drag_with_pause_and_brake(
+    (from, to, drag_duration_ms): (ClickRect, ClickRect, u64),
+    pause_ms: u64,
+    brake: Option<((i32, i32), u64)>,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let ((x1, y1), (x2, y2), sampling) = if let Some(action_seed) = action_seed {
+        let mut state = normalized_xorshift64_state(action_seed);
+        let start = from.sample(&mut state)?;
+        let end = to.sample(&mut state)?;
+        let sampling = InputSamplingEvidence::new(
+            action_seed,
+            vec![from.sampling_region()?, to.sampling_region()?],
+        )
+        .map_err(|_| {
+            ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSamplingInvalid.code())
+        })?;
+        (start, end, Some(sampling))
+    } else {
+        (
+            (from.x + from.width / 2, from.y + from.height / 2),
+            (to.x + to.width / 2, to.y + to.height / 2),
+            None,
+        )
+    };
+    let ((x3, y3), brake_duration_ms) = match brake {
+        Some(((dx, dy), duration_ms)) => (
+            (
+                x2.checked_add(dx).ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?,
+                y2.checked_add(dy).ok_or_else(|| {
+                    ContainedTaskError::new(
+                        ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    )
+                })?,
+            ),
+            duration_ms,
+        ),
+        None => ((x2, y2), 0),
+    };
+    Ok((
+        InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            drag_duration_ms,
+            pause_ms,
+            x3,
+            y3,
+            brake_duration_ms,
+        },
+        sampling,
+    ))
+}
+
 fn normalized_xorshift64_state(seed: u64) -> u64 {
     if seed == 0 {
         0x9e37_79b9_7f4a_7c15
@@ -8791,7 +8915,7 @@ fn next_xorshift64(state: &mut u64) -> u64 {
     value
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 struct ClickRect {
     x: i32,
     y: i32,
@@ -12490,6 +12614,7 @@ mod retry_wiring_tests {
                 from: &operation.from,
                 destinations: operation.destination_pages().unwrap(),
                 retryable: false,
+                may_be_passed_over: false,
             })
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(

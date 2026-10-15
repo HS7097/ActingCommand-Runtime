@@ -119,10 +119,58 @@ the emulators.
 - `actingctl status` gives no ADB port for an instance addressed by a serial, as before; check-config
   prints `adb_host` and `adb_port` `null` for a handset.
 
+## Choosing a device (RD-1c)
+
+Workflow #398 RD-1c (model-398 v1.1 §3.3). A person or an agent picks a handset's device from
+what adb discovers; the UI's device page will call the same command. Three subcommands of
+`actingctl`, and the MCP tools that answer the same (observer tools before U-3, as the
+configuration tools of #387 D1b):
+
+| CLI | MCP | Answer |
+|---|---|---|
+| `actingctl devices list --state-root <dir> [--root <install root>]` | `ac_devices` | `{devices: [{handle?, transport, state, model?, bound_alias?, endpoint?}]}` |
+| `actingctl devices bind <alias> <handle> --state-root <dir> [--root <install root>]` | `ac_device_bind {alias, handle}` | `{alias, handle, model?, restart_required: true}` |
+| `actingctl devices unbind <alias> --state-root <dir>` | `ac_device_unbind {alias}` | `{alias, unbound, restart_required}` |
+
+- They never run the Runtime and record nothing in the ledger; the next start records a binding
+  by fingerprint in `runtime.instance_bound`, so a change takes effect at the next start
+  (`restart_required`). The MCP tools take the server's install root and state root for
+  `--root` and `--state-root`. A success line carries `device_list_reported` or
+  `device_binding_changed`.
+- **The adb** is the install root's, `<install root>\tools\platform-tools\adb.exe` (Workflow #337),
+  the install root found as `actingctl packs` finds it (this process's install selection, else
+  `--root`, else the install root the executable runs from; `install_root_unresolved` without
+  one). It runs `adb devices -l` once per `list` and once per `bind`.
+- **A row** is one device of adb's list: `handle` `<transport>:<transport_id>` (the adb server's
+  session number for the device, never a device value; it changes when the device is replugged
+  or the server restarts), `transport` `usb` when the row has a `usb:` segment and `tcp`
+  otherwise, `state` as adb reports it (`device`, `unauthorized`, `offline`, …), `model`, the
+  alias the private file binds the device to (`bound_alias`, compared locally) and, for a `tcp`
+  row whose address is a loopback address (an emulator), `endpoint`. A row without a
+  `transport_id` has no handle. **No row names a serial.**
+- **`bind`** checks that the selected configuration has the alias as a handset (`instance_unknown`
+  with `instance_selector` when it has no such instance, `device_kind_unsupported` with `alias`
+  when the instance is not a handset; actingd reports a handset's broken fields as
+  `device_config_invalid`), reads adb's list again (`device_handle_unknown` with `handle` when
+  the handle is not in it), and writes the device's serial for the alias, with
+  `bound_at_unix_ms` and `bound_via` `cli` or `mcp`. The new file is checked by the file's own
+  rules before it is written, so a device bound to another alias already is refused
+  (`device_bindings_invalid`, `duplicate_serial`); a binding of the same alias is replaced. The
+  file is replaced whole through a temporary sibling (`device_bindings_write_failed` with its
+  `path` when that fails).
+- **`unbind`** removes the alias's binding; an alias without one answers `unbound: false` and
+  writes nothing. A start then registers the handset unbound (above).
+- A private file that breaks its rules is refused before anything is listed or written
+  (`device_bindings_invalid` with `path` and `device_binding_problem`). adb that does not start
+  or fails is `device_list_failed` with `adb_path`, caused by `foreign_os_error` or by
+  `foreign_adb_error` with adb's exit code and text, every serial the file binds replaced by
+  `[device:handset:<alias>]` and `raw_text_redacted`.
+- The subcommands take the flags of their row and nothing else (Workflow #382 A1-FLAG): an
+  unknown or repeated flag or a stray word is `actingctl_usage_invalid` naming it.
+
 ## Later slices
 
-- RD-1c: `actingctl devices [bind|unbind]` and the MCP tools `ac_devices`, `ac_device_bind`,
-  `ac_device_unbind`, the writers of the private file; they never print a serial.
+- RD-1c: done, "Choosing a device" above.
 - RD-2: the device link (`device.link`, `device_link:<state>` for the other link states).
 - Wireless (`transport: tcp`): reserved; identity stays the serial (`ro.serialno`), and neither
   label nor fingerprint holds an address.

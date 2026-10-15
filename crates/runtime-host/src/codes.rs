@@ -117,6 +117,52 @@ actingcommand_contract::outcome_codes! {
         /// `command.validated` (keys `instance_id`, `device_process_present`, and
         /// `stop_elapsed_ms`).
         EmulatorStopProcessUnverified => "emulator_stop_process_unverified": warning / none,
+        /// Error. A configured emulator start names an alias that is not a registered instance;
+        /// the start fails (Workflow #369 S6c; keys `alias`).
+        EmulatorAutostartInstanceUnknown => "emulator_autostart_instance_unknown": error / none,
+        /// Error. A configured emulator start names a fixture instance, which has no emulator to
+        /// start; the start fails (Workflow #369 S6c; keys `alias`).
+        EmulatorAutostartRequiresPhysicalInstance => "emulator_autostart_requires_physical_instance": error / none,
+        /// Info. The daemon enqueued the autostart claims of the configured instances whose
+        /// emulator is stopped (Workflow #369 S6c; keys `count`). A report line.
+        EmulatorAutostartQueued => "emulator_autostart_queued": info / none,
+        /// Info. An autostart claim read internet access from the operating system's
+        /// connectivity status (Workflow #369 S6c, P3; keys `alias`, `elapsed_ms`, the wait). A
+        /// report line.
+        EmulatorAutostartNetworkReady => "emulator_autostart_network_ready": info / none,
+        /// Warning. The operating system's connectivity status is unknown; the autostart claim
+        /// goes on without waiting (Workflow #369 S6c, P3; keys `alias`, `connectivity_reason`,
+        /// and `os_error` when the system gave one). A report line.
+        EmulatorAutostartNetworkStatusUnknown => "emulator_autostart_network_status_unknown": warning / none,
+        /// Error. No internet access was reported within 600 s: the configured start is refused
+        /// with the failure pair under the claim and the claim releases its key (Workflow #369
+        /// S6c, P3; keys `alias`, `elapsed_ms`). Also its report line.
+        EmulatorAutostartNetworkUnready => "emulator_autostart_network_unready": error / environment_fault,
+        /// Info. A configured start was performed and the connection preparation after it passed
+        /// (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartStarted => "emulator_autostart_started": info / none,
+        /// Warning. A configured start was performed, but the connection preparation after it did
+        /// not pass; the ladder it admitted holds the key (Workflow #369 S6c; keys `alias`). A
+        /// report line.
+        EmulatorAutostartPreparationFailed => "emulator_autostart_preparation_failed": warning / none,
+        /// Error. A configured start ended without its emulator started: its failure (a refused
+        /// claim, a refused renewal, a failed control) is the `caused_by` link, recorded where it
+        /// happened (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartFailed => "emulator_autostart_failed": error / none,
+        /// Info. An operator emulator control waits on the instance: the autostart claim releases
+        /// its key before its Start, with no failure pair (Workflow #369 S6c; keys `alias`). A
+        /// report line.
+        EmulatorAutostartSuperseded => "emulator_autostart_superseded": info / none,
+        /// Info. A scheduling pause holds the instance or the global gate: the autostart claim
+        /// queues again as a gated entry and releases its key (Workflow #369 S6c; keys `alias`).
+        /// A report line.
+        EmulatorAutostartYielded => "emulator_autostart_yielded": info / none,
+        /// Info. The instance already runs when its autostart claim holds the key: the claim
+        /// ends without action (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
+        /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases
+        /// its key (Workflow #369 S6c; keys `alias`). A report line.
+        EmulatorAutostartInterrupted => "emulator_autostart_interrupted": info / none,
         /// Warning. A persistent gate (a budget, a closed activity window, a task paused by
         /// failure suspension, or the configuration) refused a due clock slot; recorded once
         /// per (task, instance, occurrence) as a `goal_missed` planning signal (keys `task_id`,
@@ -173,6 +219,25 @@ actingcommand_contract::outcome_codes! {
         /// ruling 1); NAV-5 emits it.
         ContainedTaskNavigationRecoveryExhausted => "contained_task_navigation_recovery_exhausted": error / pack_logic_mismatch,
         // Workflow #387 D1c end
+        // Workflow #390 DRILL-1 begin: a person's drill of an instance's ladder.
+        /// Info. The trigger of a drill's ladder: a person asked for it (`DrillRecoveryLadder`);
+        /// its `recovery_ladder_started` names it as the trigger's `failure_code`, stage `drill`.
+        RecoveryLadderDrillRequested => "recovery_ladder_drill_requested": info / none,
+        /// Info. A plan drill did not run a rung the ladder would have run: it never acts on the
+        /// device (the rung's `recovery_rung_finished` outcome).
+        RecoveryRungSkippedDrillPlan => "recovery_rung_skipped_drill_plan": info / none,
+        /// Error. A drill was refused: stuck recovery is off for the instance, so no ladder
+        /// starts on it (the command's `command.rejected` and the receipt).
+        RecoveryLadderDrillDisabled => "recovery_ladder_drill_disabled": error / none,
+        /// Error. A drill was refused: a ladder holds or waits for the instance and
+        /// `rules.already_running` is `suppress` (its `recovery_ladder_suppressed`, tagged
+        /// `drill`, says `already_running`).
+        RecoveryLadderDrillAlreadyRunning => "recovery_ladder_drill_already_running": error / none,
+        /// Error. A drill was refused: the instance's cool-down window is open and
+        /// `trigger_defaults.respect_cooldown` holds the drill (keys `next_eligible_unix_ms`, the
+        /// window's end).
+        RecoveryLadderDrillCoolingDown => "recovery_ladder_drill_cooling_down": error / none,
+        // Workflow #390 DRILL-1 end
         ActionIdIssueFailed => "action_id_issue_failed": error / none,
         ActiveLeaseInstanceMissing => "active_lease_instance_missing": error / none,
         AgentContextInvalid => "agent_context_invalid": error / none,
@@ -1306,6 +1371,8 @@ actingcommand_contract::outcome_locations! {
         AdmitNewBusiness => "admit_new_business",
         AdmitPolicyDispatch => "admit_policy_dispatch",
         AdmitRecoveryLadder => "admit_recovery_ladder",
+        // Workflow #390 DRILL-1: a person's drill of an instance's ladder.
+        RecoveryLadderDrill => "recovery_ladder_drill",
         AdmitRuntimeCleanup => "admit_runtime_cleanup",
         AdmitRuntimeContinuation => "admit_runtime_continuation",
         AdmitRuntimeWork => "admit_runtime_work",
@@ -1469,6 +1536,8 @@ actingcommand_contract::outcome_locations! {
         EncodeEffectiveConfiguration => "encode_effective_configuration",
         EncodeRuntimeLifecycleFailure => "encode_runtime_lifecycle_failure",
         EndLeaseDeviceUse => "end_lease_device_use",
+        /// Workflow #369 S6c: enqueuing the configured emulator starts' claims.
+        EnqueueEmulatorAutostart => "enqueue_emulator_autostart",
         EnqueueHostClaim => "enqueue_host_claim",
         EvaluateFullPolicyCycle => "evaluate_full_policy_cycle",
         EvaluatePolicyCycle => "evaluate_policy_cycle",
@@ -1955,6 +2024,8 @@ actingcommand_contract::outcome_locations! {
         RollbackPolicyCatalog => "rollback_policy_catalog",
         RollbackReleaseSet => "rollback_release_set",
         RunContainedTaskCapture => "run_contained_task_capture",
+        /// Workflow #369 S6c: an autostart claim's hold and Start on its instance's worker.
+        RunEmulatorAutostart => "run_emulator_autostart",
         RunInstanceWorker => "run_instance_worker",
         RunMonitorCapture => "run_monitor_capture",
         RunMonitorProbe => "run_monitor_probe",
@@ -2094,6 +2165,8 @@ actingcommand_contract::outcome_locations! {
         DeviceRegistryInputOperation => "device_registry_input_operation",
         EmulatorControlBinding => "emulator_control_binding",
         EmulatorControlRegistration => "emulator_control_registration",
+        /// Workflow #369 S6c: the report lines of the configured emulator starts.
+        EmulatorAutostartReports => "emulator_autostart_reports",
         RuntimeIpcRequestRead => "runtime_ipc_request_read",
         RuntimeIpcRequestDecode => "runtime_ipc_request_decode",
         RuntimeIpcRequestCache => "runtime_ipc_request_cache",
@@ -2247,6 +2320,8 @@ pub(crate) mod test_spellings {
             // Workflow #398 RD-2: a test hands the device-link watch's events and timers in.
             DeviceLinkEventForTest => "device_link_event_for_test",
             DeviceLinkTickForTest => "device_link_tick_for_test",
+            // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
+            DeviceStateSampleForTest => "device_state_sample_for_test",
         }
     }
 }
@@ -2381,3 +2456,66 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #384 D2-S3: end ----
+
+// ---- Workflow #398 RD-5b (a handset's device state): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of a handset's device state (Workflow #398 RD-5b, model-398 v1.1 §7,
+    /// §10.1): the holds its sampling or its start gate finds, their lifting, the wake key, and
+    /// the sampling itself. The three screen-check codes (`device_wake_failed`,
+    /// `device_keyguard_dismiss_failed`, `device_locked`) and `device_state_unreadable` are the
+    /// device layer's (`actingcommand_device::DeviceStateCode`, RD-5a).
+    pub(crate) enum DeviceStateHostCode {
+        /// Warning. The handset's thermal status reached `device_state.thermal_hold_at`: it is
+        /// unavailable (`device_state:thermal`) until the status falls below
+        /// `device_state.thermal_resume_below`; at a run's start the run does not start (keys
+        /// `thermal_status`, `device_label`).
+        ThermalHold => "device_thermal_hold": warning / planned_stop,
+        /// Warning. The handset is on no power source and its battery is below
+        /// `device_state.battery_min_percent`: it is unavailable (`device_state:battery_low`)
+        /// until it is plugged in or charged; at a run's start the run does not start (keys
+        /// `battery_percent`, `device_label`).
+        BatteryLow => "device_battery_low": warning / planned_stop,
+        /// Warning. At a run's start another application was in the handset's foreground
+        /// (`device_state.in_use_gate`): the run does not start, and the handset is unavailable
+        /// (`device_state:in_use`) until a sample after `device_state.in_use_backoff_ms` finds
+        /// the instance's application, the home screen or nothing there (keys `device_label`).
+        InUse => "device_in_use": warning / planned_stop,
+        /// Info. The start gate, or the check before an input, lit the handset's screen with the
+        /// wake key (keys `device_label`).
+        ScreenWoken => "device_screen_woken": info / none,
+        /// Info. A hold of the handset lifted; with no hold left it is available again as its
+        /// self-check and its link allow (keys `device_hold`, `device_label`).
+        HoldLifted => "device_hold_lifted": info / none,
+        /// Error. The device-state sampling of the handsets could not start; the Runtime does not
+        /// run without it.
+        SamplingFailed => "device_state_sampling_failed": error / none,
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// What holds a handset (vocabulary `device_hold`, model-398 §7.3-§7.5, §10.1), in the order
+    /// its availability names the first of them (`device_state:<hold>`).
+    pub enum DeviceHold: "device_hold" {
+        /// A keyguard waits for a person (`device_locked`).
+        Locked => "locked",
+        /// The thermal status reached the hold level (`device_thermal_hold`).
+        Thermal => "thermal",
+        /// On no power source, below the battery level (`device_battery_low`).
+        BatteryLow => "battery_low",
+        /// Another application was in the foreground at a run's start (`device_in_use`).
+        InUse => "in_use",
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of a handset's device state (Workflow #398 RD-5b).
+    pub(crate) enum DeviceStateLocation {
+        Gate => "device_state_gate",
+        Sample => "device_state_sample",
+        Keepalive => "device_state_keepalive",
+        Read => "device_state_read",
+        Apply => "device_state_apply",
+        Step => "device_state_step",
+    }
+}
+// ---- Workflow #398 RD-5b: end ----

@@ -43,8 +43,9 @@ const CUT_BLOCKS: [&str; 9] = [
     "config_generation",
 ];
 /// Then each instance row's `run`, from the last row back, then each row's `monitor`, the same
-/// way; then `install.build`.
-const CUT_ROW_BLOCKS: [&str; 2] = ["run", "monitor"];
+/// way, then each row's `foreground` (Workflow #389 MCP-5b registers it last of the row blocks: it
+/// is the smallest); then `install.build`.
+const CUT_ROW_BLOCKS: [&str; 3] = ["run", "monitor", "foreground"];
 const MAX_TEXT_BYTES: u64 = 8192;
 const DEFAULT_TEXT_BYTES: u64 = 4096;
 /// The largest material ac_material exports; ac_observe and `actingctl observe --export` share it.
@@ -90,17 +91,15 @@ pub(super) fn overview(context: &ToolContext<'_>, arguments: &Map<String, Value>
         Ok(connected) => Ok(&connected.client),
         Err(error) => Err(error.to_value()),
     };
-    let answer =
-        overview::read(client, &request, &place, context.deadline).map_err(
-            |failure| match &failure {
-                Failure::Argument { argument, problem } => invalid_argument(argument, *problem),
-                Failure::Selector { .. } => ToolError::outcome("usage", failure.outcome()),
-                Failure::Install(_) | Failure::Clock => {
-                    ToolError::outcome("runtime", failure.outcome())
-                }
-                Failure::Runtime(error) => runtime_failure(context, connected.as_ref().ok(), error),
-            },
-        )?;
+    let answer = overview::read(client, &request, &place, context.deadline, &tools::envelope)
+        .map_err(|failure| match &failure {
+            Failure::Argument { argument, problem } => invalid_argument(argument, *problem),
+            Failure::Selector { .. } => ToolError::outcome("usage", failure.outcome()),
+            Failure::Install(_) | Failure::Clock => {
+                ToolError::outcome("runtime", failure.outcome())
+            }
+            Failure::Runtime(error) => runtime_failure(context, connected.as_ref().ok(), error),
+        })?;
     let warnings = answer
         .warnings
         .into_iter()
@@ -135,8 +134,8 @@ fn runtime_failure(
 
 /// Cuts `result`, an ac_overview answer, one block at a time in the order of the MCP-0 command
 /// table §4.9 until `fits` takes it: the top-level blocks of [`CUT_BLOCKS`], then each instance
-/// row's `run` from the last row back, then each row's `monitor` the same way, then
-/// `install.build`. Each cut block leaves `<block>_truncated: true` where it was. The daemon, the
+/// row's `run` from the last row back, then each row's `monitor` the same way, then each row's
+/// `foreground` (MCP-5b), then `install.build`. Each cut block leaves `<block>_truncated: true` where it was. The daemon, the
 /// global pause, each row's identity, `pause`, `lease_active` and `queued`, and `incomplete` are
 /// never cut: an answer that still does not fit when nothing is left to cut is returned as it is,
 /// and the call answers `output_budget_exceeded` (`tools::call_result`).

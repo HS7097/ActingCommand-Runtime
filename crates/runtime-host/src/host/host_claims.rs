@@ -19,6 +19,7 @@
 //! finished one payload marks the Runtime fatal with `runtime_restart_required`.
 
 use super::device_link::PendingLinkRestore;
+use super::emulator_autostart::PendingAutostart;
 use super::recovery_ladder::PendingRecoveryLadder;
 use super::startup_package::PendingStartupPackage;
 use super::*;
@@ -38,6 +39,9 @@ pub(super) enum HostClaimWork {
     /// Workflow #398 RD-2 (model-398 v1.1 §4.3): the preparation of a handset whose link came
     /// back to `device`, on a self-check claim.
     LinkRestore(PendingLinkRestore),
+    /// Workflow #369 S6c (H-5): a configured emulator start at daemon start, on its autostart
+    /// claim.
+    Autostart(PendingAutostart),
 }
 
 impl HostClaimWork {
@@ -47,6 +51,8 @@ impl HostClaimWork {
             Self::RecoveryLadder(_) => "recovery_ladder",
             // The payload runs the registered host operation of a link's restore.
             Self::LinkRestore(_) => HostLocation::DeviceLinkRestore.as_str(),
+            // The payload runs the registered host operation of a configured start.
+            Self::Autostart(_) => HostLocation::RunEmulatorAutostart.as_str(),
         }
     }
 }
@@ -162,6 +168,7 @@ impl HostShared {
             HostClaimWork::StartupPackage(pending) => self.run_startup_claim(&pending, key),
             HostClaimWork::RecoveryLadder(pending) => self.run_recovery_ladder(&pending, key),
             HostClaimWork::LinkRestore(pending) => self.run_link_restore(&pending, key),
+            HostClaimWork::Autostart(pending) => self.run_autostart_claim(&pending, key),
         }
     }
 
@@ -179,6 +186,11 @@ impl HostShared {
                 .with_causation_id(pending.causation_id),
             HostClaimWork::RecoveryLadder(pending) => pending.links().clone(),
             HostClaimWork::LinkRestore(pending) => pending.links.clone(),
+            HostClaimWork::Autostart(pending) => self.events.system_links()?.with_instance_id(
+                self.events
+                    .issuer()
+                    .issue_registered_instance(pending.instance_id),
+            ),
         })
     }
 

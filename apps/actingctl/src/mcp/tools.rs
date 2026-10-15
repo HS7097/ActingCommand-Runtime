@@ -385,7 +385,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. sections (global_pause, instances, run_window, lab_tool, install; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings). An answer larger than the output budget is cut, one block at a time until it fits: each instance row's run (the last row first), then each row's monitor, then install.build; each cut block leaves <block>_truncated: true where it was. The daemon, the global pause, each row's identity, pause, lease_active and queued, and incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
+        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, foreground {package, observed_at_unix_ms}: the package the instance last reported in the foreground before a pointer input (not a live read; absent until one was seen), and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. catalog: the active policy catalog generation {catalog_id, catalog_version, catalog_hash, activated_event_id, approval_id, approval_disposition, previous_catalog_id, previous_catalog_version}, null while none is active. config_generation {running, selected}: the configuration generation actingd runs and the one the install selects now; when they differ the warning config_generation_mismatch says a restart is needed, and each package binding of the selected configuration whose path is missing or unreadable adds the warning package_binding_unreadable. watchdog: actingctl watchdog status read locally, {decision, attention, starts_24h, last_tick}, null without an installation. sections (global_pause, instances, run_window, lab_tool, install, catalog, config_generation, watchdog; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings). An answer larger than the output budget is cut, one block at a time until it fits: watchdog, catalog, config_generation, then each instance row's run (the last row first), then each row's monitor, then each row's foreground, then install.build; each cut block leaves <block>_truncated: true where it was. The daemon, the global pause, each row's identity, pause, lease_active and queued, and incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -398,7 +398,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_events",
         title: "Runtime ledger events",
         tier: Tier::Observer,
-        description: "One page of Runtime ledger events, oldest first: the same read, parameters and page as actingctl events (QueryEvents, which records nothing in the ledger). Filters, all combined: instance (alias, instance_id or ADB port), view (events = every event, observation, changes, errors = warning and above, health, lab), since_unix_ms and until_unix_ms, after_sequence and through_sequence, event_type, exclude_event_types (at most 32, never the event_type), min_severity and max_severity (debug, info, warning, error, fatal), origin_module, task_id, run_id, request_id and correlation_id. Without since_unix_ms or after_sequence the page starts at the beginning of the ledger. Each row carries seq, ts, type, severity, instance, request_id, run_id, task_id, correlation_id, the ledger's diagnostic code and materials [{ref, media_type, size}] for ac_material (materials_truncated when that list was shortened to fit the output budget); detail payload adds the event's projected payload verbatim, detail brief (the default) has none. limit defaults to 20 (at most 100). last_sequence is the seq of the page's last row: pass it as after_sequence to read on from there, also after a restart. next_cursor continues the same query within its snapshot: send it back with the same filters and without after_sequence. truncated true means a brief page was cut to the output budget and next_cursor resumes after its last row. A payload page larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {export {path, sha256, size}, events_count, next_cursor, last_sequence} with the warning answer_exported. A cursor dies when the Runtime connection or this server restarts (cursor_invalid): read again from the first page or from after_sequence. To follow the ledger, poll this tool with after_sequence and wait_s (0-20, default 0), not ac_overview: an empty page is read again every second until rows arrive or wait_s ends, and waited_ms says how long it waited.",
+        description: "One page of Runtime ledger events, oldest first: the same read, parameters and page as actingctl events (QueryEvents, which records nothing in the ledger). Filters, all combined: instance (alias, instance_id or ADB port), view (events = every event, observation, changes, errors = warning and above, health, lab), since_unix_ms and until_unix_ms, after_sequence and through_sequence, event_type or event_types (any of at most 32 types), exclude_event_types (at most 32, never a selected type), fact_key (only the fact records that name this instance or runtime fact key), min_severity and max_severity (debug, info, warning, error, fatal), origin_module, task_id, run_id, request_id and correlation_id. Without since_unix_ms or after_sequence the page starts at the beginning of the ledger. Each row carries seq, ts, type, severity, instance, request_id, run_id, task_id, correlation_id, the ledger's diagnostic code and materials [{ref, media_type, size}] for ac_material (materials_truncated when that list was shortened to fit the output budget); detail summary adds the outcome the record carries (a state change carries none), detail payload adds the event's projected payload verbatim, detail brief (the default) has neither. limit defaults to 20 (at most 100). last_sequence is the seq of the page's last row: pass it as after_sequence to read on from there, also after a restart. next_cursor continues the same query within its snapshot: send it back with the same filters and without after_sequence. truncated true means a brief page was cut to the output budget and next_cursor resumes after its last row. A payload page larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {export {path, sha256, size}, events_count, next_cursor, last_sequence} with the warning answer_exported. A cursor dies when the Runtime connection or this server restarts (cursor_invalid): read again from the first page or from after_sequence. To follow the ledger, poll this tool with after_sequence and wait_s (0-20, default 0), not ac_overview: an empty page is read again every second until rows arrive or wait_s ends, and waited_ms says how long it waited.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -572,6 +572,46 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::code_lookup::run,
     },
     // ---- Workflow #389 MCP-14 (end) ----
+    // ---- Workflow #398 RD-1c (begin): `ac_devices`, `ac_device_bind`, `ac_device_unbind` ↔
+    // `actingctl devices list|bind|unbind`; observer before U-3, as D1b's configuration tools
+    // (model-398 §3.3). ----
+    ToolDef {
+        name: "ac_devices",
+        title: "Devices adb lists",
+        tier: Tier::Observer,
+        description: super::devices::LIST_DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::devices::list_input,
+        result_schema: super::devices::list_result,
+        run: super::devices::list,
+    },
+    ToolDef {
+        name: "ac_device_bind",
+        title: "Bind a device to a handset",
+        tier: Tier::Observer,
+        description: super::devices::BIND_DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::devices::bind_input,
+        result_schema: super::devices::bind_result,
+        run: super::devices::bind,
+    },
+    ToolDef {
+        name: "ac_device_unbind",
+        title: "Unbind a handset's device",
+        tier: Tier::Observer,
+        description: super::devices::UNBIND_DESCRIPTION,
+        read_only: false,
+        destructive: true,
+        idempotent: true,
+        input_schema: super::devices::unbind_input,
+        result_schema: super::devices::unbind_result,
+        run: super::devices::unbind,
+    },
+    // ---- Workflow #398 RD-1c (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",
@@ -683,6 +723,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: lab::app,
     },
     // ---- Workflow #389 MCP-13a (end) ----
+    // ---- Workflow #390 DRILL-1 (begin): `ac_ladder_drill` ↔ `actingctl ladder-drill`; operator
+    // before U-3, option two after it (forced compromise T-08). ----
+    ToolDef {
+        name: "ac_ladder_drill",
+        title: "Recovery ladder drill",
+        tier: Tier::Operator,
+        description: "Asks the Runtime for a drill of one instance's stuck-recovery ladder, as actingctl ladder-drill does; the Runtime takes it only from an operator origin. The drill is admitted, climbs and is recorded like a ladder a failure started, and every record of its own (recovery_ladder_started with trigger stage drill, recovery_rung_finished, recovery_ladder_finished, recovery_ladder_suppressed) is tagged drill. device false (the default): a plan drill that never acts on the device; each rung the ladder would run is recorded skipped with drill_plan, the climb ends planned, and the cool-down window is left as it was. device true: the drill climbs its rungs on the instance under the same key, admission and fences as a real ladder (return home, an application restart, an emulator restart), so it is destructive. It starts at the configured trigger_defaults.start_rung and the cool-down holds it as trigger_defaults.respect_cooldown says. A direct run still starts no ladder. The answer is {instance_alias, mode, ladder_request_id} once the drill is admitted, before it climbs; follow it with ac_events request_id <ladder_request_id>. Refusals: recovery_ladder_drill_disabled (stuck recovery is off for the instance), recovery_ladder_drill_already_running, recovery_ladder_drill_cooling_down (next_eligible_unix_ms), recovery_admission_denied (a pause, a shutdown or business capacity), instance_unknown, invalid_emulator_control_origin.",
+        read_only: false,
+        destructive: true,
+        idempotent: false,
+        input_schema: ladder_drill_input,
+        result_schema: ladder_drill_result,
+        run: operator::ladder_drill,
+    },
+    // ---- Workflow #390 DRILL-1 (end) ----
     ToolDef {
         name: "ac_targets_set",
         title: "Set resource targets",
@@ -1102,11 +1157,21 @@ fn overview_result() -> Value {
                         "pause": {"type": "object"},
                         "resource_fence": {"type": "object"},
                         "monitor": {"type": "object"},
+                        // Workflow #389 MCP-5b: the last foreground package seen.
+                        "foreground": {
+                            "type": "object",
+                            "properties": {
+                                "package": {"type": "string"},
+                                "observed_at_unix_ms": {"type": "integer"},
+                            },
+                            "required": ["package", "observed_at_unix_ms"],
+                        },
                         "run": run_status_schema(),
                         "run_incomplete": {"type": "boolean"},
                         // Workflow #389 MCP-8: cut to the output budget.
                         "run_truncated": {"const": true},
                         "monitor_truncated": {"const": true},
+                        "foreground_truncated": {"const": true},
                     },
                     "required": ["alias", "instance_id", "lease_active", "queued"],
                 },
@@ -1130,6 +1195,19 @@ fn overview_result() -> Value {
                     "build_truncated": {"const": true},
                 },
             },
+            // Workflow #389 MCP-9a (command table §4.10).
+            "catalog": {"type": ["object", "null"]},
+            "catalog_truncated": {"const": true},
+            "config_generation": {
+                "type": "object",
+                "properties": {
+                    "running": {"type": "integer"},
+                    "selected": {"type": "integer"},
+                },
+            },
+            "config_generation_truncated": {"const": true},
+            "watchdog": {"type": ["object", "null"]},
+            "watchdog_truncated": {"const": true},
             "incomplete": {"type": "boolean"},
         },
         // Workflow #389 MCP-8: `sections` may leave out every block but the daemon.
@@ -1535,6 +1613,36 @@ fn emulator_input() -> Value {
         "additionalProperties": false,
     })
 }
+
+// ---- Workflow #390 DRILL-1 (begin): `ac_ladder_drill`'s arguments (the CLI's `--instance` and
+// `--device`, R2) and result (the CLI's line without its outcome). ----
+fn ladder_drill_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "device": {
+                "type": "boolean",
+                "description": "true: the drill acts on the device as a real ladder does (--device); false or absent: a plan drill that never acts on it.",
+            },
+        },
+        "required": ["instance"],
+        "additionalProperties": false,
+    })
+}
+
+fn ladder_drill_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance_alias": {"type": "string"},
+            "mode": {"type": "string", "enum": ["plan", "device"]},
+            "ladder_request_id": {"type": "string"},
+        },
+        "required": ["instance_alias", "mode", "ladder_request_id"],
+    })
+}
+// ---- Workflow #390 DRILL-1 (end) ----
 
 /// A job's outcome within the call budget, or its handle and phase.
 fn job_result() -> Value {

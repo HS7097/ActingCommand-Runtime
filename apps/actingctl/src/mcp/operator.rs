@@ -547,6 +547,36 @@ pub(super) fn emulator(context: &ToolContext<'_>, arguments: &Map<String, Value>
     job_answer(context, &job, context.deadline)
 }
 
+// ---------------------------------------------------------------- ac_ladder_drill
+
+/// Workflow #390 DRILL-1: `actingctl ladder-drill` over MCP (`crate::ladder_drill`). `instance`
+/// and `device` are the CLI's `--instance` and `--device` (R2; `device` absent is false, a plan
+/// drill); the result is the CLI's line without its outcome, the drill the Runtime admitted. The
+/// Runtime answers at admission, before the drill climbs, so no job is needed; a refusal is the
+/// Runtime's outcome on top.
+pub(super) fn ladder_drill(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    let arguments = Arguments::new(arguments, &["instance", "device"])?;
+    let selector = arguments.required_string("instance")?;
+    let device = match arguments.value("device") {
+        None => false,
+        Some(Value::Bool(device)) => *device,
+        Some(_) => return Err(invalid_argument("device", ArgumentProblem::WrongType)),
+    };
+    let alias = resolve_alias(context, selector)?;
+    let write = begin_write(context, "ac_ladder_drill", Some(alias.as_str()), CLI)?;
+    let drill = write
+        .client
+        .drill_recovery_ladder(&alias, crate::ladder_drill::mode(device))
+        .map_err(|error| client_error(&error))?;
+    Ok(ToolSuccess {
+        result: serde_json::to_value(&drill).map_err(super::packs::encode_failed)?,
+        warnings: write.warnings,
+    })
+}
+
 // ---------------------------------------------------------------- resource targets
 
 /// R5's view of one instance; an actingd older than v0.11.0 answers

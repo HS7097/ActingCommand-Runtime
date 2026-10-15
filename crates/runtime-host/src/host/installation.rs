@@ -149,6 +149,10 @@ impl HostShared {
     {
         prepared(&self.stuck_recovery)
     }
+    /// Workflow #369 S6c: the configured emulator starts, in configuration order.
+    pub(super) fn emulator_autostart(&self) -> RuntimeHostResult<&[(InstanceId, String)]> {
+        prepared(&self.emulator_autostart).map(Vec::as_slice)
+    }
 
     fn count_work<'a>(&'a self, admission: &mut LifecycleAdmission) -> LifecycleWork<'a> {
         *admission.active.entry(thread::current().id()).or_default() += 1;

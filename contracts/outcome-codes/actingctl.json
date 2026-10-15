@@ -1686,6 +1686,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "config_generation_mismatch": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl overview or ac_overview found that the configuration generation actingd runs is not the one the installation selects now; path is the selected configuration, which takes effect only when actingd is restarted. The rest of the overview is read as usual.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "outcome_codes_reported": {
       "category": "success",
       "ladder_class": "none",
@@ -1741,6 +1757,115 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl run evidence: one page of a contained run's steps (page, recognised targets, input, frame refs), its final page and frame and its overlay ref was printed, read from the run's ledger events, as ac_run_evidence answers it (Workflow #389 MCP-6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_list_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices list: the devices the install's adb lists now were printed, one row each with its handle, transport, state, model, the alias the state root's private binding file binds it to and a loopback endpoint, never a device serial, as ac_devices answers them (Workflow #398 RD-1c).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_binding_changed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices bind or unbind: the state root's private binding file now binds the device of the handle to the handset alias, or no longer binds one to it; the change takes effect at the next start (Workflow #398 RD-1c).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_handle_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "handle": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices bind or ac_device_bind: adb does not list a device with this handle now; handles are the adb server's session numbers and change when a device is replugged or the server restarts (Workflow #398 RD-1c).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_list_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "adb_path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices or an ac_device tool could not read adb's device list: the install's adb (adb_path) did not start or ended with a failure, linked as foreign_os_error or foreign_adb_error with adb's text, bound device serials replaced by their labels (Workflow #398 RD-1c).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_kind_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "alias": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices bind or ac_device_bind: the alias is an instance of the selected configuration that is not a handset (device.kind handset); only a handset is bound to a device. actingd reports the same condition of a configuration as device_config_invalid (Workflow #398 RD-1c).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_bindings_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "device_binding_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices or an ac_device tool found the state root's private binding file (path) breaking its rules, or a binding would break them, as device_binding_problem says: for example the device is already bound to another alias. Nothing was written (Workflow #398 RD-1c).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_bindings_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl devices bind or unbind could not write the state root's private binding file (path); the failure is linked (Workflow #398 RD-1c).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2767,6 +2892,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingwatch cannot run the watchdog tick (<root>\\runtime\\actingctl.exe).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_drill_queued": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl ladder-drill: the Runtime admitted a drill of the instance's stuck-recovery ladder and queued its claim; the line carries the drill {instance_alias, mode, ladder_request_id}, as ac_ladder_drill answers it (Workflow #390 DRILL-1).",
       "common_causes": "TBD",
       "handling": "TBD"
     }

@@ -114,7 +114,7 @@ not registered by AO-0.
 | A2 | `agent.response_recorded`: `report_artifact` | reserved optional member (artifact reference) | SH-1 | AGT-3 | the report body is a ledger material, never a board post |
 | A3 | instruction lines `session.instructions` | reserved instance fact key, one per scope, `record_list` | GOAL-1 | GOAL-1 (7b) | rows `{kind, task_id?, target?, value, channel, set_at_unix_ms, expires_at_unix_ms?, basis_artifact?}`; `kind` covers a task weight, a special goal and the one-shot `run_once` of MCP-17; the frozen `session.resource_targets` stays the special-goal section (Alice 10-10 17:0x); GOAL-M fixes the rows |
 | A4 | `policy.dispatch_intent`: `priority_locked` | reserved optional member | SH-1 | RT335-S4 | only if S4 cannot take the lock from an existing record |
-| A5 | `config.catalog` | runtime fact key (runtime scope, re-observed under `config.`) | MCP-9a | MCP-9a | `{catalog_id, catalog_version, catalog_hash, activated_event_id, approval_id?, approval_disposition?, previous_catalog_id?, previous_catalog_version?}`; the configuration generation is `config.selection` (R6); the watchdog block is read client-side; a bound package path that is missing or unreadable is reported as one overview line computed at read time (coordinator 10-12) |
+| A5 | `config.catalog` | runtime fact key (runtime scope, re-observed under `config.`) | MCP-9a | MCP-9a | `{catalog_id, catalog_version, catalog_hash, activated_event_id, approval_id?, approval_disposition?, previous_catalog_id?, previous_catalog_version?}`; the configuration generation is `config.selection` (R6); the watchdog block is read client-side; a bound package path that is missing or unreadable is reported as one overview line computed at read time (coordinator 10-12); **done (MCP-9a):** one row of text fields (`catalog_version` and `previous_catalog_version` decimal text, as `config.selection`'s generation; `approval_disposition` `approved`, `rejected`, `pinned` or `revoked`); `activated_event_id` names the last `catalog.activated` or `catalog.rolled_back` record of the generation's hash, the approval members the latest approval decision whose target is that generation (by hash and version), the previous members the generation of that record's `previous_catalog_hash`; recorded at start, after each committed transition and after each approval decision when it changed; contract type `ConfigCatalog`; [runtime-config.md](runtime-config.md) "Facts" |
 | A6 | `actingctl packs --instance` ↔ `ac_packs` rows | read output of a general read (no persisted record and no runtime-client shape: it reads the configuration facts before U-3 and the loaded pack registry after it) | MCP-11 | MCP-11 | the instance's bound standard pack and, per package, `{package_id, path, role}` with `role` ∈ routine, maintenance, prerequisite, startup, recognition maintenance (token spellings reserved for MCP-11); no digest (M-PKG §5.5); a shared-table path (DB-1) and a residency column (MEM-3) come later |
 
 ### 1.8 Wave 2 slices (train 3)
@@ -869,6 +869,118 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 | RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
+### 1.57 Wave 13 slice EXEC-1 (#390, forced-compromises mapping E-04, E-13)
+
+EXEC-1 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
+("Task schema `0.9` candidate operations") is the contract. One page of a page-graph task may
+carry ordered candidate operations with a `when`, and a click may let a refusal of its guard fall
+to the page's next candidate. No new event type, no new member of a persisted record and no
+configuration key. The code `contained_task_operation_candidates_exhausted` (execution-kernel,
+error, `pack_logic_mismatch`; values `page_id`, `count`) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| EC1 | package format: task operation members `when` (`{"present": <target>}` or `{"absent": <target>}`) and `on_guard_refused` (`"next_candidate"`) (task schema `0.9`) | new members (resource file format, not a ledger shape) | EXEC-1 | resource side | `when` names a target judged on one frame (not `click_only`, not under target consensus), not on the entry application; `on_guard_refused` only on a click with a declared guard (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); the `package` interface revision is declared once by A8 |
+| EC2 | `task.step_finished` of a candidate passed over after its guard refused | new rule of an existing record (shape unchanged) | EXEC-1 | EXEC-1 | written right after the step's `task.step_started` and its guard evaluation, with no `task.effect_intent` or `task.effect_completed` between, `page_label` the page of the frame the guard refused on and no phase; the step stays counted in the run's executed steps, and the next candidate starts the next step index on the same frame |
+| EC3 | task diagnostic stream: the `target` and `error` rows' guard `phase` value `when` | new value of an existing member | EXEC-1 | EXEC-1 | the evaluation of a candidate's `when` target on the frame its step would start on, written before that step's `step_started` row (a withdrawn candidate starts no step) |
+
+### 1.58 Wave 13 slice SEL-L3b (#308, forced compromises E-10, E-11, E-12; scan session of S0 v2.1 §2)
+
+SEL-L3b widens how a scan moves: a list along either axis, a drag that ends with a pause and a
+brake across the axis, and the page flip, aligned by its overlap or by page-order evidence. It
+brings one input primitive, the drag with a pause and a brake, which a backend performs from the
+same prepared segmented plan as the vertical-brake drag, through the same provider operation
+(`segmented_swipe`) and error chain. It adds no code, location or key: a page-order viewport that
+shows no single admitted page fails the existing `selection_scan_alignment_rejected` (its catalog
+entry now names that case), and a broken action is refused with the existing
+`invalid_input_coordinate`, `invalid_input_duration` and `invalid_segmented_swipe_contract`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L3B-1 | `InputAction::SingleTouchDragWithPauseAndBrakeV1 {x1, y1, x2, y2, drag_duration_ms, pause_ms, x3, y3, brake_duration_ms}` (`single_touch_drag_with_pause_and_brake_v1`) | new enum value (wire `Input` request; ledger: an input intent's `provenance.input_action`, a `task.effect_intent`'s `action`) | SEL-L3b | SEL-L3b (a scan drag that declares a pause or a brake; online from SEL-L4b, which lets a package declare `scan`) | one press at (`x1`, `y1`) dragged to (`x2`, `y2`) over `drag_duration_ms`, held there `pause_ms`, moved to (`x3`, `y3`) over `brake_duration_ms`, released; every point on the screen, `drag_duration_ms` 1..=60 000, the others at most 60 000; without a brake `brake_duration_ms` is 0 and (`x3`, `y3`) is (`x2`, `y2`), with one it moves; a pause or a brake is present (else it is a swipe); event action `input.swipe`; `Debug` redacted; its sampling evidence is the swipe's (the press in the first region, the drag's end in the second); the input intent records no `execution_plan` (the `maa_2_0` record is the vertical-brake drag's): the action in the provenance determines the plan; the foreground gate and the Nemu input take it as they take the vertical-brake drag; the adb shell backend refuses it as it refuses every segmented swipe |
+| L3B-2 | `task.effect_intent` of a select step's scan move | existing record, written as row L3-1 states | SEL-L3b | SEL-L4b | a scan move is also a page-flip tap (`InputAction::Tap`, sampled in `rect`, or in `back_rect` for a corrective or a rewind) or the drag of row L3B-1; each is followed by its input and by no `task.effect_completed` |
+| L3B-3 | package format: a select step's `scan.advance` and `scan.reposition` | new members (resource file format, not a ledger shape) | SEL-L3b (types); SEL-L4b (parse and admission) | resource side | `kind: drag` gains the optional `pause_ms` (at least 1) and `brake {cross_px, duration_ms}` (`cross_px` not 0, signed, across the axis; `duration_ms` at least 1); `kind: rect` is new: `advance {rect, back_rect}` with `min_content_step_px` and `max_content_step_px` (aligned by overlap) or with `page_order {checks: [check target ids, page 0 first], page_step_px}` (at least one check and 1 px; aligned by the one page check that passes, the same page or the next one), never both; `reposition {rect, back_rect, max_content_step_px}`, whose rewind taps `back_rect`; `axis` takes `vertical` or `horizontal` |
+
+### 1.59 Wave 13 slice RD-5b (#398 model-398 v1.1 §7, §10.1, §12)
+
+RD-5b brings its own shapes and writes them. The device state of a bound handset is read through
+the device layer's closed command sets (RD-5a): by one sampler thread per Runtime, only while a
+bound handset is configured and its link is `device`, and by the start gate before the first step
+of every package run on it; the `device_state` section of `crates/runtime-config`
+(`src/device_state.rs`) is its configuration and [runtime-config.md](runtime-config.md), "The
+`device_state` section", that section's contract; [application-lifecycle.md](application-lifecycle.md),
+"The handset start gate", is the gate's. No member carries a device serial: a handset is its
+label `handset:<alias>`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RD5-1 | `runtime.lifecycle_observed` phase `device_state_observed` `{outcome}` | new lifecycle phase | RD-5b | RD-5b | under the handset's instance links: `device_thermal_hold` (warning, `thermal_status`) or `device_battery_low` (warning, `battery_percent`) when a sample finds the handset held; `device_hold_lifted` (info, `device_hold`) for each hold that lifts; `device_screen_woken` (info) when the wake key lit the screen; `device_state_unreadable` (error, `device_state_probe`, adb's text its `caused_by` link) for the first failing read of a sampling streak and for a start gate that could not read the screen-off timeout; each with `device_label` where its code declares it; normal commit sync |
+| RD5-2 | `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (instance scope, a bound handset only) | new runtime facts | RD-5b | RD-5b | written by a sample, source `runtime`, each with the lifetime `device_state.fact_ttl_ms`: strings (`awake`/`asleep`/`dozing`/`dreaming`; `none`/`insecure`/`secure`; a `thermal_status` word), one `record_list` row `{level, plugged, status, temperature_deci_c}`, a duration; a changed value at once, an unchanged one when its record would expire before the next sample |
+| RD5-3 | `session.instance.available` = `false` with `source_detector` `runtime.device-state`, `source_snapshot_id` `device_state:<hold>` | new source of an existing instance fact record | RD-5b | RD-5b | `locked`, `thermal`, `battery_low`, `in_use` (the first held, in that order); a device-link withdrawal comes first; with no hold left a passing self-check restores the seed, as a self-check withdrawal is restored |
+| RD5-4 | `device_wake_failed`, `device_keyguard_dismiss_failed`, `device_locked`, `device_state_unreadable` (device codes, RD-5a), `device_thermal_hold`, `device_battery_low`, `device_in_use` on a run's failure | new top codes of an existing failure | RD-5b | RD-5b | the start gate's refusal before the run's first step (operation `device_state_gate`), or the keepalive's before an input (`device_state_keepalive`); projection `backend_operation_failed`, not fatal; no input reaches the device; a run whose handset left `device` still ends with `device_link_lost` (RD-2) |
+| RD5-5 | a step of the run's lease for the screen check (`begin_destructive_step`, Business) | new use of an existing scheduler step | RD-5b | RD-5b | the wake key and the keyguard dismissal run under its witness (`Adb::run_write`); the step is finished right after the check; no ledger record of its own |
+| RD5-6 | `config.parameters.device_state` (10 rows) | new section of an existing fact family | RD-5b | RD-5b | the keys of §5's `device_state.*` row in model-398 §7.8's order; every key settable |
+
+Codes (runtime-host): `device_thermal_hold`, `device_battery_low`, `device_in_use` (warning,
+`planned_stop`), `device_screen_woken`, `device_hold_lifted` (info, `none`),
+`device_state_sampling_failed` (error, `none`; the sampler thread could not be spawned, not in
+model-398 §10.1); keys `device_hold`, `thermal_status` and their vocabularies, `battery_percent`;
+six `device_state_*` locations. `device_wake_failed`, `device_keyguard_dismiss_failed`,
+`device_locked` and `device_state_unreadable` stay the device layer's (RD-5a).
+
+### 1.60 Wave 13 slice S6c (#369 model v3.1 §7 row 8, H-5; ORD §3.5 item 17)
+
+S6c reads S6a's per-instance `start_emulator` (§1.36 E6-1) and starts a configured, stopped
+emulator at daemon start on an autostart claim; [emulator-control.md](emulator-control.md),
+"Configured start at daemon start", is the contract. No event type, persisted member, wire
+field or configuration key is added, and the claim, its start turn and its report lines live in
+memory only, as every claim kind does (model §4.1). The thirteen `emulator_autostart_*` codes,
+the locations `enqueue_emulator_autostart`, `run_emulator_autostart` and
+`emulator_autostart_reports`, the context key `connectivity_reason` (S6a's vocabulary) and the
+domain `emulator_autostart_` are catalog entries, not rows (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| E6C-1 | actingd daemon lines on stderr: the autostart report lines, `emulator_autostart_queued` (`count`) once the claims are enqueued, before `runtime_ready`; per claim `…_network_ready` or `…_network_status_unknown`, then one of `…_started`, `…_preparation_failed`, `…_failed`, `…_network_unready`, `…_superseded`, `…_yielded`, `…_skipped`, `…_interrupted`, each with `alias`; one developer line and one `OUTCOME actingd:` line each (A6-1's writer) | process interface | S6c | S6c | none when no instance names `start_emulator` (the default, off); the lines of claims the host's close ended come before `runtime_stopped`; a line that cannot be written never stops actingd; #643's stdout lines `actingd emulator_autostart_* …` were never shipped |
+| E6C-2 | an autostart claim's records under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's synthesized connection): `lease.requested` and `scheduler.admitted` + `lease.granted`, or `scheduler.queued` (deadline `u64::MAX`, priority `normal`) while a pause holds it; the renew set; `lease.released`; at its Start `command.received` (Runtime origin) and H-4's start records; a refusal before the Start: `command.received`, `command.rejected`, `runtime.failed` (`emulator_autostart_network_unready` with `alias`, `elapsed_ms`; or the `lease_expired` / `lease_missing` of a refused renewal) | new use of existing records (shapes unchanged) | S6c | S6c | a claim that yields to a pause, is superseded by an operator control, finds its instance running, or is interrupted by a drain or a shutdown writes its release only (and, for a pause, its new claim's `lease.requested` + `scheduler.queued`), no `command.*` |
+
+### 1.62 Wave 13 slice RD-1c (#398 model-398 v1.1 §3.3, §10.1, §12)
+
+RD-1c writes the private binding file RD-1b reads (RB5) and adds no ledger shape: `actingctl
+devices` runs no Runtime request and records nothing, and the next start records a binding as
+RB1 says. [device-binding.md](device-binding.md), "Choosing a device", is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D1C1 | `<state root>\private\device-bindings.json` (RB5) | first writer of an existing private file format, not a ledger shape | RD-1c | RD-1c (`actingctl devices bind\|unbind`, `ac_device_bind`, `ac_device_unbind`) | the file as RB5 defines it, `bound_via` `cli` or `mcp`; written whole through a temporary sibling after the file's own rules accept the new content (one alias and one serial each); never read by an export, archive or diagnostic (guard RD-1b-T10 names `apps/actingctl/src/devices.rs` as its writer) |
+| D1C2 | `actingctl devices list` ↔ `ac_devices` rows `{handle?, transport, state, model?, bound_alias?, endpoint?}`; `devices bind` ↔ `ac_device_bind` `{alias, handle, model?, restart_required}`; `devices unbind` ↔ `ac_device_unbind` `{alias, unbound, restart_required}` | client read and instruction outputs (no persisted record, no runtime-client shape) | RD-1c | RD-1c | `handle` `<transport>:<transport_id>`, never a device value; no output names a serial |
+
+Codes (catalog entries, not rows, §7): `device_list_reported`, `device_binding_changed`
+(success), `device_handle_unknown`, `device_list_failed`, `device_kind_unsupported`,
+`device_bindings_invalid`, `device_bindings_write_failed` (error), all actingctl, `ladder_class`
+`none`; the key `handle` (token); actingctl joins the owners of the prefix `device_`.
+
+### 1.63 Wave 13 slice DRILL-1 (#390, forced-compromises mapping T-08; coordinator ruling 9 of wave 13)
+
+DRILL-1 lets a person drill one instance's stuck-recovery ladder; a drill is recorded like a ladder
+a trigger started and tagged `drill`, and never acts on the device unless the request says so.
+[emulator-control.md](emulator-control.md), "Drills", is the contract;
+[runtime-interface.md](runtime-interface.md) has the request, CLI and MCP rows. Its codes
+(`recovery_ladder_drill_requested`, `recovery_rung_skipped_drill_plan`,
+`recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`,
+`recovery_ladder_drill_cooling_down`, `request_drill_recovery_ladder_completed`,
+`recovery_ladder_drill_queued`) and its locations are catalog entries, not rows (§7). No
+configuration key.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DR1 | `runtime.lifecycle_observed` payload member `drill` (boolean) | new optional member | DRILL-1 | DRILL-1 | present (`true`) only on a drill's own ladder phases (`recovery_ladder_started`, `recovery_rung_finished`, `recovery_instance_stopped`, `recovery_environment_ready`, `recovery_ladder_finished`, `recovery_ladder_suppressed`), absent on every other record; the payload check refuses it on any other phase, and a `recovery_ladder_started` carries it exactly when its trigger's stage is `drill` |
+| DR2 | `RecoveryTriggerStage::Drill`, spelled `drill`: `recovery_ladder_started.trigger.stage` | new enum value | DRILL-1 | DRILL-1 | a drill's trigger names no run, task, preparation, rule or match, `failure_code` `recovery_ladder_drill_requested`, `start` `immediately`; an `instance_preparation_finished` never names it; a `recovery_ladder.triggers[]` item that names it is refused `stage_not_allowed` |
+| DR3 | `RecoveryRungSkipReason::DrillPlan`, spelled `drill_plan`: `recovery_ladder_started.rungs[].reason` and the skip outcome `recovery_rung_skipped_drill_plan` of `recovery_rung_finished` | new enum value | DRILL-1 | DRILL-1 | written by a plan drill for each rung the ladder would have run (the started plan lists it `pending`) |
+| DR4 | `RecoveryLadderOutcome::Planned`, spelled `planned`: `recovery_ladder_finished.ladder_result` | new enum value | DRILL-1 | DRILL-1 | only on a drill's record (`drill: true`), with `rungs_tried` 0 and no `outcome`; info |
+| DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
+| DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -908,6 +1020,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W11 | request kinds `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` | runtime-client 2 | U-1 | UIM §8.1; their success codes come with the behaviour (U-2, U-3, U-4); **done (U-2):** `BindChannel` answers `ChannelBound` with `request_bind_channel_completed` (§1.46 U2-3) |
 | W12 | `RuntimeCaptureBackend::Scrcpy`, spelled `scrcpy`: `ReadonlyObservation.capture_backend` (read-only observation results and `CaptureSequence.observations`) | runtime-client 2 | #402 RD-3 | new enum value (R1 §5.1); the Lab maps it one to one to `CaptureBackendName::Scrcpy` (C1); W8–W11 are A4's (#718) |
 | W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
+| W14 | `EventQuery.event_types` (a set of event types, OR within it) and `EventQuery.fact_key` (an instance or runtime fact key) | runtime-client 2 | MCP-2 | two optional members of the `QueryEvents` query (`deny_unknown_fields`), absent when unused, so a query without them serializes, and fingerprints its cursor, as before; `event_types` is the alternative of `event_type` (at most 32, each once, none excluded, else `invalid_event_query_event_type_filter`); `fact_key` keeps only the records that name it (`fact.published`, `fact.invalidated`, `runtime.fact_recorded`, `runtime.fact_invalidated`), else `invalid_event_query_fact_key_filter`; [global-ledger-query.md](global-ledger-query.md) |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
@@ -929,6 +1042,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
 | `host.kept_folder_cleared` (re-check 10-14, §1.25) | workbench | no (`tag.reobserve_prefixes`) | 375-R5e-clear (U-3) |
 | `device.link` (per instance, a bound handset only; §1.52 RD2-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-2 |
+| `device.screen`, `device.keyguard`, `device.battery`, `device.thermal`, `device.screen_off_timeout_ms` (per instance, a bound handset only, with a lifetime; §1.59 RD5-2) | instance | no (`device.` is in `tag.reobserve_prefixes`) | RD-5b |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).
@@ -959,11 +1073,12 @@ when it takes effect.
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
-| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (v0.12.0) |
+| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |
+| `device_state.*` | `sample_interval_ms`, `fact_ttl_ms`, `wake_settle_ms`, `keepalive_margin_ms`, `keyguard_insecure`, `battery_min_percent`, `thermal_hold_at`, `thermal_resume_below`, `in_use_gate`, `in_use_backoff_ms` | 60 000 (5 000..=3 600 000), 180 000 (at least the sampling interval), 1 000 (100..=10 000), 60 000, `dismiss` (`dismiss` / `wait`), 15 (0..=100), `severe`, `moderate` (below `thermal_hold_at`), `false` (a dedicated handset, Alice 2026-10-13), 300 000 (10 000..=3 600 000) (model-398 §7.8); every key settable | RD-5b (built, §1.59) | RD-5b (v0.12.0) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

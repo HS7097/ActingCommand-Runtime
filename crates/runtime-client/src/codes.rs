@@ -250,6 +250,8 @@ actingcommand_contract::outcome_locations! {
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",
         SelfCheckInstance => "self_check_instance",
+        // Workflow #390 DRILL-1: a person's drill of an instance's ladder.
+        RuntimeRecoveryLadderDrill => "runtime_recovery_ladder_drill",
         IssueLeaseHolder => "issue_lease_holder",
         IssueQueuedLeaseHolder => "issue_queued_lease_holder",
         SafeReset => "safe_reset",

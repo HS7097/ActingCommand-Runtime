@@ -11,7 +11,7 @@
 use super::{RuntimeLifecyclePhase, SanitizationError};
 use crate::codes::{ContractLocation, SanitizationCode};
 use crate::outcome::{CodeStr, LadderClass};
-use crate::{RunId, TaskId, TerminalEvent};
+use crate::{RequestId, RunId, TaskId, TerminalEvent};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The longest trigger item id, and ladder profile name, a ladder record names.
@@ -79,16 +79,21 @@ pub enum RecoveryTriggerStage {
     /// Workflow #387 D1c (direction ①, M387 §3.4): records of one instance in a short window;
     /// only a ladder's own records name it, never a preparation.
     StabilityWarnings,
+    /// Workflow #390 DRILL-1 (forced compromise T-08): a person asked for a drill of the
+    /// instance's ladder (`DrillRecoveryLadder`). No trigger item matches it, so it names no
+    /// rule; only a drill's own `recovery_ladder_started` names it.
+    Drill,
 }
 
 impl RecoveryTriggerStage {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Task,
         Self::StartupPreparation,
         Self::ConnectionPreparation,
         Self::RecoveryPreparation,
         Self::ResourceFence,
         Self::StabilityWarnings,
+        Self::Drill,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -99,6 +104,7 @@ impl RecoveryTriggerStage {
             Self::RecoveryPreparation => "recovery_preparation",
             Self::ResourceFence => "resource_fence",
             Self::StabilityWarnings => "stability_warnings",
+            Self::Drill => "drill",
         }
     }
 }
@@ -154,6 +160,9 @@ pub enum RecoveryRungSkipReason {
     /// Workflow #398 (M398 §6.4): the device-state gate holds this rung's entry (a locked
     /// screen, heat, a low battery or a device in use). RD-5 records it.
     DeviceNotReady,
+    /// Workflow #390 DRILL-1: a plan drill (`RecoveryDrillMode::Plan`) does not act on the
+    /// device, so a rung the ladder would have run is not run.
+    DrillPlan,
 }
 
 impl RecoveryRungSkipReason {
@@ -168,6 +177,7 @@ impl RecoveryRungSkipReason {
             Self::ResourceFence => "resource_fence",
             Self::BeforeStartRung => "before_start_rung",
             Self::DeviceNotReady => "device_not_ready",
+            Self::DrillPlan => "drill_plan",
         }
     }
 }
@@ -261,6 +271,46 @@ pub enum RecoveryLadderOutcome {
     Recovered,
     EnvironmentReady,
     Exhausted,
+    /// Workflow #390 DRILL-1: a plan drill climbed its plan without acting on the device; it
+    /// tried no rung and recovered nothing, and it is no failure.
+    Planned,
+}
+
+/// Workflow #390 DRILL-1 (forced compromise T-08; coordinator ruling 9 of wave 13): what a drill
+/// of one instance's stuck-recovery ladder may do. Either way the drill is admitted, climbs and
+/// is recorded like a ladder a trigger started, and every record of its own is tagged `drill`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryDrillMode {
+    /// The default: the drill never acts on the device. Every rung the ladder would run is
+    /// recorded skipped with `drill_plan`, and the climb ends `planned`; nothing the ladder
+    /// keeps (the cool-down window, a resource fence's stage) changes.
+    Plan,
+    /// The request says so: the drill climbs its rungs on the instance as a real ladder does,
+    /// under the same key, admission and fences.
+    Device,
+}
+
+impl RecoveryDrillMode {
+    pub const ALL: [Self; 2] = [Self::Plan, Self::Device];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Device => "device",
+        }
+    }
+}
+
+/// Workflow #390 DRILL-1: a drill the Runtime admitted (`RuntimeResult::RecoveryLadderDrillQueued`).
+/// Its claim waits for the instance's key; every record of the drill (its claim's and its
+/// ladder's) carries `ladder_request_id` as its request id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryLadderDrill {
+    pub instance_alias: String,
+    pub mode: RecoveryDrillMode,
+    pub ladder_request_id: RequestId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,8 +368,9 @@ fn trigger_consistent(trigger: &RecoveryLadderTrigger) -> bool {
         // M387 §2.2b A2: the ladder's own preparation never starts a ladder.
         RecoveryTriggerStage::RecoveryPreparation => false,
         // Workflow #403: a fence names the unconfirmed failure's code; a run or a preparation
-        // it arose in is not its trigger, and no trigger item matched it.
-        RecoveryTriggerStage::ResourceFence => {
+        // it arose in is not its trigger, and no trigger item matched it. Workflow #390
+        // DRILL-1: a drill is a person's request, which no trigger item matches either.
+        RecoveryTriggerStage::ResourceFence | RecoveryTriggerStage::Drill => {
             unlinked && trigger.rule.is_none() && trigger.matched.is_none()
         }
     }
@@ -388,22 +439,29 @@ pub(super) fn validate_recovery_ladder_phase(
                 return Err(invalid());
             }
         }
+        // Workflow #390 DRILL-1: a planned climb tried no rung and carries no outcome.
         RuntimeLifecyclePhase::RecoveryLadderFinished {
             ladder_result,
             rungs_tried,
             outcome,
         } if usize::from(*rungs_tried) > RecoveryRung::ALL.len()
-            || (*ladder_result != RecoveryLadderOutcome::Exhausted && *rungs_tried == 0)
+            || (matches!(
+                ladder_result,
+                RecoveryLadderOutcome::Recovered | RecoveryLadderOutcome::EnvironmentReady
+            ) && *rungs_tried == 0)
+            || (*ladder_result == RecoveryLadderOutcome::Planned && *rungs_tried != 0)
             || (*ladder_result == RecoveryLadderOutcome::Exhausted) != outcome.is_some() =>
         {
             return Err(invalid());
         }
-        // A preparation record names one of the preparation stages: never a task, and never a
-        // warning burst (M387 §6.2, RVC L3).
+        // A preparation record names one of the preparation stages: never a task, never a
+        // warning burst (M387 §6.2, RVC L3) and never a drill (Workflow #390 DRILL-1).
         RuntimeLifecyclePhase::InstancePreparationFinished { stage, .. } => {
             if matches!(
                 stage,
-                RecoveryTriggerStage::Task | RecoveryTriggerStage::StabilityWarnings
+                RecoveryTriggerStage::Task
+                    | RecoveryTriggerStage::StabilityWarnings
+                    | RecoveryTriggerStage::Drill
             ) {
                 return Err(invalid());
             }
@@ -431,6 +489,38 @@ pub(super) fn validate_recovery_ladder_phase(
         _ => {}
     }
     Ok(())
+}
+
+/// Workflow #390 DRILL-1: the tag `drill` of a `runtime.lifecycle_observed` record. Only a
+/// ladder's own phases may carry it; a `recovery_ladder_started` carries it exactly when its
+/// trigger is a drill's, and only a drill's climb ends `planned`.
+pub(super) fn validate_recovery_drill_tag(
+    phase: &RuntimeLifecyclePhase,
+    drill: bool,
+) -> Result<(), SanitizationError> {
+    let consistent = match phase {
+        RuntimeLifecyclePhase::RecoveryLadderStarted { trigger, .. } => {
+            drill == (trigger.stage == RecoveryTriggerStage::Drill)
+        }
+        RuntimeLifecyclePhase::RecoveryLadderFinished {
+            ladder_result: RecoveryLadderOutcome::Planned,
+            ..
+        } => drill,
+        RuntimeLifecyclePhase::RecoveryRungFinished { .. }
+        | RuntimeLifecyclePhase::RecoveryLadderFinished { .. }
+        | RuntimeLifecyclePhase::RecoveryLadderSuppressed { .. }
+        | RuntimeLifecyclePhase::RecoveryInstanceStopped { .. }
+        | RuntimeLifecyclePhase::RecoveryEnvironmentReady { .. } => true,
+        _ => !drill,
+    };
+    if consistent {
+        Ok(())
+    } else {
+        Err(SanitizationError::new(
+            SanitizationCode::InvalidRecoveryLadderPhase,
+            "runtime_payload",
+        ))
+    }
 }
 
 #[cfg(test)]

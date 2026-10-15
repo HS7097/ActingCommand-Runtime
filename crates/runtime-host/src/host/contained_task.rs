@@ -3812,6 +3812,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             self.ensure_active()?;
             self.geometry_deadline = Some(self.geometry_operation_deadline()?);
             self.require_task_geometry_for_input()?;
+            // Workflow #398 RD-5b (model-398 v1.1 §7.2): on a handset, an input long after the
+            // last one is preceded by the screen check.
+            self.host.device_state_keepalive(
+                self.control.instance_id,
+                self.instance_alias,
+                self.token,
+                self.connection_id,
+            )?;
             let (success, selection) = self.host.input(
                 self.request,
                 self.token,
@@ -6323,10 +6331,14 @@ impl HostShared {
             unwritten_selection_record: None,
         };
         // Zero-input fields confirm the required entry in the interpreter's first capture.
+        // Workflow #398 RD-5b (model-398 v1.1 §7.2): a handset's start gate runs before the
+        // run's first step; its refusal ends the run with its own code and no input.
         let mut execution = if let Err(failure) = runtime
             .begin_diagnostic()
             .and_then(|()| runtime.record_initial_configuration(task_request, &prepared))
-        {
+            .and_then(|()| {
+                self.device_state_gate(control.instance_id, instance_alias, &token, connection_id)
+            }) {
             Err(ContainedTaskRunError::Boundary(failure))
         } else if !prerequisites.is_empty() {
             // Workflow #336 L2b: only a `linear_steps` package has prerequisite packages, and

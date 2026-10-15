@@ -121,6 +121,9 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #389 MCP-11: `packs` / `ac_packs`.
         PackageBindingUnreadable => "package_binding_unreadable": warning / none,
         // ---- end of MCP-11
+        // ---- Workflow #389 MCP-9a: `overview` / `ac_overview` (command table §4.10).
+        ConfigGenerationMismatch => "config_generation_mismatch": warning / none,
+        // ---- end of MCP-9a
         // ---- Workflow #389 MCP-14: `codes` / `ac_outcome_code` (command table §4.15).
         OutcomeCodesReported => "outcome_codes_reported": success / none,
         OutcomeCodeUnknown => "outcome_code_unknown": error / none,
@@ -129,6 +132,16 @@ actingcommand_contract::outcome_codes! {
         // ---- Workflow #389 MCP-6: `run evidence` / `ac_run_evidence` (command table §4.7).
         RunEvidenceReported => "run_evidence_reported": success / none,
         // ---- end of MCP-6
+        // ---- Workflow #398 RD-1c: `devices list|bind|unbind` / `ac_devices`,
+        // `ac_device_bind`, `ac_device_unbind` (model-398 §3.3, §10.1).
+        DeviceListReported => "device_list_reported": success / none,
+        DeviceBindingChanged => "device_binding_changed": success / none,
+        DeviceHandleUnknown => "device_handle_unknown": error / none,
+        DeviceListFailed => "device_list_failed": error / none,
+        DeviceKindUnsupported => "device_kind_unsupported": error / none,
+        DeviceBindingsInvalid => "device_bindings_invalid": error / none,
+        DeviceBindingsWriteFailed => "device_bindings_write_failed": error / none,
+        // ---- end of RD-1c
         // ---- Workflow #378 A5 (begin): the CLI's success codes (model §7.3), the MCP
         // transport and Lab codes, and the watchdog's report v2 and launcher codes (§7.5).
         AgentFactsPublished => "agent_facts_published": success / none,
@@ -165,6 +178,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeDiagnosisReported => "runtime_diagnosis_reported": success / none,
         // Workflow #389 MCP-8: `overview`.
         RuntimeOverviewReported => "runtime_overview_reported": success / none,
+        // Workflow #390 DRILL-1: `ladder-drill`, a drill of an instance's ladder admitted.
+        RecoveryLadderDrillQueued => "recovery_ladder_drill_queued": success / none,
         PackageBindingsReported => "package_bindings_reported": success / none,
         StartRuntimeStarted => "start_runtime_started": success / none,
         StartRuntimeRestarted => "start_runtime_restarted": success / none,

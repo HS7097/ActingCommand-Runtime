@@ -10,6 +10,8 @@
 use crate::child;
 // Workflow #389 MCP-14: ac_outcome_code.
 mod code_lookup;
+// Workflow #398 RD-1c: ac_devices, ac_device_bind, ac_device_unbind.
+mod devices;
 mod events;
 // Workflow #389 MCP-4: ac_facts.
 mod facts;

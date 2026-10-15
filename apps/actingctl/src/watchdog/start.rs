@@ -21,9 +21,14 @@
 //! `spawn_failed`, `watchdog_wmi_path_unsafe`, `wmi_start_failed`, `process_probe_failed`,
 //! `exited_during_startup` or `start_timeout`, with its values and the OS's or PowerShell's
 //! failure as its link.
+//!
+//! Workflow #382 A-4 (test plan v2.2 APPS-I3): what a tick reaches beyond its own files goes
+//! through [`TickSeams`]: the host's process list and boot time, the spawn of the fixed entry,
+//! the started process's state, the owner's health probe and the clock. [`System`] is the
+//! machine; the tick tests put a fake in its place, so a whole tick runs in memory.
 
 use super::decide::{CLOCK_SLACK_MS, LiveOwner, OwnerLock, READY_TIMEOUT_MS};
-use super::observe::{self, Installation, RUNTIME_IMAGE};
+use super::observe::{self, HostProbe, Installation, RUNTIME_IMAGE};
 use super::powershell::{self, CREATE_NO_WINDOW};
 use super::{io_failure, json_failure};
 use crate::codes::ActingctlCode;
@@ -37,7 +42,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 const NORMAL_PRIORITY_CLASS: u32 = 0x0000_0020;
@@ -54,11 +59,147 @@ pub(crate) struct Attempt {
     pub(crate) result: Result<LiveOwner, Outcome>,
 }
 
-enum Started {
-    /// The breakaway child (the fixed entry); its exit ends the start.
-    Child(Child),
-    /// The `cmd` that WMI created; it lives as long as the fixed entry it runs.
-    Pid(u32),
+/// Workflow #382 A-4 (test plan v2.2 APPS-I3): the watchdog's seams to the machine.
+pub(crate) trait TickSeams {
+    /// The wall clock, in Unix milliseconds.
+    fn now_unix_ms(&self) -> u64;
+    /// The monotonic clock the readiness window is measured on.
+    fn monotonic(&self) -> Duration;
+    /// Waits one readiness poll.
+    fn pause(&self, interval: Duration);
+    /// P and the last boot time (`observe::host_probe`).
+    fn host_probe(&self, root_plain: &Path) -> Result<HostProbe, Outcome>;
+    /// Spawns the fixed entry `entry` with stdout and stderr in `log` (created as `log_file`):
+    /// the method it used and the started process, or the failed start.
+    fn spawn(
+        &self,
+        target: &Target<'_>,
+        entry: &Path,
+        log_file: File,
+        log: &Path,
+        from_task: bool,
+    ) -> Result<(&'static str, Box<dyn StartedProcess>), Attempt>;
+    /// The health probe: the owner that holds the owner lock of `state_root` and answers, if
+    /// one does.
+    fn answering_owner(&self, state_root: &Path) -> Option<LiveOwner>;
+}
+
+/// A started process, as the readiness wait sees it.
+pub(crate) trait StartedProcess {
+    fn state(&mut self) -> Result<StartedState, Outcome>;
+}
+
+/// Whether a started process still runs.
+pub(crate) enum StartedState {
+    Running,
+    /// The breakaway child exited, with its exit code when it has one.
+    Exited(Option<i32>),
+    /// The breakaway child's state cannot be read: it no longer counts as starting.
+    Unreadable(std::io::Error),
+    /// The `cmd` that WMI created, named by its pid, is gone.
+    Gone(u32),
+}
+
+/// The machine: the system clocks, the CIM probe, CreateProcess or WMI, and the Runtime client.
+pub(crate) struct System {
+    origin: Instant,
+}
+
+/// The machine's seams, with the monotonic clock read from here on.
+pub(crate) fn system() -> System {
+    System {
+        origin: Instant::now(),
+    }
+}
+
+impl TickSeams for System {
+    fn now_unix_ms(&self) -> u64 {
+        observe::unix_ms(SystemTime::now())
+    }
+
+    fn monotonic(&self) -> Duration {
+        self.origin.elapsed()
+    }
+
+    fn pause(&self, interval: Duration) {
+        thread::sleep(interval);
+    }
+
+    fn host_probe(&self, root_plain: &Path) -> Result<HostProbe, Outcome> {
+        observe::host_probe(root_plain)
+    }
+
+    fn spawn(
+        &self,
+        target: &Target<'_>,
+        entry: &Path,
+        log_file: File,
+        log: &Path,
+        from_task: bool,
+    ) -> Result<(&'static str, Box<dyn StartedProcess>), Attempt> {
+        if from_task {
+            match spawn_breakaway(target, entry, log_file) {
+                Ok(child) => Ok(spawned("breakaway", child)),
+                Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => {
+                    match spawn_wmi(target, entry, log) {
+                        Ok(pid) => Ok(spawned("wmi", WmiCmd(pid))),
+                        Err(failure) => Err(failed("wmi", failure)),
+                    }
+                }
+                Err(error) => Err(failed(
+                    "breakaway",
+                    io_failure(ActingctlCode::SpawnFailed, entry, &error, IoOp::Spawn),
+                )),
+            }
+        } else {
+            drop(log_file);
+            match spawn_wmi(target, entry, log) {
+                Ok(pid) => Ok(spawned("wmi", WmiCmd(pid))),
+                Err(failure) => Err(failed("wmi", failure)),
+            }
+        }
+    }
+
+    fn answering_owner(&self, state_root: &Path) -> Option<LiveOwner> {
+        match observe::owner_journal(state_root) {
+            Ok((OwnerLock::Locked, _)) => {
+                observe::live_owner(state_root, Some(HEALTH_TIMEOUT)).ok()
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A spawn's method and its started process.
+fn spawned(
+    method: &'static str,
+    process: impl StartedProcess + 'static,
+) -> (&'static str, Box<dyn StartedProcess>) {
+    (method, Box::new(process))
+}
+
+/// The breakaway child (the fixed entry); its exit ends the start.
+impl StartedProcess for Child {
+    fn state(&mut self) -> Result<StartedState, Outcome> {
+        Ok(match self.try_wait() {
+            Ok(Some(status)) => StartedState::Exited(status.code()),
+            Ok(None) => StartedState::Running,
+            Err(error) => StartedState::Unreadable(error),
+        })
+    }
+}
+
+/// The `cmd` that WMI created; it lives as long as the fixed entry it runs.
+struct WmiCmd(u32);
+
+impl StartedProcess for WmiCmd {
+    fn state(&mut self) -> Result<StartedState, Outcome> {
+        Ok(if pid_alive(self.0)? {
+            StartedState::Running
+        } else {
+            StartedState::Gone(self.0)
+        })
+    }
 }
 
 fn failed(method: &'static str, failure: Outcome) -> Attempt {
@@ -114,16 +255,34 @@ pub(crate) fn preflight(target: &Target<'_>) -> Result<(), Outcome> {
 }
 
 pub(crate) fn start(
+    seams: &dyn TickSeams,
     installation: &Installation,
     log: &Path,
     spawn_at_unix_ms: u64,
     from_task: bool,
 ) -> Attempt {
-    start_target(&Target::of(installation), log, spawn_at_unix_ms, from_task)
+    start_with(
+        seams,
+        &Target::of(installation),
+        log,
+        spawn_at_unix_ms,
+        from_task,
+    )
 }
 // --- Workflow #389 MCP-10 (end). ---
 
+/// A start on the machine (`actingctl start` and `restart`).
 pub(crate) fn start_target(
+    installation: &Target<'_>,
+    log: &Path,
+    spawn_at_unix_ms: u64,
+    from_task: bool,
+) -> Attempt {
+    start_with(&system(), installation, log, spawn_at_unix_ms, from_task)
+}
+
+fn start_with(
+    seams: &dyn TickSeams,
     installation: &Target<'_>,
     log: &Path,
     spawn_at_unix_ms: u64,
@@ -146,32 +305,13 @@ pub(crate) fn start_target(
             );
         }
     };
-    let (method, started) = if from_task {
-        match spawn_breakaway(installation, &entry, file) {
-            Ok(child) => ("breakaway", Started::Child(child)),
-            Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => {
-                match spawn_wmi(installation, &entry, log) {
-                    Ok(pid) => ("wmi", Started::Pid(pid)),
-                    Err(failure) => return failed("wmi", failure),
-                }
-            }
-            Err(error) => {
-                return failed(
-                    "breakaway",
-                    io_failure(ActingctlCode::SpawnFailed, &entry, &error, IoOp::Spawn),
-                );
-            }
-        }
-    } else {
-        drop(file);
-        match spawn_wmi(installation, &entry, log) {
-            Ok(pid) => ("wmi", Started::Pid(pid)),
-            Err(failure) => return failed("wmi", failure),
-        }
+    let (method, started) = match seams.spawn(installation, &entry, file, log, from_task) {
+        Ok(started) => started,
+        Err(attempt) => return attempt,
     };
     Attempt {
         method,
-        result: wait_ready(installation, started, log, spawn_at_unix_ms),
+        result: wait_ready(seams, installation, started, log, spawn_at_unix_ms),
     }
 }
 
@@ -251,47 +391,39 @@ fn spawn_wmi(installation: &Target<'_>, entry: &Path, log: &Path) -> Result<u32,
 /// `pid`); one that does not answer in time is `start_timeout` (`log`, `timeout_ms`; the
 /// process is left running).
 fn wait_ready(
+    seams: &dyn TickSeams,
     installation: &Target<'_>,
-    mut started: Started,
+    mut started: Box<dyn StartedProcess>,
     log: &Path,
     spawn_at_unix_ms: u64,
 ) -> Result<LiveOwner, Outcome> {
-    let deadline = Instant::now() + installation.ready_timeout;
+    let deadline = seams.monotonic().saturating_add(installation.ready_timeout);
     let exited = || Outcome::new(ActingctlCode::ExitedDuringStartup).log(log);
     loop {
-        if let Ok((OwnerLock::Locked, _)) = observe::owner_journal(installation.state_root)
-            && let Ok(owner) = observe::live_owner(installation.state_root, Some(HEALTH_TIMEOUT))
+        if let Some(owner) = seams.answering_owner(installation.state_root)
             && owner.started_at_unix_ms >= spawn_at_unix_ms.saturating_sub(CLOCK_SLACK_MS)
         {
             return Ok(owner);
         }
-        let ended = match &mut started {
-            Started::Child(child) => match child.try_wait() {
-                Ok(Some(status)) => Some(match status.code() {
-                    Some(exit_code) => exited().exit_code(exit_code),
-                    None => exited(),
-                }),
-                Ok(None) => None,
-                // The child's state is unavailable: it no longer counts as starting.
-                Err(error) => Some(exited().caused_by(Outcome::from_io_error(&error, IoOp::Wait))),
-            },
-            Started::Pid(pid) => {
-                if pid_alive(*pid)? {
-                    None
-                } else {
-                    Some(exited().pid(*pid))
-                }
+        let ended = match started.state()? {
+            StartedState::Running => None,
+            StartedState::Exited(Some(exit_code)) => Some(exited().exit_code(exit_code)),
+            StartedState::Exited(None) => Some(exited()),
+            // The child's state is unavailable: it no longer counts as starting.
+            StartedState::Unreadable(error) => {
+                Some(exited().caused_by(Outcome::from_io_error(&error, IoOp::Wait)))
             }
+            StartedState::Gone(pid) => Some(exited().pid(pid)),
         };
         if let Some(ended) = ended {
             return Err(ended);
         }
-        if Instant::now() >= deadline {
+        if seams.monotonic() >= deadline {
             return Err(Outcome::new(ActingctlCode::StartTimeout)
                 .log(log)
                 .timeout_ms(installation.ready_timeout));
         }
-        thread::sleep(POLL_INTERVAL);
+        seams.pause(POLL_INTERVAL);
     }
 }
 

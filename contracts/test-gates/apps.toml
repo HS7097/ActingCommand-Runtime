@@ -81,8 +81,10 @@ coverage = "Y"
 tests = [
     "actingcommand-actingd::process::check_config_previews_the_catalog_plan_read_only",
     "actingcommand-runtime-host::lib::tests::gate_375_r3::gate_check_config_preview_runs_no_whole_file_quick_check",
+    "actingcommand-ledger::lib::global::tests::gate_382_a4_g8::gate_382_a4_g8_a_selected_open_reads_the_same_rows_with_ten_times_the_unrelated_history",
+    "actingcommand-ledger::lib::global::tests::gate_382_a4_g8::gate_382_a4_g8_verify_reads_each_row_once_and_no_material",
 ]
-incident = ["#375 R375-3 v1.2"]
+incident = ["#375 R375-3 v1.2", "#382 A-4"]
 
 # Request shaping
 [[gate]]
@@ -274,6 +276,11 @@ tests = [
     "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
     "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
+    "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
+    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key",
+    "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
+    "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
+    "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
 ]
 incident = ["#389"]
 
@@ -472,3 +479,116 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::provider_startup::tests::a7_a_mumu_resolution_reason_carries_its_resolution_context_as_values",
 ]
 incident = ["#378 A7"]
+
+# Workflow #369 S6c (model-369-queue v3.1 §7 row 8, test (10)): the configured emulator starts' report lines are actingd daemon lines (one developer line and one OUTCOME actingd line each, A6a's writer); a report write that fails is counted and never stops actingd, and the pass goes on to the last line
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_369_s6c::s6c_a_failed_report_write_does_not_stop_actingd",
+]
+incident = ["#369", "#361"]
+
+# actingctl ladder-drill --instance <selector> [--device] and MCP ac_ladder_drill (instance, device) send the same DrillRecoveryLadder (a plan without --device or with device false, alias or instance_id resolved with one status read) and answer the same drill {instance_alias, mode, ladder_request_id}, the CLI beside recovery_ladder_drill_queued; a device that is not a boolean is arguments_invalid, and an observer server neither lists nor runs the operator tool (Workflow #390 DRILL-1)
+[[gate]]
+key = "63"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
+]
+incident = ["#390 DRILL-1"]
+
+# actingctl events and ac_events take event_types (any of at most 32 types, each once, not with event_type, none excluded) and fact_key (an instance or a runtime fact key); a query that breaks either rule is refused before any read with the Runtime's invalid_event_query_event_type_filter or invalid_event_query_fact_key_filter, and one that keeps it reaches the query as given (Workflow #389 MCP-2)
+[[gate]]
+key = "58"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query",
+]
+incident = ["#389 MCP-2"]
+
+# actingctl events and ac_events take detail summary beside brief (the default) and payload, and refuse any other detail naming it as not recognised (Workflow #389 MCP-1 follow-up, coordinator ruling Q4)
+[[gate]]
+key = "59"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload",
+]
+incident = ["#389 MCP-1"]
+
+# ac_overview cuts each instance row's foreground (the package last seen in the foreground, MCP-5b) after every row's monitor and before install.build, marking it foreground_truncated, and never cuts a row's identity, pause, lease_active or queued (Workflow #389 MCP-5b; MCP-0 command table v1.1 §4.6, §4.9)
+[[gate]]
+key = "60"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build",
+]
+incident = ["#389 MCP-5b"]
+
+# actingctl overview and ac_overview answer the active policy catalog generation as the program fact config.catalog names it (null while none is active, invalid_fact_snapshot_record for a record that does not read back), the configuration generation actingd runs beside the one the install root selects with config_generation_mismatch when they differ, and one package_binding_unreadable per binding of the selected configuration whose path is missing (Workflow #389 MCP-9a; MCP-0 command table v1.1 §4.10; register A5)
+[[gate]]
+key = "61"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning",
+]
+incident = ["#389 MCP-9a"]
+
+# actingctl devices list|bind|unbind and ac_devices, ac_device_bind, ac_device_unbind: the list answers each device adb lists by its handle, transport, state, model, bound alias and loopback endpoint and never a serial; a bind writes the device's serial for a handset alias into the private binding file with its channel and answers without it; an unlisted handle, an alias that is no handset, an unknown alias, a device already bound to another alias and adb that fails are refused with their codes, adb's text redacted; an unbind removes the binding the Runtime reads and keeps the others (Workflow #398 RD-1c, model-398 v1.1 §12 RD-1c-T1, T2, T3, T5)
+[[gate]]
+key = "62"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others",
+]
+incident = ["#398 RD-1c"]
+
+# Resource-package admission at start and in check-config: a package directory, ZIP or JSON
+# container is admitted by its path whatever its name, a missing one is resource_package_missing,
+# one the loader refuses is resource_package_invalid with the loader's code, and check-config
+# echoes the admitted package and adds no package to not_checked (Workflow #382 A-4, test plan
+# v2.2 A-4 G7; Workflow #336 PKG-S1)
+[[gate]]
+key = "3"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_a_package_directory_zip_or_json_container_is_admitted_by_its_path",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_a_missing_package_is_resource_package_missing",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_a_package_the_loader_refuses_is_resource_package_invalid_with_its_code",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4::gate_382_a4_g7_check_config_echoes_the_admitted_package_and_adds_no_package_to_not_checked",
+]
+incident = ["#336 PKG-S1", "#382 A-4"]
+
+# emulator restart reports the failure and the final state: actingctl emulator restart and MCP
+# ac_emulator run the Runtime's Stop then Start, never the vendor's restart; a Start whose wait
+# expires fails the restart at its start phase and leaves the instance pending, with no stale
+# device.connected (Workflow #381 B; Workflow #382 A-4, test plan v2.2 A-4 G4)
+[[gate]]
+key = "19"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::emulator_restart::gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stale_connection",
+    "actingcommand-actingctl::gate::emulator_restart::gate_ac_emulator_restart_whose_start_times_out_answers_its_failure_and_never_dispatches_the_vendor_restart",
+]
+incident = ["#381 B", "#382 A-4"]
+
+# Tick orchestration on the APPS-I3 seams: a start that answers is started, one whose process exits
+# first is start_failed exited_during_startup, one that never answers is start_timeout after 180 s,
+# a held writer lock is installer_busy; the pending start record is on disk before the spawn, the
+# free writer lock is held shared through the start, and the result and last_tick are saved at the
+# tick's end (Workflow #382 A-4, test plan v2.2 A-4 G12)
+[[gate]]
+key = "25"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_an_answering_start_is_started_and_its_record_is_saved_before_the_spawn_and_at_the_end",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_whose_process_exits_first_is_start_failed_exited_during_startup",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_180_s",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
+]
+incident = ["#374", "#382 A-4"]

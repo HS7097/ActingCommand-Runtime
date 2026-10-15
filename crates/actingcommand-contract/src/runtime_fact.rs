@@ -49,6 +49,9 @@ pub const CONFIG_TOP_LEVEL_SECTION: &str = "top_level";
 /// model v1.2 §5.7): one row with the configuration file's and the defaults file's SHA-256 and,
 /// for an installed Runtime, the configuration generation.
 pub const CONFIG_SELECTION_FACT_KEY: &str = "config.selection";
+/// Key of the runtime fact that names the active policy catalog generation (Workflow #389
+/// MCP-9a, register A5): one row, [`ConfigCatalog`].
+pub const CONFIG_CATALOG_FACT_KEY: &str = "config.catalog";
 /// Key of the runtime fact that holds the settings an instruction changed (Workflow #387 D1b,
 /// model v1.2 §5.7): one row per overridden key, restored at start.
 pub const CONFIG_OVERRIDES_FACT_KEY: &str = "host.config_overrides";
@@ -386,6 +389,126 @@ impl ConfigSelection {
             source,
             ttl_ms: None,
         }
+    }
+}
+
+/// The active policy catalog generation (Workflow #389 MCP-9a, register A5), recorded as
+/// `config.catalog` (runtime scope, re-observed like every `config.` fact): its id, version and
+/// hash, the `catalog.activated` or `catalog.rolled_back` record that made it active, the latest
+/// approval decision about it and the generation it replaced. In the row the versions are
+/// decimal text, as `config.selection`'s generation is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigCatalog {
+    pub catalog_id: String,
+    pub catalog_version: u64,
+    pub catalog_hash: String,
+    /// The event id of the record that made the generation active.
+    pub activated_event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_disposition: Option<crate::ApprovalDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_catalog_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_catalog_version: Option<u64>,
+}
+
+impl ConfigCatalog {
+    /// The `config.catalog` fact: one row of text fields; the optional ones only when present.
+    pub fn to_fact_record(
+        &self,
+        observed_at_unix_ms: u64,
+        source: OriginModule,
+    ) -> RuntimeFactRecord {
+        let text = |value: &str| FactScalar::String(value.to_owned());
+        let mut row = BTreeMap::from([
+            ("catalog_id".to_owned(), text(&self.catalog_id)),
+            (
+                "catalog_version".to_owned(),
+                text(&self.catalog_version.to_string()),
+            ),
+            ("catalog_hash".to_owned(), text(&self.catalog_hash)),
+            (
+                "activated_event_id".to_owned(),
+                text(&self.activated_event_id),
+            ),
+        ]);
+        let optional = [
+            ("approval_id", self.approval_id.clone()),
+            (
+                "approval_disposition",
+                self.approval_disposition
+                    .map(|disposition| disposition.as_str().to_owned()),
+            ),
+            ("previous_catalog_id", self.previous_catalog_id.clone()),
+            (
+                "previous_catalog_version",
+                self.previous_catalog_version
+                    .map(|version| version.to_string()),
+            ),
+        ];
+        for (field, value) in optional {
+            if let Some(value) = value {
+                row.insert(field.to_owned(), FactScalar::String(value));
+            }
+        }
+        RuntimeFactRecord {
+            scope: RuntimeFactScope::Runtime,
+            key: CONFIG_CATALOG_FACT_KEY.to_owned(),
+            value: FactValue::RecordList(vec![row]),
+            observed_at_unix_ms,
+            source,
+            ttl_ms: None,
+        }
+    }
+
+    /// The generation a `config.catalog` record names; a record that is not the one row
+    /// [`Self::to_fact_record`] writes is `invalid_fact_snapshot_record`.
+    pub fn from_fact_record(record: &RuntimeFactRecord) -> Result<Self, SanitizationError> {
+        let refused = || {
+            SanitizationError::new(
+                SanitizationCode::InvalidFactSnapshotRecord,
+                "config_catalog",
+            )
+        };
+        let FactValue::RecordList(rows) = &record.value else {
+            return Err(refused());
+        };
+        let [row] = rows.as_slice() else {
+            return Err(refused());
+        };
+        let text = |field: &str| -> Result<Option<String>, SanitizationError> {
+            match row.get(field) {
+                None => Ok(None),
+                Some(FactScalar::String(value)) => Ok(Some(value.clone())),
+                Some(_) => Err(refused()),
+            }
+        };
+        let version = |field: &str| -> Result<Option<u64>, SanitizationError> {
+            text(field)?
+                .map(|value| value.parse::<u64>().map_err(|_| refused()))
+                .transpose()
+        };
+        let disposition = text("approval_disposition")?
+            .map(|value| {
+                crate::ApprovalDisposition::ALL
+                    .into_iter()
+                    .find(|disposition| disposition.as_str() == value)
+                    .ok_or_else(refused)
+            })
+            .transpose()?;
+        Ok(Self {
+            catalog_id: text("catalog_id")?.ok_or_else(refused)?,
+            catalog_version: version("catalog_version")?.ok_or_else(refused)?,
+            catalog_hash: text("catalog_hash")?.ok_or_else(refused)?,
+            activated_event_id: text("activated_event_id")?.ok_or_else(refused)?,
+            approval_id: text("approval_id")?,
+            approval_disposition: disposition,
+            previous_catalog_id: text("previous_catalog_id")?,
+            previous_catalog_version: version("previous_catalog_version")?,
+        })
     }
 }
 
