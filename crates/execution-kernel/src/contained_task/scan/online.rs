@@ -448,7 +448,7 @@ impl ContainedTaskRuntime for ReplayRuntime {
 
     fn capture(&mut self) -> Result<ObservedFrame, ContainedTaskError> {
         self.frames.next().map(ObservedFrame::from).ok_or_else(|| {
-            ContainedTaskError::new(ExecutionKernelCode::SelectionScanReplayFrameMissing.code())
+            ContainedTaskError::new(ExecutionKernelCode::OfflineFixtureExhausted.code())
         })
     }
 
