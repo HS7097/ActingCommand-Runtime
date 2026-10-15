@@ -88,8 +88,7 @@ impl GameRegistry {
     /// `contained_task_prerequisite_unbound`).
     pub(super) fn package_path(&self, package_id: &str) -> Result<PathBuf, RegistryProblem> {
         match self {
-            Self::RootUnset => Err(RegistryProblem::RootUnset),
-            Self::GameRootMissing => Err(RegistryProblem::GameRootMissing),
+            Self::RootUnset | Self::GameRootMissing => Err(RegistryProblem::NotListed),
             Self::Read {
                 directory,
                 registry,
