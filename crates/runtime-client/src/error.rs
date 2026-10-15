@@ -341,7 +341,7 @@ impl RuntimeClientError {
             context.request_id = Some(request.request_id());
             context.correlation_id = Some(request.correlation_id());
             context.expected_owner_epoch = Some(info.owner_epoch());
-            context.expected_runtime_pid = Some(info.pid());
+            context.expected_runtime_pid = None;
         }
         self
     }
