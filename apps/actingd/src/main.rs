@@ -241,7 +241,7 @@ fn write_fact_refresh_transitions(
                 "{values} cycle_seq={} transition_seq={}",
                 transition.cycle_seq, transition.transition_seq
             );
-            sink.write_all(daemon_lines(outcome, Some(developer.trim_start())).as_bytes())
+            sink.write_all(developer_line(outcome, Some(developer.trim_start())).as_bytes())
                 .and_then(|()| sink.flush())
                 .is_err()
         })
