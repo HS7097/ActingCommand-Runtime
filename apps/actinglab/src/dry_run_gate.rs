@@ -239,6 +239,10 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     // Both forms only read: the whole package (SEL-L6a) and one select step's scan with
     // `--select <operation> --scan <file>` (Workflow #308 SEL-L6b).
     ("replay", Mode::Refused("offline_device_scope_forbidden")),
+    (
+        "recognition-regression",
+        Mode::Refused("offline_device_scope_forbidden"),
+    ),
     ("scheduling compile", Mode::Refused("validation_failed")),
     ("scheduling timeline", Mode::Refused("validation_failed")),
     // mixed

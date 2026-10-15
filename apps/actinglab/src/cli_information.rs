@@ -52,6 +52,11 @@ pub(super) fn help_data() -> Value {
             "resource compile-maa": [
                 "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
             ],
+            "recognition-regression": [
+                "--state-root <the Runtime state root whose ledger kept the run's frames>",
+                "--evidence <the saved answer of actingctl run evidence or ac_run_evidence; repeatable, one per page of the same run>",
+                "--package <directory | .zip | .json container> | --zip <published .zip package>: the new package or version"
+            ],
             "replay": [
                 "--package <directory | .zip | .json container>",
                 "--frames <directory of PNG frames, replayed in file-name order>",

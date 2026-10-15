@@ -146,6 +146,76 @@
       "description": "The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member, no unknown member), within 1 MiB.",
       "common_causes": "A member is missing, misspelt or of the wrong type, or the file holds more than the declaration.",
       "handling": "Save the step's scan declaration alone, with every member it requires."
+    },
+    "recognition_regression_evidence_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab recognition-regression could not open or read an --evidence file.",
+      "common_causes": "The path does not exist or is not readable.",
+      "handling": "Name a readable file: the saved answer of actingctl run evidence or ac_run_evidence."
+    },
+    "recognition_regression_evidence_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An --evidence file of actinglab recognition-regression is not one page of a run's evidence as actingctl run evidence or ac_run_evidence answer it (request_id, and steps with step_index and frames[].ref), within 16 MiB; or two pages are of different runs; or the pages name no frame.",
+      "common_causes": "The answer was edited or truncated, pages of two runs were given, or the run kept no frame.",
+      "handling": "Save the run's evidence pages unchanged, all of one run, and name a run whose frames were kept."
+    },
+    "recognition_regression_ledger_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab recognition-regression could not read the ledger of --state-root: it does not open, it is incomplete or corrupt, an artifact does not verify, or the run's events cannot be read. Nothing was compared.",
+      "common_causes": "The path is not a Runtime state root, or its ledger is damaged.",
+      "handling": "Name the state root of the Runtime that recorded the run; run the ledger checks if it is damaged."
+    },
+    "recognition_regression_frame_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A frame reference of the --evidence of actinglab recognition-regression names no verified capture frame of the run in the ledger of --state-root. Nothing was compared.",
+      "common_causes": "The evidence was read from another Runtime than --state-root names, or was edited.",
+      "handling": "Read the evidence from the Runtime whose state root is given, and save it unchanged."
+    },
+    "recognition_regression_frame_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A frame that the evidence of actinglab recognition-regression references is not a PNG image, or its material does not read for another reason than its absence, or its PNG does not decode. Nothing was compared. A frame whose material is gone is not this error: it is listed as material_missing.",
+      "common_causes": "The frame's material was replaced or damaged.",
+      "handling": "Check the state root's artifact store; replay another run."
     }
   }
 }

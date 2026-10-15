@@ -1093,3 +1093,14 @@ tests = [
     "actingcommand-actinglab::replay_frames::replay_scan_without_an_ocr_model_reports_ocr_unavailable_before_evaluating",
 ]
 incident = ["#308"]
+
+
+# Workflow #331 RSU-1 (additions-v012 row RSU-1; compromise T-01): actinglab recognition-regression replays the frames a run's ledger kept, named by MCP-6's per-step frame references, with a new package or version, offline from the state root; per target of each frame's original record (the run's last recognition fact on the frame) it gives whether the package finds it now, its score and whether that agrees, and per target the counts and the error rate against the original record (disagreements per mille of the frames compared); a target the package lacks is absent and not compared, and a frame whose material is gone or that has no original record is listed and not compared; the package that ran agrees with its own record, and a version that changed a page's colour loses that page on every frame
+[[gate]]
+key = "70"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::recognition_regression::tests::rsu1_each_target_is_compared_with_its_original_record",
+    "actingcommand-actinglab::runtime_input_proxy::rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record",
+]
+incident = ["#331"]

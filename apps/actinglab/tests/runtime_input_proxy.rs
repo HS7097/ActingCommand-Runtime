@@ -3844,3 +3844,241 @@ fn write_forbidden_adb(root: &Path, marker: &Path) -> std::path::PathBuf {
         path
     }
 }
+
+// Workflow #331 RSU-1 (additions-v012 row RSU-1; forced compromise T-01): a Runtime runs a
+// contained task (home, one tap, terminal) and keeps its frames; actinglab
+// recognition-regression then replays the frames that the run's evidence references (the
+// per-step frame references of MCP-6) from the state root, offline, against a package. The
+// package that ran agrees with its original record on every target; a new version whose
+// terminal page expects another colour loses that target on every frame the original record
+// found it on, so its error rate against the original record is 1000 per mille, while the home
+// page's targets still agree.
+#[test]
+fn rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record() {
+    use std::io::Read;
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let config_path = root.path().join("actinglab.json");
+    let package_path = root.path().join("runtime-owned-lab.zip");
+    let result_path = root.path().join("result.zip");
+    let adb_marker = root.path().join("forbidden-adb-invoked");
+    fs::write(&config_path, "{}").expect("write config");
+    write_runtime_owned_lab_package(&package_path);
+    let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    state.transition_after_tap.store(true, Ordering::Release);
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-recognition-regression"),
+        Arc::new(FakeProvider {
+            instance_alias: "neutral.instance",
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+    let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
+        .args([
+            "--json",
+            "--instance",
+            "neutral.instance",
+            "--game",
+            "neutral",
+            "--server",
+            "test",
+            "lab",
+            "run",
+            "--zip",
+            package_path.to_str().expect("package path"),
+            "--out",
+            result_path.to_str().expect("result path"),
+        ])
+        .env("ACTINGLAB_CONFIG_PATH", &config_path)
+        .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
+        .env("ACTINGCOMMAND_ADB_PATH", &forbidden_adb)
+        .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
+        .env_remove("ACTINGLAB_SESSION_STATE_DIR")
+        .env_remove("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG")
+        .output()
+        .expect("run actinglab lab run");
+    assert!(output.status.success(), "the contained task must complete");
+
+    // The run's evidence as MCP-6 references its frames: every verified capture frame of the
+    // run's request, as `<sequence>:<event_id>:<artifact_id>`.
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    let request_id = *events
+        .iter()
+        .find(|event| {
+            event.event_type == EventType::TaskCompleted
+                && matches!(
+                    &event.payload,
+                    ProjectionPayload::Full(payload)
+                        if payload.as_ref().action() == EventAction::RuntimeTaskRun
+                )
+        })
+        .and_then(|event| event.links.request_id())
+        .expect("the contained run's request");
+    let text = |value: Value| match value {
+        Value::String(text) => text,
+        other => other.to_string(),
+    };
+    let references = client
+        .query_events(
+            EventQuery {
+                request_id: Some(request_id),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("the run's events")
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .flat_map(|event| {
+            event
+                .artifacts
+                .iter()
+                .filter(|artifact| {
+                    artifact.kind == ArtifactKind::CaptureFrame
+                        && artifact.producer
+                            == actingcommand_contract::ArtifactProducer::CaptureStore
+                })
+                .map(|artifact| {
+                    json!({"ref": format!(
+                        "{}:{}:{}",
+                        event.sequence,
+                        text(json!(event.event_id)),
+                        text(json!(artifact.artifact_id))
+                    )})
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(!references.is_empty(), "the run kept no frame");
+    let evidence = root.path().join("evidence.json");
+    fs::write(
+        &evidence,
+        serde_json::to_vec(&json!({
+            "request_id": request_id,
+            "steps": [{"step_index": 0, "frames": references}]
+        }))
+        .expect("evidence JSON"),
+    )
+    .expect("write evidence");
+    drop(client);
+    host.close().expect("close host");
+
+    // The new version: the terminal page expects green instead of blue.
+    let version = root.path().join("new-version.zip");
+    let mut archive =
+        zip::ZipArchive::new(File::open(&package_path).expect("open package")).expect("package");
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).expect("package entry");
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).expect("entry bytes");
+        if entry.name() == "resources/recognition/neutral.test.pack.json" {
+            let text = String::from_utf8(bytes).expect("pack text");
+            assert_eq!(text.matches(r#""expected":[0,0,255]"#).count(), 1);
+            bytes = text
+                .replace(r#""expected":[0,0,255]"#, r#""expected":[0,255,0]"#)
+                .into_bytes();
+        }
+        entries.push((entry.name().to_owned(), bytes));
+    }
+    write_zip(
+        &version,
+        &entries
+            .iter()
+            .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+            .collect::<Vec<_>>(),
+    );
+
+    let regression = |package: &Path| {
+        run_actinglab_json(
+            &config_path,
+            &runtime_root,
+            &local_app_data,
+            [
+                "--json",
+                "recognition-regression",
+                "--state-root",
+                runtime_root.to_str().expect("state root"),
+                "--evidence",
+                evidence.to_str().expect("evidence"),
+                "--package",
+                package.to_str().expect("package"),
+            ],
+        )["data"]
+            .clone()
+    };
+    let target = |data: &Value, id: &str| {
+        data["targets"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .find(|target| target["target"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no tally of {id}: {data}"))
+    };
+
+    let same = regression(&package_path);
+    assert_eq!(same["mode"], "offline_recognition_regression");
+    assert_eq!(same["executed"], false);
+    assert_eq!(same["production_global_ledger_written"], false);
+    assert_eq!(same["package_id"], "neutral.runtime-owned.recovery");
+    assert_eq!(
+        same["summary"]["frames_referenced"],
+        json!(references.len())
+    );
+    for id in ["page/home", "page/terminal"] {
+        let tally = target(&same, id);
+        assert!(tally["compared"].as_u64() > Some(0), "{tally}");
+        assert_eq!(tally["original_hits"], tally["compared"], "{tally}");
+        assert_eq!(tally["disagreements"], 0, "{tally}");
+        assert_eq!(tally["error_rate_milli"], 0, "{tally}");
+    }
+    assert_eq!(same["summary"]["disagreements"], 0);
+
+    let changed = regression(&version);
+    let home = target(&changed, "page/home");
+    assert_eq!(home["disagreements"], 0, "{home}");
+    let terminal = target(&changed, "page/terminal");
+    assert!(terminal["compared"].as_u64() > Some(0), "{terminal}");
+    assert_eq!(terminal["hits"], 0, "{terminal}");
+    assert_eq!(terminal["lost"], terminal["compared"], "{terminal}");
+    assert_eq!(terminal["gained"], 0, "{terminal}");
+    assert_eq!(terminal["error_rate_milli"], 1000, "{terminal}");
+    let replayed = changed["frames"]
+        .as_array()
+        .expect("frames")
+        .iter()
+        .flat_map(|frame| frame["targets"].as_array().cloned().unwrap_or_default())
+        .filter(|entry| entry["target"] == "page/terminal")
+        .collect::<Vec<_>>();
+    assert!(!replayed.is_empty());
+    for entry in replayed {
+        assert_eq!(entry["original_matched"], true, "{entry}");
+        assert_eq!(entry["matched"], false, "{entry}");
+        assert_eq!(entry["agrees"], false, "{entry}");
+        assert!(
+            entry["score"]["distance_milli"].as_i64() > Some(0),
+            "{entry}"
+        );
+    }
+}

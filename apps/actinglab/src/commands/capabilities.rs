@@ -42,6 +42,11 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("package inspect", ["offline"], "available"),
         package_cli::offline_capability(),
         command_cap("replay", ["offline"], "available"),
+        command_cap(
+            "recognition-regression",
+            ["offline", "read_only"],
+            "available",
+        ),
         command_cap("package build-task", ["offline"], "retired"),
         command_cap("package build-pack", ["offline"], "retired"),
         command_cap("package bundle", ["offline"], "available"),
