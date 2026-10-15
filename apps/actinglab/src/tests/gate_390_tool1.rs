@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #390 TOOL-1 (forced-compromises mapping row TOOL-1, compromise P-03; coordinator
-// ruling 3 of wave 15): `actinglab package fmt` writes the canonical serialization (two-space
-// indentation, CRLF line endings) of every JSON file of a content directory and, with --check,
+// ruling 3 of wave 15, and its ruling of LF line endings): `actinglab package fmt` writes the
+// canonical serialization (two-space indentation, LF line endings with a last LF) of every JSON
+// file of a content directory and, with --check,
 // writes nothing and fails naming the files that are not canonical; `actinglab package edit`
 // adds and replaces by JSON pointer (RFC 6901 pointers, RFC 6902 add and replace), then admits
 // the edited package structurally before it writes anything. Both take the content directory by
@@ -15,11 +16,10 @@ use tempfile::TempDir;
 
 const TASK_FILE: &str = "resources/operations/task/task.json";
 
-// The canonical serialization as FCM P-03 states it: two-space indentation, one member or
-// element per line, every line ending in CRLF, the last one too.
+// The canonical serialization as FCM P-03 and the coordinator's ruling state it: two-space
+// indentation, one member or element per line, every line ending in LF, the last one too.
 fn canonical_text(value: &Value) -> String {
-    let pretty = serde_json::to_string_pretty(value).unwrap();
-    format!("{}\r\n", pretty.replace('\n', "\r\n"))
+    format!("{}\n", serde_json::to_string_pretty(value).unwrap())
 }
 
 fn run(args: &[&str]) -> crate::CliResult {
@@ -135,26 +135,40 @@ fn tool1_package_fmt_writes_every_json_file_in_the_canonical_serialization() {
         "{\n    \"list\": [],\n    \"text\": \"line\\nbreak\"\n}\n",
     )
     .unwrap();
+    fs::write(
+        package.join("data/windows.json"),
+        "{\r\n  \"kept\": true\r\n}\r\n",
+    )
+    .unwrap();
     fs::write(package.join("data/notes.txt"), "kept\nas it is\n").unwrap();
 
     let result = run(&["--json", "package", "fmt", "--package", path_text(&package)]);
 
     assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
     let data = result.envelope.data.as_ref().unwrap();
-    assert_eq!(data["json_files"], 2);
+    assert_eq!(data["json_files"], 3);
     assert_eq!(
         data["reformatted"],
-        json!(["data/compact.json", "data/four_spaces.json"])
+        json!([
+            "data/compact.json",
+            "data/four_spaces.json",
+            "data/windows.json"
+        ])
+    );
+    // CRLF line endings become LF.
+    assert_eq!(
+        fs::read_to_string(package.join("data/windows.json")).unwrap(),
+        "{\n  \"kept\": true\n}\n"
     );
     // Members keep their order, text stays UTF-8 and an escaped line break stays escaped.
     assert_eq!(
         fs::read_to_string(package.join("data/compact.json")).unwrap(),
-        "{\r\n  \"zeta\": 1,\r\n  \"alpha\": [\r\n    true,\r\n    null\r\n  ],\r\n  \"name\": \
-         \"\u{e9}t\u{e9}\",\r\n  \"nested\": {\r\n    \"b\": 2,\r\n    \"a\": {}\r\n  }\r\n}\r\n"
+        "{\n  \"zeta\": 1,\n  \"alpha\": [\n    true,\n    null\n  ],\n  \"name\": \
+         \"\u{e9}t\u{e9}\",\n  \"nested\": {\n    \"b\": 2,\n    \"a\": {}\n  }\n}\n"
     );
     assert_eq!(
         fs::read_to_string(package.join("data/four_spaces.json")).unwrap(),
-        "{\r\n  \"list\": [],\r\n  \"text\": \"line\\nbreak\"\r\n}\r\n"
+        "{\n  \"list\": [],\n  \"text\": \"line\\nbreak\"\n}\n"
     );
     assert_eq!(
         fs::read_to_string(package.join("data/notes.txt")).unwrap(),
@@ -175,7 +189,7 @@ fn tool1_package_fmt_check_names_the_unformatted_files_and_writes_nothing() {
     let temp = TempDir::new().unwrap();
     let package = temp.path().join("neutral.fmt.check");
     fs::create_dir_all(package.join("data")).unwrap();
-    let canonical = "{\r\n  \"kept\": true\r\n}\r\n";
+    let canonical = "{\n  \"kept\": true\n}\n";
     let compact = "{\"kept\":false}";
     fs::write(package.join("data/canonical.json"), canonical).unwrap();
     fs::write(package.join("data/compact.json"), compact).unwrap();
