@@ -528,6 +528,7 @@ fn resources(instances: &[Fixture]) -> EvaluationResources {
                 third_party_pressure_basis_points: 0,
                 heavy_dispatch_limit: 1,
                 active_heavy_dispatches: 0,
+                heavy_threshold_milli: actingcommand_policy::DEFAULT_HEAVY_THRESHOLD_MILLI,
             })
             .collect(),
     }
