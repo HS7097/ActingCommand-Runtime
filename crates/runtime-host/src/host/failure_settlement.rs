@@ -254,6 +254,12 @@ impl HostShared {
             } else {
                 scope
             };
+            // One-off M7: a page-graph run's entry recovery package is not its layer.
+            let scope = if !main.linear && scope.starts_with("pre:") {
+                "gate".to_owned()
+            } else {
+                scope
+            };
             (rows, scope, operation)
         } else {
             (Vec::new(), "prepare".to_owned(), "prepare".to_owned())
