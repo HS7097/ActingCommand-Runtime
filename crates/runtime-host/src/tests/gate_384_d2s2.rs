@@ -465,29 +465,11 @@ fn d2s2_t10_t12_readings_publish_on_their_frames_and_a_miss_keeps_the_record() {
     host.close().expect("close the host");
 }
 
-// A catalog whose pool observes `resource.primary` in `fixture-instance-a`'s scope through the
-// ledger (a `ledger_fact` pool).
-fn live_pool_catalog() -> actingcommand_policy::CompiledCatalog {
-    let mut sources = policy_sources(1);
-    // As the live fact pool fixture writes it (facts.rs): the task is triggered by the pool's
-    // projection, the pool by the ledger.
-    let mut tasks: serde_json::Value =
-        serde_json::from_slice(&sources.tasks.bytes).expect("fixture tasks JSON");
-    tasks["tasks"][0]["trigger"] = serde_json::json!({"kind": "resource_projection",
-        "pool_id": "fixture-pool-a", "comparison": "greater_than_or_equal", "value": 11});
-    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("fixture tasks bytes");
-    let mut pools: serde_json::Value =
-        serde_json::from_slice(&sources.pools.bytes).expect("fixture pools JSON");
-    pools["pools"][0]["value_source"] =
-        serde_json::json!({"kind": "ledger_fact", "minimum_confidence_milli": 900});
-    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("fixture pools bytes");
-    compile_catalog(&sources).expect("the live pool catalog compiles")
-}
-
-// T14 (D2M:594; §3.2 checks 2-3; 簿 L648): a mark whose key the configuration's `policy.facts`
-// declares for the instance, or that a `ledger_fact` pool of the instance observes, refuses the
-// binding (`check-config` refuses it); a start ignores such a binding with
-// `fact_reader_binding_ignored`, its refusal linked as the cause.
+// T14 (D2M:594; §3.2 check 2; 簿 L648): a mark whose key the configuration's `policy.facts`
+// declares for the instance refuses the binding (`check-config` refuses it); a start ignores such
+// a binding with `fact_reader_binding_ignored`, its refusal linked as the cause. Workflow #390
+// POOL-1 (FCM S-04) retired check 3, the refusal of a key a `ledger_fact` pool observes: its
+// reading now resets the pool's base (gate_390_pool1).
 #[test]
 fn d2s2_t14_a_mark_the_configuration_claims_refuses_the_binding_and_a_start_ignores_it() {
     let path = Path::new("packages").join("reader");
@@ -507,7 +489,6 @@ fn d2s2_t14_a_mark_the_configuration_claims_refuses_the_binding_and_a_start_igno
         READING_PACKAGE_ID,
         &["resource.k1".to_owned()],
         std::slice::from_ref(&policy_fact),
-        None,
     )
     .expect_err("a key policy.facts declares is refused");
     assert_eq!(
@@ -525,25 +506,8 @@ fn d2s2_t14_a_mark_the_configuration_claims_refuses_the_binding_and_a_start_igno
         READING_PACKAGE_ID,
         &["resource.k1".to_owned()],
         std::slice::from_ref(&policy_fact),
-        None,
     )
     .expect("another instance's policy fact claims nothing of this instance");
-
-    let catalog = live_pool_catalog();
-    let live = recognition_binding_key_conflict(
-        "fixture-instance-a",
-        &path,
-        READING_PACKAGE_ID,
-        &["resource.primary".to_owned()],
-        &[],
-        Some(catalog.catalog()),
-    )
-    .expect_err("a key a ledger_fact pool observes is refused");
-    assert_eq!(reader_problem(&live), Some("live_pool_key"));
-    assert_eq!(
-        live.value("fact_key"),
-        Some(&serde_json::json!("resource.primary"))
-    );
 
     let ignored = recognition_binding_ignored("node.a", Some(READING_PACKAGE_ID), refused.clone());
     assert_eq!(

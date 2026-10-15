@@ -1264,6 +1264,27 @@ and `package_edit_write_failed` (error, ladder class `none`, in the new domains 
 | TL1-2 | `package edit --patch <file>`: a JSON array of `{file, op: add \| replace, path, value}`, no other member, at most 32 MiB | input document (an author's file; the Runtime never stores it) | TOOL-1 | — | `op` is an RFC 6902 operation, `path` an RFC 6901 JSON pointer into the JSON file `file` of the package; the edits apply in order; `--file <path> --add <pointer> --value <JSON>` (or `--replace`) gives one edit instead |
 | TL1-3 | `actinglab package edit --package <directory> (--patch <file> \| --file <path> (--add \| --replace) <pointer> --value <JSON>)`: `{mode: "package_edit", package, package_id, task_id, edits, files: [path], admission: "passed", written}`; with the global `--dry-run` also `status: "validated", dry_run: true, persisted: false` and `written: false` | operation output (no persisted record) | TOOL-1 | TOOL-1 | the edited content table is admitted as actingd admits a content directory before any file is written, and `files` (the files the edits changed, written in the canonical serialization of TL1-1) are written only after it passes; a refusal is `package_edit_admission_refused` with details `{package, code, detail, declaration, written: false}`; a write failure (`package_fmt_write_failed`, `package_edit_write_failed`) carries `{package, file, written, part_left}` |
 
+### 1.76 Wave 15 slice POOL-1 (#390, forced-compromises mapping row POOL-1, compromise S-04)
+
+POOL-1 lets a `ledger_fact` pool take its data from readings: a reading of the pool's key is the
+pool's base, which the next reading or adjustment of the key resets, and the pool's value is
+that base projected by the pool's regeneration rule. [resource-readings.md](resource-readings.md)
+("Live pools"), [scheduling/README.md](scheduling/README.md) ("Pool Projection", "Fact
+Refresh"), [resource-targets.md](resource-targets.md) and `docs/live-fact-pools.md` are the
+contract. It adds no event type, no member, no enum value, no code and no configuration key:
+existing records and outputs get new rules. The code
+`contained_task_resource_reading_live_pool_unsupported` and the location
+`check_resource_reading_pools` retire (runtime-host); the `reader_problem` token
+`live_pool_key` is no longer given and stays in the vocabulary for what earlier builds wrote.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PL1 | `fact.published` of a run's reading or adjustment write of the key a `ledger_fact` pool observes in the run's instance scope | new rule of an existing record (shape unchanged) | POOL-1 | POOL-1 | published as every reading is (the successful terminal's stages 1-3; stage 0 is gone), `invalidate_on` `[]`; it is the pool's base until the next reading or adjustment of the key; no run fails with `contained_task_resource_reading_live_pool_unsupported` any more |
+| PL2 | the live pool source check of the policy evaluation and the forward projection (`pool_fact_invalidation_binding_missing`) | new rule (no persisted shape) | POOL-1 | POOL-1 | an active record of the pool's key that the Runtime published (event actor `runtime`) with a `source_detector` starting `resource_reading:` or `resource_adjustment:` needs no input invalidation; every record still needs its current native instance binding, and any other record still needs `input.committed` and `input.failed` |
+| PL3 | the unknown reason of a `resource_projection` predicate on a `ledger_fact` pool without a usable record (`trigger_unknown` / `feedback_stop_unknown`, the detection suggestion and `planning_fact_unknown`) | new values of existing members | POOL-1 | POOL-1 | the key's own fact reason, `fact_missing`, `fact_expired`, `fact_low_confidence` (below the pool's minimum) or `type_mismatch` (not an integer within `0..=capacity`), instead of `resource_observation_missing`; with the pool in exactly the instance's scope the task raises the fact refresh's demand for the key (§1.56, D2-S4's records unchanged); a static snapshot pool keeps `resource_observation_missing` and raises none |
+| PL4 | a resource target's inventory: `ApplyResourceTargets` `conditions[].state` (`computed.current`), `targetable_resources` `observation.current`, `active_resource_targets` and the evaluator's target terms | new rule of existing output members | POOL-1 | POOL-1 | for a `ledger_fact` pool, the record projected to the evaluation instant by the pool's regeneration rule (each complete period adds `amount`, up to `capacity`; a record above `capacity` is read as observed); `observed_at_unix_ms` stays the record's; a static snapshot pool's target reads the record as observed |
+| PL5 | actingd `check-config` and start: the recognition maintenance package binding's key check (D2M §3.2 check 3, T14) | removed rule | POOL-1 | POOL-1 | a mark whose key a `ledger_fact` pool of the configured catalog observes no longer refuses the binding (`fact_reader_binding_invalid` with `live_pool_key`) and no longer makes a start ignore it; the `policy_fact_authority` check stays |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

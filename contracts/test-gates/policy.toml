@@ -541,3 +541,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_386_sr3::sr3_t11_a_changed_hash_or_build_lifts_and_tries_once_and_the_same_refusal_suspends_again",
 ]
 incident = ["#386 SR-3"]
+
+# Workflow #390 POOL-1 (FCM POOL-1, compromise S-04; register §1.76): a reading of a ledger_fact pool's key is the pool's base, which a newer reading resets and the pool's regeneration rule projects; a live pool without a usable reading (none, expired, below its minimum confidence, outside 0..=capacity) raises the fact refresh's demand for its key with that reason, a static snapshot pool none; a resource target on a live pool reads the projected inventory
+[[gate]]
+key = "49"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_390_pool1::pool1_a_reading_is_the_live_pool_s_base_and_regenerates_by_the_pool_s_rule",
+    "actingcommand-policy::lib::tests::gate_390_pool1::pool1_a_live_pool_without_a_usable_reading_requests_the_reader_for_its_key",
+    "actingcommand-policy::lib::tests::gate_390_pool1::pool1_a_target_on_a_live_pool_reads_the_projected_inventory",
+]
+incident = ["#390 POOL-1"]

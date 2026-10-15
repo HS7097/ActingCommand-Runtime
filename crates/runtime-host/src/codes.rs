@@ -454,7 +454,6 @@ actingcommand_contract::outcome_codes! {
         ContainedTaskResourceReadingDuplicate => "contained_task_resource_reading_duplicate": error / none,
         ContainedTaskResourceReadingFrameMismatch => "contained_task_resource_reading_frame_mismatch": error / none,
         ContainedTaskResourceReadingFrameMissing => "contained_task_resource_reading_frame_missing": error / none,
-        ContainedTaskResourceReadingLivePoolUnsupported => "contained_task_resource_reading_live_pool_unsupported": error / none,
         ContainedTaskResourceReadingRejected => "contained_task_resource_reading_rejected": error / none,
         ContainedTaskResourceReadingRunKindUnsupported => "contained_task_resource_reading_run_kind_unsupported": error / none,
         ContainedTaskSamplingSeedEncodeFailed => "contained_task_sampling_seed_encode_failed": error / none,
@@ -1473,7 +1472,6 @@ actingcommand_contract::outcome_locations! {
         CheckInstallSelfcheck => "check_install_selfcheck",
         // Workflow #386 SR-3: the task package admission after start and its suspensions.
         CheckPackAdmission => "check_pack_admission",
-        CheckResourceReadingPools => "check_resource_reading_pools",
         CheckSchedulerCleanup => "check_scheduler_cleanup",
         CheckSuspensionLift => "check_suspension_lift",
         ClassifyMonitorObservation => "classify_monitor_observation",

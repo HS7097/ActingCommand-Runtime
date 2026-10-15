@@ -8758,15 +8758,12 @@ impl HostShared {
         )
     }
 
-    /// Workflow #335 S5b, stages 0-2 of a successful terminal that took resource readings; the
+    /// Workflow #335 S5b, stages 1-2 of a successful terminal that took resource readings; the
     /// caller then runs the original terminal flow (stage 3). Workflow #384 D2-S3: the run's
     /// adjustment plan, when it has one, decides which records it publishes and which records
-    /// from before the run it drops.
+    /// from before the run it drops. Workflow #390 POOL-1: no stage 0 any more; a reading of the
+    /// key a `ledger_fact` pool observes is published like any other and resets the pool's base.
     ///
-    /// - Stage 0, no lock held while the pools are read: the active catalog read as the policy
-    ///   forward projection reads it. A `ledger_fact` pool observing the key of a record to
-    ///   publish in the run's instance scope refuses the readings
-    ///   (`contained_task_resource_reading_live_pool_unsupported`, detail `<id>:<pool>`).
     /// - Stage 1, under the fact write gate, then released: the terminal checks. An already
     ///   committed terminal is answered as before and a refused settlement projection is left
     ///   to the original rewrite; neither publishes.
@@ -8805,54 +8802,6 @@ impl HostShared {
                     .collect()
             }
         };
-        let scope = actingcommand_policy::ScopeSelector::Instance {
-            instance_id: readings.instance_alias.clone(),
-        };
-        let catalog = lock(self.policy()?, HostLocation::CheckResourceReadingPools)
-            .map_err(RequestFailure::poison_without_terminal)?
-            .active_loaded();
-        let live_pool = catalog.as_ref().and_then(|catalog| {
-            publications
-                .iter()
-                .filter_map(|publication| match publication {
-                    PlannedPublication::Reading { frame, reading } => readings
-                        .frames
-                        .get(*frame)
-                        .and_then(|joined| joined.readings.get(*reading))
-                        .map(|value| (value.declaration.id.as_str(), value.fact_key.as_str())),
-                    PlannedPublication::Adjustment(adjustment) => Some((
-                        adjustment.adjustment_id.as_str(),
-                        adjustment.fact_key.as_str(),
-                    )),
-                })
-                .find_map(|(id, fact_key)| {
-                    catalog
-                        .compiled()
-                        .catalog()
-                        .pools
-                        .pools
-                        .iter()
-                        .find(|pool| {
-                            matches!(
-                                pool.value_source,
-                                actingcommand_policy::PoolValueSource::LedgerFact { .. }
-                            ) && pool.scope == scope
-                                && matches!(
-                                    &pool.observation,
-                                    actingcommand_policy::ObservationRef::Fact { fact_key: observed }
-                                        if observed == fact_key
-                                )
-                        })
-                        .map(|pool| format!("{id}:{}", pool.id))
-                })
-        });
-        if let Some(detail) = live_pool {
-            return Ok(Some(refuse_resource_readings(
-                draft,
-                HostCode::ContainedTaskResourceReadingLivePoolUnsupported,
-                detail,
-            )));
-        }
         let gate = lock(
             &self.fact_write_gate,
             HostLocation::AppendContainedTaskTerminal,

@@ -250,15 +250,10 @@ The event has source `runtime`, actor `runtime`, origin module `fact-store` and 
 It carries no run link: the run and the frame are named in `source_snapshot_id`.
 
 **When.** Only a terminal whose outcome is `Success` and that carries readings or an adjustment
-plan goes through the four stages below. Every other terminal, including every run without
-readings or confirmed adjustments, runs the original terminal flow once, unchanged.
+plan goes through the three stages below. Every other terminal, including every run without
+readings or confirmed adjustments, runs the original terminal flow once, unchanged. (Workflow
+#390 POOL-1 removed stage 0, the refusal of a reading of a live pool's key; see "Live pools".)
 
-0. No lock is held. The active catalog is read under the `policy` lock, as the policy forward
-   projection reads it, and the lock is released. If a pool with `value_source: ledger_fact`
-   observes the `fact_key` of a reading or an adjustment write in the run's instance scope,
-   nothing is published and the terminal becomes the failure
-   `contained_task_resource_reading_live_pool_unsupported`. Only pool bindings are read, never
-   a score.
 1. Under `fact_write_gate`, the original checks run: the run's chain, an already committed
    terminal, the capture summary and the settlement projection. Then the gate is released. An
    already committed terminal is rejected as before; a refused projection is rewritten as before
@@ -283,7 +278,7 @@ readings or confirmed adjustments, runs the original terminal flow once, unchang
    terminal, the summary, the projection, the summary and terminal appends and the failed
    terminal note.
 
-A refusal in stage 0 or 2 rewrites the terminal as a refused projection does: outcome `Failure`
+A refusal in stage 2 rewrites the terminal as a refused projection does: outcome `Failure`
 with that code, no final page, no settlement, and the projection failure severity (`warning`
 for a policy run). The request fails as `Failed` with that code and the failure terminal; the
 detail is the failure's native detail.
@@ -299,7 +294,7 @@ observations of the frames they were read on, and the rejection is reported on i
 
 - Success: the frames' recognitions, `Finalizing` (`success`), `fact.published` once per
   reading that held, `capture.summary_committed`, `TerminalCommitted` (`success`).
-- Refused in stage 0 or 2: `Finalizing` (`success`), the readings published before the refusal,
+- Refused in stage 2: `Finalizing` (`success`), the readings published before the refusal,
   `capture.summary_committed`, `TerminalCommitted` (`failure`). This is the same sequence as for
   a refused settlement projection.
 
@@ -313,7 +308,6 @@ but has no native detail field.
 | --- | --- | --- | --- |
 | `contained_task_resource_reading_invalid` | a declaration refused before any input | `<id>:<reason>` | the package admission refusal |
 | `contained_task_resource_reading_run_kind_unsupported` | a startup or return-home package declares readings | none | the package's `runtime.failed` |
-| `contained_task_resource_reading_live_pool_unsupported` | stage 0 | `<id>:<pool id>` | the active catalog's `ledger_fact` pool of that key |
 | `contained_task_resource_reading_rejected` | stage 2 | `<id>:<fact store code>` | see below |
 
 For `contained_task_resource_reading_rejected`, the fact store code can be traced in the ledger:
@@ -332,13 +326,24 @@ stuck recovery. `contained_task_resource_reading_unresolved` is no failure code 
 #384 D2-S2: a mark that gives no reading is a warning (task diagnostic row above) and the run
 settles as it would without it; it adds nothing to `failure_streak`.
 
-**Live pools.** Readings do not supply `ledger_fact` pools. Such a pool requires its records to
-carry `input.committed` and `input.failed` in `invalidate_on`, and a reading carries neither,
-so every later evaluation would fail with `pool_fact_invalidation_binding_missing`. Stage 0
-therefore refuses. If an active record without those invalidations exists for such a pool's
-key, recover by publishing a newer observation of the key by hand, with
-`invalidate_on: ["input.committed", "input.failed"]`; it must pass the input boundary check
-(`docs/live-fact-pools.md`).
+**Live pools.** Workflow #390 POOL-1 (forced compromise S-04): a `ledger_fact` pool takes its
+data from readings. A reading, or an adjustment write, of the key the pool observes in the
+run's instance scope is published like any other, with its empty `invalidate_on`, and is the
+pool's base: its value at its observation time. The next reading or adjustment of the key
+resets the base; no input invalidates it. The pool's value at an evaluation is that base
+projected by the pool's regeneration rule (`contracts/scheduling/README.md`, "Pool
+Projection": each complete period since the observation adds `amount`, up to `capacity`), as
+long as the record is unexpired, at least the pool's minimum confidence and an integer within
+`0..=capacity`; regeneration never revives an expired record. Such a record needs no input
+invalidation: `pool_fact_invalidation_binding_missing` holds only for a record of the key that
+is not a package reading or adjustment the Runtime published (its `source_detector` starts
+with `resource_reading:` or `resource_adjustment:`), or that lost its native instance binding
+(`docs/live-fact-pools.md`). A pool without a usable record asks for a reading: the task its
+projection gates raises the fact refresh's demand for the key ([scheduling/README.md](scheduling/README.md),
+"Fact Refresh"). A resource target on the pool reads the same projected inventory
+([resource-targets.md](resource-targets.md)). An adjustment write keeps D2-S3's value (the
+base's value plus or minus the amount, observed at the confirmation): regeneration between the
+base's reading and the confirmation is known only from the next reading.
 
 ## Adjustments
 
@@ -447,7 +452,9 @@ at least the OCR target's `minimum_confidence`.
 The only connection to the scheduling catalog is `fact_key`: it equals the
 `observation: {"kind": "fact", "fact_key": ...}` of a pool (`contracts/scheduling/`), and the
 reading supplies only pools observed through such a fact. A pool observed through a task
-outcome is unchanged and never supplied by a reading. No pool id and no `resources.json` id is
+outcome is unchanged and never supplied by a reading. A `ledger_fact` pool takes the reading as
+its base and regenerates from it (Workflow #390 POOL-1, "Live pools" above); a
+`static_snapshot` pool keeps the caller's snapshot, and only its targets read the reading. No pool id and no `resources.json` id is
 named; the fact scope is always the instance of the run. The integer is the amount in the
 pool's `valuation.unit` (Workflow #335 S2), without conversion.
 
@@ -478,9 +485,10 @@ facts (D2-S4). It is an ordinary task package that only navigates and reads.
 - **`check-config`** prepares each bound package and refuses a binding that is no reader with
   `fact_reader_binding_invalid` (stage `config_recognition_binding`; `reader_problem`: the
   qualification's token, `package_unreadable` with the loader's refusal as its cause, or
-  `policy_fact_authority` / `live_pool_key` for a mark whose key the configuration's
-  `policy.facts` declares or a `ledger_fact` pool observes for the instance, since the fact
-  store would refuse every such reading). It reports `instances[].recognition_package`
+  `policy_fact_authority` for a mark whose key the configuration's `policy.facts` declares for
+  the instance, since the fact store would refuse every such reading; a key a `ledger_fact`
+  pool observes is no conflict since Workflow #390 POOL-1, and `live_pool_key` is no longer
+  given). It reports `instances[].recognition_package`
   (`package`, `fact_keys`) and warns `fact_reader_missing:<instance>:<fact key>` for each
   realistic fact (`resource.*`, `inventory.*`) a catalog task's trigger or stop predicate reads
   in an instance's scope that the instance's reader does not mark, or that an instance without

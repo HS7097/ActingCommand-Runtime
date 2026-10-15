@@ -2761,7 +2761,7 @@
           "description": "The key is a policy fact of the catalog, so a reading of it is refused."
         },
         "live_pool_key": {
-          "description": "The key is observed by a ledger-fact pool, so a reading of it is refused."
+          "description": "The key is observed by a ledger-fact pool, so a reading of it was refused. No longer given since Workflow #390 POOL-1: such a reading is the pool's base."
         },
         "package_unbound": {
           "description": "The instance has no recognition maintenance package bound."

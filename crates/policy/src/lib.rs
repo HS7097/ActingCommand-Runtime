@@ -27,6 +27,7 @@ pub use strategy::*;
 /// Gate tests that need the crate's private items (test plan §2.1), and their shared fixtures.
 #[cfg(test)]
 mod tests {
+    mod gate_390_pool1;
     mod gate_d2_s1;
     mod gate_d2_s4;
     mod gate_p1;

@@ -571,8 +571,7 @@ fn start_daemon(
     // cannot read, or whose marks the configuration claims, is left out and noted in the
     // `recognition_packages` subsystem row; the start goes on. No bound package is prepared.
     let (recognition_packages, recognition_subsystem) =
-        config::recognition_package::start_bindings(&recognition_packages, &host, policy.as_ref())
-            .map_err(ActingdError::config)?;
+        config::recognition_package::start_bindings(&recognition_packages, &host);
     let host = host.with_recognition_packages(recognition_packages);
     let host = match recognition_subsystem {
         Some(subsystem) => host.with_config_subsystem(subsystem),

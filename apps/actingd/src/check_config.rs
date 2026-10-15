@@ -167,21 +167,14 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             )
         })?;
     // Workflow #384 D2-S2 (D2 model §3.2): each recognition package binding is checked in
-    // full (checks 1-3) and a binding that is no reader is refused, so `acsetup
-    // --commit-config` does not commit it. The realistic facts the catalog reads that no
-    // reader marks are noted.
+    // full (checks 1-2; check 3 is gone since Workflow #390 POOL-1) and a binding that is no
+    // reader is refused, so `acsetup --commit-config` does not commit it. The realistic facts
+    // the catalog reads that no reader marks are noted.
     let recognition = config::recognition_package::check_bindings(
         &recognition_packages,
         &host,
-        policy.as_ref(),
         config::recognition_package::BindingRead::Prepare,
-    )
-    .map_err(|code| {
-        staged(
-            ActingdError::config(code),
-            ActingdLocation::RecognitionBinding,
-        )
-    })?;
+    );
     if let Some(invalid) = recognition
         .iter()
         .find_map(|binding| binding.verdict.as_ref().err())

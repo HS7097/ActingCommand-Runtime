@@ -3583,7 +3583,9 @@ fn evaluate_predicate(
                 ))
             })?;
             let Some(snapshot) = pool_values.get(pool_id.as_str()) else {
-                return Ok(PredicateEvaluation::unknown(resource_suggestion(spec)));
+                return Ok(PredicateEvaluation::unknown(resource_suggestion(
+                    spec, facts, time,
+                )));
             };
             let projected = project_pool_value(spec, snapshot, time.unix_ms)?;
             let projected = i64::try_from(projected).map_err(|_| {
@@ -3862,12 +3864,19 @@ fn scope_instance_id(scope: &ScopeSelector) -> Option<&str> {
     }
 }
 
-fn resource_suggestion(pool: &PoolSpec) -> DetectionSuggestion {
+fn resource_suggestion(
+    pool: &PoolSpec,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> DetectionSuggestion {
     match &pool.observation {
         ObservationRef::Fact { fact_key } => DetectionSuggestion {
             scope: pool.scope.clone(),
             fact_key: fact_key.clone(),
-            reason: "resource_observation_missing".to_owned(),
+            reason: match live_pool_unknown_reason(pool, fact_key, facts, time) {
+                Some(unknown_reason) => unknown_token(unknown_reason).to_owned(),
+                None => "resource_observation_missing".to_owned(),
+            },
         },
         ObservationRef::Outcome {
             task_id,
@@ -3880,7 +3889,48 @@ fn resource_suggestion(pool: &PoolSpec) -> DetectionSuggestion {
     }
 }
 
-fn project_pool_value(
+/// Workflow #390 POOL-1: why a `ledger_fact` pool has no value at `time`, as the unknown reason
+/// of the fact it observes in its own scope: none, a confidence below the pool's minimum, an
+/// expired record, or a value that is not an integer within `0..=capacity`. A reading of the key
+/// resets the pool's base, so the pool's unknown value asks for a reading as a predicate on the
+/// fact itself does (D2 model §3.3). `None` for a static snapshot pool, which no reading
+/// supplies, and for a usable record the caller's pool values do not hold.
+fn live_pool_unknown_reason(
+    pool: &PoolSpec,
+    fact_key: &str,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> Option<UnknownReason> {
+    let crate::PoolValueSource::LedgerFact {
+        minimum_confidence_milli,
+    } = pool.value_source
+    else {
+        return None;
+    };
+    let Some(fact) = facts
+        .facts
+        .iter()
+        .find(|fact| fact.scope == pool.scope && fact.fact_key == fact_key)
+    else {
+        return Some(UnknownReason::FactMissing);
+    };
+    if fact.confidence_milli < minimum_confidence_milli {
+        Some(UnknownReason::FactLowConfidence)
+    } else if fact
+        .expires_at_unix_ms
+        .is_some_and(|expiry| time.unix_ms > expiry)
+    {
+        Some(UnknownReason::FactExpired)
+    } else if !matches!(fact.value, FactValue::Integer(value)
+        if u64::try_from(value).is_ok_and(|value| value <= pool.capacity))
+    {
+        Some(UnknownReason::TypeMismatch)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn project_pool_value(
     spec: &PoolSpec,
     snapshot: &PoolValueSnapshot,
     now: u64,

@@ -24,13 +24,15 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
-use crate::evaluator::{activity_scope_specificity, project_time_validity, scope_matches_instance};
+use crate::evaluator::{
+    activity_scope_specificity, project_pool_value, project_time_validity, scope_matches_instance,
+};
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
     CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, DecisionReason, EvaluationFacts,
     EvaluationTime, FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES, ObservationRef,
-    ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSource,
-    SchedulingDocumentKind, ScopeSelector, TaskSpec,
+    ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSnapshot,
+    PoolValueSource, SchedulingDocumentKind, ScopeSelector, TaskSpec,
 };
 
 pub const RESOURCE_TARGETS_SCHEMA_VERSION: &str = "actingcommand.resource-targets.v1";
@@ -868,7 +870,9 @@ pub(crate) enum TargetObservation {
 /// see in `projected_facts` (already time-validity projected). Known needs a non-negative
 /// integer, a positive confidence (at least the pool's minimum for a ledger-fact pool) and an
 /// unexpired record; otherwise the first failing reason in the order missing,
-/// low_confidence, expired, invalid_value. The entry check and the evaluator share it.
+/// low_confidence, expired, invalid_value. A known inventory of a `ledger_fact` pool is
+/// projected by the pool's regeneration rule (Workflow #390 POOL-1). The entry check and the
+/// evaluator share it.
 pub(crate) fn observe_target(
     projected_facts: &EvaluationFacts,
     instance: &InstanceSnapshot,
@@ -908,7 +912,7 @@ pub(crate) fn observe_target(
     }
     match fact.value {
         FactValue::Integer(current) if current >= 0 => TargetObservation::Known {
-            current,
+            current: live_pool_inventory(pool, current, fact.observed_at_unix_ms, time),
             observed_at_unix_ms: fact.observed_at_unix_ms,
             fresh_until_unix_ms: fact.expires_at_unix_ms,
         },
@@ -916,6 +920,33 @@ pub(crate) fn observe_target(
             reason: Reason::InvalidValue,
         },
     }
+}
+
+/// Workflow #390 POOL-1: a `ledger_fact` pool's inventory at `time` is its observation (the base
+/// a reading resets) projected by the pool's regeneration rule, as the pool's own value is: each
+/// complete period since the observation adds `amount`, up to `capacity`. A static snapshot
+/// pool's fact, a nonregenerating pool and an observation above capacity are read as observed.
+fn live_pool_inventory(
+    pool: &PoolSpec,
+    current: i64,
+    observed_at_unix_ms: u64,
+    time: EvaluationTime,
+) -> i64 {
+    if pool.value_source.is_static() {
+        return current;
+    }
+    let Ok(value) = u64::try_from(current) else {
+        return current;
+    };
+    let base = PoolValueSnapshot {
+        pool_id: pool.id.clone(),
+        value,
+        observed_at_unix_ms,
+    };
+    project_pool_value(pool, &base, time.unix_ms)
+        .ok()
+        .and_then(|projected| i64::try_from(projected).ok())
+        .unwrap_or(current)
 }
 
 const ROW_KIND: &str = "row";

@@ -63,14 +63,18 @@ persistence path; ordinary recovery and historical projection read the original
 input events from GlobalLedger.
 
 Package resource readings (Workflow #335 S5b, `contracts/resource-readings.md`)
-do not supply live pools in v0.9. A reading is published with an empty
-`invalidate_on`, so its record could never pass the binding check above. Before
-publishing, the host terminal checks the active catalog: a `ledger_fact` pool
-that observes a reading's key in the run's instance scope refuses the reading
-with `contained_task_resource_reading_live_pool_unsupported`, and nothing is
-published. Bind such a key to a static pool, or publish it here. If an active
-record of a live pool's key lacks the input invalidations, every evaluation is
-refused with `pool_fact_invalidation_binding_missing` until a newer observation
-replaces it. To recover, publish that newer observation through this path with
-`invalidate_on` `input.committed` and `input.failed`; it must be observed after
-the instance's latest input boundary.
+supply live pools since Workflow #390 POOL-1. A reading, or an adjustment write,
+of the pool's key is published with an empty `invalidate_on` and is the pool's
+base until the next reading or adjustment of the key resets it; the pool's value
+is that base projected by the pool's regeneration rule. The binding check above
+does not ask such a record for the input invalidations: it holds for a record the
+Runtime published from a package run (`source_detector` `resource_reading:` or
+`resource_adjustment:`) only its current native instance binding. A live pool
+without a usable record raises the fact refresh's demand for its key, so the
+instance's recognition maintenance package reads it. If an active record of a
+live pool's key is neither such a reading nor carries the input invalidations,
+every evaluation is refused with `pool_fact_invalidation_binding_missing` until a
+newer observation replaces it. To recover, let a package read the key, or publish
+that newer observation through this path with `invalidate_on` `input.committed`
+and `input.failed`; it must be observed after the instance's latest input
+boundary.

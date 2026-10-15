@@ -191,6 +191,9 @@ mod gate_390_exec3;
 // Workflow #390 OUT-2 (forced compromises O-01, O-02, S-01): designated effect sets, their
 // counts and caps.
 mod gate_390_out2;
+// Workflow #390 POOL-1 (forced compromise S-04): a `ledger_fact` pool takes its data from
+// readings, its base reset by a reading and projected by the pool's regeneration rule.
+mod gate_390_pool1;
 // Workflow #390 READ-1 (forced compromise O-08): a fraction reading's denominator is published
 // under its second reading key.
 mod gate_390_read1;

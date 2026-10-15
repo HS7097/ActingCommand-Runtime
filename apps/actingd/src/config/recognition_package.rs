@@ -5,12 +5,13 @@
 //!
 //! - `check-config` prepares each bound package and refuses a binding that is no reader: its
 //!   package cannot be read, does not qualify (check 1), or marks a key the configuration's
-//!   `policy.facts` or a `ledger_fact` pool claims (checks 2-3). It warns `fact_reader_missing`
-//!   for a realistic fact a catalog task reads that no reader marks.
+//!   `policy.facts` claims (check 2). It warns `fact_reader_missing` for a realistic fact a
+//!   catalog task reads that no reader marks. A key a `ledger_fact` pool observes is no conflict
+//!   since Workflow #390 POOL-1: its reading resets the pool's base.
 //! - A Runtime start reads each bound package's marks without preparing it, runs without a
-//!   binding it cannot read or whose marks are claimed (checks 2-3), and notes every such
-//!   binding as `fact_reader_binding_ignored` in its `recognition_packages` subsystem row. The
-//!   start goes on: a package's error is that package's alone.
+//!   binding it cannot read or whose marks are claimed (check 2), and notes every such binding
+//!   as `fact_reader_binding_ignored` in its `recognition_packages` subsystem row. The start goes
+//!   on: a package's error is that package's alone.
 
 use super::{PolicyBootstrap, RESOURCE_PACKAGE_DIRECTORY_DEADLINE, manifest};
 use actingcommand_contract::outcome::{Code, Outcome};
@@ -27,9 +28,9 @@ use std::time::Instant;
 /// How a check reads a bound package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BindingRead {
-    /// `check-config`: prepares the package and checks its qualification (checks 1-3).
+    /// `check-config`: prepares the package and checks its qualification (checks 1-2).
     Prepare,
-    /// A Runtime start: reads the package's marks without preparing it (checks 2-3).
+    /// A Runtime start: reads the package's marks without preparing it (check 2).
     MarksOnly,
 }
 
@@ -42,40 +43,21 @@ pub(crate) struct CheckedBinding {
     pub(crate) verdict: Result<Vec<String>, Outcome>,
 }
 
-/// Checks every configured binding, in alias order. The configured catalog is compiled again
-/// for its pools; a catalog that does not compile has already refused the assembly.
+/// Checks every configured binding, in alias order.
 pub(crate) fn check_bindings(
     configured: &BTreeMap<String, PathBuf>,
     host: &RuntimeHostConfig,
-    policy: Option<&PolicyBootstrap>,
     read: BindingRead,
-) -> Result<Vec<CheckedBinding>, Code> {
-    if configured.is_empty() {
-        return Ok(Vec::new());
-    }
-    let compiled = policy
-        .map(|policy| actingcommand_policy::compile_catalog(&policy.catalog))
-        .transpose()
-        .map_err(|_| {
-            actingcommand_contract::codes::SharedCode::PolicyCatalogCompileFailed.code()
-        })?;
-    let catalog = compiled.as_ref().map(|compiled| compiled.catalog());
+) -> Vec<CheckedBinding> {
     let policy_facts = host
         .policy_inputs()
         .map_or(&[][..], |inputs| inputs.facts().facts.as_slice());
-    Ok(configured
+    configured
         .iter()
         .map(|(alias, path)| {
             let verdict = read_binding(alias, path, read).and_then(|(package_id, keys)| {
-                recognition_binding_key_conflict(
-                    alias,
-                    path,
-                    &package_id,
-                    &keys,
-                    policy_facts,
-                    catalog,
-                )
-                .map(|()| keys)
+                recognition_binding_key_conflict(alias, path, &package_id, &keys, policy_facts)
+                    .map(|()| keys)
             });
             CheckedBinding {
                 alias: alias.clone(),
@@ -83,7 +65,7 @@ pub(crate) fn check_bindings(
                 verdict,
             }
         })
-        .collect())
+        .collect()
 }
 
 /// The bound package's id and mark keys, or the binding's refusal: `package_unreadable` with
@@ -156,14 +138,13 @@ pub(crate) fn missing_reader_warnings(
 pub(crate) fn start_bindings(
     configured: &BTreeMap<String, PathBuf>,
     host: &RuntimeHostConfig,
-    policy: Option<&PolicyBootstrap>,
-) -> Result<(BTreeMap<String, PathBuf>, Option<ConfigSubsystem>), Code> {
+) -> (BTreeMap<String, PathBuf>, Option<ConfigSubsystem>) {
     if configured.is_empty() {
-        return Ok((BTreeMap::new(), None));
+        return (BTreeMap::new(), None);
     }
     let mut kept = BTreeMap::new();
     let mut ignored = Vec::new();
-    for binding in check_bindings(configured, host, policy, BindingRead::MarksOnly)? {
+    for binding in check_bindings(configured, host, BindingRead::MarksOnly) {
         match binding.verdict {
             Ok(_) => {
                 kept.insert(binding.alias, binding.path);
@@ -182,7 +163,7 @@ pub(crate) fn start_bindings(
         }
     }
     let subsystem = manifest::recognition_packages_subsystem(!kept.is_empty(), ignored);
-    Ok((kept, Some(subsystem)))
+    (kept, Some(subsystem))
 }
 
 #[cfg(test)]
@@ -200,8 +181,7 @@ mod tests {
         let configured = BTreeMap::from([("node.a".to_owned(), root.path().join("missing"))]);
         let host = RuntimeHostConfig::new(root.path(), "0123456789abcdef");
 
-        let (kept, subsystem) =
-            start_bindings(&configured, &host, None).expect("the start goes on");
+        let (kept, subsystem) = start_bindings(&configured, &host);
 
         assert!(kept.is_empty());
         let subsystem = subsystem.expect("the row of a configuration that binds a package");
@@ -233,7 +213,7 @@ mod tests {
             Some(&serde_json::json!("package_unreadable"))
         );
 
-        let (kept, subsystem) = start_bindings(&BTreeMap::new(), &host, None).expect("no binding");
+        let (kept, subsystem) = start_bindings(&BTreeMap::new(), &host);
         assert!(kept.is_empty());
         assert!(subsystem.is_none());
     }
