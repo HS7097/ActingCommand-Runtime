@@ -61,3 +61,15 @@ the RPC and output processing, and reports reader-close failures. An artifact or
 ledger fatal does not trigger another Lab diagnostic append. Ordinary package,
 recognition and capture failures remain visible. Raw `ObserveReadonly` consumers
 and offline observation retain their existing entry points.
+
+Workflow #410 item 1: every `observe` answer, offline and with `--capture`,
+states the frame's coordinate system as `frame_coordinates {device_pixels:
+[width, height], orientation, applies_to: ["tap", "tap_rect", "swipe"]}`
+(`do`'s coordinates are these frame pixels, from the top-left pixel;
+[contained-lab-operation.md](contained-lab-operation.md)). With `--preview` it
+also writes a JPEG preview of the frame, long edge at most 1024 pixels, into the
+Lab frame directory and answers `preview {path, width, height, scale}`, or
+`{failure}` (`lab_frame_export_failed`) when it could not be written; the image
+itself is never in the answer. Both members are kept by Min and count toward its
+budget. `--preview` under the global `--dry-run` is refused like `--with-frame`
+(`dry_run_unsupported`).

@@ -300,6 +300,23 @@
       "description": "actinglab package edit admitted the edited package and could not write an edited file over the old one (written to a .part file beside it, then renamed over it). The details name the file it stopped at, the files already written and any .part file left behind; nothing is removed (Workflow #390 TOOL-1).",
       "common_causes": "The file is open in another program, or the directory is read-only.",
       "handling": "Close the program holding the file, remove a .part file left behind, and run the same edits again on the package as it now is."
+    },
+    "lab_frame_export_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "raw_text": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab observe --preview, or do after an action it performed, could not export a frame (Workflow #410 item 1): reading the Runtime's verified frame, encoding its JPEG preview or writing the frame or the preview into the Lab frame directory (%LOCALAPPDATA%\\ActingCommand\\actinglab\\frames) failed. The answer still succeeds, and with do the action was performed: the part not written (preview, or after_attachment.frame_path or .preview) is answered as failure {code, path, raw_text} in its place, with the path it was written to when one was known and the operating system's text as raw_text. No image is put into the answer instead.",
+      "common_causes": "LOCALAPPDATA is not set; the disk is full or the folder is not writable; the Runtime's frame was removed from its artifact store.",
+      "handling": "Free or fix the Lab frame directory and observe again (with preview), or read the frame with ac_material."
     }
   }
 }

@@ -75,6 +75,15 @@ const BINDING_PARTS: [&str; 4] = [
 ];
 /// The largest exported answer ac_binding_draft reads back.
 const MAX_EXPORT_READ: u64 = 64 * 1024 * 1024;
+/// Workflow #410 item 1: the parts of an ac_lab_observe or ac_lab_do answer kept inline, in this
+/// order and each while the answer still fits, when the whole answer is exported: the frame's
+/// coordinate system, the paths of the frame files and the after-action attachment.
+const FRAME_PARTS: [&str; 4] = [
+    "frame_coordinates",
+    "frame_path",
+    "preview",
+    "after_attachment",
+];
 
 // ---------------------------------------------------------------- command tables
 
@@ -112,6 +121,9 @@ struct LabCommand {
     capture_is_lab_request: bool,
     /// ac_record_stop: an exported answer keeps its binding parts inline.
     keeps_binding: bool,
+    /// ac_lab_observe, ac_lab_do (Workflow #410 item 1): an exported answer keeps its frame
+    /// parts inline.
+    keeps_frame: bool,
 }
 
 const fn flag(
@@ -191,6 +203,19 @@ const DRY_RUN: Flag = flag(
     Kind::Switch,
     "--dry-run: check and report only.",
 );
+// Workflow #410 item 1: a JPEG preview of the frame, written as a file and answered by its path.
+const OBSERVE_PREVIEW: Flag = flag(
+    "preview",
+    "--preview",
+    Kind::Switch,
+    "--preview: also write a JPEG preview of the frame, long edge at most 1024 pixels, into the Lab frame directory; preview answers {path, width, height, scale}, a preview pixel times scale being a frame pixel. Never inlined.",
+);
+const DO_PREVIEW: Flag = flag(
+    "preview",
+    "--preview",
+    Kind::Switch,
+    "--preview: with capture and without dry_run, also write a JPEG preview of the frame after the action when its page is known (an unknown page's preview is always written); refused otherwise. Never inlined.",
+);
 
 static OBSERVE: LabCommand = LabCommand {
     words: &["observe"],
@@ -227,11 +252,13 @@ static OBSERVE: LabCommand = LabCommand {
             Kind::Switch,
             "--record: with capture, store the frame in the active recording.",
         ),
+        OBSERVE_PREVIEW,
         TEST_CAPTURE_DELAY,
     ],
     required: &[],
     capture_is_lab_request: true,
     keeps_binding: false,
+    keeps_frame: true,
 };
 
 static DO: LabCommand = LabCommand {
@@ -325,11 +352,13 @@ static DO: LabCommand = LabCommand {
             Kind::Text,
             "--tap-rect: x,y,w,h, only with record: the step's click rectangle.",
         ),
+        DO_PREVIEW,
         TEST_CAPTURE_DELAY,
     ],
     required: &[],
     capture_is_lab_request: true,
     keeps_binding: false,
+    keeps_frame: true,
 };
 
 static RECORD_START: LabCommand = LabCommand {
@@ -358,6 +387,7 @@ static RECORD_START: LabCommand = LabCommand {
     required: &["task_id"],
     capture_is_lab_request: false,
     keeps_binding: false,
+    keeps_frame: false,
 };
 
 static RECORD_MARK: LabCommand = LabCommand {
@@ -376,6 +406,7 @@ static RECORD_MARK: LabCommand = LabCommand {
     required: &["request"],
     capture_is_lab_request: false,
     keeps_binding: false,
+    keeps_frame: false,
 };
 
 static RECORD_STOP: LabCommand = LabCommand {
@@ -417,6 +448,7 @@ static RECORD_STOP: LabCommand = LabCommand {
     required: &[],
     capture_is_lab_request: false,
     keeps_binding: true,
+    keeps_frame: false,
 };
 
 static RECORD_STATUS: LabCommand = LabCommand {
@@ -425,6 +457,7 @@ static RECORD_STATUS: LabCommand = LabCommand {
     required: &[],
     capture_is_lab_request: false,
     keeps_binding: false,
+    keeps_frame: false,
 };
 
 // ---- Workflow #389 MCP-13a (begin): ac_app, actinglab `session app` (MCP-0 command table v1.1
@@ -454,6 +487,7 @@ static APP: LabCommand = LabCommand {
     required: &["action", "instance"],
     capture_is_lab_request: false,
     keeps_binding: false,
+    keeps_frame: false,
 };
 // ---- Workflow #389 MCP-13a (end) ----
 
@@ -1001,12 +1035,71 @@ fn author(
         } else {
             Vec::new()
         };
-        let overflow = Overflow {
+        command_end(
+            command,
             handle,
-            keeps_binding: command.keeps_binding,
-        };
-        finish(&overflow, answer.result, answer.req_id.as_deref(), warnings)
+            answer.result,
+            answer.req_id.as_deref(),
+            warnings,
+        )
     })
+}
+
+/// A Lab command's job end: the one overflow rule (review F2), with the parts its exported
+/// answer keeps inline (ac_record_stop's binding parts; Workflow #410 item 1: ac_lab_observe's
+/// and ac_lab_do's frame parts).
+fn command_end(
+    command: &LabCommand,
+    handle: &str,
+    result: Result<Value, ToolError>,
+    req_id: Option<&str>,
+    warnings: Vec<Value>,
+) -> JobEnd {
+    let overflow = Overflow {
+        handle,
+        keeps_binding: command.keeps_binding,
+    };
+    let parts = if command.keeps_frame {
+        frame_parts(&result)
+    } else {
+        Vec::new()
+    };
+    keep_frame_parts(handle, finish(&overflow, result, req_id, warnings), parts)
+}
+
+/// Workflow #410 item 1: the frame parts of an ac_lab_observe or ac_lab_do answer, in
+/// `FRAME_PARTS` order, taken before the answer may be exported.
+fn frame_parts(result: &Result<Value, ToolError>) -> Vec<(&'static str, Value)> {
+    let Ok(Value::Object(data)) = result else {
+        return Vec::new();
+    };
+    FRAME_PARTS
+        .iter()
+        .filter_map(|key| data.get(*key).map(|part| (*key, part.clone())))
+        .collect()
+}
+
+/// Workflow #410 item 1: an exported ac_lab_observe or ac_lab_do answer still states its frame's
+/// coordinate system and its frame files inline: each frame part joins the answer
+/// `{req_id, export, overflowed: true}` in `FRAME_PARTS` order while the answer still fits.
+fn keep_frame_parts(handle: &str, end: JobEnd, parts: Vec<(&'static str, Value)>) -> JobEnd {
+    let (answer, warnings) = end;
+    let mut answer = match answer {
+        Ok(answer) if answer.get("overflowed") == Some(&Value::Bool(true)) => answer,
+        other => return (other, warnings),
+    };
+    for (key, part) in parts {
+        let Some(object) = answer.as_object_mut() else {
+            break;
+        };
+        object.insert(key.to_owned(), part);
+        if !fits_as_job(handle, &answer, &warnings)
+            && let Some(object) = answer.as_object_mut()
+        {
+            object.remove(key);
+        }
+    }
+    (Ok(answer), warnings)
 }
 
 pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
@@ -1344,6 +1437,25 @@ pub(super) fn lab_result() -> Value {
     })
 }
 
+/// ac_lab_observe's and ac_lab_do's result (Workflow #410 item 1): [`lab_result`], with the
+/// frame parts an exported answer keeps inline.
+pub(super) fn frame_result() -> Value {
+    let mut schema = lab_result();
+    schema["description"] = json!(
+        "The actinglab envelope's data, unchanged: with frame_coordinates {device_pixels [width, height], orientation (landscape, portrait or square), applies_to [tap, tap_rect, swipe]}, the coordinate system of the frame (pixels counted from its top-left pixel) (ac_lab_do: of the frame the action was chosen on); preview {path, width, height, scale} when preview was asked; ac_lab_do after an action also after_attachment: {kind page_projection, observation} when the page after it is known, else {kind frame, frame_coordinates, frame_path, preview}. A part that could not be written is {failure {code lab_frame_export_failed, path, raw_text}} in its place. No image is inlined. Larger than the output budget: {req_id, export {path, sha256, size}, overflowed: true} with the warning answer_exported (without export, and with the warning material_export_failed, when the export could not be written), keeping frame_coordinates, frame_path, preview and after_attachment inline, each while it fits. Beyond the call budget: {handle, job_phase}."
+    );
+    if let Some(properties) = schema["properties"].as_object_mut() {
+        properties.insert("frame_coordinates".to_owned(), json!({"type": "object"}));
+        properties.insert(
+            "frame_path".to_owned(),
+            json!({"type": ["string", "object"]}),
+        );
+        properties.insert("preview".to_owned(), json!({"type": "object"}));
+        properties.insert("after_attachment".to_owned(), json!({"type": "object"}));
+    }
+    schema
+}
+
 pub(super) fn pack_check_input() -> Value {
     json!({
         "type": "object",
@@ -1487,4 +1599,7 @@ mod tests {
     mod gate_mcp13a;
     // Workflow #396 REC-4: ac_record_mark hands a click.follow request to actinglab unchanged.
     mod gate_rec4;
+    // Workflow #410 item 1: ac_lab_observe and ac_lab_do pass preview to actinglab, and an
+    // exported answer still states its frame inline.
+    mod gate_labobs;
 }

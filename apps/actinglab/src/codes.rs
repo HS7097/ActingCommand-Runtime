@@ -77,5 +77,13 @@ actingcommand_contract::outcome_codes! {
         /// Error. `package edit` could not write an edited file over the old one.
         PackageEditWriteFailed => "package_edit_write_failed": error / none,
         // ---- end of TOOL-1
+        // ---- Workflow #410 item 1 (pending): observe and do say what their frame is.
+        /// Warning. `observe --preview` or a performed `do` could not export a frame: reading the
+        /// Runtime's verified frame, encoding its JPEG preview or writing the frame or the
+        /// preview into the Lab frame directory failed. The answer still succeeds and carries,
+        /// in place of the part not written, `failure {code, path?, raw_text?}` (keys `path`,
+        /// `raw_text`).
+        LabFrameExportFailed => "lab_frame_export_failed": warning / none,
+        // ---- end of #410 item 1
     }
 }

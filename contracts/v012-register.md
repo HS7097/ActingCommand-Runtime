@@ -1285,6 +1285,24 @@ existing records and outputs get new rules. The code
 | PL4 | a resource target's inventory: `ApplyResourceTargets` `conditions[].state` (`computed.current`), `targetable_resources` `observation.current`, `active_resource_targets` and the evaluator's target terms | new rule of existing output members | POOL-1 | POOL-1 | for a `ledger_fact` pool, the record projected to the evaluation instant by the pool's regeneration rule (each complete period adds `amount`, up to `capacity`; a record above `capacity` is read as observed); `observed_at_unix_ms` stays the record's; a static snapshot pool's target reads the record as observed |
 | PL5 | actingd `check-config` and start: the recognition maintenance package binding's key check (D2M §3.2 check 3, T14) | removed rule | POOL-1 | POOL-1 | a mark whose key a `ledger_fact` pool of the configured catalog observes no longer refuses the binding (`fact_reader_binding_invalid` with `live_pool_key`) and no longer makes a start ignore it; the `policy_fact_authority` check stays |
 
+### 1.77 #410 item 1 `labobs`: observe and do say what their frame is (board #410; Alice 2026-10-15, the 0.12 end)
+
+The Lab's `observe` and `do` answers, and MCP's `ac_lab_observe` and `ac_lab_do` that pass them
+on unchanged, state the frame's coordinate system, give an optional JPEG preview by its path, and
+`do` attaches its result after an action. No image is ever inlined (Alice: no item 7). No ledger
+record, wire shape or configuration key changes; the rows are output members and local files.
+[contained-lab-operation.md](contained-lab-operation.md) (the last section) and
+[contained-page-observation.md](contained-page-observation.md) are the contract. The actinglab
+code `lab_frame_export_failed` (warning, ladder class `none`) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LO-1 | `frame_coordinates {device_pixels: [width, height], orientation, applies_to: ["tap", "tap_rect", "swipe"]}` on every `observe` and `do` answer | output member (no persisted record) | labobs | labobs | `orientation` `landscape` (wider than high), `portrait` (higher than wide) or `square`; `do`'s is the frame its coordinates refer to (online the before frame); Min keeps it and counts it toward `observe`'s budget |
+| LO-2 | `--preview` on `observe` (offline and `--capture`) and online `do`: `preview {path, width, height, scale}` or `{failure {code, path?, raw_text?}}` | flag and output member | labobs | labobs | a JPEG (quality 75), long edge at most 1024, `scale` = frame pixels per preview pixel (1 for a frame no larger); `observe --preview` under the global `--dry-run` is `dry_run_unsupported`; `do --preview` without `--capture` or under any dry run is `validation_failed` |
+| LO-3 | the Lab frame directory `%LOCALAPPDATA%\ActingCommand\actinglab\frames`: `<sha256>.png`, `<sha256>.preview.jpg` | local files (client side, not the state root) | labobs | labobs | named by the SHA-256 of the frame's PNG, written through a partial file of the process renamed into place; never read back by the Lab, the Runtime or an export |
+| LO-4 | `do` (online, after an action with an after frame) `after_attachment`: `{kind: "page_projection", observation, preview?}` for a recognized after page, else `{kind: "frame", frame_coordinates, frame_path, preview}` | output member | labobs | labobs | added after the Min projection of the operation members (which keep their budget); the known page's projection is cut on its own as `observe` cuts its own under Min, whole under `--verbose`/`--pretty`; also in a failure's details; a part not written is `{failure}` and the answer still succeeds |
+| LO-5 | MCP `ac_lab_observe`, `ac_lab_do`: argument `preview` ↔ `--preview`; an answer exported past the output budget keeps `frame_coordinates`, `frame_path`, `preview` and `after_attachment` inline, each in that order while it fits | MCP argument and overflow rule (apps 41 parity) | labobs | labobs | the answer is otherwise actinglab's data verbatim (A5); `{req_id, export, overflowed: true}` and the warning `answer_exported` as before |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
