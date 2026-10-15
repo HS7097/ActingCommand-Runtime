@@ -223,7 +223,7 @@ impl FactRefreshRecorder {
                 outcome: waiting.outcome.clone(),
                 package_id: waiting.package_id.clone(),
                 since_unix_ms: waiting.since_unix_ms,
-                overdue: waiting.overdue,
+                overdue: !waiting.overdue,
             };
             match instances.last_mut() {
                 Some(row) if row.instance_alias == *instance => row.demands.push(demand),
