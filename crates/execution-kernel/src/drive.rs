@@ -465,8 +465,18 @@ pub(crate) fn parse_navigation_input(
             })
         }
         // Workflow #390 LAB-2: a long press holds one point; it is a drag that does not move.
+        // Workflow #390 lpbox: a long press with `width` and `height` holds its click box, at
+        // the box's centre as a navigation tap presses its rectangle's.
         Some("long_press") | Some("long_tap") => {
-            let rect = parse_navigation_point(value)?;
+            let rect = match (value.get("width"), value.get("height")) {
+                (None, None) => parse_navigation_point(value)?,
+                (Some(_), Some(_)) => parse_navigation_rect(value)?,
+                _ => {
+                    return Err(DriveDecisionError::invalid(
+                        "long press click box requires both width and height",
+                    ));
+                }
+            };
             let point = drive_rect_center(rect)?;
             let duration_ms = value
                 .get("duration_ms")
@@ -816,5 +826,38 @@ mod tests {
                 duration_ms: 800
             }
         );
+    }
+
+    // Workflow #390 lpbox (exec key 76): a long press with a click box holds the box, at its
+    // centre as a navigation tap presses its rectangle's, for its duration; a box needs both
+    // `width` and `height`.
+    #[test]
+    fn lpbox_a_long_press_box_navigation_input_holds_its_box() {
+        let box_rect = PackRect {
+            x: 30,
+            y: 40,
+            width: 8,
+            height: 6,
+        };
+        let input = parse_navigation_input(&serde_json::json!({
+            "kind": "long_press", "x": 30, "y": 40, "width": 8, "height": 6, "duration_ms": 800
+        }))
+        .expect("long press box");
+        assert_eq!(
+            input,
+            DriveSemanticInput::Drag {
+                from_rect: box_rect,
+                to_rect: box_rect,
+                from: DrivePoint { x: 34, y: 43 },
+                to: DrivePoint { x: 34, y: 43 },
+                duration_ms: 800,
+            }
+        );
+
+        let error = parse_navigation_input(&serde_json::json!({
+            "kind": "long_press", "x": 30, "y": 40, "width": 8, "duration_ms": 800
+        }))
+        .expect_err("half a box");
+        assert_eq!(error.kind(), DriveDecisionErrorKind::InvalidInput);
     }
 }

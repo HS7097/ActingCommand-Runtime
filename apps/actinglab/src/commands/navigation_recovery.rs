@@ -700,8 +700,18 @@ pub(crate) fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput>
             })
         }
         // Workflow #390 LAB-2: a long press holds one point; it is a drag that does not move.
+        // Workflow #390 lpbox: a long press with `width` and `height` holds its click box, at
+        // the box's centre as a navigation tap presses its rectangle's.
         Some("long_press") | Some("long_tap") => {
-            let rect = parse_navigation_point(value)?;
+            let rect = match (value.get("width"), value.get("height")) {
+                (None, None) => parse_navigation_point(value)?,
+                (Some(_), Some(_)) => parse_navigation_rect(value)?,
+                _ => {
+                    return Err(CliError::usage(
+                        "long press click box requires both width and height",
+                    ));
+                }
+            };
             let point = rect_center(rect)?;
             let duration_ms = value
                 .get("duration_ms")
@@ -1767,4 +1777,54 @@ pub(crate) fn rect_json(rect: actingcommand_recognition_pack::PackRect) -> Value
         "width": rect.width,
         "height": rect.height
     })
+}
+
+#[cfg(test)]
+mod lpbox_tests {
+    use super::*;
+
+    // Workflow #390 lpbox (exec key 76): actinglab's navigation reader holds a long press's click
+    // box, at the box's centre as it presses a tap's rectangle, for the click's duration; a point
+    // long press still holds its point; a box needs both `width` and `height`.
+    #[test]
+    fn lpbox_a_long_press_box_navigation_input_holds_its_box() {
+        let input = parse_navigation_input(&json!({
+            "kind": "long_press", "x": 30, "y": 40, "width": 8, "height": 6, "duration_ms": 800
+        }))
+        .expect("long press box");
+        assert_eq!(
+            semantic_input_json(&input),
+            json!({
+                "type": "drag",
+                "from_rect": {"x": 30, "y": 40, "width": 8, "height": 6},
+                "to_rect": {"x": 30, "y": 40, "width": 8, "height": 6},
+                "from": {"x": 34, "y": 43},
+                "to": {"x": 34, "y": 43},
+                "duration_ms": 800
+            })
+        );
+
+        let point = parse_navigation_input(&json!({
+            "kind": "long_tap", "x": 30, "y": 40, "duration_ms": 800
+        }))
+        .expect("point long press");
+        assert_eq!(
+            semantic_input_json(&point),
+            json!({
+                "type": "drag",
+                "from_rect": {"x": 30, "y": 40, "width": 1, "height": 1},
+                "to_rect": {"x": 30, "y": 40, "width": 1, "height": 1},
+                "from": {"x": 30, "y": 40},
+                "to": {"x": 30, "y": 40},
+                "duration_ms": 800
+            })
+        );
+
+        let Err(error) = parse_navigation_input(&json!({
+            "kind": "long_press", "x": 30, "y": 40, "height": 6, "duration_ms": 800
+        })) else {
+            panic!("half a click box is refused");
+        };
+        assert_eq!(error.code, "validation_failed", "{}", error.message);
+    }
 }

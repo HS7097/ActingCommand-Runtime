@@ -1319,6 +1319,33 @@ table goes from 34 to 35 tools (observer 19 to 20).
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
 | GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
+### 1.82 Wave 16 slice lpbox: a long press takes a click box (#390; coordinator ruling 6 of wave 16; Alice 2026-10-09)
+
+Alice's rule of 10-09 is that pack taps use click boxes (a point picked inside a box sized to
+the control, the whole box harmless), never fixed points. The kernel's `long_press` (alias
+`long_tap`) was the one click of a task package with no box form: `point` has `rect` and
+`target_center` has `target`, and every drag already takes rectangles. It now takes a click
+box, and the Lab records a long press as the box around the point it presses (wave-15 rulings,
+LAB-2 item 2). [resource-declarations.md](resource-declarations.md) (the lpbox paragraph) and
+[lab-recording.md](lab-recording.md) ("Drags and long presses") are the contract. No code, no
+configuration key and no ledger member is new; the refusals reuse
+`contained_task_operation_invalid`, `contained_task_input_out_of_bounds`, the declaration
+reason `MissingField`, `invalid_input_sampling_action` and `validation_failed`.
+
+Migration: none needed. The point form stays valid, so a package with a point long press keeps
+loading. No package declares one today: none of the three resource repositories' `main`, nor
+their open pull requests (checked on 2026-10-15), holds a `long_press` or `long_tap`
+click. A point long press written from now on needs the reason its target has no stable extent
+(Alice 10-09); otherwise it is a box.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LB-1 | a task operation's or navigation edge's click `{"kind": "long_press" \| "long_tap", "x", "y", "width", "height", "duration_ms"}` | resource file format (an optional member pair; task schemas unchanged) | lpbox | lpbox (Lab generation) | `width` and `height` together (one alone is `MissingField` at the other, `contained_task_operation_invalid` in the kernel), each at least 1, inside the resolution (`contained_task_input_out_of_bounds`); the point form `{kind, x, y, duration_ms}` is unchanged; the navigation projection and a guard synthesized from the click keep the box |
+| LB-2 | the run's held point: a point of the box drawn with the step's action seed (`xorshift64_uniform_rect_v1`, as a `rect` tap's), the box's center without a seed; `task.semantic` `EffectIntent` `sampling {algorithm, action_seed, source_regions: [box]}` | new rule of an existing optional member (ledger shape unchanged) | lpbox | lpbox | the sanitizer took `sampling` on `Tap`, `Swipe` and the two drags; it now also takes it on `LongTap`, with one region holding the point (else `invalid_input_sampling_action`); a point long press records none, as before |
+| LB-3 | drive navigation and actinglab's navigation reader on a boxed `long_press` click: a drag that does not move, from the box to the box, at its center | new rule (no persisted shape) | lpbox | lpbox | as they press a `rect` tap at its rectangle's center; a box needs both members (`drive_plan_invalid` / `validation_failed`) |
+| LB-4 | `record mark --long-press x,y,w,h`, request member `click.long_press {x, y, width, height}` (`actingcommand.lab-record-mark.v1`) | tool input (changes L2-2's point) | lpbox | lpbox | the box is the step's click rectangle; a bare point is `validation_failed`; MCP `ac_record_mark` hands the request on unchanged |
+| LB-5 | the package `record stop` generates for a long press: `{"kind": "long_press", "x", "y", "width", "height", "duration_ms"}` with the step's click rectangle; `do --capture --record` on it holds the box's center (`point_rule` `rect_center`, was `declared_point`) | resource file format the tool writes; output value | lpbox | lpbox | changes L2-4 and L2-6; the first decision must hold a point inside the box; a recording made before keeps its 1x1 click rectangle and generates a box of one pixel |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -1639,8 +1639,8 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
 /// The click of a click step: the recorded rectangle, or (Workflow #396 REC-4) the box of the
 /// template it follows (`target`) or that box's corner plus the recorded offset (`offset`).
 /// Never `target_center`, which clicks one fixed point. Workflow #390 LAB-2: a drag is a `drag`
-/// click from the recorded rectangle to its destination, a long press a `long_press` click at its
-/// point.
+/// click from the recorded rectangle to its destination, a long press (Workflow #390 lpbox) a
+/// `long_press` click with the recorded rectangle as its click box.
 fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
     match click.gesture {
         Some(ClickGesture::Drag { to, duration_ms }) => {
@@ -1656,6 +1656,8 @@ fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
                 "kind": "long_press",
                 "x": click.rect.x,
                 "y": click.rect.y,
+                "width": click.rect.width,
+                "height": click.rect.height,
                 "duration_ms": duration_ms
             }));
         }

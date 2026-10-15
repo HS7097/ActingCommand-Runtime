@@ -113,7 +113,7 @@ record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
             [--template <id>=x,y,w,h[@x,y,w,h]]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
             [--forbid <id>]… [--anchor <id> | --no-anchor]
             [--click x,y,w,h | --click-from <id> | --click-follow <id> | --click x,y,w,h --click-follow <id>
-             | --click x,y,w,h --drag-to x,y,w,h --duration-ms <ms> | --long-press x,y --duration-ms <ms>]
+             | --click x,y,w,h --drag-to x,y,w,h --duration-ms <ms> | --long-press x,y,w,h --duration-ms <ms>]
             [--click-guard <id>] [--click-retry <n>]
             [--replace-click] [--remove <id>]… [--optional [--settle-ms <0..60000>] | --not-optional]
             [--dry-run] [--state-dir <dir>]
@@ -198,7 +198,8 @@ gestures (Workflow #390 LAB-2, see "Forbidden marks and anchors" and "Drags and 
 ```
 ```json
 {"schema_version":"actingcommand.lab-record-mark.v1","step":3,
- "click":{"long_press":{"x":640,"y":360},"duration_ms":800},"replace_click":true}
+ "click":{"long_press":{"x":620,"y":340,"width":40,"height":40},"duration_ms":800},
+ "replace_click":true}
 ```
 
 `"clear_anchor": true` (`--no-anchor`) clears the step's anchor; `remove` takes a forbidden
@@ -388,17 +389,20 @@ Workflow #390 LAB-2. A step's effect may be a drag or a long press instead of a 
 - `--click x,y,w,h --drag-to x,y,w,h --duration-ms <ms>` (`"click": {"region", "drag_to",
   "duration_ms"}`) declares a drag that presses a point of the click rectangle, moves to a point
   of the destination rectangle and lifts there after the duration; a fast drag is a swipe.
-- `--long-press x,y --duration-ms <ms>` (`"click": {"long_press": {"x", "y"}, "duration_ms"}`)
-  declares a long press that holds that point for the duration; the step's click rectangle is
-  the 1x1 rectangle at the point.
+- `--long-press x,y,w,h --duration-ms <ms>` (`"click": {"long_press": {"x", "y", "width",
+  "height"}, "duration_ms"}`) declares a long press in that click box, held for the duration;
+  the box is the step's click rectangle (Workflow #390 lpbox, Alice's rule of 10-09 that pack
+  taps use click boxes: size it to the pressed control, so that every point of it is harmless).
+  A bare point `x,y` is `validation_failed`; `x,y,1,1` is the box of one pixel.
 - The duration is 1..=60000 ms. A drag needs its rectangle, its destination and a duration; a
-  long press its point and a duration and no rectangle; neither takes `--click-from` or
+  long press its box and a duration and no `--click` rectangle; neither takes `--click-from` or
   `--click-follow`; every rectangle lies inside the frame. Anything else is `validation_failed`
   (exit 2). Guard, retry and `--replace-click` apply as to a tap.
 - `recording.json` records `click.gesture`: `{"kind": "drag", "to", "duration_ms"}` or
   `{"kind": "long_press", "duration_ms"}`; `record status` shows it on the click.
-- The kernel presses a long press at one point (`long_press` takes a point, not a rectangle), so
-  a long press is the one generated click that is not a box.
+- Workflow #390 lpbox: the generated `long_press` click declares the box, and the kernel holds a
+  point it picks inside the box, as it taps a `rect` click (the `long_press` paragraph of
+  [resource-declarations.md](resource-declarations.md)). Every generated click is a box.
 
 ### OCR in the Lab
 
@@ -543,7 +547,7 @@ frame attachment or recording persistence. The global parser handles the flag at
   its duration (`rect_center`), or along `--swipe x1,y1,x2,y2,ms`, which must start in the one
   and end in the other (`record_click_outside_step_rect`) and last the declared duration
   (`record_click_rect_conflict`), rule `explicit`. A long press is a swipe that ends where it
-  began, at its point, over its duration (`declared_point`); `--swipe` on it is
+  began, at the center of its click box, over its duration (`rect_center`); `--swipe` on it is
   `record_click_rect_conflict`. `--tap` and `--tap-rect` on such a step are
   `record_click_rect_conflict`; `--swipe` on a tap step is `record_click_rect_conflict`, and on
   a step without a declared click `record_step_click_missing` (declare the drag with `record
@@ -894,8 +898,8 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   REC-4: `{"kind": "target", …}` or `{"kind": "offset", …}` for a click that follows a template,
   see "Following a template"; Workflow #390 LAB-2: `{"kind": "drag", "from", "to",
   "duration_ms"}` with the recorded rectangle and destination for a drag, `{"kind": "long_press",
-  "x", "y", "duration_ms"}` at the recorded point for a long press, see "Drags and long
-  presses"),
+  "x", "y", "width", "height", "duration_ms"}` with the recorded click box for a long press,
+  see "Drags and long presses"),
   `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
   `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
   `retry_interval_ms` only when the step declares a retry. Its guard target comes from the

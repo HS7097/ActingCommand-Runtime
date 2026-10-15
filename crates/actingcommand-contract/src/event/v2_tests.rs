@@ -2355,6 +2355,62 @@ fn task_semantic_effect_intent_sampling_rejects_invalid_evidence() {
     .expect_err("unknown sampling algorithm");
 }
 
+// Workflow #390 lpbox (exec key 76): a long press drawn in its click box records the seed and
+// the box as its one sampling region, and the effect intent keeps them; the evidence must hold
+// the pressed point in exactly one region.
+#[test]
+fn lpbox_a_long_tap_effect_intent_carries_the_sampling_of_its_box() {
+    let region = InputSamplingRegion::new(10, 20, 8, 6).expect("sampling region");
+    let intent = |x: i32, y: i32| TaskSemanticFact::EffectIntent {
+        frame_extent: None,
+        step_index: 1,
+        operation_label: "hold".to_string(),
+        action: InputAction::LongTap {
+            x,
+            y,
+            duration_ms: 800,
+        },
+    };
+    let sampled = sanitize(
+        TaskPayloadDraft::semantic_with_sampling(
+            intent(17, 25),
+            InputSamplingEvidence::new(78, vec![region]).expect("sampling evidence"),
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let recovered: EventPayload =
+        serde_json::from_value(serde_json::to_value(sampled.payload()).expect("payload JSON"))
+            .expect("sampled long tap round trip");
+    let EventPayload::Task(TaskPayload::Semantic(payload)) = recovered else {
+        panic!("expected task semantic payload")
+    };
+    let sampling = payload.sampling().expect("sampling metadata");
+    assert_eq!(sampling.action_seed(), 78);
+    assert_eq!(sampling.source_regions(), [region]);
+
+    let second = InputSamplingRegion::new(40, 40, 4, 4).expect("sampling region");
+    for (case, fact, regions) in [
+        ("a point outside the box", intent(18, 25), vec![region]),
+        ("two regions", intent(12, 22), vec![region, second]),
+    ] {
+        let error = sanitize_error(
+            TaskPayloadDraft::semantic_with_sampling(
+                fact,
+                InputSamplingEvidence::new(78, regions).expect("sampling evidence"),
+                AuditInput::new(),
+            )
+            .into(),
+        );
+        assert_eq!(
+            error.code(),
+            SanitizationCode::InvalidInputSamplingAction.code(),
+            "{case}"
+        );
+    }
+}
+
 #[test]
 fn task_semantic_payload_rejects_invalid_facts() {
     let invalid = [

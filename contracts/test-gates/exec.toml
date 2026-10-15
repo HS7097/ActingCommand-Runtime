@@ -1167,3 +1167,20 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result",
 ]
 incident = ["#410"]
+
+# Workflow #390 lpbox (coordinator ruling 6 of wave 16, from Alice's rule of 10-09 that pack taps use click boxes, never fixed points; register §1.82): a long_press (long_tap) click takes a click box x, y, width, height and the kernel holds a point picked inside it for the click's duration, drawn with the action seed as a rect tap's point and recorded with the box as its one sampling region (the box's centre without a seed); the effect intent keeps that sampling, which must hold the point in one region; the point long press the contract already allowed keeps loading and holds its point; half a box (width or height alone), an empty box or one past the frame is refused at admission and before any input; source compilation keeps the box in the navigation and in a guard synthesized from the click; the Lab's validation, the drive navigation and actinglab's navigation reader take the box (navigation holds its centre); the Lab records a long press as the click box around the point it presses (--long-press x,y,w,h, a bare point refused), do --capture --record holds the box's centre, the package declares the box and the first decision holds a point inside it
+[[gate]]
+key = "76"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_lpbox::lpbox_a_long_press_box_holds_a_seeded_point_of_its_box_for_its_duration",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_lpbox::lpbox_a_long_press_takes_a_whole_box_inside_the_frame_or_its_allowed_point",
+    "actingcommand-contract::lib::event::tests::lpbox_a_long_tap_effect_intent_carries_the_sampling_of_its_box",
+    "actingcommand-pack-containment::lib::source::tests::lpbox_a_source_long_press_keeps_its_click_box_in_the_navigation_and_the_guard",
+    "actingcommand-lab::lib::lab_run::tests::lpbox_lab_validation_takes_a_long_press_click_box_inside_the_frame",
+    "actingcommand-execution-kernel::lib::drive::tests::lpbox_a_long_press_box_navigation_input_holds_its_box",
+    "actingcommand-actinglab::bin:actinglab::commands::navigation_recovery::lpbox_tests::lpbox_a_long_press_box_navigation_input_holds_its_box",
+    "actingcommand-lab::lib::gate_390_lab2::lpbox_a_long_press_is_recorded_with_its_click_box_and_held_inside_it",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::lpbox_record_mark_long_press_flag_takes_a_click_box",
+]
+incident = ["#390"]

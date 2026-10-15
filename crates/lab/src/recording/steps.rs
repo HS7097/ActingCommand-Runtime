@@ -1519,9 +1519,10 @@ fn gesture_declared(spec: &ClickSpec) -> bool {
     spec.drag_to.is_some() || spec.long_press.is_some() || spec.duration_ms.is_some()
 }
 
-/// Workflow #390 LAB-2: a drag (`region` to `drag_to`) or a long press (the point `long_press`,
-/// recorded as a 1x1 rectangle), each over `duration_ms` (1..=60000), with every rectangle inside
-/// the frame; it takes no source mark and follows no template.
+/// Workflow #390 LAB-2: a drag (`region` to `drag_to`) or a long press (Workflow #390 lpbox: the
+/// click box `long_press`, recorded as the step's click rectangle), each over `duration_ms`
+/// (1..=60000), with every rectangle inside the frame; it takes no source mark and follows no
+/// template.
 fn gesture_declaration(
     spec: &ClickSpec,
     size: Option<RecordSize>,
@@ -1559,17 +1560,11 @@ fn gesture_declaration(
                 },
             ))
         }
-        (None, None, Some(point), Some(duration_ms)) if source_free => {
-            let rect = RecordRect {
-                x: point.x,
-                y: point.y,
-                width: 1,
-                height: 1,
-            };
+        (None, None, Some(rect), Some(duration_ms)) if source_free => {
             if !inside(rect) {
                 return Err(invalid(
                     "validation_failed",
-                    "the long press point must lie inside the frame",
+                    "the long press box must lie inside the frame with width and height >= 1",
                 ));
             }
             Ok((
@@ -1582,7 +1577,7 @@ fn gesture_declaration(
         _ => Err(invalid(
             "validation_failed",
             "a drag needs --click x,y,w,h, --drag-to x,y,w,h and --duration-ms; a long press needs \
-             --long-press x,y and --duration-ms; neither takes --click-from or --click-follow",
+             --long-press x,y,w,h and --duration-ms; neither takes --click-from or --click-follow",
         )),
     }
 }
@@ -2615,8 +2610,9 @@ fn point_inside(point: RecordPoint, rect: RecordRect) -> bool {
 
 /// Workflow #390 LAB-2: `do --capture --record` on a step that declares a drag or a long press.
 /// A drag goes from a point of its rectangle to a point of `to` (their centers, or `--swipe`'s
-/// points, which must lie inside them, with the declared duration); a long press holds its one
-/// point. `--tap` and `--tap-rect` press a tap and are refused here.
+/// points, which must lie inside them, with the declared duration); a long press holds the
+/// center of its click box (Workflow #390 lpbox), the box being recorded around that point.
+/// `--tap` and `--tap-rect` press a tap and are refused here.
 fn plan_gesture(
     recording: &LabRecording,
     index: u32,
@@ -2671,11 +2667,8 @@ fn plan_gesture(
             (rect_center(rect), rect_center(to), "rect_center")
         }
         (ClickGesture::LongPress { .. }, None) => {
-            let point = RecordPoint {
-                x: rect.x,
-                y: rect.y,
-            };
-            (point, point, "declared_point")
+            let point = rect_center(rect);
+            (point, point, "rect_center")
         }
         (ClickGesture::LongPress { .. }, Some(_)) => {
             return Err(conflict(
