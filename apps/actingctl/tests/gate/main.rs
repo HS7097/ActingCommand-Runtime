@@ -22,6 +22,8 @@ mod install_transition;
 mod mcp_app;
 // Workflow #389 MCP-14: `actingctl codes` ↔ `ac_outcome_code`.
 mod mcp_codes_parity;
+// Workflow #398 RD-1c: `actingctl devices` ↔ `ac_devices`, `ac_device_bind`, `ac_device_unbind`.
+mod mcp_devices_parity;
 // Workflow #389 MCP-7: `actingctl diagnose` ↔ `ac_diagnose`.
 mod mcp_diagnose_parity;
 mod mcp_events_parity;

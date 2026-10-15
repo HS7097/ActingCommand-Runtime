@@ -7006,9 +7006,11 @@ fn actinglab_glue_declarations_hold() {
 // Workflow #398 RD-1b, test row T10 (model-398 v1.1 §3.2, §12): the private binding file
 // `<state root>\private\device-bindings.json` holds the device serials, so it is read only by
 // the binding reader and never exported, archived or put into a diagnostic. Its path constants
-// and its reader are named only in the contract's `device_binding` module and actingd's binding
-// reader; the evidence export, the ledger maintenance archive, the kept-frame folders, the
-// forensic reads and the diagnostic paths name none of them.
+// and its reader are named only in the contract's `device_binding` module, actingd's binding
+// reader and its one writer, `actingctl devices bind|unbind` (Workflow #398 RD-1c, model-398
+// §3.2: "only `actingctl devices bind|unbind` and a person write it"); the evidence export, the
+// ledger maintenance archive, the kept-frame folders, the forensic reads and the diagnostic paths
+// name none of them.
 #[test]
 fn rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings() {
     const NAMES: &[&str] = &[
@@ -7021,6 +7023,7 @@ fn rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings() {
     const READERS: &[&str] = &[
         "crates/actingcommand-contract/src/device_binding.rs",
         "apps/actingd/src/config/device_binding.rs",
+        "apps/actingctl/src/devices.rs",
     ];
     const NEVER_READING: &[&str] = &[
         "crates/runtime-host/src/host/evidence_export.rs",

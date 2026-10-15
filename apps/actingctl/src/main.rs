@@ -64,6 +64,11 @@ mod run_evidence;
 // Workflow #390 DRILL-1: `ladder-drill` (MCP `ac_ladder_drill`), a drill of an instance's ladder.
 mod ladder_drill;
 
+// ---- Workflow #398 RD-1c (begin): `devices list|bind|unbind` (MCP `ac_devices`,
+// `ac_device_bind`, `ac_device_unbind`).
+mod devices;
+// ---- Workflow #398 RD-1c (end) ----
+
 use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -206,6 +211,12 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #389 MCP-6 (end) ----
+    // ---- Workflow #398 RD-1c (begin): `devices` runs the install's adb, never the Runtime, and
+    // leaves before `Invocation::parse`; its flags are `flags_of`'s. ----
+    if let Some(exit) = devices::dispatch(&arguments) {
+        return exit;
+    }
+    // ---- Workflow #398 RD-1c (end) ----
     match run(arguments, detail) {
         Ok(Done {
             members,
@@ -1567,6 +1578,11 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
             // Workflow #389 MCP-21.
             "--wait",
         ],
+        // Workflow #398 RD-1c: `devices`; the alias and the handle are positional words.
+        "devices" if matches!(action, Some(devices::LIST | devices::BIND)) => {
+            &["--state-root", "--root"]
+        }
+        "devices" if action == Some(devices::UNBIND) => &["--state-root"],
         _ => return None,
     };
     Some(flags)

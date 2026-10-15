@@ -278,6 +278,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key",
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
+    "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
 ]
 incident = ["#389"]
 
@@ -532,3 +533,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning",
 ]
 incident = ["#389 MCP-9a"]
+
+# actingctl devices list|bind|unbind and ac_devices, ac_device_bind, ac_device_unbind: the list answers each device adb lists by its handle, transport, state, model, bound alias and loopback endpoint and never a serial; a bind writes the device's serial for a handset alias into the private binding file with its channel and answers without it; an unlisted handle, an alias that is no handset, an unknown alias, a device already bound to another alias and adb that fails are refused with their codes, adb's text redacted; an unbind removes the binding the Runtime reads and keeps the others (Workflow #398 RD-1c, model-398 v1.1 §12 RD-1c-T1, T2, T3, T5)
+[[gate]]
+key = "62"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial",
+    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others",
+]
+incident = ["#398 RD-1c"]

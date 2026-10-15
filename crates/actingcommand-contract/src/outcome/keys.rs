@@ -453,4 +453,6 @@ outcome_keys! {
     code_name: name,
     // Workflow #389 MCP-21: how long a command's `--wait` waited for its request.
     waited_ms: duration_ms,
+    // Workflow #398 RD-1c: a device's handle in adb's list, `<transport>:<transport_id>`.
+    handle: token,
 }

@@ -944,6 +944,22 @@ domain `emulator_autostart_` are catalog entries, not rows (§7).
 | E6C-1 | actingd daemon lines on stderr: the autostart report lines, `emulator_autostart_queued` (`count`) once the claims are enqueued, before `runtime_ready`; per claim `…_network_ready` or `…_network_status_unknown`, then one of `…_started`, `…_preparation_failed`, `…_failed`, `…_network_unready`, `…_superseded`, `…_yielded`, `…_skipped`, `…_interrupted`, each with `alias`; one developer line and one `OUTCOME actingd:` line each (A6-1's writer) | process interface | S6c | S6c | none when no instance names `start_emulator` (the default, off); the lines of claims the host's close ended come before `runtime_stopped`; a line that cannot be written never stops actingd; #643's stdout lines `actingd emulator_autostart_* …` were never shipped |
 | E6C-2 | an autostart claim's records under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's synthesized connection): `lease.requested` and `scheduler.admitted` + `lease.granted`, or `scheduler.queued` (deadline `u64::MAX`, priority `normal`) while a pause holds it; the renew set; `lease.released`; at its Start `command.received` (Runtime origin) and H-4's start records; a refusal before the Start: `command.received`, `command.rejected`, `runtime.failed` (`emulator_autostart_network_unready` with `alias`, `elapsed_ms`; or the `lease_expired` / `lease_missing` of a refused renewal) | new use of existing records (shapes unchanged) | S6c | S6c | a claim that yields to a pause, is superseded by an operator control, finds its instance running, or is interrupted by a drain or a shutdown writes its release only (and, for a pause, its new claim's `lease.requested` + `scheduler.queued`), no `command.*` |
 
+### 1.62 Wave 13 slice RD-1c (#398 model-398 v1.1 §3.3, §10.1, §12)
+
+RD-1c writes the private binding file RD-1b reads (RB5) and adds no ledger shape: `actingctl
+devices` runs no Runtime request and records nothing, and the next start records a binding as
+RB1 says. [device-binding.md](device-binding.md), "Choosing a device", is the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D1C1 | `<state root>\private\device-bindings.json` (RB5) | first writer of an existing private file format, not a ledger shape | RD-1c | RD-1c (`actingctl devices bind\|unbind`, `ac_device_bind`, `ac_device_unbind`) | the file as RB5 defines it, `bound_via` `cli` or `mcp`; written whole through a temporary sibling after the file's own rules accept the new content (one alias and one serial each); never read by an export, archive or diagnostic (guard RD-1b-T10 names `apps/actingctl/src/devices.rs` as its writer) |
+| D1C2 | `actingctl devices list` ↔ `ac_devices` rows `{handle?, transport, state, model?, bound_alias?, endpoint?}`; `devices bind` ↔ `ac_device_bind` `{alias, handle, model?, restart_required}`; `devices unbind` ↔ `ac_device_unbind` `{alias, unbound, restart_required}` | client read and instruction outputs (no persisted record, no runtime-client shape) | RD-1c | RD-1c | `handle` `<transport>:<transport_id>`, never a device value; no output names a serial |
+
+Codes (catalog entries, not rows, §7): `device_list_reported`, `device_binding_changed`
+(success), `device_handle_unknown`, `device_list_failed`, `device_kind_unsupported`,
+`device_bindings_invalid`, `device_bindings_write_failed` (error), all actingctl, `ladder_class`
+`none`; the key `handle` (token); actingctl joins the owners of the prefix `device_`.
+
 ### 1.63 Wave 13 slice DRILL-1 (#390, forced-compromises mapping T-08; coordinator ruling 9 of wave 13)
 
 DRILL-1 lets a person drill one instance's stuck-recovery ladder; a drill is recorded like a ladder
