@@ -626,6 +626,7 @@ fn selection_record(
         reasons: record_reasons(&decision.reasons),
         confirmation: TaskSelectionConfirmation::NotAttempted,
         unknown_check: None,
+        multi_select: None,
     })
 }
 

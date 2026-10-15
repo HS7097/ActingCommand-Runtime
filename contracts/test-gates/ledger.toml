@@ -190,6 +190,8 @@ tests = [
     "actingcommand-ledger::lib::global::read_only_tests::open_read_only_reports_complete_corruption_with_readable_prefix",
     "actingcommand-ledger::lib::global::read_only_tests::open_read_only_stops_on_non_final_tail_before_later_segments",
     "actingcommand-ledger::lib::global::read_only_tests::open_read_only_query_matches_event_indexes",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_reports_blank_lines_duplicate_keys_and_empty_segments",
+    "actingcommand-ledger::lib::global::read_only_tests::open_read_only_reports_each_repair_journal_state_a_crash_can_leave",
 ]
 incident = []
 
@@ -518,3 +520,38 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_l3_g9::gate_l3_g9_material_deleted_by_hand_reads_the_same_rows",
 ]
 incident = ["#375", "#382 L-3"]
+
+# Owner journal compaction (Workflow #191 O): a fold derives the same last record, revision, blocks and proofs from its image, keeps the last record's bytes and every block start an earlier startup sealed, writes nothing, and a second fold continues the checkpoint; recovery from the side file (R1-R4) before, during and after the in-place write derives the same journal (Workflow #382 L-4 G11)
+[[gate]]
+key = "17"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::owner_journal::gate_l4_g11::gate_l4_g11_a_fold_derives_the_journal_it_replaces_and_keeps_every_sealed_bound",
+    "actingcommand-ledger::lib::owner_journal::gate_l4_g11::gate_l4_g11_a_second_fold_continues_the_checkpoint_and_keeps_every_sealed_bound",
+    "actingcommand-ledger::lib::owner_journal::gate_l4_g11::gate_l4_g11_side_file_recovery_before_during_and_after_the_write_derives_the_same_journal",
+]
+incident = ["#382 L-4"]
+
+# actingledger `facts --at`, `material --request` and `views --instance-port` through the in-process actingledger::run on formal roots: the store replayed through a position or not_available beyond it, the verified frame bytes or a missing frame with a nonzero exit and no write, every instance id ever bound to a port or instance_port_unknown / instance_port_conflict (Workflow #382 L-4 G15)
+[[gate]]
+key = "36"
+coverage = "Y"
+tests = [
+    "actingledger::gate::facts::gate_facts_at_a_position_are_the_store_replayed_through_that_position",
+    "actingledger::gate::facts::gate_facts_beyond_the_snapshot_are_not_available_and_exit_nonzero",
+    "actingledger::gate::material::gate_material_returns_the_verified_frame_bytes_and_writes_nothing",
+    "actingledger::gate::material::gate_material_of_a_frame_deleted_by_hand_is_missing_and_exits_nonzero",
+    "actingledger::gate::views::gate_views_instance_port_holds_every_instance_ever_bound_to_the_port",
+    "actingledger::gate::views::gate_views_instance_port_without_a_binding_is_unknown",
+    "actingledger::gate::views::gate_views_instance_port_with_another_instance_condition_conflicts",
+]
+incident = ["#382 L-4"]
+
+# Workflow #357 DB-3s (M-357b v1.0 §5.3, §5.4, §12.6 T16; register §1.66 MS5): a multi select's tap intents, each linked to its pick's confirmation frame, and a scan move come before its selection record, all under the step's one action, with one effect completion after; a formal root reads them back, so no reader requires the record before the step's first intent
+[[gate]]
+key = "48"
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_357_db3s::db3s_t16_a_multi_select_record_follows_its_tap_intents_and_reads_back",
+]
+incident = ["#357 DB-3s"]

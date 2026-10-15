@@ -210,6 +210,7 @@ fn input_draft(
 }
 
 #[test]
+#[ignore = "child process entry: its parent test runs it with --ignored --exact"]
 fn ledger_writer_process_child() {
     let (Ok(root), Ok(ready_path)) = (env::var(CHILD_ROOT_ENV), env::var(CHILD_READY_ENV)) else {
         return;
@@ -240,6 +241,7 @@ fn hard_killed_writer_releases_os_lock_and_records_recovery() {
     let executable = env::current_exe().expect("test executable");
     let mut child = Command::new(executable)
         .args([
+            "--ignored",
             "--exact",
             "global::tests::process::ledger_writer_process_child",
             "--nocapture",
@@ -274,6 +276,7 @@ fn hard_killed_writer_releases_os_lock_and_records_recovery() {
 }
 
 #[test]
+#[ignore = "child process entry: its parent test runs it with --ignored --exact"]
 fn critical_intent_process_child() {
     let (Ok(root), Ok(ready_path)) = (
         env::var(CRITICAL_CHILD_ROOT_ENV),
@@ -329,6 +332,7 @@ fn crash_after_intent_never_forges_an_outcome() {
     let ready_path = temp.path().join("critical-ready");
     let mut child = Command::new(env::current_exe().expect("test executable"))
         .args([
+            "--ignored",
             "--exact",
             "global::tests::process::critical_intent_process_child",
             "--nocapture",

@@ -223,6 +223,7 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_failures_after_send_without_a_projection_are_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_failure_chained_to_an_after_send_failure_is_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_settled_failures_are_not_uncertain",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
 ]
 incident = ["#382 C-1"]
 
@@ -231,7 +232,7 @@ incident = ["#382 C-1"]
 key = "R5"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-client::lib::tests::contained_task_can_outlive_the_general_five_second_exchange_timeout",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_contained_task_receipt_outlives_the_io_budget",
     "actingcommand-runtime-client::lib::tests::contained_task_response_timeout_is_typed_and_runs_reset_recovery",
     "actingcommand-runtime-client::lib::tests::contained_task_pre_deadline_eof_remains_receipt_failure",
 ]
@@ -478,3 +479,69 @@ tests = [
     "actingcommand-contract::lib::runtime::tests::s4_t5_a_wire_request_that_names_a_package_digest_is_refused",
 ]
 incident = ["#336 PKG-S4"]
+
+# Latch rules (#382 C-2 G5, ScriptedRuntime): a fatal rejection, a receipt-header timeout, an end of stream before the deadline and another owner epoch on the reconnect latch the client, and its next call never reaches the Runtime; a non-fatal rejection does not latch. An input whose receipt never came keeps its request context and is sent once (replaces test plan §4 #7)
+[[gate]]
+key = "R2"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_client_latches_on_fatal_and_transport_failures_and_never_on_a_non_fatal_rejection",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_is_sent_once",
+]
+incident = ["#382 C-2"]
+
+# Install-transition receipt matching (#382 C-2 G4, ScriptedRuntime): a missing receipt is unconfirmed and uncertain and the request is never sent again; another transition or ticket is unexpected; CommitShutdown takes its ShutdownAccepted, Release its own ticket
+[[gate]]
+key = "R4"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpected",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket",
+]
+incident = ["#382 C-2"]
+
+# Run-status fold (#382 C-2 G9, Workflow #338 R1, ScriptedRuntime ledger): admitted only from a package admission, then running, then the terminal's outcome; interrupted_unterminated after a later start or takeover without a terminal; not_found with its request member always present; dispatch, origin and lease terminal
+[[gate]]
+key = "R7"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_is_admitted_then_running_then_the_outcome_of_its_terminal",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_without_a_terminal_after_a_runtime_start_or_takeover_is_interrupted_unterminated",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_the_ledger_does_not_hold_is_not_found_with_its_request_member_always_present",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_names_its_dispatch_its_origin_and_its_lease_terminal",
+]
+incident = ["#382 C-2"]
+
+# Emulator control (#382 C-2 G8, ScriptedRuntime): a restart the host timed out is a device failure carrying its host code; a result for another instance or action is unexpected
+[[gate]]
+key = "R12"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_restart_the_host_timed_out_is_a_device_failure_carrying_its_host_code",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected",
+]
+incident = ["#382 C-2"]
+
+# Workflow #357 DB-3s (M-357b v1.0 §5, §12.6 T1-T15; register §1.66 MS1-MS5): a multi select's record shape; a single select keeps its bytes, every pick shape round-trips, rules M1-M8 refuse what no writer writes, the public projection keeps only codes inside the picks, the largest real record is measured against the write bound, and no 0.12.x member is read (contract key after K23)
+[[gate]]
+key = "K24"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t1_single_select_records_keep_their_bytes",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t2_a_single_frame_multi_select_that_picked_three_round_trips",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t3_a_scan_multi_select_taps_in_content_order",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t4_the_resolved_count_follows_the_declared_count_and_the_free_slots",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t5_a_partial_fill_with_an_unknown_instance_is_blocked_by_rule_4_only",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t6_single_frame_failures_end_the_sequence_and_the_record_copies_them",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t7_scan_failures_end_the_sequence_and_stay_scan_shapes",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t8_a_sequence_stopped_outside_the_record_counts_its_checked_taps",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t9_rule_5_compares_a_full_fill_by_its_lowest_score",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t10_an_early_stopped_multi_select_is_full_with_every_quota_filled",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t11_a_single_select_never_carries_a_multi_select_confirmation",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t12_each_rule_refuses_what_no_writer_writes",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t13_the_public_projection_keeps_only_codes_inside_the_picks",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t14_the_largest_multi_select_record_is_measured_against_the_write_bound",
+    "actingcommand-contract::lib::event::payload::task_selection::tests::db3s_t15_an_unknown_member_in_a_multi_select_shape_is_not_read",
+]
+incident = ["#357 DB-3s"]
