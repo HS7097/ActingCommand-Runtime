@@ -181,3 +181,58 @@ fn gate_ac_overview_stops_cutting_as_soon_as_the_answer_fits() {
     }
     assert_eq!(overview["install"], full_overview()["install"]);
 }
+
+// Workflow #389 MCP-5b (MCP-0 command table v1.1 §4.6, §4.9; ADD:311: a slice that adds an
+// overview block registers its place in the order): each instance row's `foreground` is cut after
+// every row's monitor and before install.build, each cut leaving `foreground_truncated: true` in
+// its row; what is never cut stays as it was.
+#[test]
+fn gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build() {
+    let mut overview = full_overview();
+    for index in 0..ROWS {
+        overview["instances"][index]["foreground"] = json!({
+            "package": "neutral.application",
+            "observed_at_unix_ms": 1_700_000_000_000_u64,
+        });
+    }
+    let start = overview.clone();
+    let seen = RefCell::new(Vec::new());
+    cut_to_fit(&mut overview, |candidate| {
+        seen.borrow_mut().push(candidate.clone());
+        false
+    });
+    let seen = seen.into_inner();
+    let cuts = seen
+        .windows(2)
+        .map(|pair| cut_between(&pair[0], &pair[1]))
+        .collect::<Vec<_>>();
+    let rows_from = TOP_BLOCKS.len();
+    assert_eq!(cuts.len(), rows_from + 3 * ROWS + 1, "cuts: {cuts:?}");
+    for (offset, block) in ["run", "monitor", "foreground"].into_iter().enumerate() {
+        let from = rows_from + offset * ROWS;
+        let mut cut = cuts[from..from + ROWS].to_vec();
+        cut.sort();
+        assert_eq!(
+            cut,
+            (0..ROWS)
+                .map(|index| format!("{block}@{index}"))
+                .collect::<Vec<_>>(),
+            "cuts: {cuts:?}"
+        );
+    }
+    assert_eq!(cuts.last().map(String::as_str), Some("install.build"));
+    for index in 0..ROWS {
+        let row = &overview["instances"][index];
+        assert_eq!(
+            (row.get("foreground"), &row["foreground_truncated"]),
+            (None, &json!(true)),
+            "row {index}: {overview}"
+        );
+        for kept in ["alias", "instance_id", "lease_active", "queued", "pause"] {
+            assert_eq!(
+                row[kept], start["instances"][index][kept],
+                "row {index} lost {kept}: {overview}"
+            );
+        }
+    }
+}

@@ -277,6 +277,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and_a_fact_key",
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
+    "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
 ]
 incident = ["#389"]
 
@@ -511,3 +512,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload",
 ]
 incident = ["#389 MCP-1"]
+
+# ac_overview cuts each instance row's foreground (the package last seen in the foreground, MCP-5b) after every row's monitor and before install.build, marking it foreground_truncated, and never cuts a row's identity, pause, lease_active or queued (Workflow #389 MCP-5b; MCP-0 command table v1.1 §4.6, §4.9)
+[[gate]]
+key = "60"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_before_the_build",
+]
+incident = ["#389 MCP-5b"]
