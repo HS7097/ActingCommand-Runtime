@@ -451,6 +451,8 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",
+ "actingcommand-runtime-database",
+ "actingcommand-runtime-state",
  "serde_json",
  "tempfile",
 ]

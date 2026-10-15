@@ -6,10 +6,45 @@
 // actingd that does not know BindChannel drops the connection without a receipt: the client
 // reconnects once in the same owner epoch, goes on unbound, says so
 // (`client_channel_unsupported`) and sends no BindChannel on its later reconnects.
+//
+// Every wait of these scripts is bounded (test plan v2.2 §2.1): a client that never makes the
+// connection a script waits for, or never sends or hangs up on it, fails the test after
+// `GATE_WAIT` instead of hanging the job.
 
 use super::*;
 use actingcommand_contract::{RuntimeControlPlaneStatus, RuntimeOperationKind};
-use std::sync::Mutex;
+use std::panic::resume_unwind;
+use std::sync::{Mutex, mpsc};
+
+// Bounds a broken run only; no test relies on it.
+const GATE_WAIT: Duration = Duration::from_secs(120);
+
+// The next connection `listener` accepts, its reads bounded by `GATE_WAIT`; a panic naming
+// `connection` when none arrives within `GATE_WAIT`. The accept runs on a clone of the
+// listener, which stays blocked behind a test that already failed.
+fn accept_within_gate_wait(listener: &TcpListener, connection: &str) -> TcpStream {
+    let accepting = listener
+        .try_clone()
+        .unwrap_or_else(|error| panic!("{connection}: clone the scripted listener: {error}"));
+    let (accepted, arrival) = mpsc::channel();
+    thread::spawn(move || {
+        // The receiver is gone once its wait ran out; nothing is left to tell.
+        let _ = accepted.send(accepting.accept());
+    });
+    let (stream, _) = arrival
+        .recv_timeout(GATE_WAIT)
+        .unwrap_or_else(|_| panic!("{connection}: no connection within {GATE_WAIT:?}"))
+        .unwrap_or_else(|error| panic!("{connection}: {error}"));
+    stream
+        .set_read_timeout(Some(GATE_WAIT))
+        .unwrap_or_else(|error| panic!("{connection}: bound its reads: {error}"));
+    stream
+}
+
+// The script's end, with the script's own panic when it failed.
+fn join_script(server: thread::JoinHandle<()>) {
+    server.join().unwrap_or_else(|panic| resume_unwind(panic));
+}
 
 // A request, or `None` once the client hung up.
 fn read_or_end(stream: &mut TcpStream) -> Option<RuntimeRequest> {
@@ -80,7 +115,7 @@ fn u2_a_reconnect_after_a_dropped_request_binds_the_same_channel() {
     let bindings = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&bindings);
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
-        let (mut first, _) = listener.accept().expect("accept the client");
+        let mut first = accept_within_gate_wait(&listener, "the client");
         seen.lock()
             .expect("bindings")
             .push(answer_handshake(&mut first, owner_epoch));
@@ -90,7 +125,7 @@ fn u2_a_reconnect_after_a_dropped_request_binds_the_same_channel() {
             RuntimeOperation::ResourceTargetView { .. }
         ));
         drop(first);
-        let (mut second, _) = listener.accept().expect("accept the reconnect");
+        let mut second = accept_within_gate_wait(&listener, "the reconnect");
         seen.lock()
             .expect("bindings")
             .push(answer_handshake(&mut second, owner_epoch));
@@ -102,7 +137,7 @@ fn u2_a_reconnect_after_a_dropped_request_binds_the_same_channel() {
         .expect_err("the dropped request is not answered");
     assert_eq!(error.code().as_str(), "runtime_operation_unsupported");
     drop(client);
-    server.join().expect("scripted runtime");
+    join_script(server);
     assert_eq!(
         *bindings.lock().expect("bindings"),
         vec![FORWARDED_LAB, FORWARDED_LAB]
@@ -117,7 +152,7 @@ fn u2_the_contained_task_timeout_recovery_binds_the_same_channel() {
     let bindings = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&bindings);
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
-        let (mut timed_out, _) = listener.accept().expect("accept the task client");
+        let mut timed_out = accept_within_gate_wait(&listener, "the task client");
         seen.lock()
             .expect("bindings")
             .push(answer_handshake(&mut timed_out, owner_epoch));
@@ -126,7 +161,7 @@ fn u2_the_contained_task_timeout_recovery_binds_the_same_channel() {
             task.operation(),
             RuntimeOperation::RunContainedTask { .. }
         ));
-        let (mut recovery, _) = listener.accept().expect("accept the recovery client");
+        let mut recovery = accept_within_gate_wait(&listener, "the recovery client");
         drop(timed_out);
         recovery
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -148,7 +183,7 @@ fn u2_the_contained_task_timeout_recovery_binds_the_same_channel() {
             .expect("bounded task deadline"),
     );
     drop(client);
-    server.join().expect("scripted runtime");
+    join_script(server);
     assert_eq!(
         *bindings.lock().expect("bindings"),
         vec![FORWARDED_LAB, FORWARDED_LAB]
@@ -174,7 +209,7 @@ fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
     let seen = Arc::clone(&after_reconnect);
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
         // The old actingd: Health is answered, BindChannel ends the connection.
-        let (mut first, _) = listener.accept().expect("accept the client");
+        let mut first = accept_within_gate_wait(&listener, "the client");
         let health = read_scripted_request(&mut first);
         assert!(matches!(health.operation(), RuntimeOperation::Health));
         write_scripted_result(&mut first, &health, RuntimeResult::Health { owner_epoch });
@@ -185,7 +220,7 @@ fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
         ));
         drop(first);
         // The one reconnect: Health, then the client's own requests.
-        let (mut second, _) = listener.accept().expect("accept the reconnect");
+        let mut second = accept_within_gate_wait(&listener, "the reconnect");
         let health = read_scripted_request(&mut second);
         assert!(matches!(health.operation(), RuntimeOperation::Health));
         write_scripted_result(&mut second, &health, RuntimeResult::Health { owner_epoch });
@@ -206,7 +241,7 @@ fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
         ));
         drop(second);
         // A later reconnect: Health only.
-        let (mut third, _) = listener.accept().expect("accept the later reconnect");
+        let mut third = accept_within_gate_wait(&listener, "the later reconnect");
         let health = read_scripted_request(&mut third);
         assert!(matches!(health.operation(), RuntimeOperation::Health));
         write_scripted_result(&mut third, &health, RuntimeResult::Health { owner_epoch });
@@ -234,7 +269,7 @@ fn u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable() {
         .expect_err("the old actingd drops the unknown request");
     assert_eq!(error.code().as_str(), "runtime_operation_unsupported");
     drop(client);
-    server.join().expect("scripted runtime");
+    join_script(server);
     assert_eq!(REPORTS.lock().expect("reports").len(), 1);
     assert!(
         !after_reconnect

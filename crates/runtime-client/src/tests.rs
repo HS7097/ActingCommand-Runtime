@@ -16,6 +16,9 @@ mod gate_a2a;
 mod gate_a4;
 // #382 C-1: the R6 result classes and the receipt waits of existing operations (test plan C-1).
 mod gate_c1;
+// #382 C-2: the scripted Runtime's gates G4, G5, G8 and G9 and the replacements of test plan
+// section 4 items 6 and 7 (test plan C-2).
+mod gate_c2;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
@@ -1974,57 +1977,6 @@ fn receipt_eof_before_deadline_remains_connection_failure() {
     assert!(error.to_string().contains("receipt_header_io"));
 }
 
-#[test]
-fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
-    let root = TempDir::new().expect("tempdir");
-    let server = scripted_runtime(&root, |listener, owner_epoch| {
-        let (mut stream, _) = listener.accept().expect("accept client");
-        respond_to_handshake(&mut stream, owner_epoch);
-
-        let request = read_scripted_request(&mut stream);
-        assert!(matches!(
-            request.operation(),
-            RuntimeOperation::RunContainedTask { request, .. }
-                if request.response_deadline_ms()
-                    == ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS
-        ));
-        thread::sleep(Duration::from_millis(5_100));
-        let ids = IdentifierIssuer::new().expect("identifier issuer");
-        write_scripted_result(
-            &mut stream,
-            &request,
-            RuntimeResult::ContainedTaskCompleted {
-                run_id: *ids.mint_run_id().expect("run id").transport(),
-                task_id: *ids.mint_task_id().expect("task id").transport(),
-                task_request_id: request.request_id(),
-                response_deadline_monotonic_ms: Some(60_000),
-                task_result: TaskOutcome::Success,
-                final_page: None,
-                executed_steps: 1,
-            },
-        );
-        respond_with_empty_event_page(&mut stream);
-    });
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        root.path(),
-        crate::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .expect("runtime client");
-
-    let started = std::time::Instant::now();
-    let output = client
-        .run_contained_task("node.a", contained_task_request())
-        .expect("task inside configured response deadline");
-    assert!(started.elapsed() >= Duration::from_secs(5));
-    assert!(matches!(
-        output.receipt().result(),
-        Some(RuntimeResult::ContainedTaskCompleted { .. })
-    ));
-    server.join().expect("scripted runtime");
-}
-
 // Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5488296852
 #[test]
 fn successful_contained_task_returns_complete_ordered_projection_across_event_pages() {
@@ -3938,96 +3890,6 @@ fn missing_runtime_info_is_a_visible_fatal_error() {
     .expect_err("missing discovery must fail");
     assert_eq!(error.code().as_str(), "runtime_info_unavailable");
     assert!(error.is_fatal());
-}
-
-#[test]
-fn broken_ipc_connection_latches_without_reconnect() {
-    let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
-    let host = host(&root, state, 1_000);
-    let client = client(&root);
-    host.close().expect("close host");
-
-    let first = client.health().expect_err("closed runtime must fail");
-    let second = client
-        .health()
-        .expect_err("terminal failure must be stable");
-    assert_eq!(first, second);
-    assert!(first.is_fatal());
-    drop(client);
-
-    for debug in [false, true] {
-        let root = TempDir::new().expect("tempdir");
-        let state = Arc::new(FakeState {
-            input_open_delay: Duration::from_millis(800),
-            ..FakeState::default()
-        });
-        let host = self::host(&root, Arc::clone(&state), 5_000);
-        let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(
-                root.path(),
-                crate::RuntimeChannel::Lab,
-                EventActor::Lab,
-                EventSource::Lab,
-            )
-            .with_io_timeout(Duration::from_millis(100))
-            .with_backend_open_timeout(Duration::from_millis(240)),
-        )
-        .expect("runtime client");
-        let session = debug.then(|| client.begin_debug_session().expect("debug session"));
-        let token = match &session {
-            Some(session) => session.acquire_lease("node.a"),
-            None => client.acquire_lease("node.a"),
-        }
-        .expect("lease");
-        let input = || match &session {
-            Some(session) => session.input(&token, InputAction::Tap { x: 10, y: 20 }),
-            None => client.input(&token, InputAction::Tap { x: 10, y: 20 }),
-        };
-        let error = input().expect_err("the complete finite receipt budget must expire");
-        assert_eq!(
-            error.code().as_str(),
-            "runtime_receipt_header_failed",
-            "{error:#?}"
-        );
-        let io = error.receipt_header_io().expect("input header I/O context");
-        assert!(matches!(
-            io.kind(),
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-        ));
-        assert!(io.request_id().is_some());
-        assert!(io.correlation_id().is_some());
-        assert_eq!(
-            io.expected_owner_epoch(),
-            Some(&client.runtime_info().owner_epoch())
-        );
-        assert_eq!(io.expected_runtime_pid(), Some(client.runtime_info().pid()));
-        if let Some(session) = &session {
-            assert_eq!(io.correlation_id(), Some(&session.correlation_id()));
-        }
-        assert!(!io.message().is_empty());
-        assert!(io.message().chars().count() <= 256);
-        assert!(error.committed_receipt().is_none());
-        assert!(error.is_fatal());
-        assert_eq!(input().expect_err("no resend after timeout"), error);
-        assert_eq!(
-            client.release_lease(&token).expect_err("latched release"),
-            error
-        );
-        // The timeout is not evidence of non-performance: let the one accepted input finish,
-        // waiting for it (bounded) instead of a fixed 400 ms.
-        let waited = Instant::now();
-        while state.inputs.load(Ordering::Acquire) == 0 && waited.elapsed() < Duration::from_secs(5)
-        {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(state.opens.load(Ordering::Acquire), 1);
-        assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-        drop(session);
-        drop(client);
-        host.close().expect("close timed-out session");
-        assert_eq!(state.closes.load(Ordering::Acquire), 1);
-    }
 }
 
 #[test]
