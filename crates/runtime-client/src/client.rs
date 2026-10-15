@@ -6299,7 +6299,8 @@ pub(crate) fn contained_task_response_timeout(
     configured_task_timeout: Duration,
 ) -> RuntimeClientResult<Duration> {
     configured_task_timeout
-        .checked_add(io_timeout)
+        .min(io_timeout)
+        .checked_add(Duration::ZERO)
         .ok_or_else(|| {
             RuntimeClientError::fatal(
                 ClientCode::RuntimeContainedTaskTimeoutOverflow,
