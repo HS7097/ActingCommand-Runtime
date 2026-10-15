@@ -4371,6 +4371,18 @@
           }
         ],
         "backend": "scene_file",
+        "frame_coordinates": {
+          "applies_to": [
+            "tap",
+            "tap_rect",
+            "swipe"
+          ],
+          "device_pixels": [
+            1,
+            1
+          ],
+          "orientation": "square"
+        },
         "frame_path": "observe.png",
         "observation": {
           "content_sha256": "27b881724b35167aa13686852a5ad4e31d23082639e3ee95d2c548078cdb25a0",
@@ -4479,6 +4491,18 @@
         },
         "executed": false,
         "frame_age_ms": 0,
+        "frame_coordinates": {
+          "applies_to": [
+            "tap",
+            "tap_rect",
+            "swipe"
+          ],
+          "device_pixels": [
+            1,
+            1
+          ],
+          "orientation": "square"
+        },
         "guard_result": {
           "evaluation": {
             "color": {
