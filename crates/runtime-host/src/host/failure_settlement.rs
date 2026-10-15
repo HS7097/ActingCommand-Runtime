@@ -173,7 +173,7 @@ impl HostShared {
         refused: &RefusedPackage,
     ) -> RuntimeHostResult<()> {
         let settings = self.pack_admission_settings()?;
-        if crate::pack_admission::suspends(&settings.suspend_codes, refused.code) {
+        if crate::pack_admission::suspends(&settings.suspend_codes[..0], refused.code) {
             self.pack_admission
                 .suspend(path, &refused.package_id, refused.code)?;
         }
