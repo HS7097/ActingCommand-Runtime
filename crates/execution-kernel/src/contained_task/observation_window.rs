@@ -33,7 +33,6 @@ use actingcommand_contract::{
 use actingcommand_recognition_pack::TargetEvaluation;
 use serde::Deserialize;
 use std::ops::RangeInclusive;
-use std::thread;
 use std::time::{Duration, Instant};
 
 /// The longest observation window an operation may declare (FCM E-05).
@@ -255,17 +254,18 @@ impl PreparedContainedTask {
                     after_page,
                 });
             }
+            let task_left = task_deadline.saturating_duration_since(runtime.monotonic_now());
             pause(
                 runtime,
                 TaskTimingBoundary::PageRecognitionWait,
                 interval
                     .min(deadline.saturating_duration_since(now))
-                    .min(task_deadline.saturating_duration_since(Instant::now())),
+                    .min(task_left),
                 timing,
             );
-            if Instant::now() >= task_deadline {
+            if runtime.monotonic_now() >= task_deadline {
                 return Err(self
-                    .task_timeout_error(TaskTimingStage::BeforeInput, task_deadline, None)
+                    .task_timeout_error(runtime, TaskTimingStage::BeforeInput, task_deadline, None)
                     .into());
             }
             let (fresh, step_timing) =
@@ -394,17 +394,23 @@ impl PreparedContainedTask {
                     limit
                 }
             };
+            let task_left = task_deadline.saturating_duration_since(runtime.monotonic_now());
             pause(
                 runtime,
                 TaskTimingBoundary::PostconditionWait,
                 interval
                     .min(limit.saturating_duration_since(now))
-                    .min(task_deadline.saturating_duration_since(Instant::now())),
+                    .min(task_left),
                 timing,
             );
-            if Instant::now() >= task_deadline {
+            if runtime.monotonic_now() >= task_deadline {
                 return Err(self
-                    .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .task_timeout_error(
+                        runtime,
+                        TaskTimingStage::Postcondition,
+                        task_deadline,
+                        None,
+                    )
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
@@ -423,9 +429,14 @@ impl PreparedContainedTask {
                     continue;
                 }
             };
-            if Instant::now() >= task_deadline {
+            if runtime.monotonic_now() >= task_deadline {
                 return Err(self
-                    .task_timeout_error(TaskTimingStage::Postcondition, task_deadline, None)
+                    .task_timeout_error(
+                        runtime,
+                        TaskTimingStage::Postcondition,
+                        task_deadline,
+                        None,
+                    )
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
@@ -483,14 +494,15 @@ fn pause<R: ContainedTaskRuntime>(
     timing: ContainedTaskTimingContext,
 ) {
     let identity = runtime.task_boundary_identity(boundary);
-    let started = Instant::now();
-    thread::sleep(duration);
+    let started = runtime.monotonic_now();
+    runtime.pause(duration);
+    let ended = runtime.monotonic_now();
     runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
         boundary,
         identity,
         context: timing,
         started,
-        ended: Instant::now(),
+        ended,
         succeeded: true,
     });
 }

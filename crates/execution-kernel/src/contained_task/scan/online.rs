@@ -229,13 +229,13 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
         if !self.replay {
             let boundary = TaskTimingBoundary::PageRecognitionWait;
             let identity = self.runtime.task_boundary_identity(boundary);
-            let started = Instant::now();
+            let started = self.runtime.monotonic_now();
             // The wait never runs past the scan's deadline; the session fails at it.
             let left = self
                 .deadline
                 .saturating_duration_since(self.runtime.observation_now());
-            std::thread::sleep(interval.min(left));
-            let ended = Instant::now();
+            self.runtime.pause(interval.min(left));
+            let ended = self.runtime.monotonic_now();
             self.runtime
                 .observe_task_boundary(ContainedTaskBoundaryTiming {
                     boundary,
