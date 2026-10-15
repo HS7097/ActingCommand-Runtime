@@ -22,7 +22,7 @@ fn canonical_text(value: &Value) -> String {
     format!("{}\n", serde_json::to_string_pretty(value).unwrap())
 }
 
-fn run(args: &[&str]) -> crate::CliResult {
+fn run_tool1(args: &[&str]) -> crate::CliResult {
     crate::run_cli(args.iter().copied(), true)
 }
 
@@ -142,7 +142,7 @@ fn tool1_package_fmt_writes_every_json_file_in_the_canonical_serialization() {
     .unwrap();
     fs::write(package.join("data/notes.txt"), "kept\nas it is\n").unwrap();
 
-    let result = run(&["--json", "package", "fmt", "--package", path_text(&package)]);
+    let result = run_tool1(&["--json", "package", "fmt", "--package", path_text(&package)]);
 
     assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
     let data = result.envelope.data.as_ref().unwrap();
@@ -176,7 +176,7 @@ fn tool1_package_fmt_writes_every_json_file_in_the_canonical_serialization() {
     );
     assert_no_digest(&result);
 
-    let again = run(&["--json", "package", "fmt", "--package", path_text(&package)]);
+    let again = run_tool1(&["--json", "package", "fmt", "--package", path_text(&package)]);
     assert_eq!(again.exit_code(), 0, "{}", again.envelope_json());
     assert_eq!(
         again.envelope.data.as_ref().unwrap()["reformatted"],
@@ -194,7 +194,7 @@ fn tool1_package_fmt_check_names_the_unformatted_files_and_writes_nothing() {
     fs::write(package.join("data/canonical.json"), canonical).unwrap();
     fs::write(package.join("data/compact.json"), compact).unwrap();
 
-    let check = run(&[
+    let check = run_tool1(&[
         "--json",
         "package",
         "fmt",
@@ -222,9 +222,9 @@ fn tool1_package_fmt_check_names_the_unformatted_files_and_writes_nothing() {
         compact
     );
 
-    let format = run(&["--json", "package", "fmt", "--package", path_text(&package)]);
+    let format = run_tool1(&["--json", "package", "fmt", "--package", path_text(&package)]);
     assert_eq!(format.exit_code(), 0, "{}", format.envelope_json());
-    let passed = run(&[
+    let passed = run_tool1(&[
         "--json",
         "package",
         "fmt",
@@ -256,7 +256,7 @@ fn tool1_package_edit_adds_and_replaces_by_json_pointer_then_admits_and_writes()
     ]);
     fs::write(&patch, serde_json::to_vec(&edits).unwrap()).unwrap();
 
-    let result = run(&[
+    let result = run_tool1(&[
         "--json",
         "package",
         "edit",
@@ -293,7 +293,7 @@ fn tool1_package_edit_takes_one_edit_from_its_flags() {
     let package = temp.path().join("neutral.edit.source");
     let task = neutral_package(&package);
 
-    let result = run(&[
+    let result = run_tool1(&[
         "--json",
         "package",
         "edit",
@@ -330,7 +330,7 @@ fn tool1_package_edit_refused_by_admission_writes_nothing() {
     ]);
     fs::write(&patch, serde_json::to_vec(&edits).unwrap()).unwrap();
 
-    let result = run(&[
+    let result = run_tool1(&[
         "--json",
         "package",
         "edit",
@@ -355,7 +355,7 @@ fn tool1_package_edit_pointer_that_does_not_resolve_writes_nothing() {
     neutral_package(&package);
     let before = package_files(&package);
 
-    let result = run(&[
+    let result = run_tool1(&[
         "--json",
         "package",
         "edit",
