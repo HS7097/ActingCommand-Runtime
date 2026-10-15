@@ -132,6 +132,7 @@ fn s4_package_dry_run_simulates_a_content_directory() {
         "target_page": "terminal",
         "operations": [{
             "id": "open_terminal",
+            "purpose": "exercise the content-directory dry run",
             "from": "home",
             "to": "terminal",
             "click": {"kind": "point", "x": 1, "y": 0},
