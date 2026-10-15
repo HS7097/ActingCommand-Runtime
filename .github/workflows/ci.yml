@@ -508,7 +508,7 @@ jobs:
     timeout-minutes: 35
     env:
       CI_PACKAGES: -p actingcommand-actingd -p actingcommand-actingctl -p actingcommand-vision-provider-check
-      CI_SKIP: process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal
+      CI_SKIP: ''
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -605,7 +605,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      FLAKY_TESTS: actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success@actingcommand-runtime-host/fixture-backends
+      FLAKY_TESTS: actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success@actingcommand-runtime-host/fixture-backends
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
