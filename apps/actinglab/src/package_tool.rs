@@ -201,6 +201,7 @@ pub(super) fn run_edit(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         }
     }
     let package = root.display().to_string();
+    write_files(&root, &changes, ActinglabCode::PackageEditWriteFailed)?;
     let prepared = PreparedContainedTask::load_content_entries(
         ADMISSION_INSTANCE,
         entries,
