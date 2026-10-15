@@ -1700,7 +1700,9 @@ impl HostShared {
                 (outcome_keys, current_facts, fact_gate)
             };
             drop(outcome_gate);
-            if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
+            if current_facts.fact_snapshot_id.is_empty()
+                && current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id
+            {
                 return Err(policy_admission_request(
                     HostCode::PolicyFactsStale,
                     HostLocation::AdmitPolicyDispatch,
