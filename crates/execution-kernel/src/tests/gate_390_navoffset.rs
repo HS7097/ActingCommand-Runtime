@@ -135,7 +135,10 @@ fn json_bytes(value: Value) -> Vec<u8> {
 }
 
 // An observation package (the Lab resource layout) whose home page shows the icon `ui/zoom`,
-// a template with scales 1000 and 750, and whose one navigation edge from it is `click`.
+// a template with scales 1000 and 750, and whose one navigation edge from it is `click`. It
+// scores `ccoeff_normed`, as the kernel's other synthetic packs do: under `ccorr_normed` the
+// noise icon's flat-field floor (REC-7) is 0.920 at 1000 and, at 750, 1.002, which no threshold
+// reaches.
 fn package(click: Value) -> Vec<u8> {
     zip_entries(&[
         (
@@ -162,6 +165,7 @@ fn package(click: Value) -> Vec<u8> {
                 "game": "neutral",
                 "server": "test",
                 "coordinate_space": {"width": WIDTH, "height": HEIGHT},
+                "defaults": {"match_metric": "ccoeff_normed"},
                 "targets": [
                     {"type": "template", "id": "ui/zoom",
                      "template_path": "recognition/assets/zoom.png",
