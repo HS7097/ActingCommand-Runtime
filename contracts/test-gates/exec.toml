@@ -1086,7 +1086,7 @@ tests = [
 incident = ["#390"]
 
 
-# Workflow #308 SEL-L6b (FCM row SEL-L6b; compromise T-01): actinglab replay --frames --select <operation> --scan <file> replays one select step's scan through the kernel's scan path (dry_run_scan) over a recorded forward run, the step's dispatched frame first; the scan's policy evaluates the given fact snapshot at the instant it was read, or the empty offline snapshot, so a fresh fact keeps every card a member and a stale or missing one drops every card as unknown while the list is still covered; a recording that needs a frame it does not hold fails selection_scan_replay_frame_missing, never passes; a scan that does not cover its list exits non-zero with replay_scan_refused and its end's outcome; without an OCR model the scan replay is refused with lab_ocr_unavailable before any frame is evaluated
+# Workflow #308 SEL-L6b (FCM row SEL-L6b; compromise T-01): actinglab replay --frames --select <operation> --scan <file> replays one select step's scan through the kernel's scan path (dry_run_scan) over a recorded forward run, the step's dispatched frame first; the scan's policy evaluates the given fact snapshot at the instant it was read, or the empty offline snapshot, so a fresh fact keeps every card a member and a stale or missing one drops every card as unknown while the list is still covered; a recording that needs a frame it does not hold fails selection_scan_replay_frame_missing, never passes; a scan that does not cover its list exits non-zero with replay_scan_refused and its end's outcome; without an OCR model the scan replay is refused with lab_ocr_unavailable before any frame is evaluated; a scan whose evaluator aborts in a viewport replays as aborted, coverage incomplete with its start, no member and the evaluator's unknown decision, never covered (wave-14 rulings SEL-L6b item 2; TEST-FU; partial: actinglab's non-zero exit for an aborted scan is not reached in CI, since a scan's identity reads an OCR target and actinglab without an OCR model refuses such a package before any frame)
 [[gate]]
 key = "69"
 coverage = "Y"
@@ -1095,6 +1095,7 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_308_l6b::l6b_t2_a_recording_that_stops_before_the_list_ends_fails_typed",
     "actingcommand-actinglab::replay_frames::replay_scan_of_a_step_that_is_not_a_select_exits_with_replay_scan_refused",
     "actingcommand-actinglab::replay_frames::replay_scan_without_an_ocr_model_reports_ocr_unavailable_before_evaluating",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l6b::gate_l6b_a_scan_the_evaluator_aborts_in_a_viewport_replays_aborted_never_covered",
 ]
 incident = ["#308"]
 
@@ -1203,7 +1204,7 @@ tests = [
 ]
 incident = ["#390"]
 
-# Workflow #390 LAB-2 item 7 (wave-15 rulings; coordinator ruling 7 of wave 16; register §1.83): both navigation input readers, the kernel's drive reader and actinglab's, read a REC-4 offset click {"kind": "offset", "target_id", "offset": {x, y, width, height}} (record mark --click with --click-follow, or a source rect_move) as the box at the top-left corner of the box its target matches plus the offset, the offset scaled by the factor a template with scales matched at; a package whose navigation holds one is admitted for online observation, so it can be a carrier package, and the online observation and actinglab observe give its element that box on the frame observed
+# Workflow #390 LAB-2 item 7 (wave-15 rulings; coordinator ruling 7 of wave 16; register §1.83): both navigation input readers, the kernel's drive reader and actinglab's, read a REC-4 offset click {"kind": "offset", "target_id", "offset": {x, y, width, height}} (record mark --click with --click-follow, or a source rect_move) as the box at the top-left corner of the box its target matches plus the offset, the offset scaled by the factor a template with scales matched at; a package whose navigation holds one is admitted for online observation, so it can be a carrier package, and the online observation and actinglab observe give its element that box on the frame observed; actinglab's observe test admits its pack as pack containment does (admit_template_assets: REC-7's floor and masks, REC-5's scaled sizes), scoring ccoeff_normed like the kernel fixture (TEST-FU)
 [[gate]]
 key = "77"
 coverage = "Y"

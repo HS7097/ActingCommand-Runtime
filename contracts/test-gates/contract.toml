@@ -516,13 +516,14 @@ tests = [
 ]
 incident = ["#382 C-2"]
 
-# Emulator control (#382 C-2 G8, ScriptedRuntime): a restart the host timed out is a device failure carrying its host code; a result for another instance or action is unexpected
+# Emulator control (#382 C-2 G8, ScriptedRuntime): a restart the host timed out is a device failure carrying its host code; a result for another instance or action is unexpected. Pause and resume (TEST-FU; contracts/scheduling-pause.md, Conditional resume, Workflow #338 R4): a conditional resume dropped before its receipt reconnects and reads Status once in the same owner epoch; still paused at the expected revision is runtime_operation_unsupported, a later revision or no pause is uncertain runtime_scheduling_resume_unconfirmed, another owner epoch is uncertain naming runtime_owner_epoch_changed with no Status read, and the resume is never sent again
 [[gate]]
 key = "R12"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_restart_the_host_timed_out_is_a_device_failure_carrying_its_host_code",
     "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_conditional_resume_dropped_before_its_receipt_reads_status_in_the_same_owner_epoch",
 ]
 incident = ["#382 C-2"]
 
@@ -557,3 +558,12 @@ tests = [
     "actingcommand-actinglab-architecture::workspace_guards::d2_t32_the_fact_refresh_code_never_calls_the_ledger_write_interface",
 ]
 incident = ["#384"]
+
+# Test plan v2.2 §3.10 E-3 (EXEC-I3): every timer and every wait of the contained-task kernel goes through its runtime's clock (ContainedTaskRuntime::monotonic_now and ::pause); the production code of contained_task.rs and every production module below it calls neither Instant::now nor thread::sleep, except the seam's two default bodies, and the scan reaches every module the test plan names (the kernel_clock_seam guard of E-3, PR #869; contract key K26, the next free key of the file that holds the architecture guards; TEST-FU)
+[[gate]]
+key = "K26"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-architecture::kernel_clock_seam::contained_task_kernel_reads_its_clock_and_waits_only_through_the_runtime_seam",
+]
+incident = ["#382 E-3"]
