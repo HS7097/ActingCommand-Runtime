@@ -2936,6 +2936,36 @@
       "description": "actingctl fact-refresh: what the scheduler's fact refresh waits for (FactRefreshStatus) was printed, as ac_overview answers its fact_refresh block (Workflow #384 D2-S5).",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "capability_gap_recorded": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl capability-gap: one capability gap (capability, why) was appended as one line to this user's local log %LOCALAPPDATA%\\ActingCommand\\actingctl\\capability-gaps.jsonl, as ac_capability_gap records it; the line and the log's path were printed. Nothing is sent anywhere and nothing goes to the Runtime or its ledger (Workflow #410 item 6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "capability_gap_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingctl capability-gap or ac_capability_gap could not append the gap to the user's local log (path); the failure is linked. Without path, neither LOCALAPPDATA nor APPDATA names a folder for the log (Workflow #410 item 6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   }
 }

@@ -69,6 +69,9 @@ mod ladder_drill;
 mod devices;
 // ---- Workflow #398 RD-1c (end) ----
 
+// Workflow #410 item 6: `capability-gap` (MCP `ac_capability_gap`), the local capability-gap log.
+mod capability_gap;
+
 use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -217,6 +220,11 @@ fn main() -> ExitCode {
         return exit;
     }
     // ---- Workflow #398 RD-1c (end) ----
+    // Workflow #410 item 6: `capability-gap` appends to the user's local log, never the Runtime,
+    // and leaves before `Invocation::parse`; its flags are `flags_of`'s.
+    if let Some(exit) = capability_gap::dispatch(&arguments) {
+        return exit;
+    }
     match run(arguments, detail) {
         Ok(Done {
             members,
@@ -1622,6 +1630,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
             &["--state-root", "--root"]
         }
         "devices" if action == Some(devices::UNBIND) => &["--state-root"],
+        // Workflow #410 item 6: both texts are required; no root is read.
+        capability_gap::COMMAND => &["--capability", "--why"],
         _ => return None,
     };
     Some(flags)
