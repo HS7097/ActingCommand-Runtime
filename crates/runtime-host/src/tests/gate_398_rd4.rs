@@ -453,33 +453,38 @@ fn rd4_t6_a_device_state_hold_at_rung_one_skips_it_device_not_ready_and_rung_two
     wait_for_ladder_end(&ladder.host, POLICY_INSTANCE_ALIAS);
     let events = ladder.events();
     let outcomes = rung_outcomes(&events);
-    let [
-        (first, first_result, first_code),
-        (second, second_result, _),
-    ] = outcomes.as_slice()
-    else {
-        panic!("two rungs: {outcomes:?}");
+    let finished = |action: RecoveryRung| {
+        outcomes
+            .iter()
+            .find(|(rung, _, _)| *rung == action)
+            .cloned()
+            .unwrap_or_else(|| panic!("{action:?} finished: {outcomes:?}"))
     };
-    assert_eq!(*first, RecoveryRung::ReturnHome);
-    assert_eq!(*first_result, RecoveryRungOutcome::Skipped);
+    let (_, result, code) = finished(RecoveryRung::ReturnHome);
+    assert_eq!(result, RecoveryRungOutcome::Skipped);
     assert_eq!(
-        first_code.as_deref(),
+        code.as_deref(),
         Some("recovery_rung_skipped_device_not_ready")
     );
-    assert_eq!(*second, RecoveryRung::ApplicationRestart);
-    assert_ne!(*second_result, RecoveryRungOutcome::Skipped);
+    let (_, result, _) = finished(RecoveryRung::ApplicationRestart);
+    assert_ne!(result, RecoveryRungOutcome::Skipped);
+    assert_eq!(
+        outcomes
+            .iter()
+            .map(|(rung, _, _)| *rung)
+            .collect::<Vec<_>>(),
+        vec![RecoveryRung::ReturnHome, RecoveryRung::ApplicationRestart]
+    );
     let (_, _, rungs_tried) = ladder_finished(&events).expect("the ladder's end");
     assert_eq!(rungs_tried, 1);
     ladder.close();
 }
 
-// RD-4-T7 (§6.6, option B): a trigger that starts at rung 3 on a handset whose profile has two.
-// Under `exhaust` (the default) the ladder starts, names the profile, skips both rungs as before
-// the start, runs none, ends exhausted and releases its key once; under `last_rung` it runs the
-// profile's last rung, the application restart, alone. An emulator climbs the section's rungs
-// under each of the three values.
+// RD-4-T7 (§6.6, option B, `exhaust`, the default): a trigger that starts at rung 3 on a handset
+// whose profile has two. The ladder starts, names the profile, skips both rungs as before the
+// start, runs none, ends exhausted and releases its key once.
 #[test]
-fn rd4_t7_a_start_beyond_the_handset_profile_follows_start_beyond_profile() {
+fn rd4_t7_under_exhaust_a_start_beyond_the_handset_profile_runs_no_rung() {
     let exhausted = ladder_host(
         &Device::Handset,
         instance_id(),
@@ -508,7 +513,12 @@ fn rd4_t7_a_start_beyond_the_handset_profile_follows_start_beyond_profile() {
     assert!(rung_runs(&events, &context).is_empty(), "no rung runs");
     assert_eq!(ladder_key_releases(&events, &context), 1, "one release");
     exhausted.close();
+}
 
+// RD-4-T7 (§6.6, `last_rung`): the same trigger on the same handset climbs the profile's last
+// rung, the application restart, alone.
+#[test]
+fn rd4_t7_under_last_rung_a_start_beyond_the_handset_profile_climbs_its_last_rung() {
     let last_rung = ladder_host(
         &Device::Handset,
         instance_id(),
@@ -520,7 +530,6 @@ fn rd4_t7_a_start_beyond_the_handset_profile_follows_start_beyond_profile() {
     let context = last_rung.climb();
     let events = last_rung.events();
     let (plan, _, profile) = one_ladder(&events);
-    assert_eq!(profile.as_deref(), Some("handset"));
     assert_eq!(
         plan,
         vec![
@@ -531,6 +540,7 @@ fn rd4_t7_a_start_beyond_the_handset_profile_follows_start_beyond_profile() {
             pending(RecoveryRung::ApplicationRestart),
         ]
     );
+    assert_eq!(profile.as_deref(), Some("handset"));
     let (_, _, rungs_tried) = ladder_finished(&events).expect("the ladder's end");
     assert_eq!(rungs_tried, 1);
     assert_eq!(
@@ -539,9 +549,13 @@ fn rd4_t7_a_start_beyond_the_handset_profile_follows_start_beyond_profile() {
         "the application restart's run"
     );
     last_rung.close();
+}
 
-    // An emulator: the section's rungs from the trigger's start rung, under each value. Under
-    // `refuse` every start rung fits every profile, so its item starts at rung 2.
+// RD-4-T7 (§6.6): an emulator climbs the section's rungs from the trigger's start rung under each
+// of the three values. Under `refuse` every start rung fits every profile, so its item starts at
+// rung 2.
+#[test]
+fn rd4_t7_an_emulator_climbs_the_section_s_rungs_under_each_value() {
     let starting_at_rung_two = json!([{
         "id": "navigation_exhausted",
         "stages": ["task"],
