@@ -223,6 +223,7 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_failures_after_send_without_a_projection_are_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_a_failure_chained_to_an_after_send_failure_is_uncertain",
     "actingcommand-runtime-client::lib::tests::gate_c1::gate_settled_failures_are_not_uncertain",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
 ]
 incident = ["#382 C-1"]
 
@@ -231,7 +232,7 @@ incident = ["#382 C-1"]
 key = "R5"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-client::lib::tests::contained_task_can_outlive_the_general_five_second_exchange_timeout",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_contained_task_receipt_outlives_the_io_budget",
     "actingcommand-runtime-client::lib::tests::contained_task_response_timeout_is_typed_and_runs_reset_recovery",
     "actingcommand-runtime-client::lib::tests::contained_task_pre_deadline_eof_remains_receipt_failure",
 ]
@@ -469,3 +470,46 @@ tests = [
     "actingcommand-contract::lib::event::tests::pkg_s2::s2_t7_a_selection_record_carries_no_package_pin",
 ]
 incident = ["#336 PKG-S2"]
+
+# Latch rules (#382 C-2 G5, ScriptedRuntime): a fatal rejection, a receipt-header timeout, an end of stream before the deadline and another owner epoch on the reconnect latch the client, and its next call never reaches the Runtime; a non-fatal rejection does not latch. An input whose receipt never came keeps its request context and is sent once (replaces test plan §4 #7)
+[[gate]]
+key = "R2"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_client_latches_on_fatal_and_transport_failures_and_never_on_a_non_fatal_rejection",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_input_whose_receipt_never_came_latches_with_its_request_context_and_is_sent_once",
+]
+incident = ["#382 C-2"]
+
+# Install-transition receipt matching (#382 C-2 G4, ScriptedRuntime): a missing receipt is unconfirmed and uncertain and the request is never sent again; another transition or ticket is unexpected; CommitShutdown takes its ShutdownAccepted, Release its own ticket
+[[gate]]
+key = "R4"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_whose_receipt_never_came_is_unconfirmed_uncertain_and_sent_once",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_install_transition_receipt_for_another_transition_or_ticket_is_unexpected",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_commit_shutdown_takes_its_shutdown_and_release_its_own_ticket",
+]
+incident = ["#382 C-2"]
+
+# Run-status fold (#382 C-2 G9, Workflow #338 R1, ScriptedRuntime ledger): admitted only from a package admission, then running, then the terminal's outcome; interrupted_unterminated after a later start or takeover without a terminal; not_found with its request member always present; dispatch, origin and lease terminal
+[[gate]]
+key = "R7"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_is_admitted_then_running_then_the_outcome_of_its_terminal",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_without_a_terminal_after_a_runtime_start_or_takeover_is_interrupted_unterminated",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_the_ledger_does_not_hold_is_not_found_with_its_request_member_always_present",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_run_names_its_dispatch_its_origin_and_its_lease_terminal",
+]
+incident = ["#382 C-2"]
+
+# Emulator control (#382 C-2 G8, ScriptedRuntime): a restart the host timed out is a device failure carrying its host code; a result for another instance or action is unexpected
+[[gate]]
+key = "R12"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_a_restart_the_host_timed_out_is_a_device_failure_carrying_its_host_code",
+    "actingcommand-runtime-client::lib::tests::gate_c2::gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected",
+]
+incident = ["#382 C-2"]
