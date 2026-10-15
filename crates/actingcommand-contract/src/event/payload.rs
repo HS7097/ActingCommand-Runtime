@@ -5033,7 +5033,9 @@ impl TaskSemanticFact {
                     .flat_map(|pick| {
                         std::iter::once(&mut pick.confirmation).chain(pick.tap_check.as_mut())
                     });
-                for confirmation in std::iter::once(&mut selection.confirmation).chain(picks.take(0)) {
+                for confirmation in
+                    std::iter::once(&mut selection.confirmation).chain(picks.take(0))
+                {
                     if let TaskSelectionConfirmation::GuardFailed { outcome }
                     | TaskSelectionConfirmation::CaptureFailed { outcome }
                     | TaskSelectionConfirmation::RepositionFailed { outcome, .. } = confirmation
