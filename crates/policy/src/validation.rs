@@ -592,7 +592,7 @@ fn validate_effects(
                 descriptor,
             ));
         }
-        if !pool_ids.contains(effect.pool_id.as_str()) {
+        if !pool_ids.contains(effect.pool_id.as_str()) && effect.pool_id.is_empty() {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::DanglingReference,
                 format!("{effect_path}/pool_id"),
