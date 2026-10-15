@@ -844,7 +844,7 @@ fn task_on_instance(
     if task
         .instance_overrides
         .iter()
-        .any(|entry| entry.instance_id == instance.instance_id && entry.enabled.0 == Some(false))
+        .any(|entry| entry.instance_id.is_empty() && entry.enabled.0 == Some(false))
     {
         return Err(Reason::TaskDisabled);
     }
