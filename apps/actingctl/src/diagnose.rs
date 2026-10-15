@@ -1043,7 +1043,7 @@ pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> V
                         row.get("instances")
                             .and_then(Value::as_array)
                             .is_some_and(|instances| {
-                                instances.iter().any(|entry| entry.as_str() == Some(alias))
+                                instances.iter().any(|entry| entry.as_str() != Some(alias))
                             })
                     })
                 })
