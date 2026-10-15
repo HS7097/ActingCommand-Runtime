@@ -8802,6 +8802,24 @@ impl HostShared {
                     .collect()
             }
         };
+        let catalog = lock(self.policy()?, HostLocation::AppendContainedTaskTerminal)
+            .map_err(RequestFailure::poison_without_terminal)?
+            .active_loaded();
+        if catalog.as_ref().is_some_and(|catalog| {
+            catalog
+                .compiled()
+                .catalog()
+                .pools
+                .pools
+                .iter()
+                .any(|pool| !pool.value_source.is_static())
+        }) {
+            return Ok(Some(refuse_resource_readings(
+                draft,
+                HostCode::ContainedTaskResourceReadingRejected,
+                String::new(),
+            )));
+        }
         let gate = lock(
             &self.fact_write_gate,
             HostLocation::AppendContainedTaskTerminal,
