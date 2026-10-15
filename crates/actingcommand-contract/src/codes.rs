@@ -773,6 +773,7 @@ crate::outcome_codes! {
         InvalidFactHash => "invalid_fact_hash": error / none,
         InvalidEventQueryInstanceFilter => "invalid_event_query_instance_filter": error / none,
         InvalidEventQueryEventTypeFilter => "invalid_event_query_event_type_filter": error / none,
+        InvalidEventQueryFactKeyFilter => "invalid_event_query_fact_key_filter": error / none,
         FingerprinterFailed => "fingerprinter_failed": error / none,
         InvalidTaskTimingObservations => "invalid_task_timing_observations": error / none,
         InvalidArtifactRetention => "invalid_artifact_retention": error / none,

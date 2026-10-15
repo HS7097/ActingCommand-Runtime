@@ -788,10 +788,20 @@ pub struct EventQuery {
     pub from_sequence: Option<u64>,
     pub to_sequence: Option<u64>,
     pub event_type: Option<EventType>,
+    /// Workflow #389 MCP-2: matches any listed event type, OR within the set and AND with every
+    /// other condition; not together with `event_type`. An empty set is no constraint and leaves
+    /// the serialized query unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_types: Vec<EventType>,
     /// Excludes every listed event type: AND with every other condition.
     /// An empty set is no constraint and leaves the serialized query unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_event_types: Vec<EventType>,
+    /// Workflow #389 MCP-2: matches only a record that names this fact key, an instance fact's
+    /// or a runtime fact's (`EventPayload::names_fact_key`); AND with every other condition.
+    /// Absent, it is no constraint and leaves the serialized query unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_key: Option<String>,
     pub minimum_severity: Option<EventSeverity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_severity: Option<EventSeverity>,
@@ -817,6 +827,8 @@ pub struct EventQuery {
 }
 
 const MAX_EXCLUDED_EVENT_TYPES: usize = 32;
+/// Workflow #389 MCP-2 (MCP-0 command table v1.1 §4.2): the most types `event_types` lists.
+const MAX_SELECTED_EVENT_TYPES: usize = 32;
 
 impl EventQuery {
     pub fn validate(&self) -> Result<(), SanitizationError> {
@@ -826,18 +838,40 @@ impl EventQuery {
                 "query",
             ));
         }
-        let excluded = &self.exclude_event_types;
+        let excluded: &[EventType] = &self.exclude_event_types;
+        let selected: &[EventType] = &self.event_types;
+        let repeats = |types: &[EventType]| {
+            types
+                .iter()
+                .enumerate()
+                .any(|(index, event_type)| types[..index].contains(event_type))
+        };
         if excluded.len() > MAX_EXCLUDED_EVENT_TYPES
             || self
                 .event_type
                 .is_some_and(|event_type| excluded.contains(&event_type))
-            || excluded
+            || repeats(excluded)
+            // Workflow #389 MCP-2: the selected set is one type's alternative, at most 32 types,
+            // each once, none of them excluded.
+            || (self.event_type.is_some() && !selected.is_empty())
+            || selected.len() > MAX_SELECTED_EVENT_TYPES
+            || repeats(selected)
+            || selected
                 .iter()
-                .enumerate()
-                .any(|(index, event_type)| excluded[..index].contains(event_type))
+                .any(|event_type| excluded.contains(event_type))
         {
             return Err(SanitizationError::new(
                 SanitizationCode::InvalidEventQueryEventTypeFilter,
+                "query",
+            ));
+        }
+        // Workflow #389 MCP-2: a fact key by the rule of an instance fact or of a runtime fact.
+        if let Some(key) = &self.fact_key
+            && crate::fact::validate_fact_key(key).is_err()
+            && crate::runtime_fact::validate_runtime_fact_key(key).is_err()
+        {
+            return Err(SanitizationError::new(
+                SanitizationCode::InvalidEventQueryFactKeyFilter,
                 "query",
             ));
         }

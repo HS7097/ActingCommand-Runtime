@@ -234,13 +234,21 @@ pub(super) fn input_schema() -> Value {
                 "minimum": 0,
                 "description": "Only events up to this ledger sequence.",
             },
-            "event_type": id("One event type, for example task.failed."),
+            "event_type": id("One event type, for example task.failed. Not with event_types."),
+            // Workflow #389 MCP-2 (MCP-0 command table v1.1 §4.2).
+            "event_types": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {"type": "string", "minLength": 1},
+                "description": "Any of these event types, each once; not with event_type and never an excluded type.",
+            },
             "exclude_event_types": {
                 "type": "array",
                 "maxItems": 32,
                 "items": {"type": "string", "minLength": 1},
                 "description": "Event types left out; never the event_type.",
             },
+            "fact_key": id("Only the fact records that name this instance or runtime fact key: fact.published, fact.invalidated, runtime.fact_recorded and runtime.fact_invalidated."),
             "min_severity": severity.clone(),
             "max_severity": severity,
             "origin_module": id("The module that recorded the event, for example policy."),

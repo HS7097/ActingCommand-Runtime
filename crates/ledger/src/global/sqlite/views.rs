@@ -255,12 +255,16 @@ pub(super) fn select_sequences(
         ));
         values.extend(bindings);
     }
-    if let Some(event_types) = query_value
-        .get("exclude_event_types")
-        .and_then(serde_json::Value::as_array)
-        .filter(|event_types| !event_types.is_empty())
-    {
-        // AND with every other predicate; one typed binding per excluded event type.
+    // Workflow #389 MCP-2: the selected types (OR within the set) beside the excluded ones (AND
+    // with every other predicate); one typed binding per event type.
+    for (field, operator) in [("event_types", "IN"), ("exclude_event_types", "NOT IN")] {
+        let Some(event_types) = query_value
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+            .filter(|event_types| !event_types.is_empty())
+        else {
+            continue;
+        };
         let mut bindings = Vec::with_capacity(event_types.len());
         for event_type in event_types {
             let Some(event_type) = event_type.as_str() else {
@@ -272,10 +276,28 @@ pub(super) fn select_sequences(
             bindings.push(SqlValue::Text(event_type.to_owned()));
         }
         sql.push_str(&format!(
-            " AND e.event_type NOT IN ({})",
+            " AND e.event_type {operator} ({})",
             vec!["?"; bindings.len()].join(",")
         ));
         values.extend(bindings);
+    }
+    if let Some(key) = query.fact_key.as_deref() {
+        // Workflow #389 MCP-2: the fact key a record names is in its typed payload, as the
+        // diagnostic code below is.
+        let matching: Vec<_> = events
+            .iter()
+            .filter(|event| event.payload().names_fact_key(key))
+            .map(|event| encode(event.sequence()))
+            .collect();
+        let matching = serde_json::to_string(&matching).map_err(|error| {
+            GlobalLedgerError::json(
+                LedgerCode::EventSerializationFailed.code(),
+                LedgerLocation::EncodeLedgerQuery.location(),
+                &error,
+            )
+        })?;
+        sql.push_str(" AND e.sequence IN (SELECT value FROM json_each(?))");
+        values.push(SqlValue::Text(matching));
     }
     if query.minimum_severity.is_some() || query.maximum_severity.is_some() {
         let allowed: Vec<_> = SEVERITIES

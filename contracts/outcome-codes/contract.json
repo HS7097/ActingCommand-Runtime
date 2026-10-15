@@ -10543,6 +10543,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_event_query_fact_key_filter": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Event or record sanitization refused a value: invalid event query fact key filter, a key that is neither an instance fact key nor a runtime fact key.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "fingerprinter_failed": {
       "category": "error",
       "ladder_class": "none",

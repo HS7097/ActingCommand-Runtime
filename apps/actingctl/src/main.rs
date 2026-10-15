@@ -1485,6 +1485,32 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
     let flags: &'static [&'static str] = match command {
         // Workflow #389 MCP-14: the list flags of `codes`; its code is a positional word.
         "codes" => &["--prefix", "--owner", "--limit", "--cursor"],
+        // Workflow #389 MCP-1: `events`, one flag per parameter of `ac_events`
+        // (`events::PARAMETERS`); MCP-2 adds `--event-types` and `--fact-key`.
+        "events" => &[
+            "--state-root",
+            "--instance",
+            "--view",
+            "--since-unix-ms",
+            "--until-unix-ms",
+            "--after-sequence",
+            "--through-sequence",
+            "--event-type",
+            "--event-types",
+            "--exclude-event-types",
+            "--fact-key",
+            "--min-severity",
+            "--max-severity",
+            "--origin-module",
+            "--task-id",
+            "--run-id",
+            "--request-id",
+            "--correlation-id",
+            "--detail",
+            "--limit",
+            "--cursor",
+            "--wait-s",
+        ],
         // Workflow #389 MCP-6: `run evidence`, by request_id or run_id, a page of steps.
         "run" if action == Some(run_evidence::ACTION) => &[
             "--state-root",

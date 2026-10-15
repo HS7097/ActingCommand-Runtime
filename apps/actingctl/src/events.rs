@@ -41,9 +41,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Rows carry their full payloads, where the ledger's diagnostic code lives.
 pub(crate) const PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
+/// The subcommand; its flags are `flags_of`'s (Workflow #382 A1-FLAG, #389 MCP-2).
+pub(crate) const COMMAND: &str = "events";
 /// Every parameter: the MCP argument names, which are the CLI flag names without `--` and with
-/// `_` for `-` (#389 R2).
-pub(crate) const PARAMETERS: [&str; 19] = [
+/// `_` for `-` (#389 R2). Workflow #389 MCP-2 adds `event_types` and `fact_key` (§4.2).
+pub(crate) const PARAMETERS: [&str; 21] = [
     "instance",
     "view",
     "since_unix_ms",
@@ -51,7 +53,9 @@ pub(crate) const PARAMETERS: [&str; 19] = [
     "after_sequence",
     "through_sequence",
     "event_type",
+    "event_types",
     "exclude_event_types",
+    "fact_key",
     "min_severity",
     "max_severity",
     "origin_module",
@@ -73,7 +77,7 @@ const INTEGER_PARAMETERS: [&str; 6] = [
     "wait_s",
 ];
 /// Parameters that take a list: an array in MCP, a comma-separated value on the CLI.
-const LIST_PARAMETERS: [&str; 1] = ["exclude_event_types"];
+const LIST_PARAMETERS: [&str; 2] = ["event_types", "exclude_event_types"];
 pub(crate) const DEFAULT_LIMIT: u16 = 20;
 /// The CLI's largest page: the Runtime's page bound (§2.2; MCP stops at 100).
 pub(crate) const CLI_MAX_LIMIT: u16 = MAX_RUNTIME_EVENT_QUERY_EVENTS;
@@ -85,7 +89,7 @@ pub(crate) const MAX_WAIT_S: u64 = 20;
 pub(crate) const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type>] [--exclude-event-types <type,...>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
+const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
 
 /// What each row carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,7 +152,7 @@ pub(crate) enum ArgumentProblem {
     NotA(&'static str),
     /// `detail` other than `brief` or `payload`.
     DetailUnknown,
-    /// `exclude_event_types` that is not a list of event types.
+    /// `event_types` or `exclude_event_types` that is not a list of event types.
     NotEventTypes,
     /// `cursor` together with `after_sequence`.
     CursorWithAfterSequence,
@@ -323,33 +327,17 @@ pub(crate) fn parse(
             ArgumentProblem::CursorWithAfterSequence,
         ));
     }
-    let exclude_event_types = match arguments.get("exclude_event_types") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(types)) => types
-            .iter()
-            .map(|event_type| {
-                event_type
-                    .as_str()
-                    .and_then(parsed::<EventType>)
-                    .ok_or_else(|| {
-                        EventsError::argument("exclude_event_types", ArgumentProblem::NotEventTypes)
-                    })
-            })
-            .collect::<Result<Vec<EventType>, _>>()?,
-        Some(_) => {
-            return Err(EventsError::argument(
-                "exclude_event_types",
-                ArgumentProblem::NotEventTypes,
-            ));
-        }
-    };
     let filters = EventQuery {
         view: typed::<LedgerView>(arguments, "view", "a ledger view")?,
         from_timestamp_unix_ms: integer(arguments, "since_unix_ms", 0, MAX_INTEGER)?,
         to_timestamp_unix_ms: integer(arguments, "until_unix_ms", 0, MAX_INTEGER)?,
         to_sequence: integer(arguments, "through_sequence", 0, MAX_INTEGER)?,
         event_type: typed::<EventType>(arguments, "event_type", "an event type")?,
-        exclude_event_types,
+        // Workflow #389 MCP-2: the union of types and the fact key, checked below with the
+        // rest by the Runtime's rule.
+        event_types: event_types(arguments, "event_types")?,
+        exclude_event_types: event_types(arguments, "exclude_event_types")?,
+        fact_key: text(arguments, "fact_key")?.map(str::to_owned),
         minimum_severity: typed::<EventSeverity>(arguments, "min_severity", "a severity")?,
         maximum_severity: typed::<EventSeverity>(arguments, "max_severity", "a severity")?,
         origin_module: typed::<OriginModule>(arguments, "origin_module", "an origin module")?,
@@ -380,6 +368,23 @@ fn text<'a>(arguments: &'a Map<String, Value>, key: &str) -> Result<Option<&'a s
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) if !text.is_empty() => Ok(Some(text.as_str())),
         Some(_) => Err(EventsError::argument(key, ArgumentProblem::NotText)),
+    }
+}
+
+/// A list of event types: an array in MCP, a comma-separated value on the CLI.
+fn event_types(arguments: &Map<String, Value>, key: &str) -> Result<Vec<EventType>, EventsError> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(types)) => types
+            .iter()
+            .map(|event_type| {
+                event_type
+                    .as_str()
+                    .and_then(parsed::<EventType>)
+                    .ok_or_else(|| EventsError::argument(key, ArgumentProblem::NotEventTypes))
+            })
+            .collect(),
+        Some(_) => Err(EventsError::argument(key, ArgumentProblem::NotEventTypes)),
     }
 }
 
@@ -644,7 +649,7 @@ pub(crate) fn brief_row(event: &ProjectedEvent) -> Value {
 /// (Workflow #378 A5), the page with `runtime_events_reported`, or `{outcome}` with the failure
 /// (an argument failure's developer line adds the usage) and exit 1.
 pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
-    if arguments.first()?.to_str()? != "events" {
+    if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
     Some(match run_cli(&arguments[1..]) {
@@ -710,10 +715,11 @@ fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
     Ok(page.result(&rows, next_cursor, false))
 }
 
-/// `--state-root` and every other flag under its parameter name, typed as MCP types it:
-/// integers as numbers, lists split at commas, the rest as strings. Every flag takes a value and
-/// may be given once.
+/// `--state-root` and every other flag `flags_of` names for `events`, under its parameter name,
+/// typed as MCP types it: integers as numbers, lists split at commas, the rest as strings. Every
+/// flag takes a value and may be given once.
 fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>), EventsError> {
+    let takes = crate::flags_of(COMMAND, None).unwrap_or_default();
     let mut state_root = None;
     let mut parameters = Map::new();
     let mut index = 0;
@@ -721,16 +727,13 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
         let flag = arguments[index]
             .to_str()
             .ok_or_else(|| EventsError::argument("flag", ArgumentProblem::NotUtf8))?;
-        let name = flag
-            .strip_prefix("--")
-            .filter(|name| !name.contains('_'))
-            .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::UnknownFlag))?;
         // Workflow #382 A1-FLAG: a flag `events` does not take is unknown, with or without a
         // value after it.
+        let name = flag
+            .strip_prefix("--")
+            .filter(|_| takes.contains(&flag))
+            .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::UnknownFlag))?;
         let key = name.replace('-', "_");
-        if name != "state-root" && !PARAMETERS.contains(&key.as_str()) {
-            return Err(EventsError::argument(flag, ArgumentProblem::UnknownFlag));
-        }
         let value = arguments
             .get(index + 1)
             .ok_or_else(|| EventsError::argument(flag, ArgumentProblem::ValueMissing))?;
@@ -772,7 +775,8 @@ pub(crate) fn process_session() -> u64 {
     RandomState::new().hash_one((process::id(), started))
 }
 
-// Test-only: Workflow #378 A5, an argument failure of `events` as an outcome.
+// Test-only: Workflow #378 A5, an argument failure of `events` as an outcome; Workflow #389
+// MCP-2, the query rule of `event_types` and `fact_key`.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,6 +845,118 @@ mod tests {
                     range.map(|(_, maximum)| json!(maximum))
                 ),
                 "{problem:?}: {outcome}"
+            );
+        }
+    }
+
+    // Workflow #389 MCP-2 (MCP-0 command table v1.1 §4.2): `event_types` and `fact_key` follow the
+    // rule the Runtime holds every query to, checked before any read. `event_types` is the
+    // alternative of `event_type`, at most 32 types, each once, none of them excluded, or
+    // `invalid_event_query_event_type_filter`; `fact_key` is an instance fact key or a runtime
+    // fact key, or `invalid_event_query_fact_key_filter`. A union and either kind of key that keep
+    // the rule reach the query as given.
+    #[test]
+    fn mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query() {
+        use actingcommand_contract::codes::SanitizationCode;
+
+        let thirty_three = [
+            "provider.startup_observed",
+            "runtime.started",
+            "runtime.takeover",
+            "runtime.failed",
+            "runtime.lifecycle_observed",
+            "runtime.instance_bound",
+            "runtime.fact_recorded",
+            "runtime.fact_invalidated",
+            "runtime.fact_snapshot",
+            "monitor.probe_requested",
+            "monitor.probe_started",
+            "monitor.probe_completed",
+            "monitor.probe_failed",
+            "monitor.recovery_admitted",
+            "monitor.recovery_deferred",
+            "perf.pressure_started",
+            "perf.pressure_ended",
+            "perf.stutter_detected",
+            "perf.summary",
+            "perf.monitor_degraded",
+            "perf.monitor_recovered",
+            "perf.balance_changed",
+            "fact.published",
+            "fact.invalidated",
+            "approval.decision",
+            "command.received",
+            "command.validated",
+            "command.rejected",
+            "scheduler.admitted",
+            "scheduler.queued",
+            "scheduler.denied",
+            "scheduler.preempted",
+            "policy.dispatch_intent",
+        ];
+        let refused = [
+            (
+                json!({"event_type": "fact.published", "event_types": ["fact.published", "runtime.failed"]}),
+                SanitizationCode::InvalidEventQueryEventTypeFilter,
+            ),
+            (
+                json!({"event_types": thirty_three.to_vec()}),
+                SanitizationCode::InvalidEventQueryEventTypeFilter,
+            ),
+            (
+                json!({"event_types": ["fact.published", "runtime.failed", "fact.published"]}),
+                SanitizationCode::InvalidEventQueryEventTypeFilter,
+            ),
+            (
+                json!({"event_types": ["fact.published", "runtime.failed"], "exclude_event_types": ["runtime.failed"]}),
+                SanitizationCode::InvalidEventQueryEventTypeFilter,
+            ),
+            (
+                json!({"fact_key": "neutral.key"}),
+                SanitizationCode::InvalidEventQueryFactKeyFilter,
+            ),
+        ];
+        for (arguments, code) in refused {
+            let Value::Object(arguments) = arguments else {
+                panic!("the arguments are an object")
+            };
+            match parse(&arguments, CLI_MAX_LIMIT) {
+                Err(error @ EventsError::Query(_)) => {
+                    let outcome = error.outcome();
+                    assert!(
+                        outcome.is(code) && outcome.category() == Category::Error,
+                        "{arguments:?}: {outcome}"
+                    );
+                }
+                Err(other) => panic!("{arguments:?} was refused as {other}, not by the query rule"),
+                Ok(request) => panic!("{arguments:?} was taken: {request:?}"),
+            }
+        }
+
+        let union = thirty_three[..32].to_vec();
+        for (arguments, event_types, fact_key) in [
+            (json!({"event_types": union}), union.clone(), None),
+            (
+                json!({"event_types": ["fact.published"], "fact_key": "session.neutral.key"}),
+                ["fact.published"].to_vec(),
+                Some("session.neutral.key"),
+            ),
+            (
+                json!({"fact_key": "application.foreground"}),
+                Vec::new(),
+                Some("application.foreground"),
+            ),
+        ] {
+            let Value::Object(arguments) = arguments else {
+                panic!("the arguments are an object")
+            };
+            let request = parse(&arguments, CLI_MAX_LIMIT)
+                .unwrap_or_else(|error| panic!("{arguments:?} was refused: {error}"));
+            let query = request.query(None);
+            assert_eq!(
+                (json!(query.event_types), query.fact_key.as_deref()),
+                (json!(event_types), fact_key),
+                "{arguments:?}"
             );
         }
     }

@@ -117,6 +117,23 @@ serialized query unchanged; the in-memory predicate and the SQLite
 duplicate or the selected `event_type` is rejected with
 `invalid_event_query_event_type_filter`.
 
+`EventQuery.event_types` (Workflow #389 MCP-2) selects every event whose type is
+in the set: OR within the set, AND with every other condition (an empty set is
+no constraint and leaves the serialized query unchanged; the in-memory predicate
+and the SQLite `e.event_type IN (...)` apply the same test). It is the
+alternative of `event_type`: giving both, more than 32 entries, a duplicate or a
+type that `exclude_event_types` also lists is rejected with
+`invalid_event_query_event_type_filter`.
+
+`EventQuery.fact_key` (Workflow #389 MCP-2) keeps only the records that name that
+fact key: `fact.published` (its record or one of its related records),
+`fact.invalidated`, `runtime.fact_recorded` and `runtime.fact_invalidated`; no
+other record names a fact key, so none matches. It is AND with every other
+condition, and absent it leaves the serialized query unchanged. The key must
+follow the rule of an instance fact key or of a runtime fact key; any other is
+rejected with `invalid_event_query_fact_key_filter`. Both selectors read the key
+from the typed payload, the SQLite one as it reads the diagnostic code.
+
 `RuntimeEventQueryPage.read_scope` separates source completeness from `has_more`.
 It gives the formal Runtime/offline source, material read state, actual
 `scanned_through_position` and event-count, response-byte or incomplete-source

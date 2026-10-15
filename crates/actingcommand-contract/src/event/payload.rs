@@ -12051,6 +12051,22 @@ impl EventPayload {
         self.family_payload().detail().diagnostic_code()
     }
 
+    /// Workflow #389 MCP-2 (`EventQuery.fact_key`): whether this record names the fact `key`.
+    /// The fact records name one: a published instance fact (its record or one of its related
+    /// records), an invalidated instance fact, a recorded and an invalidated runtime fact. No
+    /// other record does.
+    pub fn names_fact_key(&self, key: &str) -> bool {
+        match self {
+            Self::Fact(FactPayload::Published(value)) => {
+                value.records().any(|record| record.key == key)
+            }
+            Self::Fact(FactPayload::Invalidated(value)) => value.invalidation.key == key,
+            Self::Runtime(RuntimePayload::FactRecorded(value)) => value.record.key == key,
+            Self::Runtime(RuntimePayload::FactInvalidated(value)) => value.invalidation.key == key,
+            _ => false,
+        }
+    }
+
     pub fn runtime_state(&self) -> Option<&crate::RuntimeStateFact> {
         self.family_payload().detail().runtime_state()
     }
