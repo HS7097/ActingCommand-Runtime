@@ -2542,6 +2542,7 @@ impl SqliteLedgerReadOnly {
         timing: &mut LedgerOpenTiming,
     ) -> GlobalLedgerResult<(Vec<PersistedEvent>, super::LedgerStorageStatus)> {
         let started = Instant::now();
+        let _ = read_formal_snapshot(database, deadline);
         let raw = read_formal_snapshot(database, deadline);
         timing.sql_read_ms = elapsed_ms(started);
         let raw = raw?;
