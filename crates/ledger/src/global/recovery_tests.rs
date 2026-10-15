@@ -3,8 +3,7 @@
 use super::*;
 use actingcommand_contract::{
     AuditInput, CommandPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
-    LedgerPayload, OriginModule, RecoveryReason,
+    EventOrigin, EventSeverity, EventSource, IdentifierIssuer, OriginModule,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -22,7 +21,14 @@ const READY_PATH_ENV: &str = "ACTINGCOMMAND_TEST_REPAIR_READY";
 const CHILD_TEST: &str = "global::recovery_tests::repair_process_child";
 const TAIL: &[u8] = br#"{"incomplete":"tail""#;
 
+// Workflow #382 L-4 (test plan §4 #15): a child process entry, not a test of its own. It is
+// ignored in an ordinary run; `kill_at_repair_stage` runs it with `--ignored --exact`, and only
+// the journal check below still stops it (after its prepare). The Segment repair writer's crash
+// tests that stopped it at every stage are retired (test plan §4 #16, LED-R1); their replacement
+// is the read-only journal state table in read_only_tests.rs and, on the formal store, L-3 G5
+// (tests/gate_l3_g5.rs).
 #[test]
+#[ignore = "child process entry: its parent test runs it with --ignored --exact"]
 fn repair_process_child() {
     let Ok(root) = std::env::var(CHILD_ROOT_ENV) else {
         return;
@@ -30,43 +36,6 @@ fn repair_process_child() {
     let ledger = GlobalLedger::open(test_config(Path::new(&root), "repair-child"))
         .expect("child opens ledger until repair barrier");
     ledger.close().expect("child closes ledger");
-}
-
-#[test]
-fn prepared_repair_resumes_before_open_succeeds() {
-    let temp = seeded_truncated_root();
-    kill_at_repair_stage(temp.path(), "after_prepare");
-
-    assert_repair_closeout(temp.path());
-}
-
-#[test]
-fn unexpected_segment_length_during_repair_is_fatal() {
-    let temp = seeded_truncated_root();
-    kill_at_repair_stage(temp.path(), "after_prepare");
-    let segment = final_segment(temp.path());
-    let length = fs::metadata(&segment).expect("segment metadata").len();
-    OpenOptions::new()
-        .write(true)
-        .open(segment)
-        .expect("open segment")
-        .set_len(length - 1)
-        .expect("create unexpected length");
-
-    let error = GlobalLedger::open(test_config(temp.path(), "unexpected-length"))
-        .expect_err("third segment length must be fatal");
-
-    assert_eq!(error.code(), "repair_segment_length_mismatch");
-}
-
-#[test]
-fn recovery_event_is_unique_when_crash_precedes_completion() {
-    let temp = seeded_truncated_root();
-    kill_at_repair_stage(temp.path(), "after_recovery_append");
-
-    let first_id = assert_repair_closeout(temp.path());
-    let second_id = assert_repair_closeout(temp.path());
-    assert_eq!(first_id, second_id);
 }
 
 #[test]
@@ -140,37 +109,6 @@ fn legacy_writer_v1_is_rejected_explicitly() {
     assert_eq!(error.code(), "unsupported_writer_schema");
 }
 
-#[test]
-fn kill_after_prepare_recovers_one_fact() {
-    assert_kill_boundary("after_prepare");
-}
-
-#[test]
-fn kill_after_quarantine_recovers_one_fact() {
-    assert_kill_boundary("after_quarantine");
-}
-
-#[test]
-fn kill_after_truncate_recovers_one_fact() {
-    assert_kill_boundary("after_truncate");
-}
-
-#[test]
-fn kill_after_recovery_append_recovers_one_fact() {
-    assert_kill_boundary("after_recovery_append");
-}
-
-#[test]
-fn kill_after_completion_reopens_cleanly() {
-    assert_kill_boundary("after_completion");
-}
-
-fn assert_kill_boundary(stage: &str) {
-    let temp = seeded_truncated_root();
-    kill_at_repair_stage(temp.path(), stage);
-    assert_repair_closeout(temp.path());
-}
-
 fn seeded_truncated_root() -> TempDir {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(test_config(temp.path(), "seed-writer")).expect("seed ledger");
@@ -230,6 +168,7 @@ fn kill_at_repair_stage(root: &Path, stage: &str) {
 
 fn spawn_repair_child(root: &Path, stage: &str, ready: &Path) -> Child {
     Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("--ignored")
         .arg("--exact")
         .arg(CHILD_TEST)
         .arg("--nocapture")
@@ -257,43 +196,6 @@ pub(super) fn wait_for_barrier(child: &mut Child, ready: &Path, stage: &str) {
     let _ = child.kill();
     let _ = child.wait();
     panic!("repair child did not reach {stage} barrier");
-}
-
-fn assert_repair_closeout(root: &Path) -> actingcommand_contract::EventId {
-    let ledger = GlobalLedger::open(test_config(root, "verification-writer"))
-        .expect("reopen repaired ledger");
-    let events = ledger.query(EventQuery::default()).expect("query events");
-    ledger.close().expect("close verification ledger");
-
-    for (index, event) in events.iter().enumerate() {
-        assert_eq!(event.sequence(), index as u64 + 1);
-    }
-    let recovered = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event.payload(),
-                actingcommand_contract::EventPayload::Ledger(LedgerPayload::Recovered(payload))
-                    if payload.reason() == RecoveryReason::TruncatedFinalTail
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(recovered.len(), 1);
-    assert_eq!(recovered[0].event_type(), EventType::LedgerRecovered);
-    assert_eq!(quarantine_files(root).len(), 1);
-    assert_journal_completed(root);
-    *recovered[0].event_id()
-}
-
-fn quarantine_files(root: &Path) -> Vec<PathBuf> {
-    let directory = root.join("quarantine");
-    let mut paths = fs::read_dir(directory)
-        .expect("quarantine directory")
-        .map(|entry| entry.expect("quarantine entry").path())
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths
 }
 
 fn assert_journal_completed(root: &Path) {

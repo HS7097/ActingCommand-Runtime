@@ -672,7 +672,7 @@ a pending Intent consumes the sealed Intent and does not re-judge eligibility.
 The frame owner reuses `frame_store`'s three watermarks, near-duplicate handling and
 pinning. ArtifactStore owns pin/persist/evict actions and file integrity, while the
 ledger owns immutable references and the derived query result. The same design
-connects #287 disk-capacity observations and #97-P7 `enforce_retention`; memory
+connects #287 disk-capacity observations and the #97-P7 budget sweep (retired, Workflow #382 L-4); memory
 watermarks alone do not authorize disk deletion. The S4 package must freeze the
 run-window bound, pin/retention evidence and I/O failure handling before enabling
 these actions. No S0 file retention or verifier behavior changes.
