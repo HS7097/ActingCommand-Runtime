@@ -121,11 +121,8 @@ fn oversized_do_answer() -> Value {
         .map(|index| format!("neutral-ledger-row-{index:04}"))
         .collect::<Vec<_>>();
     let coordinates = json!({
-        "unit": "device_pixel",
-        "width": 1920,
-        "height": 1080,
+        "device_pixels": [1920, 1080],
         "orientation": "landscape",
-        "origin": "top_left",
         "applies_to": ["tap", "tap_rect", "swipe"],
     });
     json!({

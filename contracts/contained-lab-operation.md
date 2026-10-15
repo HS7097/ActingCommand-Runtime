@@ -173,11 +173,13 @@ entry creates no local recording authority or persistent session fact store.
 
 Every `do` answer (online, `--capture --dry-run` and offline `--scene --dry-run`)
 states the coordinate system of the frame its coordinates refer to, the before
-frame online, as `frame_coordinates {unit: "device_pixel", width, height,
-orientation, origin: "top_left", applies_to: ["tap", "tap_rect", "swipe"]}`:
-`orientation` is `landscape` when the frame is wider than high, `portrait` when
-higher than wide, `square` otherwise, and `--tap`, `--tap-rect` and `--swipe`
-take coordinates in exactly these frame pixels.
+frame online, as `frame_coordinates {device_pixels: [width, height],
+orientation, applies_to: ["tap", "tap_rect", "swipe"]}`: the frame's width and
+height in device pixels; `orientation` is `landscape` when the frame is wider
+than high, `portrait` when higher than wide, `square` otherwise; and `--tap`,
+`--tap-rect` and `--swipe` take coordinates in exactly these frame pixels,
+counted from the top-left pixel. The statement is kept short because Min keeps
+it whole and `observe`'s Min answer still targets 1 KiB (the soft limit).
 
 After an action the online form attaches its result by default, so the caller
 needs no extra observation. Whenever the operation has an after frame (also in a

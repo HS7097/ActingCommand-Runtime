@@ -6621,6 +6621,8 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
         forbidden_in: MAIN_ONLY,
         allowed_callers: &[
             glue_caller_file(SESSION_RECORD),
+            // Workflow #410 item 1: frame and preview files are named by their PNG's SHA-256.
+            glue_caller_file("apps/actinglab/src/lab2_cli/frame.rs"),
             glue_caller_file("apps/actinglab/src/lab_package_control.rs"),
             glue_caller_file("apps/actinglab/src/sha256.rs"),
         ],
@@ -6689,6 +6691,9 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_caller_file("apps/actinglab/src/device_runtime_config.rs"),
             glue_caller_file("apps/actinglab/src/env_detection.rs"),
             glue_caller_file("apps/actinglab/src/lab2_cli.rs"),
+            // Workflow #410 item 1: the Lab frame directory below the application state root,
+            // and the after frame read verified from the Runtime state root's artifact store.
+            glue_caller_file("apps/actinglab/src/lab2_cli/frame.rs"),
             glue_caller_file("apps/actinglab/src/lab_run.rs"),
             glue_caller_file("apps/actinglab/src/readonly_cli.rs"),
             glue_caller_file("apps/actinglab/src/runtime_debug.rs"),

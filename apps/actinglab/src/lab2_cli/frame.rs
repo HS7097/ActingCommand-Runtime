@@ -3,9 +3,10 @@
 //! Workflow #410 item 1 (board #410, Alice 2026-10-15): what an `observe` or `do` answer says
 //! about its frame.
 //!
-//! - `frame_coordinates` states the frame's coordinate system: device pixels, its width and
-//!   height, its orientation, the origin at the top-left pixel, and the `do` arguments that take
-//!   coordinates in this same system (`tap`, `tap_rect`, `swipe`).
+//! - `frame_coordinates` states the frame's coordinate system: its width and height in device
+//!   pixels, its orientation, and the `do` arguments that take coordinates in this same system
+//!   (`tap`, `tap_rect`, `swipe`). It is short because Min keeps it whole and `observe`'s Min
+//!   answer still targets 1 KiB (the soft limit).
 //! - `--preview` writes a JPEG preview of the frame, its long edge at most 1024 pixels, into the
 //!   Lab frame directory and answers its path, its size and its scale: a preview pixel times the
 //!   scale is a frame pixel.
@@ -36,9 +37,10 @@ const COORDINATE_INPUTS: [&str; 3] = ["tap", "tap_rect", "swipe"];
 /// The Lab frame directory below actinglab's state root.
 const FRAME_DIRECTORY: &str = "frames";
 
-/// `frame_coordinates` of a `width` × `height` frame: device pixels, with the origin at the
-/// top-left pixel; `landscape` when the frame is wider than high, `portrait` when higher than
-/// wide, `square` otherwise; `applies_to` names the `do` arguments given in this system.
+/// `frame_coordinates` of a `width` × `height` frame: `{device_pixels: [width, height],
+/// orientation, applies_to}`, counted from the top-left pixel; `landscape` when the frame is wider
+/// than high, `portrait` when higher than wide, `square` otherwise; `applies_to` names the `do`
+/// arguments given in this system.
 pub(super) fn coordinates(width: u32, height: u32) -> Value {
     let orientation = match width.cmp(&height) {
         std::cmp::Ordering::Greater => "portrait",
@@ -46,11 +48,8 @@ pub(super) fn coordinates(width: u32, height: u32) -> Value {
         std::cmp::Ordering::Equal => "square",
     };
     json!({
-        "unit": "device_pixel",
-        "width": width,
-        "height": height,
+        "device_pixels": [width, height],
         "orientation": orientation,
-        "origin": "top_left",
         "applies_to": COORDINATE_INPUTS,
     })
 }
@@ -289,11 +288,8 @@ mod tests {
             (720, 720, "square"),
         ] {
             let statement = coordinates(width, height);
-            assert_eq!(statement["unit"], "device_pixel");
-            assert_eq!(statement["width"], width);
-            assert_eq!(statement["height"], height);
+            assert_eq!(statement["device_pixels"], json!([width, height]));
             assert_eq!(statement["orientation"], orientation, "{width}x{height}");
-            assert_eq!(statement["origin"], "top_left");
             let inputs = statement["applies_to"]
                 .as_array()
                 .expect("applies_to is a list");
