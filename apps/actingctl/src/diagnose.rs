@@ -1089,7 +1089,7 @@ fn clock_slot_rows_of(
         .unwrap_or_default();
     let total = rows.len();
     // The report lists them newest first; the stable sort keeps that order within each rank.
-    rows.sort_by_key(|row| clock_slot_rank(*row));
+    rows.sort_by_key(|row| clock_slot_rank(row));
     let kept = rows.into_iter().take(CLOCK_SLOTS).cloned().collect();
     (kept, total)
 }

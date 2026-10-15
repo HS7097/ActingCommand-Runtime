@@ -209,8 +209,12 @@ fn clock_slots_show_a_deferred_slot_pending_then_settled_same_window() {
     assert_eq!(report["clock_slots"], json!([settled]), "{report:#}");
 }
 
-/// An owed selection that was never admitted is `absorbed` by the run that later served the
-/// next occurrence; the first run before it was served by its own admission.
+// An owed selection that was never admitted is `absorbed` by the run that later served the
+// next occurrence; the first run before it was served by its own admission. Since #372 K4
+// (K372 addendum of 2026-10-15, K4.2 `clock_slot_superseded` row and K4.3 "Once"), the
+// evaluation that sees the next occurrence also records the never-admitted occurrence
+// `clock_slot_superseded`, settled `collapsed`: an owed record is not one of the refused,
+// deferred or expired records that stop it.
 #[test]
 fn clock_slots_settle_an_owed_selection_never_admitted_as_absorbed() {
     let sources = slot_sources(1, &[slot_task(&[390], 1)], None);
@@ -242,9 +246,27 @@ fn clock_slots_settle_an_owed_selection_never_admitted_as_absorbed() {
         POLICY_INSTANCE_ALIAS,
         at(1, 6, 30),
     );
+    let superseded = signal_id(
+        SlotRecord::Superseded,
+        SLOT_TASK,
+        POLICY_INSTANCE_ALIAS,
+        at(1, 6, 30),
+    );
     assert_eq!(
         report["clock_slots"],
         json!([
+            {
+                "code": "clock_slot_superseded",
+                "task_id": SLOT_TASK,
+                "instance_id": POLICY_INSTANCE_ALIAS,
+                "occurrence_unix_ms": at(1, 6, 30),
+                "next_occurrence_unix_ms": at(2, 6, 30),
+                "slot_fate": "collapsed",
+                "slot_fate_settled": true,
+                "recorded_sequence": record_sequence(&events, &superseded),
+                "recorded_at_unix_ms": at(2, 6, 31),
+                "next_dispatch": admitted_at(&events, at(2, 6, 31)),
+            },
             {
                 "code": "clock_slot_owed",
                 "task_id": SLOT_TASK,
