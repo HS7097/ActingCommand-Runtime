@@ -166,6 +166,10 @@
       "type": "integer",
       "description": "The raw operating-system error number (Win32 error or HRESULT)."
     },
+    "connectivity_reason": {
+      "type": "vocab:connectivity_reason",
+      "description": "Why the operating system's internet connectivity status is unknown (Workflow #369 S6c, from host-metrics' network_connectivity)."
+    },
     "io_kind": {
       "type": "vocab:io_kind",
       "description": "The Rust io::ErrorKind of an I/O failure, in snake_case."
@@ -593,6 +597,14 @@
     "value_op": {
       "type": "vocab:value_op",
       "description": "The comparison of a value test."
+    },
+    "mark_id": {
+      "type": "id",
+      "description": "The id of a mark of a Lab recording (record mark), such as the template mark a click follows (Workflow #396 REC-4)."
+    },
+    "follow_problem": {
+      "type": "vocab:follow_problem",
+      "description": "Why a Lab recording's click that follows a template mark does not hold."
     },
     "unknown_reason": {
       "type": "vocab:unknown_reason",
@@ -1617,6 +1629,18 @@
       "type": "vocab:device_watch_problem",
       "description": "What went wrong with the device-link watch, the Runtime's one adb track-devices process (Workflow #398 RD-2)."
     },
+    "device_hold": {
+      "type": "vocab:device_hold",
+      "description": "What holds a handset (Workflow #398 RD-5b)."
+    },
+    "thermal_status": {
+      "type": "vocab:thermal_status",
+      "description": "A handset's thermal status (Workflow #398 RD-5b)."
+    },
+    "battery_percent": {
+      "type": "integer",
+      "description": "A handset's battery level, 0 to 100 percent (Workflow #398 RD-5b)."
+    },
     "mumu_manager_version": {
       "type": "version",
       "description": "The version MuMuManager reported in a discovery."
@@ -1720,6 +1744,10 @@
     "waited_ms": {
       "type": "duration_ms",
       "description": "How long a command's --wait waited for its request before it stopped waiting, in milliseconds."
+    },
+    "handle": {
+      "type": "token",
+      "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
     }
   },
   "vocabularies": {
@@ -3700,6 +3728,33 @@
         }
       }
     },
+    "follow_problem": {
+      "description": "Why a Lab recording's click that follows a template mark does not hold (Workflow #396 REC-4).",
+      "source": {
+        "file": "crates/lab/src/codes.rs",
+        "enum": "ClickFollowProblem"
+      },
+      "tokens": {
+        "not_template": {
+          "description": "The followed mark is not a template mark of the step."
+        },
+        "not_required": {
+          "description": "The followed template is only a member of an any_of check, not a required mark of the step's page."
+        },
+        "guard_conflict": {
+          "description": "The click guard names another mark than the followed template."
+        },
+        "primary_mismatch": {
+          "description": "On the primary frame the template's best match is not at its crop, or not at factor 1000."
+        },
+        "template_unmatched": {
+          "description": "On a frame the template does not pass in its search area."
+        },
+        "click_outside_frame": {
+          "description": "On a frame the click box that follows the match leaves the frame."
+        }
+      }
+    },
     "device_category": {
       "description": "The category of a device failure.",
       "source": {
@@ -4913,6 +4968,49 @@
         }
       }
     },
+    "device_hold": {
+      "description": "What holds a handset (model-398 section 7.3 to 7.5), in the order its availability names the first of them (device_state:<hold>).",
+      "tokens": {
+        "locked": {
+          "description": "A keyguard waits for a person (device_locked)."
+        },
+        "thermal": {
+          "description": "The thermal status reached the hold level (device_thermal_hold)."
+        },
+        "battery_low": {
+          "description": "On no power source, below the battery level (device_battery_low)."
+        },
+        "in_use": {
+          "description": "Another application was in the foreground at a run's start (device_in_use)."
+        }
+      }
+    },
+    "thermal_status": {
+      "description": "A handset's thermal status (model-398 section 7.1): Android's thermal status levels, mildest first. The device_state thermal keys take these words.",
+      "tokens": {
+        "none": {
+          "description": "Status 0: no throttling."
+        },
+        "light": {
+          "description": "Status 1: light throttling."
+        },
+        "moderate": {
+          "description": "Status 2: moderate throttling."
+        },
+        "severe": {
+          "description": "Status 3: severe throttling."
+        },
+        "critical": {
+          "description": "Status 4: the platform has done everything it can to reduce power."
+        },
+        "emergency": {
+          "description": "Status 5: key components are about to shut down."
+        },
+        "shutdown": {
+          "description": "Status 6: the device shuts down at once."
+        }
+      }
+    },
     "standard_pack_problem": {
       "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6).",
       "tokens": {
@@ -5988,6 +6086,7 @@
       "lab"
     ],
     "device_": [
+      "actingctl",
       "actingd",
       "contract",
       "device",
@@ -8127,6 +8226,9 @@
     ],
     "start_emulator_": [
       "actingd"
+    ],
+    "emulator_autostart_": [
+      "runtime-host"
     ]
   },
   "fragments": {

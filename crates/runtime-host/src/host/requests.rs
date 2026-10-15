@@ -487,6 +487,14 @@ impl HostShared {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.self_check_instance(request, validated, instance_alias, connection_id)
             }
+            // Workflow #390 DRILL-1: a person's drill of a physical instance's ladder.
+            RuntimeOperation::DrillRecoveryLadder {
+                instance_alias,
+                mode,
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.drill_recovery_ladder(request, validated, instance_alias, *mode)
+            }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
                 holder_id,

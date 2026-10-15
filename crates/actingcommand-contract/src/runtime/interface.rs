@@ -232,6 +232,7 @@ runtime_operation_kinds! {
     PauseScheduling,
     ResumeScheduling,
     SelfCheckInstance,
+    DrillRecoveryLadder,
     RunContainedTask,
     Input,
     PublishFact,
@@ -337,6 +338,8 @@ impl RuntimeOperationKind {
             | Self::CancelContainedTask
             | Self::ControlEmulatorInstance
             | Self::SelfCheckInstance
+            // Workflow #390 DRILL-1: a ladder drill, an option-two operation.
+            | Self::DrillRecoveryLadder
             | Self::RegisterDiagnosticSignature
             | Self::RetireDiagnosticSignature
             | Self::RecordDebugEvent
@@ -391,6 +394,8 @@ impl RuntimeOperationKind {
             Self::PauseScheduling => Some(ReceiptCode::PauseSchedulingCompleted.code()),
             Self::ResumeScheduling => Some(ReceiptCode::ResumeSchedulingCompleted.code()),
             Self::SelfCheckInstance => Some(ReceiptCode::SelfCheckInstanceCompleted.code()),
+            // Workflow #390 DRILL-1.
+            Self::DrillRecoveryLadder => Some(ReceiptCode::DrillRecoveryLadderCompleted.code()),
             Self::RunContainedTask => Some(ReceiptCode::RunContainedTaskCompleted.code()),
             Self::Input => Some(ReceiptCode::InputCompleted.code()),
             Self::PublishFact => Some(ReceiptCode::PublishFactCompleted.code()),
@@ -495,6 +500,7 @@ impl RuntimeOperation {
             Self::PauseScheduling { .. } => Kind::PauseScheduling,
             Self::ResumeScheduling { .. } => Kind::ResumeScheduling,
             Self::SelfCheckInstance { .. } => Kind::SelfCheckInstance,
+            Self::DrillRecoveryLadder { .. } => Kind::DrillRecoveryLadder,
             Self::RunContainedTask { .. } => Kind::RunContainedTask,
             Self::Input { .. } => Kind::Input,
             Self::PublishFact { .. } => Kind::PublishFact,
@@ -642,6 +648,9 @@ mod tests {
             K::CancelContainedTask => (Lab(Debugging), Some(Operation), true),
             K::ControlEmulatorInstance => (Lab(Debugging), Some(Operation), true),
             K::SelfCheckInstance => (Lab(Debugging), Some(Operation), true),
+            // Workflow #390 DRILL-1 (forced compromise T-08): the ladder drill is an option-two
+            // operation (FCM: "CLI ↔ MCP option-two tools"), recorded through G14.
+            K::DrillRecoveryLadder => (Lab(Debugging), Some(Operation), true),
             K::RegisterDiagnosticSignature => (Lab(Debugging), Some(Operation), true),
             K::RetireDiagnosticSignature => (Lab(Debugging), Some(Operation), true),
             K::RecordDebugEvent => (Lab(Debugging), Some(Operation), true),

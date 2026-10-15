@@ -333,12 +333,51 @@ rule is `config_value_invalid` (`section_check`) for the key it concerns: both l
 non-empty and `watch.restart_window_ms` is at least the first restart wait. A wait that is no
 number of milliseconds is `wrong_type`.
 
+## The `device_state` section (Workflow #398 RD-5b)
+
+Model-398 v1.1 §7.8 and [v012-register.md](v012-register.md) §1.59: how the Runtime reads the
+device state of a bound handset and when that state holds it. Every key is read where it is used,
+so an instruction may change each while the Runtime runs: the sampling keys at the next sample,
+the others at the next start gate or input. The values are starting points the real-device check
+may tune; `in_use_gate` is off because the handset is a dedicated one (Alice, 2026-10-13,
+model-398 §16 item 2).
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `device_state.sample_interval_ms` | milliseconds `5000..=3600000` | `60000` | yes |
+| `device_state.fact_ttl_ms` | milliseconds, at least the sampling interval | `180000` | yes |
+| `device_state.wake_settle_ms` | milliseconds `100..=10000` | `1000` | yes |
+| `device_state.keepalive_margin_ms` | milliseconds | `60000` | yes |
+| `device_state.keyguard_insecure` | `dismiss` or `wait` | `dismiss` | yes |
+| `device_state.battery_min_percent` | integer `0..=100` | `15` | yes |
+| `device_state.thermal_hold_at` | a thermal status (`none`, `light`, `moderate`, `severe`, `critical`, `emergency`, `shutdown`) | `severe` | yes |
+| `device_state.thermal_resume_below` | a thermal status below `thermal_hold_at` | `moderate` | yes |
+| `device_state.in_use_gate` | boolean | `false` | yes |
+| `device_state.in_use_backoff_ms` | milliseconds `10000..=3600000` | `300000` | yes |
+
+- A bound handset whose link is `device` is read every `sample_interval_ms` (read-only commands
+  only; a sample never wakes the screen) and its `device.*` facts live for `fact_ttl_ms`.
+- At a run's start, and before an input of a run once the time since the last one reaches the
+  screen-off timeout read on the handset less `keepalive_margin_ms`, a dark screen gets one wake
+  key and waits `wake_settle_ms`; a keyguard without a credential gets one dismissal under
+  `dismiss`, or waits for a person under `wait`.
+- On no power source below `battery_min_percent`, at or above `thermal_hold_at`, and (with
+  `in_use_gate`) another application in front at a run's start, the handset holds; a thermal hold
+  lifts only below `thermal_resume_below`, an in-use hold only at a sample after
+  `in_use_backoff_ms`. No value makes the Runtime change a setting of the handset, press its
+  power key or enter a credential.
+
+The section is checked whole at start, in `check-config` and after every instruction; a broken
+rule is `config_value_invalid` (`section_check`) for the key it concerns: `fact_ttl_ms` is at
+least `sample_interval_ms` and `thermal_resume_below` is below `thermal_hold_at`.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
 |---|---|---|
 | `config.subsystems` | unchanged; Workflow #384 D2-S2 adds the row `recognition_packages` when the configuration binds a recognition package: enabled when the start kept one, with one `note` link of `fact_reader_binding_ignored` per binding it runs without | at start |
 | `config.selection` | one: `config_sha256`, `defaults_sha256` (`sha256:<hex>`), `config_generation` (decimal text, installed Runtime only) | at start |
+| `config.catalog` (Workflow #389 MCP-9a, register A5) | one, the active policy catalog generation: `catalog_id`, `catalog_version` (decimal text), `catalog_hash`, `activated_event_id` (the event id of the `catalog.activated` or `catalog.rolled_back` record that made it active), and when known `approval_id` and `approval_disposition` (the latest approval decision whose target is that generation), `previous_catalog_id` and `previous_catalog_version` (decimal text; the generation that record replaced); no fact while no generation is active | at start, after each committed catalog transition and after each approval decision, each time only when it changed |
 | `config.parameters.<section>` | one per key of the section, in manifest order: `key`, `value`, `source` (`explicit`, `default`, `discovered`, `instruction`), `settable`; the section is the key's first segment, `top_level` for a key without a dot; at most 256 rows each | at start, each section; again when an instruction changes a key of it; a section an earlier start recorded and this one has not is recorded empty |
 | `host.config_overrides` | one per instruction value: `config_key`, `value_json`, `base_json`, `base_source` (`explicit` or `default`), `set_unix_ms`, `set_in_owner_epoch`, `request_id`; `channel` from U-2 on | at every `ConfigureSettings`, and at start when it held rows (tagged, `tag.workbench_patterns`) |
 

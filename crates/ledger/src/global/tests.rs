@@ -2894,3 +2894,6 @@ mod gate_l3_g8;
 // Workflow #382 L-3 G9 (LED-I5): the formal open reads each row once and no material.
 #[path = "tests/gate_l3_g9.rs"]
 mod gate_l3_g9;
+// Workflow #382 A-4 G8 (LED-I5): the check-config preview's selected open and verify, counted.
+#[path = "tests/gate_382_a4_g8.rs"]
+mod gate_382_a4_g8;

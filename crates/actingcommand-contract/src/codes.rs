@@ -180,6 +180,8 @@ crate::outcome_codes! {
         InstanceFactSnapshotCompleted => "request_instance_fact_snapshot_completed": success / none,
         // Workflow #389 U-2 (register W11: the success code comes with the behaviour).
         BindChannelCompleted => "request_bind_channel_completed": success / none,
+        // Workflow #390 DRILL-1: a ladder drill was admitted and queued.
+        DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
     }
 }
 
@@ -771,6 +773,7 @@ crate::outcome_codes! {
         InvalidFactHash => "invalid_fact_hash": error / none,
         InvalidEventQueryInstanceFilter => "invalid_event_query_instance_filter": error / none,
         InvalidEventQueryEventTypeFilter => "invalid_event_query_event_type_filter": error / none,
+        InvalidEventQueryFactKeyFilter => "invalid_event_query_fact_key_filter": error / none,
         FingerprinterFailed => "fingerprinter_failed": error / none,
         InvalidTaskTimingObservations => "invalid_task_timing_observations": error / none,
         InvalidArtifactRetention => "invalid_artifact_retention": error / none,

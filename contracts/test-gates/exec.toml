@@ -976,3 +976,60 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_read1::read1_a_run_publishes_the_denominator_under_the_second_reading_key",
 ]
 incident = ["#390"]
+
+# Workflow #390 EXEC-1 (FCM E-04, E-13): one page may carry ordered candidate operations; a candidate whose `when` (a target present or absent) does not hold on the frame is withdrawn before its step starts, and a click that declares on_guard_refused next_candidate passes over to the next candidate on the same frame when its guard refuses before any input of its step, its step finishing without an input and staying counted; a page whose candidates were all passed over ends the run with contained_task_operation_candidates_exhausted (page_id, count) and no input; admission follows every candidate that may run in the page-graph and phased route checks; both are task schema 0.9 page-graph declarations
+[[gate]]
+key = "63"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_admission_takes_when_and_a_declared_fall_through_on_page_graph_operations",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_the_first_candidate_whose_when_holds_runs",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_a_declared_guard_refusal_falls_to_the_next_candidate_on_the_same_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_a_page_whose_candidates_all_fail_ends_the_run_without_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_exec1::exec1_admission_follows_every_candidate_that_may_run",
+    "actingcommand-pack-containment::lib::source::declarations::tests::exec1_when_and_on_guard_refused_declare_a_candidate_operation",
+]
+incident = ["#390"]
+
+# Workflow #308 SEL-L3b (forced compromises E-10, E-11, E-12; scan session of the frozen selector model S0 v2.1 §2; register §1.58): a scan reads a list along the horizontal axis; a drag may end with a pause and a brake across the axis (the input single_touch_drag_with_pause_and_brake_v1, one contact: press, drag, hold, brake, release), and a gap's corrective reverses it with the same pause and brake; a page flip is a tap that aligns by its overlap within the declared steps (its corrective and the rewind tap back_rect), or, without overlap, by page-order evidence: exactly one declared page check passes on each viewport and each flip shows the same page or the next, so a skipped page fails unexpected_displacement, no or two page checks fail no_consistent_shift or ambiguous_shift, and two absorbed flips fail end_unconfirmed; over the kernel's own path the held drag and the tap are each one input and one task.effect_intent of the select step, and the page is read from the captured frame
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_horizontal_strip_is_covered_from_its_start_to_its_end",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_drag_with_a_pause_and_a_brake_brakes_across_the_axis_and_its_corrective_reverses_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_page_flip_aligns_by_its_overlap_and_rewinds_by_its_reverse_tap",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_page_flip_gap_is_closed_by_one_tap_on_its_back_rect",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_pages_without_overlap_are_placed_by_page_order_evidence",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_skipped_page_fails_unexpected_displacement",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_viewport_with_no_page_check_or_with_two_fails",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_two_absorbed_page_flips_fail_end_unconfirmed",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::kernel_path::l3b_a_drag_with_a_pause_and_a_brake_is_one_effect_intent_and_one_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::kernel_path::l3b_a_page_flip_is_one_tap_and_its_page_is_read_from_the_captured_frame",
+    "actingcommand-device::lib::input::tests::l3b_a_drag_with_a_pause_and_a_brake_holds_then_brakes_in_one_contact",
+    "actingcommand-device::lib::input::tests::l3b_a_pause_alone_or_a_brake_alone_is_one_drag",
+    "actingcommand-device::lib::input::tests::l3b_a_drag_without_a_pause_or_a_brake_or_with_a_still_brake_is_refused",
+]
+incident = ["#308"]
+
+# Workflow #396 REC-4: a Lab recording's click follows a template mark. --click-follow generates a target click and --click with --click-follow an offset click (the rectangle minus the crop's corner), both guarded by the followed template, admitted by the kernel and never target_center; following a color mark or a check is not_template, a template only an any_of check names is not_required, another guard is guard_conflict (record mark refused with record_click_follow_invalid, nothing written); on the step's live frames an earlier equal match on the primary frame is primary_mismatch and a followed box leaving a sample frame is click_outside_frame (rejections inside record_mark_rejected); a recording without a follow generates its click step, guard, template target and click provenance as before; the first decision clicks inside the box the template moved to on a sample frame; a followed template matched at 750 scales its offset; template marks take scales (every factor must pass on some frame of an own mark), a mask and unique (the second place within the margin is reported); ac_record_mark hands a click.follow request to actinglab unchanged
+[[gate]]
+key = "65"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_click_following_a_template_generates_a_target_click_guarded_by_it",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_rectangle_with_a_follow_generates_its_offset_from_the_crop",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_followed_box_that_leaves_a_sample_frame_is_click_outside_frame",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_following_a_color_mark_or_a_check_is_not_template",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_following_a_template_only_an_any_of_check_names_is_not_required",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_another_click_guard_than_the_followed_template_is_guard_conflict",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_an_earlier_equal_match_on_the_primary_frame_is_primary_mismatch",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_without_a_follow_the_click_step_is_generated_as_before",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_on_a_moved_sample_frame_the_first_decision_clicks_inside_the_new_box",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_followed_template_matched_at_750_scales_its_offset",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_scaled_template_mark_needs_every_factor_on_some_frame",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_masked_template_mark_is_self_tested_with_its_mask_and_can_be_followed",
+    "actingcommand-lab::lib::gate_396_rec4::rec4_a_unique_template_mark_with_a_second_place_in_its_margin_is_refused_with_it",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rec4::gate_ac_record_mark_hands_a_click_follow_request_to_actinglab_unchanged",
+]
+incident = ["#396"]

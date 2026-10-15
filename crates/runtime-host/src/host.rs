@@ -162,6 +162,11 @@ mod contained_task;
 mod device_diagnostic;
 // Workflow #398 RD-2: the wired device link of the handsets, its wait and restore.
 mod device_link;
+// Workflow #398 RD-5b: the device state of the handsets, its holds and the start gate.
+mod device_state;
+// Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
+mod emulator_autostart;
+pub use emulator_autostart::EmulatorAutostartReports;
 mod emulator_instance;
 mod evidence_export;
 mod facts;
@@ -504,6 +509,9 @@ pub struct RuntimeHostConfig {
     /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
     /// `actingctl task-run --package / --expected-sha256`.
     startup_packages: BTreeMap<String, ContainedTaskRequest>,
+    /// Workflow #369 S6c: the aliases whose stopped emulator the daemon starts at its start, in
+    /// configuration order (actingd's `start_emulator`, S6a). Empty by default: nothing starts.
+    emulator_autostart: Vec<String>,
     /// Per instance alias: the default resource package the daemon admitted from its
     /// configuration (slice #324-r1). Reported by instance status only; never opened here.
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
@@ -537,7 +545,16 @@ pub struct RuntimeHostConfig {
     /// refuses as the ledger would.
     #[cfg(test)]
     settlement_refusal_for_test: Option<actingcommand_contract::RunId>,
+    /// Workflow #369 S6c, test only: the connectivity status an autostart claim reads instead of
+    /// the operating system's.
+    #[cfg(test)]
+    network_connectivity_for_test: Option<NetworkConnectivityForTest>,
 }
+
+/// Workflow #369 S6c, test only: a scripted connectivity read.
+#[cfg(test)]
+pub(crate) type NetworkConnectivityForTest =
+    Arc<dyn Fn() -> actingcommand_host_metrics::NetworkConnectivity + Send + Sync>;
 
 impl RuntimeHostConfig {
     pub fn new(state_root: impl Into<PathBuf>, secret_fingerprint_salt: impl AsRef<[u8]>) -> Self {
@@ -566,6 +583,7 @@ impl RuntimeHostConfig {
             config_manifest: None,
             config_selection: None,
             startup_packages: BTreeMap::new(),
+            emulator_autostart: Vec::new(),
             resource_packages: BTreeMap::new(),
             stuck_recovery: BTreeMap::new(),
             recognition_packages: BTreeMap::new(),
@@ -578,7 +596,20 @@ impl RuntimeHostConfig {
             preparation_test_hook: None,
             #[cfg(test)]
             settlement_refusal_for_test: None,
+            #[cfg(test)]
+            network_connectivity_for_test: None,
         }
+    }
+
+    /// Workflow #369 S6c, test only: autostart claims read `read` instead of the operating
+    /// system's connectivity status.
+    #[cfg(test)]
+    pub(crate) fn with_network_connectivity_for_test(
+        mut self,
+        read: NetworkConnectivityForTest,
+    ) -> Self {
+        self.network_connectivity_for_test = Some(read);
+        self
     }
 
     /// Workflow #369 E3 (#670 safety net), test only: the start refuses `run_id`'s settlement
@@ -773,6 +804,15 @@ impl RuntimeHostConfig {
     /// The configured startup packages, keyed by instance alias.
     pub const fn startup_packages(&self) -> &BTreeMap<String, ContainedTaskRequest> {
         &self.startup_packages
+    }
+
+    /// Workflow #369 S6c: the instances whose stopped emulator the daemon starts at its start,
+    /// by alias in configuration order (`RuntimeHost::enqueue_emulator_autostart`). An alias that
+    /// is not a registered instance fails startup with `emulator_autostart_instance_unknown`, a
+    /// fixture instance with `emulator_autostart_requires_physical_instance`.
+    pub fn with_emulator_autostart(mut self, emulator_autostart: Vec<String>) -> Self {
+        self.emulator_autostart = emulator_autostart;
+        self
     }
 
     /// Installs the admitted default resource packages, keyed by instance alias (slice
@@ -1054,6 +1094,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
                 "startup_packages",
                 &self.startup_packages.keys().collect::<Vec<_>>(),
             )
+            .field("emulator_autostart", &self.emulator_autostart)
             .field(
                 "resource_packages",
                 &self.resource_packages.keys().collect::<Vec<_>>(),
@@ -1084,6 +1125,8 @@ pub struct RuntimeHost {
     /// Workflow #361 B1: one outcome per scheduling pause this start restored or dropped
     /// (Workflow #378 A6a: was one line each).
     scheduling_pause_restore: Vec<Outcome>,
+    /// Workflow #369 S6c: the report lines of the configured emulator starts; valid after close.
+    emulator_autostart_reports: EmulatorAutostartReports,
     shared: Option<Arc<HostShared>>,
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
@@ -1611,6 +1654,11 @@ impl RuntimeHost {
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
             startup_packages: OnceLock::new(),
+            emulator_autostart: OnceLock::new(),
+            emulator_autostart_turn: Mutex::new(emulator_autostart::AutostartTurn::default()),
+            emulator_autostart_reports: EmulatorAutostartReports::default(),
+            #[cfg(test)]
+            network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
             #[cfg(test)]
@@ -1622,6 +1670,7 @@ impl RuntimeHost {
             recovery_ladders: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
+            device_states: Mutex::new(device_state::DeviceStates::default()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
             config_override_gate: Mutex::new(()),
             recovery_ladder_config: Mutex::new(None),
@@ -1657,6 +1706,7 @@ impl RuntimeHost {
             owner_released_by_exit: released_by_exit,
             ledger_opened,
             scheduling_pause_restore: Vec::new(),
+            emulator_autostart_reports: shared.emulator_autostart_reports(),
             shared: Some(Arc::clone(&shared)),
             accept_thread: None,
             sweep_thread: None,
@@ -1732,6 +1782,10 @@ impl RuntimeHost {
             drop(provider);
             let startup_packages = startup_package::resolve_startup_packages(
                 &config.startup_packages,
+                &registered_instances,
+            )?;
+            let emulator_autostart = emulator_autostart::resolve_emulator_autostart(
+                &config.emulator_autostart,
                 &registered_instances,
             )?;
             let stuck_recovery = recovery_ladder::resolve_stuck_recovery(
@@ -1873,6 +1927,7 @@ impl RuntimeHost {
             installation::set_prepared(&shared.policy, Mutex::new(policy))?;
             installation::set_prepared(&shared.monitor_registry, Mutex::new(monitor_registry))?;
             installation::set_prepared(&shared.startup_packages, startup_packages)?;
+            installation::set_prepared(&shared.emulator_autostart, emulator_autostart)?;
             installation::set_prepared(&shared.stuck_recovery, stuck_recovery)?;
             *lock(
                 &shared.registered_instances,
@@ -1896,6 +1951,9 @@ impl RuntimeHost {
             if let Some(config_manifest) = &config.config_manifest {
                 shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
             }
+            // Workflow #389 MCP-9a (register A5): the active policy catalog generation, re-observed
+            // as every `config.` fact is.
+            shared.record_config_catalog()?;
             // Workflow #387 D1c: the `recovery_ladder` section in effect (the defaults file's
             // for a host started without a manifest), read and checked before any instance is
             // prepared.
@@ -1924,6 +1982,9 @@ impl RuntimeHost {
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
             device_link::start(&shared)?;
+            // Workflow #398 RD-5b (model-398 §7.2): the device-state sampling of the bound
+            // handsets; none without a bound handset.
+            device_state::start(&shared)?;
             lock(
                 &shared.performance,
                 HostLocation::SampleCapacityBeforeBusiness,
@@ -2065,6 +2126,23 @@ impl RuntimeHost {
     /// this start's ledger open, which actingd writes as its daemon line.
     pub fn ledger_opened(&self) -> &Outcome {
         &self.ledger_opened
+    }
+
+    /// Workflow #369 S6c (model-369-queue H-5): enqueues one autostart claim per configured
+    /// instance whose emulator is stopped (its endpoint is pending), in configuration order;
+    /// actingd calls it once, after policy initialization and before `runtime_ready`. It does
+    /// not block: each claim waits for the network, its turn and its Start on its instance's
+    /// worker. Returns how many claims were enqueued; only a failure the Runtime does not
+    /// survive is the error.
+    pub fn enqueue_emulator_autostart(&self) -> RuntimeHostResult<usize> {
+        self.shared_ref(HostLocation::EnqueueEmulatorAutostart)?
+            .enqueue_emulator_autostart()
+    }
+
+    /// Workflow #369 S6c: the report lines of the configured emulator starts, which actingd
+    /// writes as daemon lines; the handle stays valid after the host closed.
+    pub fn emulator_autostart_reports(&self) -> EmulatorAutostartReports {
+        self.emulator_autostart_reports.clone()
     }
 
     /// The daemon checks fatal_error first, then returns through its owned close path.
@@ -2952,6 +3030,20 @@ impl RuntimeHost {
         device_link::tick(shared)
     }
 
+    /// Workflow #398 RD-5b: one sample of every handset's device state at once, as the sampler
+    /// runs it when a sample is due.
+    #[cfg(test)]
+    pub(crate) fn device_state_sample_for_test(&self) -> RuntimeHostResult<()> {
+        let shared = self.shared.as_ref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::RuntimeHostClosed,
+                crate::codes::test_spellings::TestLocation::DeviceStateSampleForTest,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })?;
+        device_state::sample(shared, true)
+    }
+
     /// Workflow #369 S1: the instance's admission guard, for a test thread to hold.
     #[cfg(test)]
     pub(crate) fn instance_admission_for_test(
@@ -3786,6 +3878,13 @@ impl RuntimeHost {
             &mut failure,
             device_link::stop_watch(&shared),
         );
+        // Workflow #398 RD-5b: the device-state sampler ends with the shutdown request and is
+        // joined.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            device_state::stop(&shared),
+        );
         // Workflow #369 W-2: pumping stopped with the shutdown request; the queues are
         // cancelled (`lease.queue_disconnected`), then the instance workers are signalled and
         // joined, before the host's own close.
@@ -4225,6 +4324,13 @@ struct HostShared {
     scheduling_pause_persist_gate: Mutex<()>,
     // Slice #316-B3: startup packages by registered instance.
     startup_packages: OnceLock<BTreeMap<InstanceId, ContainedTaskRequest>>,
+    // Workflow #369 S6c: the configured emulator starts (registered instance and alias) in
+    // configuration order, the start turn of their claims, and their report lines.
+    emulator_autostart: OnceLock<Vec<(InstanceId, String)>>,
+    emulator_autostart_turn: Mutex<emulator_autostart::AutostartTurn>,
+    emulator_autostart_reports: EmulatorAutostartReports,
+    #[cfg(test)]
+    network_connectivity_for_test: Option<NetworkConnectivityForTest>,
     // Workflow #369 W-2: what each queued or handed-off host claim runs once granted, by the
     // claim's request id (like `queued_requests`, with no state of its own), and the
     // per-instance workers that run it.
@@ -4247,6 +4353,9 @@ struct HostShared {
     // Workflow #398 RD-2: the handsets' device links and their watch (model-398 §4). A leaf
     // lock: nothing else is taken while it is held.
     device_links: Mutex<device_link::DeviceLinks>,
+    // Workflow #398 RD-5b: the handsets' device-state holds and their sampler (model-398 §7). A
+    // leaf lock: nothing else is taken while it is held.
+    device_states: Mutex<device_state::DeviceStates>,
     // Workflow #387 D1b: the configuration in effect (the file layer of the manifest and the
     // instruction values), and the gate that orders each change and the start's restore with
     // the records it leads to.

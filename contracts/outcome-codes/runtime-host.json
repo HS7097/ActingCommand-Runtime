@@ -20832,6 +20832,512 @@
       "description": "The one adb reconnect of an offline handset's transport (device_link.offline_action = kick_once) failed (#398 R1 RD-2, model-398 section 4.3); the Runtime waits for the link as under wait. adb's text is the cause.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "device_thermal_hold": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "thermal_status": "required",
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset's thermal status reached device_state.thermal_hold_at (#398 R1 RD-5b, model-398 section 7.4): it is unavailable under device_state:thermal until the status falls below device_state.thermal_resume_below. Recorded when a sample finds it; at a run's start the run does not start and no input is sent.",
+      "common_causes": "The handset grew hot during long runs or while charging.",
+      "handling": "Let the handset cool; the next sample below the resume level lifts the hold."
+    },
+    "device_battery_low": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "battery_percent": "required",
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A handset is on no power source and its battery is below device_state.battery_min_percent (#398 R1 RD-5b, model-398 section 7.4): it is unavailable under device_state:battery_low. A handset plugged in never holds, charging or not. Recorded when a sample finds it; at a run's start the run does not start and no input is sent.",
+      "common_causes": "The cable is out or the charger is off.",
+      "handling": "Plug the handset in; the next sample lifts the hold."
+    },
+    "device_in_use": {
+      "category": "warning",
+      "ladder_class": "planned_stop",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "At a run's start another application than the instance's and the home screen's was in the handset's foreground, under device_state.in_use_gate (#398 R1 RD-5b, model-398 section 7.5): the run does not start and the handset is unavailable under device_state:in_use until a sample after device_state.in_use_backoff_ms finds no other application in front.",
+      "common_causes": "A person is using the handset.",
+      "handling": "Leave the handset on the home screen or the instance's application."
+    },
+    "device_screen_woken": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_label": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The start gate of a run on a handset, or the check before an input, lit the screen with the wake key (#398 R1 RD-5b, model-398 section 7.3); the run goes on.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_hold_lifted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "device_hold": "required",
+        "device_label": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A hold of a handset lifted (#398 R1 RD-5b, model-398 section 7.4): a sample found it cooled, plugged in, unlocked or no longer in use, or a run's start gate found it ready. With no hold left it is available again as its self-check and its link allow.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "device_state_sampling_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The device-state sampling of the bound handsets could not start (#398 R1 RD-5b, model-398 section 7.2): its thread could not be spawned. The Runtime does not run without it.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_instance_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured emulator start (actingd start_emulator, Workflow #369 S6c) names an alias that is not a registered instance; the Runtime host's start fails. alias names it.",
+      "common_causes": "A host configured by another embedder than actingd, whose own configuration check refuses such a start (start_emulator_requires_discovery_binding).",
+      "handling": "Correct the configured instances, then start again."
+    },
+    "emulator_autostart_requires_physical_instance": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured emulator start (Workflow #369 S6c) names a fixture instance, which has no emulator to start; the Runtime host's start fails. alias names it.",
+      "common_causes": "A host configured by another embedder than actingd, whose own configuration check refuses such a start.",
+      "handling": "Configure start_emulator only on a discovery-bound instance, then start again."
+    },
+    "emulator_autostart_queued": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_network_ready": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "elapsed_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An autostart claim read internet access from the operating system's connectivity status (Workflow #369 S6c, P3); elapsed_ms is how long it waited since its grant. The claim goes on to its start turn. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_network_status_unknown": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "connectivity_reason": "required",
+        "os_error": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The operating system's connectivity status is unknown (connectivity_reason, and os_error when the system gave one); the autostart claim goes on without waiting (Workflow #369 S6c, P3). A report line.",
+      "common_causes": "An older Windows without the connectivity query, a failed query, or a level the build does not know.",
+      "handling": "TBD"
+    },
+    "emulator_autostart_network_unready": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "elapsed_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No internet access was reported within 600 s (Workflow #369 S6c, P3): the configured start is refused with command.rejected and runtime.failed under the autostart claim, and the claim releases its key; elapsed_ms is the wait. Also its report line. The instance stays stopped.",
+      "common_causes": "The host had no network, or only local access, while actingd started.",
+      "handling": "Start the instance with emulator control once the network is up."
+    },
+    "emulator_autostart_started": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured start was performed and the connection preparation after it passed (Workflow #369 S6c); the key went to the instance's startup package, if one is configured. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_preparation_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured start was performed, but the connection preparation after it did not pass (Workflow #369 S6c); the preparation recorded its failure, and the ladder it admitted holds the key. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A configured start ended without its emulator started (Workflow #369 S6c): its failure is the caused_by link (a refused claim, a refused renewal, a failed control), recorded where it happened. A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_superseded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An operator emulator control waits on the instance: the autostart claim releases its key before its start, with no failure pair (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_yielded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scheduling pause holds the instance or the global gate: the autostart claim queues again as a gated entry and releases its key; the resume grants it again (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_skipped": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "emulator_autostart_interrupted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drain or a shutdown ended the autostart claim before its start; it releases its key, and the next daemon start enqueues it again (Workflow #369 S6c, H-5). A report line.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "recovery_ladder_drill_requested": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The trigger of a drill's stuck-recovery ladder: a person asked for a drill of the instance's ladder (DrillRecoveryLadder, actingctl ladder-drill, MCP ac_ladder_drill; Workflow #390 DRILL-1). Its recovery_ladder_started names it as the trigger's failure_code with stage drill; every record of the drill's own is tagged drill.",
+      "common_causes": "A person asked for a drill of the instance's ladder.",
+      "handling": "Nothing to do; follow the drill's records by its ladder_request_id."
+    },
+    "recovery_rung_skipped_drill_plan": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A plan drill of a stuck-recovery ladder did not run a rung the ladder would have run: a plan drill never acts on the device (the rung's recovery_rung_finished outcome; skip reason drill_plan, Workflow #390 DRILL-1). The climb ends planned.",
+      "common_causes": "A drill was asked for without --device (MCP device false).",
+      "handling": "Nothing to do. Ask for the drill with --device (device true) to climb the rungs on the device."
+    },
+    "recovery_ladder_drill_disabled": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drill of an instance's stuck-recovery ladder was refused because stuck recovery is off for that instance, so no ladder starts on it (Workflow #390 DRILL-1). The command's command.rejected carries it; nothing else is recorded.",
+      "common_causes": "instances[].stuck_recovery or recovery_ladder.enabled is false for the instance.",
+      "handling": "Turn stuck recovery on for the instance (actingctl config set) if the drill should run, then ask again."
+    },
+    "recovery_ladder_drill_already_running": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drill of an instance's stuck-recovery ladder was refused because a ladder already holds or waits for the instance and recovery_ladder.rules.already_running is suppress (Workflow #390 DRILL-1). Its recovery_ladder_suppressed, tagged drill, says already_running.",
+      "common_causes": "A ladder a failure started, or an earlier drill, still holds or waits for the instance.",
+      "handling": "Wait until that ladder's recovery_ladder_finished, then ask again."
+    },
+    "recovery_ladder_drill_cooling_down": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "next_eligible_unix_ms": "required",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drill of an instance's stuck-recovery ladder was refused because the instance's cool-down window is open and recovery_ladder.trigger_defaults.respect_cooldown holds the drill (Workflow #390 DRILL-1). next_eligible_unix_ms is the window's end; its recovery_ladder_suppressed, tagged drill, says cooldown.",
+      "common_causes": "A ladder got the instance's key within the cool-down window (recovery_ladder.cooldown_secs or the instance's stuck_recovery_cooldown_secs), or a device drill did.",
+      "handling": "Ask again from next_eligible_unix_ms, or set recovery_ladder.trigger_defaults.respect_cooldown to false for the drill."
     }
   },
   "locations": {
@@ -27483,6 +27989,86 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime host operation: end a run whose device failed while its handset is not at device with device_link_lost (Workflow #398 RD-2)."
+    },
+    "device_state_gate": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the start gate of a package run on a handset, before its first step (Workflow #398 RD-5b)."
+    },
+    "device_state_sample": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the device-state sampling of the bound handsets (Workflow #398 RD-5b)."
+    },
+    "device_state_keepalive": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: the screen check before an input of a run on a handset, long after the last one (Workflow #398 RD-5b)."
+    },
+    "device_state_read": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: read the device-state holds of a handset (Workflow #398 RD-5b)."
+    },
+    "device_state_apply": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: apply a change of a handset's device-state holds (Workflow #398 RD-5b)."
+    },
+    "device_state_step": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A runtime host operation: begin or end the lease step of a handset's screen check (Workflow #398 RD-5b)."
+    },
+    "enqueue_emulator_autostart": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: enqueue the configured emulator starts' claims (Workflow #369 S6c)."
+    },
+    "run_emulator_autostart": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: an autostart claim's hold and start on its instance's worker (Workflow #369 S6c)."
+    },
+    "emulator_autostart_reports": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: the report lines of the configured emulator starts (Workflow #369 S6c)."
+    },
+    "recovery_ladder_drill": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: a person's drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
     }
   }
 }

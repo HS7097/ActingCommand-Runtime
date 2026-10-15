@@ -21,6 +21,7 @@ use actingcommand_device::{
     NemuSessionBackends, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
     create_touch_backend_for_fenced_input, discover_mumu_instances, mumu_state_wait,
 };
+use actingcommand_device::{AdbDeviceStateShell, DeviceStateShell};
 use actingcommand_device::{AdbTrackDevices, DeviceSerial, TrackDevicesEvent, TrackDevicesStopper};
 pub use actingcommand_execution_kernel::{
     DeviceLinkWatch, DeviceLinkWatchEvent, DeviceLinkWatchStop, DeviceProcessPresence,
@@ -729,6 +730,27 @@ impl ExecutionBackendEntry {
         };
         Adb::new(self.application_adb.clone()).reconnect(serial.adb_arg())
     }
+
+    /// Workflow #398 RD-5b (model-398 v1.1 §7.1-§7.3): `work` with the device-state shell of a
+    /// bound handset (`adb -s <serial> shell ...` through the entry's adb, RD-5a's closed sets
+    /// only) and the entry's application id; `false` for an emulator and for a handset the
+    /// private binding file binds no device to, which get no command.
+    fn with_handset_state(
+        &self,
+        work: &mut dyn FnMut(&mut dyn DeviceStateShell, &str),
+    ) -> DeviceResult<bool> {
+        let target = {
+            let endpoint = self.endpoint();
+            match endpoint.handset() {
+                Some(HandsetEndpoint::Bound(_)) => endpoint.application_target.clone(),
+                Some(HandsetEndpoint::Unbound) | None => return Ok(false),
+            }
+        };
+        let adb = Adb::new(self.application_adb.clone());
+        let mut shell = AdbDeviceStateShell::new(&adb, &target);
+        work(&mut shell, &self.application_id);
+        Ok(true)
+    }
 }
 
 /// Workflow #398 RD-2 (model-398 v1.1 §4.1): the registry's device-link watch, one
@@ -1092,6 +1114,19 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             RegistryEntry::Fixture(_) => Err(DeviceError::fatal(
                 "a fixture instance has no handset transport to reconnect",
             )),
+        }
+    }
+
+    fn with_handset_state(
+        &self,
+        instance_alias: &str,
+        work: &mut dyn FnMut(&mut dyn DeviceStateShell, &str),
+    ) -> DeviceResult<bool> {
+        match self.entry(instance_alias)? {
+            RegistryEntry::Real(entry) => entry.with_handset_state(work),
+            // A fixture instance is no handset: it gets no device-state command.
+            #[cfg(feature = "fixture-backends")]
+            RegistryEntry::Fixture(_) => Ok(false),
         }
     }
 
@@ -1511,7 +1546,7 @@ fn validate_application_id(application_id: &str) -> RuntimeHostResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_device::SegmentedSwipeAction;
+    use actingcommand_device::{SegmentedDragAction, SegmentedSwipeAction};
 
     /// A scheduler-shaped step witness for driving a write method directly.
     fn step_witness() -> FencedWrite {
@@ -1595,7 +1630,7 @@ mod tests {
     struct RecordingInputBackend {
         result: DeviceResult<()>,
         calls: Arc<Mutex<Vec<&'static str>>>,
-        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedSwipeAction>>>,
+        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedDragAction>>>,
         supports_segmented_swipe: bool,
     }
 
@@ -1675,7 +1710,7 @@ mod tests {
     struct DiagnosticInputBackendFixture {
         backend: DeviceRegistryInputDiagnosticBackend,
         calls: Arc<Mutex<Vec<&'static str>>>,
-        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedSwipeAction>>>,
+        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedDragAction>>>,
     }
 
     fn diagnostic_input_backend(result: DeviceResult<()>) -> DiagnosticInputBackendFixture {
@@ -1862,7 +1897,7 @@ mod tests {
             *segmented_swipe_actions
                 .lock()
                 .expect("segmented swipe actions"),
-            [action]
+            [SegmentedDragAction::VerticalBrake(action)]
         );
     }
 
@@ -1912,7 +1947,7 @@ mod tests {
             *segmented_swipe_actions
                 .lock()
                 .expect("segmented swipe actions"),
-            [action]
+            [SegmentedDragAction::VerticalBrake(action)]
         );
     }
 

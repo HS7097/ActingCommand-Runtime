@@ -108,11 +108,15 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+// Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
+mod gate_308_l3b;
 mod gate_336_pkgs2;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;
 mod gate_369s5;
+// Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
+mod gate_369_s6c;
 mod gate_372k2;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
 mod gate_373_nav3b;
@@ -156,22 +160,33 @@ mod gate_387_d1cf;
 mod gate_387_d1cg;
 // Workflow #389 MCP-4, register W2: the instance fact read records nothing.
 mod gate_389_mcp4;
+// Workflow #389 MCP-9a, register A5: `config.catalog` names the active policy catalog
+// generation, its record, its latest approval decision and its predecessor.
+mod gate_389_mcp9a;
 // Workflow #389 U-2: the door binds each connection to its channel and marks, never refuses.
 mod gate_389_u2;
 // Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): outcome subsets, unproduced
 // outcomes and zero-input packages with several outcomes.
 mod gate_390_out1;
+// Workflow #390 EXEC-1 (forced compromise E-04): a guard refusal falls to the page's next
+// candidate operation.
+mod gate_390_exec1;
 // Workflow #390 OUT-2 (forced compromises O-01, O-02, S-01): designated effect sets, their
 // counts and caps.
 mod gate_390_out2;
 // Workflow #390 READ-1 (forced compromise O-08): a fraction reading's denominator is published
 // under its second reading key.
 mod gate_390_read1;
+// Workflow #390 DRILL-1 (forced compromise T-08): a person's drill of an instance's ladder is
+// recorded like a real one, tagged `drill`, and acts on the device only when it says so.
+mod gate_390_drill1;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;
 // Workflow #398 RD-2: a handset's wired device link through the host.
 mod gate_398_rd2;
+// Workflow #398 RD-5b: a handset's device state, its holds and the start gate through the host.
+mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
 mod gate_epoch_close;

@@ -322,6 +322,34 @@ pub struct SelfTest {
     pub max_cell: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<BTreeMap<String, SelfTestStatus>>,
+    /// Workflow #396 REC-4: the declared factors of a template mark with `scales`, in their
+    /// declared order, that its template passed at on at least one frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_scales_milli: Option<Vec<u32>>,
+}
+
+/// Workflow #396 REC-4 (REC-5): the factors a template mark is resampled by and searched at, as
+/// the task's `verify_templates[].scales` declares them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateScalesSpec {
+    pub factors_milli: Vec<u32>,
+}
+
+/// Workflow #396 REC-4 (REC-7): the gray range of the template pixels a template mark scores,
+/// as the task's `verify_templates[].mask` declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TemplateMaskSpec {
+    Range { lower: u8, upper: u8 },
+}
+
+/// Workflow #396 REC-4 (REC-2): a second place within this margin of the best match fails a
+/// template mark, as the task's `verify_templates[].unique` declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateUniqueSpec {
+    pub margin_milli: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -388,6 +416,14 @@ pub struct RecordedMark {
     pub all_of: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub any_of: Option<Vec<String>>,
+    /// Workflow #396 REC-4: a template mark's factors (REC-5), mask (REC-7) and margin of
+    /// uniqueness (REC-2), as declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scales: Option<TemplateScalesSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<TemplateMaskSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique: Option<TemplateUniqueSpec>,
     pub self_test: SelfTest,
     pub created_at_unix_ms: u64,
 }
@@ -398,6 +434,12 @@ impl RecordedMark {
             .as_deref()
             .or(self.any_of.as_deref())
             .unwrap_or(&[])
+    }
+
+    /// Workflow #396 REC-4: a template mark that declares factors, a mask or uniqueness. Its
+    /// self-test evaluates it as the Runtime evaluates the target the package declares for it.
+    pub fn declares_exact_template(&self) -> bool {
+        self.scales.is_some() || self.mask.is_some() || self.unique.is_some()
     }
 }
 
@@ -428,14 +470,39 @@ pub struct ClickExecution {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepClick {
+    /// The click rectangle on the primary frame; a click that follows a template is executed
+    /// and shown with it while recording.
     pub rect: RecordRect,
     pub source: String,
     pub from: Option<String>,
+    /// Workflow #396 REC-4: the template mark the package's click follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<ClickFollow>,
     pub retry: Option<ClickRetry>,
     pub declared_at_unix_ms: u64,
     pub execution: Option<ClickExecution>,
     pub attempts: Vec<ClickExecution>,
     pub needs_review: bool,
+}
+
+/// Workflow #396 REC-4: how the package's click follows a template mark. `target` clicks the
+/// match box; `offset` clicks the match box's top-left corner plus `offset`, which is the
+/// declared rectangle minus the crop's top-left corner (scaled by the factor the template
+/// matched at, for a template with `scales`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClickFollow {
+    pub mark_id: String,
+    pub form: ClickFollowForm,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<RecordRect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClickFollowForm {
+    Target,
+    Offset,
 }
 
 impl StepClick {
@@ -568,6 +635,14 @@ pub struct MarkSpec {
     pub all_of: Option<Vec<String>>,
     #[serde(default)]
     pub any_of: Option<Vec<String>>,
+    /// Workflow #396 REC-4: a template mark's factors (REC-5), mask (REC-7) and margin of
+    /// uniqueness (REC-2).
+    #[serde(default)]
+    pub scales: Option<TemplateScalesSpec>,
+    #[serde(default)]
+    pub mask: Option<TemplateMaskSpec>,
+    #[serde(default)]
+    pub unique: Option<TemplateUniqueSpec>,
 }
 
 impl MarkSpec {
@@ -595,17 +670,24 @@ impl MarkSpec {
             model_sha256: None,
             all_of: None,
             any_of: None,
+            scales: None,
+            mask: None,
+            unique: None,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A click declaration: a rectangle (`region`), a mark's region (`from`), or (Workflow #396
+/// REC-4) a template mark it follows (`follow`), alone or with a rectangle.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClickSpec {
     #[serde(default)]
     pub region: Option<RecordRect>,
     #[serde(default)]
     pub from: Option<String>,
+    #[serde(default)]
+    pub follow: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

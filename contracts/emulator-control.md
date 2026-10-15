@@ -66,7 +66,10 @@ scheduler's default lease TTL, the request's own connection):
   the release hands the key straight to that ladder ("Stuck-recovery ladder"); otherwise it
   hands the key to the next eligible claim, or frees the instance. A failed action ends the
   key as a failed lease end does (`lease.released` under the lease's own links, the key handed
-  on), except after an unconfirmed close, which keeps it.
+  on), except after an unconfirmed close, which keeps it. Since Workflow #369 S6c a failed
+  action that hands no startup claim over, one whose provider step itself failed included,
+  first cancels the instance's queued startup claim as well (coordinator ruling on review #716,
+  item 1).
 
 ## Close before the action
 
@@ -395,9 +398,10 @@ that belongs to emulator control:
   them first; a refusal is recorded as the package's failure and the receipt still says
   `scheduled`. A new startup claim cancels one still queued for the same instance
   (`scheduler.denied lease_queue_cancelled`, warning), and so does a control whose hold hands
-  no startup claim over (a `stop`, or a `start` / `restart` whose preparation failed): a
-  startup run against a stopped or unprepared emulator is meaningless, so a start under a
-  pause followed by a stop leaves no startup run at the resume.
+  no startup claim over (a `stop`, a `start` / `restart` whose preparation failed, and since
+  Workflow #369 S6c a failed control, one whose provider step failed included): a startup run
+  against a stopped or unprepared emulator is meaningless, so a start under a pause followed
+  by a stop leaves no startup run at the resume.
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -700,6 +704,50 @@ cancelled). Such an interruption fails the current rung with that reason and end
 `exhausted` at warning, followed by its one release. A superseded preparation trigger records
 `preparation_superseded`; these two reasons use `until_unix_ms: 0` (no inferred wake time).
 
+### Drills (Workflow #390 DRILL-1)
+
+Forced compromise T-08 (the recovery route could not be tried by hand) and coordinator ruling 9
+of wave 13: a person may ask for a drill of one physical instance's ladder,
+`DrillRecoveryLadder { instance_alias, mode }`, an option-two operation (`actingctl
+ladder-drill --instance <selector> [--device]`, MCP `ac_ladder_drill` with `instance` and
+`device`; [runtime-interface.md](runtime-interface.md)). Only an explicit User+Ui or Cli+Cli
+request may issue it (the emulator control origin gate: a drill may restart the emulator), and
+only for a physical instance. The direct-run rule does not change: a direct task run still
+starts no ladder while `rules.direct_runs` is `exempt`.
+
+- **Recorded like a real ladder, tagged `drill`.** The request is recorded as a command
+  (`command.received`, then `command.validated` or `command.rejected`). The drill is a ladder
+  with trigger `stage: drill`, `failure_code` `recovery_ladder_drill_requested`, no run, task,
+  preparation, rule or match, and `start: immediately`; it matches no trigger item, so it starts
+  at `trigger_defaults.start_rung` and the cool-down holds it as
+  `trigger_defaults.respect_cooldown` says, as a resource fence's ladder does. It is admitted as
+  every ladder is (shutdown, the scheduling pause, business capacity, a ladder that holds or
+  waits for the instance under `rules.already_running`, the cool-down), its claim
+  is queued (routine, high, no deadline; claim kind `ladder`, so a later trigger sees it as a
+  ladder), and it climbs on the instance's worker by the same plan, holding checks and records as
+  any ladder. Every record of its own (`recovery_ladder_started`, `recovery_rung_finished`,
+  `recovery_instance_stopped`, `recovery_environment_ready`, `recovery_ladder_finished`,
+  `recovery_ladder_suppressed`) carries the payload member `drill: true`; no other record
+  carries it, and a `recovery_ladder_started` carries it exactly when its trigger's stage is
+  `drill`. Its records are linked to the instance and the request's correlation id, under the
+  drill's own request id (`ladder_request_id`) and causation id.
+- **Never the device unless the request says so.** `mode: plan` (the default of both frontends)
+  never acts on the device: the plan is recorded as it is, every rung the ladder would run is
+  recorded `skipped` with `recovery_rung_skipped_drill_plan` (reason `drill_plan`), and the climb
+  ends `recovery_ladder_finished { ladder_result: "planned", rungs_tried: 0 }` at info. A plan
+  drill changes nothing the ladder keeps: it opens no cool-down window and leaves a resource
+  fence's stage as it was. `mode: device` climbs the rungs on the instance exactly as a real
+  ladder does, under the same key, admission guard, fences and holding checks, opens the
+  cool-down window as a ladder that got the key does, and ends as a real climb ends.
+- **Answer and refusals.** Once the drill is admitted and its claim queued the request completes
+  (`request_drill_recovery_ladder_completed`) with `RecoveryLadderDrillQueued { drill:
+  {instance_alias, mode, ladder_request_id} }`, before the drill climbs. Refused, after its
+  `command.rejected`: `recovery_ladder_drill_disabled` (stuck recovery is off for the instance),
+  `recovery_ladder_drill_already_running` and `recovery_ladder_drill_cooling_down`
+  (`next_eligible_unix_ms`), each after the drill's `recovery_ladder_suppressed`, and
+  `recovery_admission_denied` when shutdown, a pause or capacity refused the admission (also
+  after its suppression record); a refused claim keeps the claim's own refusal.
+
 ### Records
 
 Facts are `runtime.lifecycle_observed` events (origin `(Runtime, Runtime, Runtime)`) linked to
@@ -713,7 +761,7 @@ own causation id. Phases (`kind`, snake_case, unknown fields refused):
 | `recovery_instance_stopped` | `stop { sequence, event_id }` (confirmed Stop command terminal) | info |
 | `recovery_environment_ready` | `stop`, `start`, `preparation` (actual event references in increasing sequence order) | info |
 | `recovery_rung_finished` | `rung`, `rung_result: "recovered" \| "environment_ready" \| "failed" \| "skipped"`, `run_id?`, `outcome?` (why a rung failed or was skipped; a skip is `recovery_rung_skipped_<reason>`, info), `environment?` | its outcome's category when it has one; otherwise info |
-| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted"`, `rungs_tried` (rungs executed, not skipped; at most 3), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption) | success info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
+| `recovery_ladder_finished` | `ladder_result: "recovered" \| "environment_ready" \| "exhausted" \| "planned"`, `rungs_tried` (rungs executed, not skipped; at most 3; 0 for `planned`, above 0 for `recovered` and `environment_ready`), `outcome?` (exactly when `exhausted`: `recovery_ladder_exhausted`, caused by the last failed rung's outcome, or `recovery_ladder_interrupted`, caused by the holding interruption); `planned` only on a drill's record (Workflow #390 DRILL-1) | success and `planned` info; `exhausted` error (`recovery_ladder_exhausted`) or warning (`recovery_ladder_interrupted`) |
 | `recovery_ladder_suppressed` | `reason: "cooldown" \| "already_running" \| "preparation_superseded" \| "admission_denied" \| "blackout"` (`blackout`: a trigger inside a blackout, `until_unix_ms` its end; written from SR-4a on, read from v0.12.0 on, [scheduling-blackout.md](scheduling-blackout.md)), `until_unix_ms`, `rule?` (the trigger item that matched; absent for a fence's ladder) | admission denial warning; otherwise info |
 
 Ledger revision 3 (Workflow #378 A3): a phase's severity is its `outcome`'s category, else
@@ -729,16 +777,19 @@ require task/run IDs and a rule matched by code or class, and omit `preparation`
 triggers require `preparation` (sequence above 0), a rule matched by code or class and omit
 task/run IDs; `stability_warnings` triggers name nothing but a rule matched as a warning burst of
 at least one record in a window above 0 whose first record is not after its last;
-`recovery_preparation` triggers are refused; `resource_fence` triggers name no run, task,
-preparation, rule or match. `environment_ready` is valid only for R3, with no run ID and an
+`recovery_preparation` triggers are refused; `resource_fence` and `drill` triggers name no run,
+task, preparation, rule or match. A record of any other phase never carries `drill: true`, and an
+`instance_preparation_finished` never names the stage `drill` (Workflow #390 DRILL-1).
+`environment_ready` is valid only for R3, with no run ID and an
 `environment` event reference. `recovered` continues to require a real successful package run
 ID. Unknown fields are refused.
 
 `rung` is `return_home`, `application_restart` or `emulator_restart`; a skip `reason` is
 `no_recovery_package`, `no_startup_package`, `no_emulator_control`, `capture_unavailable`,
-`input_unavailable`, `adb_unavailable`, `resource_fence`, `before_start_rung` or
+`input_unavailable`, `adb_unavailable`, `resource_fence`, `before_start_rung`,
 `device_not_ready` (the device-state gate holds the rung's entry; Workflow #398 M398 §6.4,
-emitted by the device-state slice). A ladder with no recovery package, no startup package and
+emitted by the device-state slice) or `drill_plan` (a plan drill did not run the rung; Workflow
+#390 DRILL-1). A ladder with no recovery package, no startup package and
 no emulator control records `recovery_ladder_started` (all rungs skipped), one
 `recovery_rung_finished` (`skipped`) per rung and `recovery_ladder_finished` (`exhausted`,
 `rungs_tried` 0).
@@ -749,6 +800,85 @@ configuration manifest (a host started without one reads the defaults file's).
 does not carry; `validate` refuses an invalid alias or a cool-down outside `1..=86400` with
 `invalid_stuck_recovery`, and startup refuses an alias that is not registered with
 `stuck_recovery_instance_unknown` (both fatal).
+
+## Configured start at daemon start (Workflow #369 S6c)
+
+<!-- Workflow #369 S6c (model-369-queue v3.1 H-5, §7 row 8): #643's configured start rebuilt as
+one claim per instance in the instance's one queue. -->
+An instance configured with `"start_emulator": true` (`actingd` configuration, Workflow #369
+S6a: off unless the instance names it; discovery-bound instances only,
+`start_emulator_requires_discovery_binding` otherwise; manifest parameter
+`instance.<instance_id>.start_emulator`) whose emulator is stopped when the daemon starts (its
+ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
+(`ClaimKind::Autostart`). An instance already running gets the usual start preparation only.
+
+- **When.** `actingd` enqueues the claims once, after policy initialization succeeded (without
+  a `policy` section, right after the host started) and before `runtime_ready`; the enqueue
+  does not block, so `runtime-info.json` is not delayed. Host configuration:
+  `RuntimeHostConfig::with_emulator_autostart` takes the aliases in configuration order;
+  startup refuses an alias that is not registered (`emulator_autostart_instance_unknown`) or a
+  fixture instance (`emulator_autostart_requires_physical_instance`), both fatal, with the
+  alias; `RuntimeHost::enqueue_emulator_autostart` enqueues the claims.
+- **The claim.** A Runtime-internal routine claim: no deadline (`scheduler.queued` carries
+  `u64::MAX`), normal priority, never preempting, under its own `AcquireLease` request (origin
+  `(Agent, Adapter)`, the host's synthesized connection), with a 120 s key. Like an operator
+  control it takes neither the bound-endpoint check nor the performance-control lease gate and
+  is granted with drain capacity, so a stopped (pending) instance is granted it. Every claim is
+  visible: a holder from the enqueue (`lease.requested`, `scheduler.admitted`, `lease.granted`
+  under the claim's request; status `lease_active`), or, while a scheduling pause holds the
+  instance or the global gate (a restored pause included), a gated entry from the first moment
+  (`lease.requested` + `scheduler.queued`; status `queued_request_count` 1); the resume grants
+  it. A takeover cooldown is waited out in the queue. A pending instance stays withheld from
+  policy until its start and preparation pass.
+- **Network first.** Once granted, the claim waits on its instance's worker
+  (`actingd-instance-<alias>`) while it holds the key, never on a shared thread. It reads the
+  operating system's connectivity status at once and every 5 s, for at most 600 s (on Windows
+  `GetNetworkConnectivityHint`; internet access and constrained internet access count). The
+  Runtime opens no connection and resolves no name. An unknown status (the operating system
+  reports an unknown level, the query fails or does not exist) goes on at once and is reported
+  once. When no internet access is reported within 600 s, the start is refused: the claim's
+  `command.received`, then `command.rejected` + `runtime.failed` with
+  `emulator_autostart_network_unready` (`alias`, `elapsed_ms`), and the claim releases its key;
+  the instance stays stopped.
+- **Holding checks.** The wait ticks every 500 ms. At each tick the claim renews its key to
+  120 s whenever less than 30 s is left (the usual renew set, Info, under the claim's request;
+  a refused renewal refuses the start with the pair, carrying `lease_expired` or
+  `lease_missing`), and it ends its hold before the Start:
+  - on a drain or a shutdown: it releases its key (the next daemon start enqueues it again);
+  - when an operator emulator control waits on the instance: it is superseded and releases its
+    key with no `command.*` record, so the operator's control is granted within its 5 s; once
+    the Start is being driven the claim does not yield, and an operator control that arrives
+    then waits its 5 s and may be refused `lease_queue_expired` naming holder `autostart`;
+  - when a scheduling pause holds the instance or the global gate: it queues again as a gated
+    entry, then releases its key, so the pause completes; the resume grants it again;
+  - when the instance already runs (an operator started it): it releases its key and does
+    nothing.
+- **Order.** The claims holding their keys take a start turn one at a time, the first in
+  configuration order first, so their Starts follow one another in that order; a claim that
+  waits queued takes part once it is granted. The turn holds no key and no queue position, and
+  a claim waiting for it keeps renewing its key.
+- **The Start.** With the turn, after a last check of the above, the claim drives the operator
+  start path ("The operator's claim and the fence") on its own key: its `command.received`
+  (Runtime origin, written only now, so a claim that ended before leaves no open command), the
+  fence on its key, the close, the renewal before the provider step, the provider Start, the
+  binding, the ADB baseline, the renewal before the preparation, `command.validated` or
+  `command.rejected` + `runtime.failed`, `runtime.instance_bound`, `device.connected` and the
+  connection preparation on the key. A passing preparation hands the key to the startup
+  package through the gate ("Startup package hook"); a failing one hands it to the ladder it
+  admits ("Stuck-recovery ladder"); a failed start ends the key as a failed operator control
+  does.
+- **Report.** Each outcome is one report line, which `actingd` writes as a daemon line
+  (`OUTCOME actingd:` with the developer line, Workflow #378 A6a): `emulator_autostart_queued`
+  (`count`) when the claims are enqueued, nothing when no instance names `start_emulator`;
+  per claim `emulator_autostart_network_ready` (`alias`, `elapsed_ms`) or
+  `emulator_autostart_network_status_unknown` (`alias`, `connectivity_reason`, `os_error`), and
+  one of `emulator_autostart_started`, `emulator_autostart_preparation_failed` (the backend
+  self-check after the start did not pass), `emulator_autostart_failed` (`caused_by` the
+  failure), `emulator_autostart_network_unready`, `emulator_autostart_superseded`,
+  `emulator_autostart_yielded`, `emulator_autostart_skipped` (already running) and
+  `emulator_autostart_interrupted` (a drain or a shutdown), each with the `alias`. A report
+  line that cannot be written never stops the daemon. Only a failure the Runtime does not
+  survive (a ledger append) stops the host.
 
 ## Client and CLI
 

@@ -788,11 +788,13 @@ fn triggers(
         for token in &item.stages {
             let stage = parse_stage(token)
                 .filter(|stage| {
-                    // A2: the ladder's own preparation never triggers; a fence matches no item.
+                    // A2: the ladder's own preparation never triggers; a fence matches no item,
+                    // and neither does a person's drill (Workflow #390 DRILL-1).
                     !matches!(
                         stage,
                         RecoveryTriggerStage::RecoveryPreparation
                             | RecoveryTriggerStage::ResourceFence
+                            | RecoveryTriggerStage::Drill
                     )
                 })
                 .ok_or_else(|| failure(TRIGGERS, ConfigValueProblem::StageNotAllowed))?;

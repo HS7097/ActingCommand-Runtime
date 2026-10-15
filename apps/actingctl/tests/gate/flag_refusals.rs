@@ -163,6 +163,19 @@ const CLIENT: &[Subcommand] = &[
         &["--config"],
         &["--key-prefix", "session."],
     ),
+    // Workflow #390 DRILL-1: `ladder-drill --instance <selector> [--device]`.
+    result(
+        &[
+            "ladder-drill",
+            "--state-root",
+            ROOT,
+            "--instance",
+            "neutral.instance",
+            "--device",
+        ],
+        &["--wait", "60"],
+        &["--device"],
+    ),
     result(
         &["monitor-status", "--state-root", ROOT],
         &["--recover"],
@@ -415,6 +428,29 @@ const CLIENT: &[Subcommand] = &[
         ],
         &["--instance", "neutral.instance"],
         &["--from-step", "1"],
+    ),
+    // Workflow #398 RD-1c: `devices list|bind|unbind`; the alias and the handle are positional.
+    result(
+        &["devices", "list", "--state-root", ROOT, "--root", ROOT],
+        &["--instance", "neutral.instance"],
+        &["--root", ROOT],
+    ),
+    result(
+        &[
+            "devices",
+            "bind",
+            "neutral.phone",
+            "usb:7",
+            "--state-root",
+            ROOT,
+        ],
+        &["--wait", "60"],
+        &["--state-root", ROOT],
+    ),
+    result(
+        &["devices", "unbind", "neutral.phone", "--state-root", ROOT],
+        &["--root", ROOT],
+        &["--state-root", ROOT],
     ),
 ];
 

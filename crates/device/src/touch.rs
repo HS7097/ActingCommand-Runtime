@@ -544,17 +544,18 @@ impl InputBackend for SelectedTouchBackend {
         action.validate()?;
         if !self.active.backend.supports_segmented_swipe() {
             return Err(DeviceError::fatal(format!(
-                "touch backend {} does not support single_touch_drag_with_vertical_brake_v1",
-                self.active.name.as_str()
+                "touch backend {} does not support {}",
+                self.active.name.as_str(),
+                action.name()
             )));
         }
-        self.validate_action_points("single_touch_drag_with_vertical_brake_v1", &action.points)?;
+        self.validate_action_points(action.name(), &action.points())?;
         let started = Instant::now();
         match self.active.backend.segmented_swipe_prepared(witness, plan) {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.record_runtime_failure(
-                    "single_touch_drag_with_vertical_brake_v1",
+                    action.name(),
                     self.active.name,
                     &err,
                     started.elapsed().as_millis(),

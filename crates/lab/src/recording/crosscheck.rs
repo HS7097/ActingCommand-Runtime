@@ -8,9 +8,10 @@
 //! `record_artifact_admission_failed` or `record_step_self_mismatch`; warnings never refuse.
 
 use super::container::table_digest;
+use super::follow::followed_box;
 use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanStep};
-use super::model::{MarkFamily, RecordedFrame};
+use super::model::{ClickFollow, MarkFamily, RecordRect, RecordedFrame};
 use super::store::{blocked, invalid, with_details};
 use crate::LabOcr;
 use crate::codes::LabCode;
@@ -196,15 +197,43 @@ fn not_evaluated_warning(reason: &str, message: &str) -> Value {
     })
 }
 
+/// Workflow #396 REC-4: the box a click following a template clicks on `loaded`, as the admitted
+/// evaluator matches the template there; `None` when the template does not pass on it.
+fn followed_rect(
+    evaluator: &RecognitionEvaluator,
+    loaded: &LoadedFrame,
+    follow: &ClickFollow,
+) -> LabResult<Option<RecordRect>> {
+    let evaluation = evaluator
+        .evaluate_target(&loaded.scene, &follow.mark_id)
+        .map_err(|error| {
+            admission_failed(
+                "first_decision",
+                format!(
+                    "the followed template '{}' cannot be evaluated: {error}",
+                    follow.mark_id
+                ),
+                json!({"target": follow.mark_id}),
+            )
+        })?;
+    Ok(evaluation
+        .template
+        .filter(|_| evaluation.passed)
+        .and_then(|template| followed_box(&template, follow)))
+}
+
 /// Section 4.6 item 3 with R24: a package with an application step is simulated on the first
 /// live frame and must be refused before any capture; a first step involving OCR is not
 /// simulated when the Lab has no OCR model (Workflow #396 LAB-3: `lab_ocr_unavailable`);
 /// otherwise the first step's primary frame must give the first click, inside its rectangle.
+/// Workflow #396 REC-4: when that click follows a template, every live frame of step 1 must give
+/// it inside the box the template gives on that frame (`evaluator` evaluates the template).
 pub(crate) fn first_decision(
     prepared: &PreparedContainedTask,
     plan: &Plan,
     cache: &FrameCache,
     ocr: &LabOcr,
+    evaluator: &RecognitionEvaluator,
 ) -> LabResult<FirstDecision> {
     let first = plan
         .steps
@@ -274,33 +303,71 @@ pub(crate) fn first_decision(
         .ok_or_else(|| invalid("validation_failed", "step 1 has no frame"))?;
     let result = simulate(frame)?;
     let operation = plan.operation_id(first);
-    let rect = first.step.click.as_ref().map(|click| click.rect);
-    let inside = match (&result.decision, rect) {
-        (
-            OfflineDecision::WouldClick {
-                operation_label,
-                action: InputAction::Tap { x, y },
-                ..
-            },
-            Some(rect),
-        ) => {
-            *operation_label == operation
-                && *x >= rect.x
-                && *y >= rect.y
-                && i64::from(*x) < i64::from(rect.x) + i64::from(rect.width)
-                && i64::from(*y) < i64::from(rect.y) + i64::from(rect.height)
+    let click = first.step.click.as_ref();
+    let follow = click.and_then(|click| click.follow.as_ref());
+    // Workflow #396 REC-4: a click that follows a template clicks the box the template gives
+    // on the frame, so every live frame of step 1 is simulated, each against its own box.
+    let checked = match follow {
+        None => vec![(frame, result.clone())],
+        Some(_) => {
+            let mut checked = Vec::new();
+            for live in first.live_frames() {
+                let decision = if live.sha256 == frame.sha256 && live.frame_id == frame.frame_id {
+                    result.clone()
+                } else {
+                    simulate(live)?
+                };
+                checked.push((live, decision));
+            }
+            checked
         }
-        _ => false,
     };
-    if !inside {
-        return Err(admission_failed(
-            "first_decision",
-            format!(
-                "on its primary frame, step 1 must give the click {operation} inside its \
-                 rectangle"
-            ),
-            json!({"decision": result.decision, "frame": frame.frame_id, "rect": rect}),
-        ));
+    for (checked_frame, checked_result) in &checked {
+        let rect = match (click, follow) {
+            (Some(_), Some(follow)) => {
+                followed_rect(evaluator, cached(cache, checked_frame)?, follow)?
+            }
+            (click, _) => click.map(|click| click.rect),
+        };
+        let inside = match (&checked_result.decision, rect) {
+            (
+                OfflineDecision::WouldClick {
+                    operation_label,
+                    action: InputAction::Tap { x, y },
+                    ..
+                },
+                Some(rect),
+            ) => {
+                *operation_label == operation
+                    && *x >= rect.x
+                    && *y >= rect.y
+                    && i64::from(*x) < i64::from(rect.x) + i64::from(rect.width)
+                    && i64::from(*y) < i64::from(rect.y) + i64::from(rect.height)
+            }
+            _ => false,
+        };
+        if !inside {
+            let message = match follow {
+                None => format!(
+                    "on its primary frame, step 1 must give the click {operation} inside its \
+                     rectangle"
+                ),
+                Some(follow) => format!(
+                    "on frame {}, step 1 must give the click {operation} inside the box that \
+                     its followed template '{}' gives there",
+                    checked_frame.frame_id, follow.mark_id
+                ),
+            };
+            return Err(admission_failed(
+                "first_decision",
+                message,
+                json!({
+                    "decision": checked_result.decision,
+                    "frame": checked_frame.frame_id,
+                    "rect": rect
+                }),
+            ));
+        }
     }
     let mut value = serde_json::to_value(&result.decision).map_err(|error| {
         invalid(

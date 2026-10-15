@@ -30,5 +30,6 @@ mod tests {
     mod gate_d2_s1;
     mod gate_p1;
     mod gate_p2a;
+    mod gate_p2b;
     mod selection_catalog;
 }

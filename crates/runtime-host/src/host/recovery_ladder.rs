@@ -70,10 +70,10 @@ use actingcommand_contract::outcome::{Code, CodeStr, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, ContainedTaskRecoveryBinding,
     EmulatorInstanceAction, HolderId, InstanceStuckRecovery, IssuedCausationId,
-    IssuedCorrelationId, IssuedRequestId, LeasePriority, RecoveryLadderOutcome,
-    RecoveryLadderSuppression, RecoveryLadderTrigger, RecoveryRung, RecoveryRungOutcome,
-    RecoveryRungPlan, RecoveryRungSkipReason, RecoveryRungState, RecoveryTriggerMatch,
-    RecoveryTriggerStage, RecoveryTriggerStart, SchedulingResumeSelfCheck,
+    IssuedCorrelationId, IssuedRequestId, LeasePriority, RecoveryDrillMode, RecoveryLadderDrill,
+    RecoveryLadderOutcome, RecoveryLadderSuppression, RecoveryLadderTrigger, RecoveryRung,
+    RecoveryRungOutcome, RecoveryRungPlan, RecoveryRungSkipReason, RecoveryRungState,
+    RecoveryTriggerMatch, RecoveryTriggerStage, RecoveryTriggerStart, SchedulingResumeSelfCheck,
 };
 use actingcommand_device::DeviceResourceQuiescence;
 use actingcommand_runtime_config::{
@@ -324,9 +324,18 @@ pub(super) struct PendingRecoveryLadder {
     /// B3 `queue`: admitted behind a ladder that holds or waits for the instance; judged
     /// against the cool-down again when it gets the key.
     behind_ladder: bool,
+    /// Workflow #390 DRILL-1: a person's drill, and what it may do; `None` for a ladder a
+    /// trigger started. A drill's own records are tagged `drill`.
+    drill: Option<RecoveryDrillMode>,
 }
 
 impl PendingRecoveryLadder {
+    /// Workflow #390 DRILL-1: a plan drill never acts on the device and changes nothing the
+    /// ladder keeps (the cool-down window, a resource fence's stage).
+    fn plan_drill(&self) -> bool {
+        self.drill == Some(RecoveryDrillMode::Plan)
+    }
+
     pub(super) const fn claim(&self) -> &RuntimeRequest {
         &self.claim
     }
@@ -356,6 +365,10 @@ impl PendingRecoveryLadder {
         self.trigger.start == RecoveryTriggerStart::AfterPerformanceRelease
     }
 }
+
+/// An admitted ladder, or why its admission was suppressed with the `until_unix_ms` its
+/// `recovery_ladder_suppressed` record names.
+type LadderAdmission = Result<PendingRecoveryLadder, (RecoveryLadderSuppression, u64)>;
 
 /// Per instance: where the cool-down window ends, and the identity of the latest preparation
 /// attempt (`PreparationSuperseded`). Whether a ladder holds or waits is the scheduler's
@@ -966,6 +979,7 @@ impl HostShared {
             respect_cooldown: item.respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            drill: None,
         };
         Ok((event, self.admit_recovery_ladder(pending)?))
     }
@@ -1051,6 +1065,7 @@ impl HostShared {
             respect_cooldown: config.default_respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            drill: None,
         };
         self.admit_recovery_ladder(pending)
     }
@@ -1151,6 +1166,7 @@ impl HostShared {
                 respect_cooldown: item.respect_cooldown,
                 behind_ladder: false,
                 config: Arc::clone(&burst.config),
+                drill: None,
             };
             if let Some(ladder) = self.admit_recovery_ladder(pending)? {
                 self.enqueue_ladder_claim(ladder)?;
@@ -1410,6 +1426,7 @@ impl HostShared {
             respect_cooldown: item.respect_cooldown,
             behind_ladder: false,
             config: Arc::clone(&config),
+            drill: None,
         };
         self.admit_recovery_ladder(pending)
     }
@@ -1439,6 +1456,182 @@ impl HostShared {
         }
     }
 
+    /// Workflow #390 DRILL-1 (forced compromise T-08; coordinator ruling 9 of wave 13):
+    /// `DrillRecoveryLadder`, a person's drill of one physical instance's ladder. The request is
+    /// recorded as a command. The drill matches no trigger item (stage `drill`): it starts at
+    /// `trigger_defaults.start_rung` and the cool-down holds it as
+    /// `trigger_defaults.respect_cooldown` says, as a resource fence's ladder does, and it is
+    /// admitted as every ladder is (shutdown, the scheduling pause, business capacity, a ladder
+    /// that holds or waits for the instance, the cool-down). Its claim is queued (routine, high,
+    /// no deadline) and it climbs on the instance's worker like any ladder, every record of its
+    /// own tagged `drill`. A plan drill acts on nothing and changes nothing the ladder keeps; a
+    /// device drill climbs its rungs on the instance under the same key, admission and fences.
+    /// Stuck recovery off for the instance, a suppressed admission or a refused claim refuses
+    /// the request after its `command.rejected`. A direct task run still starts no ladder.
+    pub(super) fn drill_recovery_ladder(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        mode: RecoveryDrillMode,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let resolved = self.resolve_instance(instance_alias)?;
+        let instance_id = resolved.instance_id();
+        let links = self.append_client_command_intent(
+            original,
+            request,
+            instance_id,
+            EventAction::RuntimeAction,
+            None,
+        )?;
+        let config = self.ladder_config()?;
+        let settings = self.instance_stuck_recovery(instance_id, &config)?;
+        if !settings.enabled {
+            return Err(self.refuse_drill(
+                links,
+                RuntimeHostError::request(
+                    HostCode::RecoveryLadderDrillDisabled,
+                    HostLocation::RecoveryLadderDrill,
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+            ));
+        }
+        let issuer = self.events.issuer();
+        let ladder_request_id = issuer
+            .mint_request_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let correlation_id = issuer
+            .mint_correlation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let causation_id = issuer
+            .mint_causation_id()
+            .map_err(|_| runtime_identifier_error())?;
+        let holder_id = *issuer
+            .mint_holder_id()
+            .map_err(|_| runtime_identifier_error())?
+            .transport();
+        let claim = self.ladder_claim_request(
+            &resolved,
+            ladder_request_id,
+            correlation_id,
+            causation_id,
+            holder_id,
+        )?;
+        let pending = PendingRecoveryLadder {
+            instance_id,
+            instance_alias: resolved.instance_alias.clone(),
+            trigger: RecoveryLadderTrigger {
+                stage: RecoveryTriggerStage::Drill,
+                run_id: None,
+                task_id: None,
+                preparation: None,
+                failure_code: CodeStr::from(HostCode::RecoveryLadderDrillRequested.code()),
+                rule: None,
+                matched: None,
+                start: RecoveryTriggerStart::Immediately,
+            },
+            recovery: None,
+            recovery_configured: None,
+            links: request
+                .event_links(Some(instance_id), None, None)
+                .with_request_id(ladder_request_id)
+                .with_causation_id(causation_id),
+            request_id: *ladder_request_id.transport(),
+            correlation_id,
+            causation_id,
+            cooldown_ms: u64::from(settings.cooldown_secs) * 1_000,
+            claim,
+            holder_id,
+            start_rung: config.default_start_rung,
+            respect_cooldown: config.default_respect_cooldown,
+            behind_ladder: false,
+            config: Arc::clone(&config),
+            drill: Some(mode),
+        };
+        let pending = match self.admit_or_suppress_ladder(pending)? {
+            Ok(pending) => pending,
+            Err((reason, until_unix_ms)) => {
+                return Err(self.refuse_drill(links, drill_suppressed(reason, until_unix_ms)));
+            }
+        };
+        let drill = RecoveryLadderDrill {
+            instance_alias: pending.instance_alias.clone(),
+            mode,
+            ladder_request_id: pending.request_id,
+        };
+        let connection_id =
+            ConnectionId::new(STARTUP_PACKAGE_CONNECTION_VALUE).map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                    HostLocation::BuildLadderConnection,
+                    &error,
+                ))
+            })?;
+        let claim = pending.claim.clone();
+        let claim_alias = pending.instance_alias.clone();
+        let lease_ttl_ms = pending.claim_ttl_ms();
+        if let Err(failure) = self.request_host_claim_work(
+            HostClaim {
+                request: &claim,
+                instance_alias: &claim_alias,
+                holder_id,
+                connection_id,
+                kind: ClaimKind::Ladder,
+                priority: LeasePriority::High,
+                lease_ttl_ms,
+            },
+            HostClaimWork::RecoveryLadder(Box::new(pending)),
+        ) {
+            if failure.poison_runtime || failure.error.is_fatal() {
+                return Err(failure);
+            }
+            return Err(self.refuse_drill(links, *failure.error));
+        }
+        let validated = self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::validated(
+                EventAction::RuntimeAction,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&validated)),
+            result: RuntimeResult::RecoveryLadderDrillQueued { drill },
+            failure_outcome: None,
+        })
+    }
+
+    /// Workflow #390 DRILL-1: a refused drill's `command.rejected` with `error`'s outcome, and
+    /// the denial that names it.
+    fn refuse_drill(&self, links: EventLinksDraft, error: RuntimeHostError) -> RequestFailure {
+        match self.append_event(
+            EventSeverity::Error,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::rejected_with_outcome(
+                EventAction::RuntimeAction,
+                DiagnosticCode::CommandRejected,
+                EffectDisposition::NotPerformed,
+                error.outcome(),
+                AuditInput::new(),
+            ),
+        ) {
+            Ok(rejected) => RequestFailure::request(
+                error,
+                RuntimeReceiptState::Denied,
+                Some(terminal(&rejected)),
+            ),
+            Err(failure) => failure,
+        }
+    }
+
     /// Admits a ladder, or records why it is suppressed, naming the trigger item that matched:
     /// a ladder already holds or waits for the instance and `rules.already_running` is
     /// `suppress` (B3; Workflow #369 §5.3, read from the scheduler), or the cool-down window is
@@ -1447,10 +1640,20 @@ impl HostShared {
     /// from now (B4). Returns the admitted ladder.
     fn admit_recovery_ladder(
         &self,
-        mut pending: PendingRecoveryLadder,
+        pending: PendingRecoveryLadder,
     ) -> RuntimeHostResult<Option<PendingRecoveryLadder>> {
+        Ok(self.admit_or_suppress_ladder(pending)?.ok())
+    }
+
+    /// `admit_recovery_ladder`, answering a suppressed ladder with its recorded reason and the
+    /// `until_unix_ms` its `recovery_ladder_suppressed` names (Workflow #390 DRILL-1: a drill's
+    /// request is refused by it). A plan drill reads the cool-down window and never opens it.
+    fn admit_or_suppress_ladder(
+        &self,
+        mut pending: PendingRecoveryLadder,
+    ) -> RuntimeHostResult<LadderAdmission> {
         if !self.recovery_admitted(&pending)? {
-            return Ok(None);
+            return Ok(Err((RecoveryLadderSuppression::AdmissionDenied, 0)));
         }
         let now_unix_ms = self.clock.sample()?.unix_ms;
         let ladder_active = lock(&self.scheduler, HostLocation::ReadRecoveryLadderHold)?
@@ -1460,7 +1663,7 @@ impl HostShared {
             let until_unix_ms = windows
                 .get(&pending.instance_id)
                 .map_or(0, |window| window.until_unix_ms);
-            if opens_cooldown_window(&pending.config.rules, true) {
+            if opens_cooldown_window(&pending.config.rules, true) && !pending.plan_drill() {
                 windows
                     .entry(pending.instance_id)
                     .or_default()
@@ -1475,7 +1678,7 @@ impl HostShared {
         ) {
             Admission::Admitted { behind_ladder } => {
                 pending.behind_ladder = behind_ladder;
-                return Ok(Some(pending));
+                return Ok(Ok(pending));
             }
             Admission::Suppressed(reason) => reason,
         };
@@ -1488,7 +1691,7 @@ impl HostShared {
                 rule: pending.trigger.rule.clone(),
             },
         )?;
-        Ok(None)
+        Ok(Err((reason, until_unix_ms)))
     }
 
     /// Workflow #369 H-1, P1 (review #716 follow-up): the explicit release `request_id` of the
@@ -1616,8 +1819,13 @@ impl HostShared {
         .map(|mut counter| counter.set_climbing(pending.instance_id, true));
         let climbed = marked.and_then(|()| self.climb_recovery_ladder(pending, &mut key));
         // Workflow #403: a ladder that ends with its instance still fenced did not prove the
-        // close; the instance waits for a person (set before the key is released).
-        let awaited = self.resource_fence_awaits_person(pending.instance_id);
+        // close; the instance waits for a person (set before the key is released). Workflow #390
+        // DRILL-1: a plan drill tried nothing, so a fence's stage stays as it was.
+        let awaited = if pending.plan_drill() {
+            Ok(())
+        } else {
+            self.resource_fence_awaits_person(pending.instance_id)
+        };
         let unmarked = lock(
             &self.stability_counter,
             HostLocation::RecoveryStabilityCount,
@@ -1680,8 +1888,9 @@ impl HostShared {
                 );
             }
         }
-        // B4 `admitted` (Workflow #369 §5.3): only a ladder that got the key opens its window.
-        if opens_cooldown_window(&pending.config.rules, false) {
+        // B4 `admitted` (Workflow #369 §5.3): only a ladder that got the key opens its window;
+        // a plan drill, which acts on nothing, opens none (Workflow #390 DRILL-1).
+        if opens_cooldown_window(&pending.config.rules, false) && !pending.plan_drill() {
             lock(
                 &self.recovery_ladders,
                 HostLocation::OpenRecoveryLadderWindow,
@@ -1827,6 +2036,19 @@ impl HostShared {
                 )?;
                 continue;
             }
+            // Workflow #390 DRILL-1: a plan drill never acts on the device; the rung it would
+            // have run is recorded skipped.
+            if pending.plan_drill() {
+                self.append_recovery_rung_finished(
+                    pending,
+                    rung,
+                    RecoveryRungOutcome::Skipped,
+                    None,
+                    Some(rung_skip_outcome(RecoveryRungSkipReason::DrillPlan)),
+                    None,
+                )?;
+                continue;
+            }
             rungs_tried += 1;
             let attempt = match rung_config {
                 RungConfig::ReturnHome {
@@ -1938,6 +2160,19 @@ impl HostShared {
         // only when the last rung that ran was itself ended by a holding interruption.
         if let Some(reason) = last_interruption {
             return self.finish_interrupted_ladder(pending, key, None, reason, rungs_tried);
+        }
+        // Workflow #390 DRILL-1: a plan drill's climb tried no rung; it ends `planned`, no
+        // failure.
+        if pending.plan_drill() {
+            return self.append_recovery_ladder_fact(
+                pending,
+                EventSeverity::Info,
+                RuntimeLifecyclePhase::RecoveryLadderFinished {
+                    ladder_result: RecoveryLadderOutcome::Planned,
+                    rungs_tried,
+                    outcome: None,
+                },
+            );
         }
         // Ledger revision 3: the exhausted climb's outcome (category error) carries the last
         // failed rung's outcome as its cause; none when every rung was skipped.
@@ -2478,14 +2713,14 @@ impl HostShared {
                 OriginModule::Runtime,
                 EventActor::Runtime,
                 pending.links.clone(),
-                RuntimePayloadDraft::lifecycle_observed(
+                ladder_fact_payload(
                     self.owner_epoch,
+                    pending,
                     RuntimeLifecyclePhase::RecoveryEnvironmentReady {
                         stop,
                         start: driven.terminal,
                         preparation,
                     },
-                    AuditInput::new(),
                 ),
             )?;
             let startup = self
@@ -2872,9 +3107,22 @@ impl HostShared {
             OriginModule::Runtime,
             EventActor::Runtime,
             pending.links.clone(),
-            RuntimePayloadDraft::lifecycle_observed(self.owner_epoch, phase, AuditInput::new()),
+            ladder_fact_payload(self.owner_epoch, pending, phase),
         )
         .map(|_| ())
+    }
+}
+
+/// One of `pending`'s own ladder phases; a drill's is tagged `drill` (Workflow #390 DRILL-1).
+fn ladder_fact_payload(
+    owner_epoch: actingcommand_contract::OwnerEpoch,
+    pending: &PendingRecoveryLadder,
+    phase: RuntimeLifecyclePhase,
+) -> RuntimePayloadDraft {
+    if pending.drill.is_some() {
+        RuntimePayloadDraft::recovery_drill_observed(owner_epoch, phase, AuditInput::new())
+    } else {
+        RuntimePayloadDraft::lifecycle_observed(owner_epoch, phase, AuditInput::new())
     }
 }
 
@@ -2930,7 +3178,36 @@ fn rung_skip_outcome(reason: RecoveryRungSkipReason) -> Outcome {
         RecoveryRungSkipReason::ResourceFence => HostCode::RecoveryRungSkippedResourceFence,
         RecoveryRungSkipReason::BeforeStartRung => HostCode::RecoveryRungSkippedBeforeStartRung,
         RecoveryRungSkipReason::DeviceNotReady => HostCode::RecoveryRungSkippedDeviceNotReady,
+        RecoveryRungSkipReason::DrillPlan => HostCode::RecoveryRungSkippedDrillPlan,
     })
+}
+
+/// Workflow #390 DRILL-1: the refusal of a drill whose admission was suppressed, by the reason
+/// its `recovery_ladder_suppressed` records: the open cool-down window (until `until_unix_ms`),
+/// a ladder that holds or waits for the instance, or an admission the rules that stay in code
+/// refused (shutdown, a scheduling pause, business capacity). A drill is never a preparation
+/// and meets no blackout before SR-4a, so those reasons are refused as a closed admission.
+fn drill_suppressed(reason: RecoveryLadderSuppression, until_unix_ms: u64) -> RuntimeHostError {
+    match reason {
+        RecoveryLadderSuppression::Cooldown => RuntimeHostError::request(
+            HostCode::RecoveryLadderDrillCoolingDown,
+            HostLocation::RecoveryLadderDrill,
+            RuntimeErrorCode::LeaseCooldown,
+        )
+        .with_outcome_values(|outcome| outcome.next_eligible_unix_ms(until_unix_ms)),
+        RecoveryLadderSuppression::AlreadyRunning => RuntimeHostError::request(
+            HostCode::RecoveryLadderDrillAlreadyRunning,
+            HostLocation::RecoveryLadderDrill,
+            RuntimeErrorCode::LeaseBusy,
+        ),
+        RecoveryLadderSuppression::AdmissionDenied
+        | RecoveryLadderSuppression::PreparationSuperseded
+        | RecoveryLadderSuppression::Blackout => RuntimeHostError::request(
+            HostCode::RecoveryAdmissionDenied,
+            HostLocation::RecoveryLadderDrill,
+            RuntimeErrorCode::RuntimeBusy,
+        ),
+    }
 }
 
 /// Review L6 (#666): whether a rung's failure reason ended the rung rather than being its own

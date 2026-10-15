@@ -27,6 +27,10 @@ const OBSERVATION_WINDOW_MEMBERS: &[(&str, &[&str])] = &[
 /// members.
 const INPUT_RECHECK_MEMBERS: &[(&str, &[&str])] =
     &[("fresh_frame", &[]), ("stable_frames", &["frames"])];
+/// Workflow #390 EXEC-1: an operation's `when` names its target under exactly one of these.
+const WHEN_MEMBERS: &[&str] = &["present", "absent"];
+/// Workflow #390 EXEC-1: the one value of an operation's `on_guard_refused`.
+const GUARD_REFUSAL_NEXT_CANDIDATE: &str = "next_candidate";
 
 struct Declaration<'a> {
     file: &'a Path,
@@ -406,6 +410,8 @@ impl Declaration<'_> {
                 "optional",
                 "observation_window",
                 "input_recheck",
+                "when",
+                "on_guard_refused",
             ],
         )?;
         if object.get("verify_template").is_none_or(Value::is_null) {
@@ -534,6 +540,10 @@ impl Declaration<'_> {
                 "input_recheck" if !value.is_null() => {
                     self.tagged(value, &pointer, "kind", INPUT_RECHECK_MEMBERS)?;
                 }
+                "when" if !value.is_null() => self.when(value, &pointer)?,
+                "on_guard_refused" if !value.is_null() => {
+                    self.on_guard_refused(value, &pointer)?;
+                }
                 _ => {}
             }
         }
@@ -588,6 +598,37 @@ impl Declaration<'_> {
             )?;
         }
         Ok(())
+    }
+
+    /// Workflow #390 EXEC-1: an operation's `when`, task schema `0.9` only (`UnconsumedField`
+    /// before it): `{"present": "<target>"}` or `{"absent": "<target>"}`, one member naming a
+    /// target, nothing else. Runtime admission checks the target.
+    fn when(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let object = self.object(value, pointer, WHEN_MEMBERS)?;
+        let mut declared = WHEN_MEMBERS
+            .iter()
+            .filter_map(|member| object.get(*member).map(|target| (*member, target)));
+        match (declared.next(), declared.next()) {
+            (Some((member, target)), None) => self.string(target, &child(pointer, member)),
+            (None, _) => Err(self.error(pointer, ResourceDeclarationReason::MissingField)),
+            (Some(_), Some(_)) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
+        }
+    }
+
+    /// Workflow #390 EXEC-1: an operation's `on_guard_refused`, task schema `0.9` only
+    /// (`UnconsumedField` before it): the string `next_candidate`.
+    fn on_guard_refused(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema != Some("0.9") {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        match value.as_str() {
+            Some(GUARD_REFUSAL_NEXT_CANDIDATE) => Ok(()),
+            Some(_) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
+            None => Err(self.error(pointer, ResourceDeclarationReason::InvalidType)),
+        }
     }
 
     /// An operation's intermediate state (Workflow #336, `linear_steps` only):
@@ -3722,6 +3763,98 @@ mod tests {
                 serde_json::json!({"kind": "stable_frames", "frames": "3"}),
                 "/operations/0/input_recheck/frames",
                 "invalid_type",
+            ),
+        ] {
+            let error = task(schema)
+                .operation(&operation(member, value), "/operations/0", true)
+                .expect_err("the declaration is refused");
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(issue["field_path"], pointer);
+            assert_eq!(issue["reason"], refusal);
+        }
+    }
+
+    /// Workflow #390 EXEC-1: task schema `0.9` declares an operation's `when` (`present` or
+    /// `absent`, naming a target) and its `on_guard_refused` (`next_candidate`); an older task
+    /// schema refuses both as unconsumed, and a `when` with no member, two members, another
+    /// member or a target that is no string, or another `on_guard_refused`, is refused at its
+    /// pointer.
+    #[test]
+    fn exec1_when_and_on_guard_refused_declare_a_candidate_operation() {
+        let operation = |member: &str, value: Value| {
+            let mut operation = serde_json::json!({
+                "id": "claim", "from": "home", "to": "terminal",
+                "click": {"kind": "point", "x": 1, "y": 0},
+                "guard": {"page_id": "home", "target_id": "flag/ready",
+                          "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                          "color_probe": "flag/ready"}
+            });
+            operation[member] = value;
+            operation
+        };
+        let task = |schema| Declaration {
+            file: Path::new("tasks/task/task.json"),
+            schema: Some(schema),
+        };
+        for (member, value) in [
+            ("when", serde_json::json!({"present": "flag/ready"})),
+            ("when", serde_json::json!({"absent": "flag/ready"})),
+            ("on_guard_refused", serde_json::json!("next_candidate")),
+        ] {
+            task("0.9")
+                .operation(&operation(member, value), "/operations/0", true)
+                .expect("task schema 0.9 declares it");
+        }
+        for (schema, member, value, pointer, refusal) in [
+            (
+                "0.8",
+                "when",
+                serde_json::json!({"present": "flag/ready"}),
+                "/operations/0/when",
+                "unconsumed_field",
+            ),
+            (
+                "0.8",
+                "on_guard_refused",
+                serde_json::json!("next_candidate"),
+                "/operations/0/on_guard_refused",
+                "unconsumed_field",
+            ),
+            (
+                "0.9",
+                "when",
+                serde_json::json!({}),
+                "/operations/0/when",
+                "missing_field",
+            ),
+            (
+                "0.9",
+                "when",
+                serde_json::json!({"present": "flag/ready", "absent": "flag/ready"}),
+                "/operations/0/when",
+                "invalid_value",
+            ),
+            (
+                "0.9",
+                "when",
+                serde_json::json!({"passes": "flag/ready"}),
+                "/operations/0/when/passes",
+                "unknown_field",
+            ),
+            (
+                "0.9",
+                "when",
+                serde_json::json!({"absent": 1}),
+                "/operations/0/when/absent",
+                "invalid_type",
+            ),
+            (
+                "0.9",
+                "on_guard_refused",
+                serde_json::json!("fail"),
+                "/operations/0/on_guard_refused",
+                "invalid_value",
             ),
         ] {
             let error = task(schema)

@@ -47,6 +47,7 @@ outcome_keys! {
     raw_text_sensitivity: vocab(sensitivity),
     raw_text_redacted: boolean,
     os_error: integer,
+    connectivity_reason: vocab(connectivity_reason),
     io_kind: vocab(io_kind),
     io_op: vocab(io_op),
     http_status: integer,
@@ -157,6 +158,9 @@ outcome_keys! {
     value_side: vocab(value_side),
     value_problem: vocab(value_problem),
     value_op: vocab(value_op),
+    // Workflow #396 REC-4.
+    mark_id: id,
+    follow_problem: vocab(follow_problem),
     unknown_reason: vocab(unknown_reason),
     rule_id: token,
     unknown_clause: vocab(unknown_clause),
@@ -407,6 +411,11 @@ outcome_keys! {
     // device-link watch.
     device_link_state: vocab(device_link_state),
     device_watch_problem: vocab(device_watch_problem),
+    // Workflow #398 RD-5b: the hold of a handset's device state, its thermal status and its
+    // battery level.
+    device_hold: vocab(device_hold),
+    thermal_status: vocab(thermal_status),
+    battery_percent: integer,
     // Workflow #378 A3 (acceptance): the MuMuManager version a provider startup refusal names.
     mumu_manager_version: version,
     // ---- Workflow #373 NAV-6 (standard-pack root, shared interrupt pages): begin ----
@@ -444,4 +453,6 @@ outcome_keys! {
     code_name: name,
     // Workflow #389 MCP-21: how long a command's `--wait` waited for its request.
     waited_ms: duration_ms,
+    // Workflow #398 RD-1c: a device's handle in adb's list, `<transport>:<transport_id>`.
+    handle: token,
 }

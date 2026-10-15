@@ -9,16 +9,24 @@
 // ac_overview result are the same object, apart from the start of the run window, which each
 // read takes from its own clock. Every answer fits the output budget, so §2.2 leaves no other
 // difference and nothing is marked truncated. Without `sections` every block is answered
-// (daemon, instances, run_window, lab_tool, install); with `sections` only those named and the
-// daemon. The instance is named by its alias and by its instance_id (D4). Workflow #378 A5: the
+// (daemon, instances, run_window, lab_tool, install, and Workflow #389 MCP-9a's catalog,
+// config_generation and watchdog); with `sections` only those named and the daemon. The fake
+// Runtime has no active policy catalog and no install root: catalog and watchdog are null and
+// config_generation names neither generation. The instance is named by its alias and by its instance_id (D4). Workflow #378 A5: the
 // CLI line carries `runtime_overview_reported` beside the overview.
 //
 // The refusal test: a section name §4.9 does not have is refused before any read, by the CLI as
 // `actingctl_usage_invalid` naming `--sections`, by MCP as `arguments_invalid` naming `sections`,
 // both with `argument_problem` `not_recognised`.
+//
+// The foreground test (Workflow #389 MCP-5b) is described at its function.
 
-use crate::c4_runtime::RuntimeChild;
+use crate::c4_runtime::{RuntimeChild, neutral_foreground, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
+use actingcommand_contract::{
+    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, InputAction, RuntimeFactScope,
+};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -51,7 +59,16 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same
     for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
         assert_eq!(
             members(answer),
-            BTreeSet::from(["daemon", "install", "instances", "lab_tool", "run_window"]),
+            BTreeSet::from([
+                "catalog",
+                "config_generation",
+                "daemon",
+                "install",
+                "instances",
+                "lab_tool",
+                "run_window",
+                "watchdog",
+            ]),
             "{side}: {answer}"
         );
         assert_daemon(side, answer);
@@ -59,6 +76,15 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same
         assert!(
             answer["run_window"]["since_unix_ms"].is_u64(),
             "{side}: no run window start: {answer}"
+        );
+        assert_eq!(
+            (
+                &answer["catalog"],
+                &answer["config_generation"],
+                &answer["watchdog"]
+            ),
+            (&Value::Null, &json!({}), &Value::Null),
+            "{side}: {answer}"
         );
         assert_eq!(answer["lab_tool"], json!({"present": false}), "{side}");
         assert_eq!(
@@ -170,6 +196,86 @@ fn gate_overview_and_ac_overview_refuse_an_unknown_section_naming_it() {
         "ac_overview: {answer}"
     );
     mcp.close_input();
+    drop(mcp);
+}
+
+// Workflow #389 MCP-5b (MCP-0 command table v1.1 §2.3, §4.6, D10, ruling Q7): each instance row
+// carries `foreground {package, observed_at_unix_ms}`, the instance program fact
+// `application.foreground` the foreground gate records before a pointer input, so the package
+// last seen, not a live read. Before any pointer input the instance has no such fact and its row
+// no `foreground`, on both sides and without a warning; after one tap the row carries the
+// package the fake device reports (`neutral_foreground`) and the time the fact was observed. For
+// the same arguments the CLI's stdout JSON and the ac_overview result are the same object, apart
+// from the start of the run window.
+#[test]
+fn gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported() {
+    let root = TempDir::new().expect("tempdir");
+    write_sealed_frame(&root.path().join("sealed.png"));
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    let mut id = 1;
+    let words = ["overview", "--instance", ALIAS, "--sections", "instances"];
+    let arguments = json!({"instance": ALIAS, "sections": ["instances"]});
+
+    // No pointer input yet: no fact, no block.
+    let (cli, tool) = parity(&mut mcp, &mut id, root.path(), &words, arguments.clone());
+    for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
+        assert!(
+            answer["instances"][0].get("foreground").is_none(),
+            "{side}: a row carries a foreground no input has seen: {answer}"
+        );
+    }
+
+    // One tap through the foreground gate.
+    let holder = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("connect a Runtime client");
+    let token = holder.acquire_lease(ALIAS).expect("hold the instance");
+    let tapped = holder.input(&token, InputAction::Tap { x: 1, y: 1 });
+    holder.release_lease(&token).expect("release the instance");
+    let instance_id = holder
+        .status()
+        .expect("read the Runtime status")
+        .instances()
+        .iter()
+        .find(|instance| instance.instance_alias() == ALIAS)
+        .expect("setup: the fake instance is not registered")
+        .instance_id();
+    let observed_at_unix_ms = holder
+        .runtime_fact_snapshot()
+        .expect("read the program facts")
+        .records
+        .iter()
+        .find(|record| {
+            record.key == APPLICATION_FOREGROUND_FACT_KEY
+                && record.scope == RuntimeFactScope::Instance { instance_id }
+        })
+        .map(|record| record.observed_at_unix_ms)
+        .unwrap_or_else(|| {
+            panic!("setup: the tap left no foreground fact of the instance: {tapped:?}")
+        });
+    drop(holder);
+    let package = neutral_foreground()
+        .foreground
+        .expect("the fake device reports a foreground package");
+
+    let (cli, tool) = parity(&mut mcp, &mut id, root.path(), &words, arguments);
+    for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
+        assert_eq!(
+            answer["instances"][0]["foreground"],
+            json!({"package": package, "observed_at_unix_ms": observed_at_unix_ms}),
+            "{side}: {answer}"
+        );
+    }
+
+    mcp.close_input();
+    runtime.stop_clean();
     drop(mcp);
 }
 

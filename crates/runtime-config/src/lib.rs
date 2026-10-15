@@ -15,7 +15,7 @@
 //!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay);
 //!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
-//!   (Workflow #398 RD-2, model-398 §4.6).
+//!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -25,6 +25,7 @@
 mod codes;
 mod defaults;
 pub mod device_link;
+pub mod device_state;
 mod effective;
 mod existing;
 mod host_claims;
@@ -44,6 +45,7 @@ pub use defaults::{
     DefaultsFile, DefaultsInvalid, SHIPPED_DEFAULTS, sha256_text, shipped_defaults_sha256,
 };
 pub use device_link::{DeviceLinkConfig, DeviceLinkFile, OfflineAction};
+pub use device_state::{DeviceStateConfig, DeviceStateFile, KeyguardInsecureAction, ThermalLevel};
 pub use effective::{
     AppliedSettings, CheckContext, ConfigFailure, DeviceBounds, EffectiveConfig, InstructionStamp,
     InstructionValue, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CHANNEL,
@@ -91,6 +93,9 @@ pub fn annotate_settable(
 // Workflow #398 RD-2.
 #[cfg(test)]
 mod device_link_tests;
+// Workflow #398 RD-5b.
+#[cfg(test)]
+mod device_state_tests;
 #[cfg(test)]
 mod ladder_tests;
 // Workflow #383 AO-1.

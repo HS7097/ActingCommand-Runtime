@@ -70,7 +70,8 @@ command deletes nothing and names the files it already wrote.
   resolution (`record_frame_size_mismatch`).
 - Fields added later use `serde(default, skip_serializing_if)`: `application` (see
   "Application steps") and `optional` (see "Optional steps") are absent on steps without
-  one.
+  one; so are a click's `follow`, a template mark's `scales`, `mask` and `unique`, and a
+  self-test's `matched_scales_milli` (see "Following a template", Workflow #396 REC-4).
 
 ## Commands
 
@@ -106,8 +107,9 @@ not, frames can only be added with `record mark --frame`).
 
 ```
 record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
-            [--template <id>=x,y,w,h]… [--color <id>=x,y,w,h]… [--reuse <id>]…
-            [--click x,y,w,h | --click-from <id>] [--click-guard <id>] [--click-retry <n>]
+            [--template <id>=x,y,w,h]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
+            [--click x,y,w,h | --click-from <id> | --click-follow <id> | --click x,y,w,h --click-follow <id>]
+            [--click-guard <id>] [--click-retry <n>]
             [--replace-click] [--remove <id>]… [--optional [--settle-ms <0..60000>] | --not-optional]
             [--dry-run] [--state-dir <dir>]
 record mark [--step <n>] [--frame <png>] [--template …]… [--color …]… [--reuse <id>]…
@@ -164,6 +166,21 @@ The other step operations are `{"kind":"reopen_step","step":n}`, `{"kind":"close
 `{"kind":"to_transition","step":n}`. Unknown fields are refused at every level of the request
 (`validation_failed`, exit 2).
 
+A click that follows a template mark, and a template mark with factors, a mask and a margin of
+uniqueness (Workflow #396 REC-4, see "Following a template"):
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","frame":"D:\\frames\\f1.png",
+ "samples":["D:\\frames\\f1_moved.png"],
+ "add":[{"id":"ui/a","family":"template","region":{"x":40,"y":300,"width":64,"height":64},
+         "search":{"x":0,"y":280,"width":640,"height":120},
+         "scales":{"factors_milli":[1000,750]},"mask":{"type":"range","lower":150,"upper":255},
+         "unique":{"margin_milli":50}}],
+ "click":{"follow":"ui/a"}}
+```
+
+`"click":{"region":{…},"follow":"ui/a"}` declares the offset form.
+
 Rules:
 
 - `--request` cannot be combined with the shortcut flags; single-valued flags given twice,
@@ -183,9 +200,11 @@ Rules:
 - `--remove <id>` removes the entry only; a mark reused elsewhere, named by a check or used
   as the click guard is refused (`record_mark_in_use`).
 - `--page <name>` (`^[a-z0-9][a-z0-9_]{0,47}$`) names the step's page.
-- Click: exactly one of a rectangle (`--click`, inside the frame with width and height ≥ 1)
-  and a mark of the step (`--click-from`, copying the mark's region; for a template that is
-  the crop, not the search area; a check has no region: `record_click_source_invalid`).
+- Click: exactly one of a rectangle (`--click`, inside the frame with width and height ≥ 1),
+  a mark of the step (`--click-from`, copying the mark's region; for a template that is
+  the crop, not the search area; a check has no region: `record_click_source_invalid`), and a
+  template mark of the step the click follows (`--click-follow`, alone or with `--click`; see
+  "Following a template"). `follow` with `from` is `validation_failed`.
   A second click needs `--replace-click` (`record_click_exists`); an executed click
   cannot be replaced before `--reopen-step` (`record_click_executed`). `--click-guard`
   names a template, color, color digest or check mark of the step
@@ -238,7 +257,7 @@ samples, not superseded frames). The result is `passed`, `failed` or `not_evalua
 
 | family | fields | self-test |
 |---|---|---|
-| template | `region` (crop), `search?` (default `region`; must contain it and lie in the frame), `threshold?` | the crop from the primary frame is matched in `search` with the recording metric; every frame needs score ≥ threshold; `min_score`, `margin` = min score − threshold, `matched_rect`, `location_ambiguous` (a match elsewhere than the crop still passes) |
+| template | `region` (crop), `search?` (default `region`; must contain it and lie in the frame), `threshold?`; Workflow #396 REC-4: `scales?` (`{"factors_milli"}`, REC-5; `--scales f,…` gives every `--template` of the command these factors), `mask?` (`{"type": "range", "lower", "upper"}`, REC-7), `unique?` (`{"margin_milli"}`, REC-2), as the task's `verify_templates[]` declares them, never added on their own | the crop from the primary frame is matched in `search` with the recording metric; every frame needs score ≥ threshold; `min_score`, `margin` = min score − threshold, `matched_rect`, `location_ambiguous` (a match elsewhere than the crop still passes). A mark with `scales`, `mask` or `unique` is evaluated on every frame as the Runtime evaluates the target the package declares for it (a recognition pack `0.7` template target; a declaration its rules refuse is `validation_failed`): with `scales`, `matched_scales_milli` lists the factors it passed at, and an own mark must pass at every factor on at least one frame of its step (put a sample of each zoom in the step); with `unique`, a second place within the margin fails the frame and the failure gives it as `uniqueness{score_milli, second_score_milli, margin_milli, second_rect}`, so the author can set the margin |
 | color | `region`, `max_distance?` | `expected` is the mean color of `region` on the primary frame; every frame's mean color must be within the distance; `margin` = limit − largest distance |
 | color_digest | `region`, `columns`, `rows`, `max_mean_milli`, `max_cell?`, `exclude_cells?` (no defaults) | `cells` from the primary frame (`color_digest.v1`); every frame must pass; `margin` = `{mean_milli, max_cell}` limits minus the worst values |
 | ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required | the OCR target the package declares for the mark is evaluated on every frame with the Lab's OCR provider (see "OCR in the Lab"); every frame must pass; a provider or evaluation error is `failed` with `self_test_error`. Without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), and not evaluated is never reported as passed |
@@ -248,6 +267,54 @@ Shape errors (missing or misplaced fields, an invalid grid) are `validation_fail
 2); a region outside the frame (`region_outside_frame`), an invalid search area
 (`search_invalid`), a check member that is not a mark of the step (`check_member_invalid`)
 and failed self-tests are reasons inside `record_mark_rejected`.
+
+### Following a template
+
+Workflow #396 REC-4 (REC-M v1.2.1 §6). A click may follow a template mark of its step (own or
+reused) instead of clicking a fixed rectangle, for a button whose position moves:
+
+- `--click-follow <id>` (`"click":{"follow":"<id>"}`): the package clicks the box the template
+  matches on the frame it runs on, `{"kind": "target", "target_id": "<id>"}`. The step's
+  `click.rect` is the crop and `click.source` is `followed_mark`.
+- `--click x,y,w,h --click-follow <id>` (`"click":{"region":{…},"follow":"<id>"}`): the package
+  clicks the matched box's top-left corner plus the offset, `{"kind": "offset", "target_id":
+  "<id>", "offset": {x, y, width, height}}`, where the offset is the rectangle minus the crop's
+  top-left corner (width and height kept). For a template with `scales` the kernel scales the
+  offset by the factor it matched at. `click.rect` is the declared rectangle, `click.source`
+  `declared`.
+- `recording.json` records `click.follow{mark_id, form: "target" | "offset", offset?}`. The
+  recorded rectangle is what `do --capture --record` executes and `record status` shows.
+- The click's guard is the followed template: `target_id` the template, `verify_template` its
+  asset, `expected_rect` its search area. A step without `follow` generates the same bytes as
+  before, and no generated click is ever `target_center`.
+- A template is not made `unique` for being followed; declare `unique` with a margin when a
+  second copy could appear, using the second place its self-test reports.
+
+`record_click_follow_invalid` (exit 3; `details.outcome` names `mark_id` and `follow_problem`)
+refuses the command, and nothing is written, when the declaration cannot hold; the rules are
+checked again on every `record mark` of the step:
+
+| `follow_problem` | when |
+|---|---|
+| `not_template` | the followed mark is not a template mark of the step |
+| `not_required` | the template is a member of an `any_of` check of the step, so it is not a required mark of the page (the guard comes from the required marks) |
+| `guard_conflict` | `--click-guard` (or the step's guard) names another mark |
+
+The followed template cannot be removed while the click follows it (`record_mark_in_use`). On
+every live frame of the step (the primary frame and the samples) the click must hold too;
+otherwise the batch is refused under `record_mark_rejected` with one `{id: <the template>,
+reason: "record_click_follow_invalid", frame_id, outcome, …}` for the first frame that does
+not hold:
+
+| `follow_problem` | when |
+|---|---|
+| `primary_mismatch` | on the primary frame the template's best match is not the crop itself (an earlier equal match elsewhere wins), or a template with `scales` matches there at another factor than 1000 |
+| `template_unmatched` | on a frame the template does not pass in its search area |
+| `click_outside_frame` | on a frame the followed box (with the scaled offset) does not lie inside the frame |
+
+The search area should cover every position the template moves to; with a search area equal
+to the crop the generated box is the recorded rectangle. Whether the whole box is harmless to
+click on every frame is for the author to check on the frames.
 
 ### OCR in the Lab
 
@@ -689,12 +756,16 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `scheduling_outcome` mapping `{"outcome_key": "<task_id>_done", "effect":
   "no_designated_effect", "terminal_pages": [<last page>]}`.
 - A click step's operation is `step_ii_click`: `from` its page, `to` and `expect_after.page_id`
-  the next page, `click: {"kind": "rect", …}` with the recorded rectangle,
+  the next page, `click: {"kind": "rect", …}` with the recorded rectangle (Workflow #396
+  REC-4: `{"kind": "target", …}` or `{"kind": "offset", …}` for a click that follows a template,
+  see "Following a template"),
   `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
   `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
   `retry_interval_ms` only when the step declares a retry. Its guard target comes from the
-  page's required marks only: the click guard, the click source unless it is OCR, the first
-  template, the first color or color digest, the first check. The guard's `expected_rect` is
+  page's required marks only: the template a click follows, the click guard, the click source
+  unless it is OCR, the first template, the first color or color digest, the first check. A
+  followed template that is not a required template mark of the page is refused with
+  `record_click_follow_invalid`. The guard's `expected_rect` is
   the template's search area, the color or digest region, or the bounding box of the check's
   members. A page with only OCR marks gives no guard and `unguarded_trusted_coordinate: true`.
 - An application step's operation is `step_ii_app`: `application: {"action"}`,
@@ -770,7 +841,11 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      simulated: `first_decision{status:"not_evaluated", reason:"lab_ocr_unavailable"}` and the
      warning `first_decision_not_evaluated`; with one it is simulated like any other step;
    - otherwise step 1's primary frame must give `would_click` of `step_01_click` with the
-     point inside its rectangle.
+     point inside its rectangle. When that click follows a template (Workflow #396 REC-4),
+     every live frame of step 1 (the primary frame and the samples) is simulated, and each must
+     give the point inside the box the followed template gives on that frame, as the admitted
+     evaluator matches it (the match box, or its corner plus the scaled offset); the decision
+     shown is the primary frame's.
 
    Anything else is `record_artifact_admission_failed` with the decision.
 4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
@@ -918,7 +993,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict`, `record_stop_option_conflict` |
+| 3 | `record_session_not_active`, `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_artifact_name_conflict`, `record_requires_conflict`, `record_stop_option_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

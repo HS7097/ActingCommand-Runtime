@@ -189,8 +189,21 @@ pub enum ApprovalDisposition {
 }
 
 impl ApprovalDisposition {
+    /// Every disposition (Workflow #389 MCP-9a reads one back from `config.catalog`).
+    pub const ALL: [Self; 4] = [Self::Approved, Self::Rejected, Self::Pinned, Self::Revoked];
+
     pub const fn grants_authority(self) -> bool {
         matches!(self, Self::Approved | Self::Pinned)
+    }
+
+    /// The disposition's spelling, as it serialises.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Pinned => "pinned",
+            Self::Revoked => "revoked",
+        }
     }
 }
 
