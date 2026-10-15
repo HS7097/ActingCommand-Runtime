@@ -663,9 +663,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run CLI source");
 
-    // Workflow #336 PKG-S1: the capability admits by path or bytes and records the caller's
-    // reference; `pkg_s1_package_admission_computes_and_compares_no_package_digest` keeps every
-    // digest comparison off this path.
+    // Workflow #336 PKG-S1/PKG-S4: the capability admits by path or bytes and the request names
+    // its package by its path only; `pkg_s1_package_admission_computes_and_compares_no_package_digest`
+    // keeps every digest comparison off this path.
     for required in ["pub struct ExternallyVerifiedBundle", "Containment::new()"] {
         assert!(
             bundle.contains(required),
@@ -683,9 +683,8 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         "Runtime contained task bypasses the externally verified bundle capability"
     );
     assert!(
-        host.contains("PreparedContainedTask::load_path(")
-            && host.contains("request.expected_sha256(),"),
-        "Runtime host must admit the client package by its path and record its reference"
+        host.contains("PreparedContainedTask::load_path(") && !host.contains("expected_sha256"),
+        "Runtime host must admit the client package by its path, without a digest"
     );
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
@@ -694,13 +693,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        cli.contains("required_package_reference")
-            && cli.contains("PackageInput::open_declared(&flags, reference)")
-            && cli.contains("PackageInput::declared_reference(flags)")
-            && cli.contains("package_reader.reference.clone()")
-            && cli.contains("ContainedTaskRequest::new")
-            && cli.contains("run_contained_task(&instance, request)"),
-        "ActingLab production run CLI does not require an external package reference"
+        cli.contains("PackageInput::open(&flags)")
+            && cli.contains("ContainedTaskRequest::new(package_reader.path()")
+            && cli.contains("run_contained_task(&instance, request)")
+            && !cli.contains("expected-sha256")
+            && !cli.contains("package-ref"),
+        "ActingLab production run CLI must submit its package by its path, without a digest"
     );
 }
 
@@ -975,9 +973,10 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
             "package CLI router lost offline route {required}"
         );
     }
+    // Workflow #336 PKG-S4 (forced compromise T-01): the dry run reads its package by its path.
     for required in [
-        "validate_lab_package_bytes",
-        "PreparedContainedTask::load",
+        "validate_lab_package_path",
+        "PreparedContainedTask::load_path",
         "simulate_contained_task",
         "mode: \"offline_simulation\"",
         "executed: false",
@@ -5631,13 +5630,20 @@ fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
         .and_then(|(_, tail)| tail.split_once("}\n\nimpl ContainedTaskRequest"))
         .map(|(body, _)| body)
         .expect("locate ContainedTaskRequest fields");
-    for required in ["package_path: String", "expected_sha256: crate::PackageRef"] {
-        assert!(
-            request.contains(required),
-            "contained task request lost {required}"
-        );
-    }
-    for forbidden in ["game", "server", "package_name", "TaskSemanticFact"] {
+    assert!(
+        request.contains("package_path: String"),
+        "contained task request lost package_path: String"
+    );
+    // Workflow #336 PKG-S4 (option 丙, M-PKG v1.1 §4.5): the request carries no package digest.
+    for forbidden in [
+        "game",
+        "server",
+        "package_name",
+        "TaskSemanticFact",
+        "expected_sha256",
+        "PackageRef",
+        "sha256",
+    ] {
         assert!(
             !request.contains(forbidden),
             "contained task client contract embeds application identity via {forbidden}"

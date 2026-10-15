@@ -275,7 +275,6 @@ fn recognize_artifact(ids: &IdentifierIssuer) -> RuntimeOperation {
                 captured: event(3),
             },
             package_path: "C:\\packages\\saved-ocr.zip".to_owned(),
-            expected_sha256: "0".repeat(64).into(),
             target_id: "fixture/ocr".to_owned(),
         }),
     }

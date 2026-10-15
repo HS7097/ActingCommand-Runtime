@@ -592,3 +592,14 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
+# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} and prerequisite_packages {package_id, package_path} checks, and one that still carries startup_package.expected_sha256, prerequisite_packages[].package_digest or policy.procedure_manifest[].package_digest is config_decode_failed at config_load; actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
+[[gate]]
+key = "55"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::process::s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks",
+    "actingcommand-actingctl::bin:actingctl::tests::s4_t3_task_run_refuses_a_package_digest_flag",
+    "actingcommand-actingctl::c4_process::actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit",
+    "actingcommand-actingctl::gate::mcp_pkgs4::s4_t4_ac_run_pack_and_ac_pack_check_take_no_package_digest",
+]
+incident = ["#336 PKG-S4"]

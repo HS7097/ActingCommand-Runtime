@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -56,7 +55,6 @@ struct Fixture {
     state_root: std::path::PathBuf,
     scene: std::path::PathBuf,
     package: std::path::PathBuf,
-    package_sha256: String,
 }
 
 impl Fixture {
@@ -74,10 +72,6 @@ impl Fixture {
         fs::write(&scene, RED_PNG).expect("scene");
         write_resources(&resource_root);
         write_package(&package, &resource_root);
-        let package_sha256 = format!(
-            "{:x}",
-            Sha256::digest(fs::read(&package).expect("package bytes"))
-        );
 
         Self {
             _temp: temp,
@@ -87,7 +81,6 @@ impl Fixture {
             state_root,
             scene,
             package,
-            package_sha256,
         }
     }
 
@@ -108,8 +101,6 @@ impl Fixture {
                 self.scene.to_str().expect("scene UTF-8"),
                 "--zip",
                 self.package.to_str().expect("package UTF-8"),
-                "--expected-sha256",
-                &self.package_sha256,
             ])
             .current_dir(&self.root)
             .env(

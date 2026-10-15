@@ -93,6 +93,24 @@ pub(super) fn configured_return_home_refusal(detail: String) -> RequestFailure {
     prerequisite_refusal(SharedCode::ContainedTaskPrerequisiteIncompatible, detail)
 }
 
+/// A refusal of the shared prerequisite predicate, relayed with the kernel's code and detail and
+/// denied before any lease: a chain layer's, and (Workflow #336 PKG-S4, M-PKG D7) a configured
+/// return-home package that is not the package its `prerequisite_packages` entry names.
+pub(super) fn kernel_refusal(
+    error: actingcommand_execution_kernel::ContainedTaskError,
+) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::relayed_request(
+            error.code().as_str(),
+            RESOLVE_OPERATION.as_str(),
+            RuntimeErrorCode::PackageInvalid,
+        )
+        .with_native_detail(error.detail().unwrap_or("").to_owned()),
+        RuntimeReceiptState::Denied,
+        None,
+    )
+}
+
 impl HostShared {
     /// The return-home package `layer` falls back to (Workflow #336 L2c, R16): only a
     /// `linear_steps` package that declares no prerequisite package and has a first step page
@@ -172,18 +190,6 @@ impl HostShared {
         }
         let deadline = material_deadline()?;
         let mut chain: Vec<PreparedContainedTask> = Vec::new();
-        let pure_refusal = |error: actingcommand_execution_kernel::ContainedTaskError| {
-            RequestFailure::request(
-                RuntimeHostError::relayed_request(
-                    error.code().as_str(),
-                    RESOLVE_OPERATION.as_str(),
-                    RuntimeErrorCode::PackageInvalid,
-                )
-                .with_native_detail(error.detail().unwrap_or("").to_owned()),
-                RuntimeReceiptState::Denied,
-                None,
-            )
-        };
         while let Some(link) = next {
             let dependent = chain.last().unwrap_or(prepared);
             recorded.push(ResolvedLayer {
@@ -195,13 +201,10 @@ impl HostShared {
             let binding = self.prerequisite_packages.get(&link.package_id);
             qualification
                 .begin(&link, binding.is_some())
-                .map_err(pure_refusal)?;
+                .map_err(kernel_refusal)?;
             let binding = binding.expect("shared prerequisite predicate checked the binding");
-            let request = ContainedTaskRequest::new(
-                binding.package_path(),
-                binding.expected_sha256().clone(),
-            )
-            .map_err(|_| prerequisite_refusal(ADMISSION_FAILED, link.detail("")))?;
+            let request = ContainedTaskRequest::new(binding.package_path())
+                .map_err(|_| prerequisite_refusal(ADMISSION_FAILED, link.detail("")))?;
             let admitted = prepare_contained_task(
                 instance_alias,
                 &request,
@@ -211,11 +214,11 @@ impl HostShared {
             .map_err(|failure| prerequisite_admission_failure(failure, link.detail("")))?;
             qualification
                 .admit(&link, admitted.package_descriptor())
-                .map_err(pure_refusal)?;
+                .map_err(kernel_refusal)?;
             next = self.next_prerequisite(&qualification);
             chain.push(admitted);
         }
-        qualification.finish().map_err(pure_refusal)?;
+        qualification.finish().map_err(kernel_refusal)?;
         Ok(chain)
     }
 }

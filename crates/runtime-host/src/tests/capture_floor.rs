@@ -10,7 +10,6 @@ fn run_neutral_task(state: &Arc<FakeState>) -> RuntimeReceipt {
     let package = root.path().join("neutral-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
@@ -24,7 +23,7 @@ fn run_neutral_task(state: &Arc<FakeState>) -> RuntimeReceipt {
     let request = client.request(RuntimeOperation::run_contained_task(
         "neutral.instance",
         client.ids.mint_holder_id().expect("holder"),
-        ContainedTaskRequest::new(package.display().to_string(), expected).expect("task request"),
+        ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
     ));
     client.send(&request)
 }

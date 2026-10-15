@@ -17,7 +17,6 @@ use tempfile::TempDir;
 const ROOT: &str = "{root}";
 // A word no subcommand takes.
 const STRAY: &str = "extra";
-const PACKAGE_REF: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const QUERY: &str = r#"{"action":"query","transition_id":"transition-flags"}"#;
 // A request_id as the Runtime mints it (Workflow #389 MCP-6, `run evidence`).
 const REQUEST_ID: &str = "request_0123456789abcdef0123456789abcdef";
@@ -316,8 +315,6 @@ const CLIENT: &[Subcommand] = &[
             "neutral.instance",
             "--package",
             "neutral-task.zip",
-            "--expected-sha256",
-            PACKAGE_REF,
         ],
         &["--interval-ms", "1000"],
         &["--package", "neutral-task.zip"],
@@ -404,8 +401,6 @@ const CLIENT: &[Subcommand] = &[
             "neutral.instance",
             "--package",
             "neutral-task.zip",
-            "--expected-sha256",
-            PACKAGE_REF,
             "--wait",
             "60",
         ],

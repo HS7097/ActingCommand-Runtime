@@ -581,11 +581,7 @@ impl Run {
 fn run(host: &RuntimeHost, temp: &TempDir, name: &str, target: &[u8]) -> Run {
     let path = temp.path().join(format!("{name}.zip"));
     fs::write(&path, target).expect("write run package");
-    let task_request = ContainedTaskRequest::new(
-        path.display().to_string(),
-        format!("{:x}", Sha256::digest(target)),
-    )
-    .expect("task request");
+    let task_request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");
     let mut client = TestClient::connect(host);
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");

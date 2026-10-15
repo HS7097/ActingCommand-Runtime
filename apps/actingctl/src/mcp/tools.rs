@@ -617,7 +617,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Check a task package",
         tier: Tier::Observer,
         description: concat!(
-            "Checks one task package offline, as actinglab --json package digest and package preflight do, and answers both verbatim: {digest, preflight}. preflight runs with package_ref when it is given, otherwise with the digest's reference. With package_ref, package_ref_check {given, matches_digest} says whether it is the digest's reference, and preflight is actinglab's verdict on it. preflight's coverage says how far the check went: it neither recognizes nor executes anything.",
+            "Checks one task package offline, as actinglab --json package preflight does, and answers its result verbatim: {preflight}. The package is named by its path only; admission is structural and no digest is computed. preflight's coverage says how far the check went: it neither recognizes nor executes anything.",
             lab_errors!(),
             check_job!()
         ),
@@ -648,7 +648,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_run_pack",
         title: "Run a task package",
         tier: Tier::Operator,
-        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path; package_ref defaults to the actinglab package digest of it (needs the install's tools). A recovery package is recovery_package with an optional recovery_package_ref, never the ref alone. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.job_result.error as the Runtime's lease_queue_expired, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
+        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path, and a recovery package is recovery_package, its path; no digest is given or computed. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.job_result.error as the Runtime's lease_queue_expired, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -755,7 +755,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Lab observe",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json observe, one argument per flag, and answers its data verbatim. Offline (scene) it detects the page of a PNG scene with the package (package with package_ref, or zip with expected_sha256) and touches no Runtime. With capture the Runtime takes the instance's current frame (instance: its alias) and records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id.",
+            "Runs actinglab --json observe, one argument per flag, and answers its data verbatim. Offline (scene) it detects the page of a PNG scene with the package (package, or zip, by its path) and touches no Runtime. With capture the Runtime takes the instance's current frame (instance: its alias) and records the Lab request in its ledger; this server then records one client.action (surface mcp) carrying the answer's req_id.",
             lab_errors!(),
             lab_job!()
         ),
@@ -851,7 +851,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Binding draft",
         tier: Tier::Author,
         description: concat!(
-            "Turns an ac_record_stop answer into a binding draft and changes nothing. Give exactly one of record_stop (the answer itself, also an exported one that kept its lab parts) and record_stop_export {path, sha256} (the export of an ac_record_stop answer, read only from %TEMP%\\actingcommand-mcp\\materials and only when its sha256 matches). binding_example, binding_requires, prerequisite_entry_example and catalog_on_failure_example come verbatim from it; binding_requires is null, with the warning binding_requires_unavailable, when the answer has none (a record stop answering already_generated). admission: actinglab package preflight on the recorded package (binding_example.scheduled_execution.package_path with lab.package_ref); its coverage is the admission scope, preflight_error when it does not pass. check_config {config, exit_code, outcome, report_export}: actingd check-config on the install's current actingd.config.json, which it only reads; the whole report is exported, its outcome is copied from it; the draft is not in it, and nothing is merged into any configuration or copy. manual_steps: binding_requires, then edit the configuration, approve in the UI, restart the daemon; all of them are the person's.",
+            "Turns an ac_record_stop answer into a binding draft and changes nothing. Give exactly one of record_stop (the answer itself, also an exported one that kept its lab parts) and record_stop_export {path, sha256} (the export of an ac_record_stop answer, read only from %TEMP%\\actingcommand-mcp\\materials and only when its sha256 matches). binding_example, binding_requires, prerequisite_entry_example and catalog_on_failure_example come verbatim from it; binding_requires is null, with the warning binding_requires_unavailable, when the answer has none (a record stop answering already_generated). admission: actinglab package preflight on the recorded package (binding_example.scheduled_execution.package_path, by its path); its coverage is the admission scope, preflight_error when it does not pass. check_config {config, exit_code, outcome, report_export}: actingd check-config on the install's current actingd.config.json, which it only reads; the whole report is exported, its outcome is copied from it; the draft is not in it, and nothing is merged into any configuration or copy. manual_steps: binding_requires, then edit the configuration, approve in the UI, restart the daemon; all of them are the person's.",
             lab_errors!(),
             check_job!()
         ),
@@ -1513,13 +1513,7 @@ fn run_pack_input() -> Value {
         "properties": {
             "instance": instance_argument(),
             "package": {"type": "string", "minLength": 1, "description": "The task package's path."},
-            "package_ref": {
-                "type": "string",
-                "minLength": 1,
-                "description": "The package's sha256 or content reference; default: actinglab package digest.",
-            },
-            "recovery_package": {"type": "string", "minLength": 1},
-            "recovery_package_ref": {"type": "string", "minLength": 1},
+            "recovery_package": {"type": "string", "minLength": 1, "description": "The recovery package's path."},
             "deadline_s": {"type": "integer", "minimum": 60, "maximum": 1800, "default": 1800},
         },
         "required": ["instance", "package"],

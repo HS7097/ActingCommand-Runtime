@@ -14,7 +14,6 @@ pub const MAX_OBSERVATION_TARGETS: usize = 64;
 #[serde(deny_unknown_fields)]
 pub struct ContainedObservationRequest {
     package_path: String,
-    expected_sha256: crate::PackageRef,
     targets: Vec<String>,
 }
 
@@ -27,12 +26,10 @@ impl fmt::Debug for ContainedObservationRequest {
 impl ContainedObservationRequest {
     pub fn new(
         package_path: impl Into<String>,
-        expected_sha256: impl Into<crate::PackageRef>,
         targets: Vec<String>,
     ) -> RuntimeContractResult<Self> {
         let request = Self {
             package_path: package_path.into(),
-            expected_sha256: expected_sha256.into(),
             targets,
         };
         request.validate()?;
@@ -47,7 +44,6 @@ impl ContainedObservationRequest {
                 RuntimeContractCode::InvalidObservationPackagePath,
             ));
         }
-        self.expected_sha256.validate()?;
         if self.targets.len() > MAX_OBSERVATION_TARGETS
             || self.targets.iter().enumerate().any(|(index, target)| {
                 target.is_empty()
@@ -64,9 +60,6 @@ impl ContainedObservationRequest {
     }
     pub fn package_path(&self) -> &str {
         &self.package_path
-    }
-    pub fn expected_sha256(&self) -> &crate::PackageRef {
-        &self.expected_sha256
     }
     pub fn targets(&self) -> &[String] {
         &self.targets

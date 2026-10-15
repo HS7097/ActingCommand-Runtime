@@ -4757,12 +4757,12 @@ pub(super) fn prepare_contained_task(
             HostCode::ContainedTaskPathNotAbsolute,
         ));
     }
-    // Workflow #336 PKG-S1 (option 丙): the path chooses the loader; the request's reference is
-    // recorded as the caller gave it and compared with nothing.
+    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
+    // structural only; the request names no digest, so the package carries no reference.
     PreparedContainedTask::load_path(
         instance_alias,
         path,
-        request.expected_sha256(),
+        &actingcommand_contract::PackageRef::default(),
         vision_provider,
         deadline,
     )
@@ -5745,12 +5745,23 @@ impl HostShared {
         })?;
         // Workflow #336 L2d: a configured return-home package on the ladder's first rung passes
         // the checks of a return-home chain layer against the failed package and declares no
-        // prerequisite package, before its chain and any lease.
-        if let Some(failed) = &pending.configured_return_home
-            && let Some(detail) =
+        // prerequisite package, before its chain and any lease. Workflow #336 PKG-S4 (M-PKG D7):
+        // first, it is the package its `prerequisite_packages` entry names by `package_id`.
+        if let Some(failed) = &pending.configured_return_home {
+            if let Some(package_id) = self
+                .return_home_packages
+                .get(&(failed.game.clone(), failed.server.clone()))
+            {
+                prepared
+                    .package_descriptor()
+                    .require_configured_package_id(package_id)
+                    .map_err(prerequisite::kernel_refusal)?;
+            }
+            if let Some(detail) =
                 prerequisite::configured_return_home_incompatibility(&prepared, failed)
-        {
-            return Err(prerequisite::configured_return_home_refusal(detail));
+            {
+                return Err(prerequisite::configured_return_home_refusal(detail));
+            }
         }
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, || Ok(material_deadline))?;
@@ -6989,11 +7000,7 @@ impl HostShared {
                 }
             },
         };
-        let recovery_request = ContainedTaskRequest::new(
-            binding.package_path(),
-            binding.expected_sha256(),
-        )
-        .map_err(|_| {
+        let recovery_request = ContainedTaskRequest::new(binding.package_path()).map_err(|_| {
             ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryBindingInvalid.as_str())
         })?;
         let recovery = match prepare_contained_task(
@@ -7062,6 +7069,26 @@ impl HostShared {
             }
         };
         if configured {
+            // Workflow #336 PKG-S4 (M-PKG D7): a configured package is the package its
+            // `prerequisite_packages` entry names by `package_id`; another one is refused as a
+            // chain layer is, and starts no ladder.
+            if let Some(Err(error)) = self
+                .return_home_packages
+                .get(&(prepared.game().to_owned(), prepared.server().to_owned()))
+                .map(|package_id| {
+                    recovery
+                        .package_descriptor()
+                        .require_configured_package_id(package_id)
+                })
+            {
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                        disposition: TaskEntryTargetDisposition::FailClosed,
+                        outcome: Some(error.outcome()),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return Err(ContainedTaskRunError::Task(error));
+            }
             // A configured package passes the checks of a return-home chain layer (its
             // `scheduling_outcome` without a designated operation allowed and ignored) and
             // declares no prerequisite package; a refusal, like the chain's, starts no ladder.
@@ -7422,12 +7449,9 @@ impl HostShared {
             };
             if binding_label.is_none() {
                 let binding_request =
-                    ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256())
-                        .map_err(|_| {
-                            contained_task_replay_denied(
-                                HostCode::ContainedTaskRequestRecoveryReused,
-                            )
-                        })?;
+                    ContainedTaskRequest::new(binding.package_path()).map_err(|_| {
+                        contained_task_replay_denied(HostCode::ContainedTaskRequestRecoveryReused)
+                    })?;
                 binding_label = Some(self.replayed_package_label(
                     instance_alias,
                     &binding_request,

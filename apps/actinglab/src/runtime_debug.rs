@@ -150,12 +150,10 @@ struct PreparedPackageDebug {
 }
 
 fn package_debug_request(flags: &FlagArgs, _command: &str) -> CliOutcome<PreparedPackageDebug> {
+    // Workflow #336 PKG-S4 (option 丙): the package by its path only.
     let reader = PackageInput::open(flags)?;
-    let request = PackageDebugRequest::new(
-        reader.path().to_string_lossy().into_owned(),
-        reader.reference.clone(),
-    )
-    .map_err(|error| CliError::usage(error.to_string()))?;
+    let request = PackageDebugRequest::new(reader.path().to_string_lossy().into_owned())
+        .map_err(|error| CliError::usage(error.to_string()))?;
     Ok(PreparedPackageDebug { request, reader })
 }
 

@@ -184,7 +184,7 @@ fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_
     let root = TempDir::new().expect("tempdir");
     let fenced_state = Arc::new(FakeState::default());
     let other_state = Arc::new(FakeState::default());
-    let (package, expected) = super::gate_369s5::direct_run_package(&root, &other_state);
+    let package = super::gate_369s5::direct_run_package(&root, &other_state);
     let fenced = instance_id();
     let host = RuntimeHost::start(
         config(&root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0))),
@@ -206,7 +206,7 @@ fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_
         RuntimeOperation::run_contained_task(
             OTHER_ALIAS,
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package, expected).expect("task request"),
+            ContainedTaskRequest::new(package).expect("task request"),
         ),
     );
     let release = holder.request(RuntimeOperation::ReleaseLease { token });
@@ -305,7 +305,7 @@ fn gate_an_unconfirmed_application_close_fences_only_its_instance_and_the_other_
 fn gate_a_direct_run_fence_starts_no_ladder_and_a_passing_resume_lifts_it() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let (package, expected) = super::gate_369s5::direct_run_package(&root, &state);
+    let package = super::gate_369s5::direct_run_package(&root, &state);
     let fenced = instance_id();
     let host = RuntimeHost::start(
         config(&root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0))),
@@ -320,7 +320,7 @@ fn gate_a_direct_run_fence_starts_no_ladder_and_a_passing_resume_lifts_it() {
         RuntimeOperation::run_contained_task(
             FENCED_ALIAS,
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package, expected).expect("task request"),
+            ContainedTaskRequest::new(package).expect("task request"),
         ),
     );
 
@@ -647,13 +647,12 @@ fn gate_a_ledger_writer_failure_still_ends_the_whole_runtime() {
     let package = root.path().join("fence-ledger-failure.zip");
     let bytes = neutral_stability_contained_task_package(true, 2, 5);
     fs::write(&package, &bytes).expect("write stability package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let failing = Arc::new(FakeState::default());
     failing
         .physical_task_geometry
         .store(true, Ordering::Release);
     let other = Arc::new(FakeState::default());
-    let (other_package, other_expected) = super::gate_369s5::direct_run_package(&root, &other);
+    let other_package = super::gate_369s5::direct_run_package(&root, &other);
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::from_entries([
@@ -669,7 +668,7 @@ fn gate_a_ledger_writer_failure_still_ends_the_whole_runtime() {
     let run = client.request(RuntimeOperation::run_contained_task(
         FENCED_ALIAS,
         client.ids.mint_holder_id().expect("holder"),
-        ContainedTaskRequest::new(package.display().to_string(), expected).expect("task request"),
+        ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
     ));
 
     let failed = client.send(&run);
@@ -689,7 +688,7 @@ fn gate_a_ledger_writer_failure_still_ends_the_whole_runtime() {
         RuntimeOperation::run_contained_task(
             OTHER_ALIAS,
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(other_package, other_expected).expect("task request"),
+            ContainedTaskRequest::new(other_package).expect("task request"),
         ),
     );
     let refused = host

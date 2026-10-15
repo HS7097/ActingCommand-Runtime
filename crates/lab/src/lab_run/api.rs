@@ -2,19 +2,14 @@
 
 impl<P: LabPorts> Lab<P> {
     pub fn lab_validate(&mut self, request: LabValidateRequest) -> CliOutcome<LabValidateResponse> {
-        validate_lab_package_zip_with_expected(&request.zip_path, request.expected_input_sha256)
+        validate_lab_package_zip(&request.zip_path)
     }
 }
 
-fn validate_lab_package_zip_with_expected(
-    zip_path: &Path,
-    expected_input_sha256: Option<Sha256Hash>,
-) -> CliOutcome<LabValidateResponse> {
-    let contained =
-        load_lab_package_for_validation(zip_path, "lab-validate", expected_input_sha256)?;
-    let input_sha256 = contained.sha256.clone();
-    let hash_source = contained.hash_source.to_string();
-    let externally_verified = contained.externally_verified;
+/// Workflow #336 PKG-S4 (option 丙): admits the Lab package structurally; no digest of it is
+/// taken, computed or reported.
+fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<LabValidateResponse> {
+    let contained = load_lab_package_for_validation(zip_path, "lab-validate")?;
     let entry_count = contained.bundle.entry_count();
     let control = lab_control_from_bundle(&contained.bundle)?;
     control.validate()?;
@@ -22,9 +17,6 @@ fn validate_lab_package_zip_with_expected(
     Ok(LabValidateResponse {
         zip: zip_path.display().to_string(),
         status: "valid".to_string(),
-        input_sha256,
-        hash_source,
-        externally_verified,
         entry_count,
         control: LabValidateControlResponse {
             package_id: control.package_id,
@@ -63,23 +55,51 @@ fn validate_lab_package_zip_with_expected(
 }
 
 /// Deep-validates the exact package bytes that will be passed to the execution kernel.
-/// Workflow #336 PKG-S1: `recorded` is the caller's ZIP reference, reported back and compared
-/// with nothing.
+/// Workflow #336 PKG-S4 (option 丙): admission is structural; no digest is taken or reported.
 pub fn validate_lab_package_bytes(
     input_label: &str,
     bytes: &[u8],
-    recorded: &PackageRef,
 ) -> CliOutcome<LabContainedPackageValidationResponse> {
-    let admitted = ExternallyVerifiedBundle::load(input_label, bytes, recorded)
+    let recorded = PackageRef::default();
+    let admitted = ExternallyVerifiedBundle::load(input_label, bytes, &recorded)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let sha256 = admitted
-        .loaded_bundle()
-        .package_ref()
-        .legacy_sha256()
-        .ok_or_else(|| {
-            CliError::package_invalid("ZIP admission requires a legacy package reference")
-        })?
-        .to_owned();
+    validate_admitted_lab_package(admitted, input_label, || {
+        actingcommand_execution_kernel::PreparedContainedTask::load(input_label, bytes, &recorded)
+            .map(drop)
+    })
+}
+
+/// Workflow #336 PKG-S4 (forced compromise T-01): `validate_lab_package_bytes` for the package
+/// `locator` names, read as its path chooses (PKG-S1): a content directory, a `.json` or
+/// `.zip` container, or an assembled ZIP. Admission is structural; no digest is taken.
+pub fn validate_lab_package_path(
+    input_label: &str,
+    locator: &Path,
+    deadline: std::time::Instant,
+) -> CliOutcome<LabContainedPackageValidationResponse> {
+    let recorded = PackageRef::default();
+    let admitted =
+        ExternallyVerifiedBundle::load_path(input_label, locator, &recorded, false, None, deadline)
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    validate_admitted_lab_package(admitted, input_label, || {
+        actingcommand_execution_kernel::PreparedContainedTask::load_path(
+            input_label,
+            locator,
+            &recorded,
+            None,
+            deadline,
+        )
+        .map(drop)
+    })
+}
+
+/// The deep validation of an admitted Lab package; `runtime_admission` admits the same package
+/// again as the execution kernel does, for the contracts that use Runtime admission.
+fn validate_admitted_lab_package(
+    admitted: ExternallyVerifiedBundle,
+    input_label: &str,
+    runtime_admission: impl FnOnce() -> Result<(), actingcommand_execution_kernel::ContainedTaskError>,
+) -> CliOutcome<LabContainedPackageValidationResponse> {
     let task_count = admitted.loaded_bundle().task_count();
     let entries = admitted
         .loaded_bundle()
@@ -95,8 +115,7 @@ pub fn validate_lab_package_bytes(
         Some("0.8" | "0.9")
     ) {
         // These contracts use Runtime admission for offline validation.
-        actingcommand_execution_kernel::PreparedContainedTask::load(input_label, bytes, recorded)
-        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        runtime_admission().map_err(|error| CliError::package_invalid(error.to_string()))?;
         let evaluator = bundle.evaluator().ok_or_else(|| {
             CliError::package_invalid("missing recognition evaluator for Lab package")
         })?;
@@ -158,9 +177,6 @@ pub fn validate_lab_package_bytes(
     let validation = LabValidateResponse {
         zip: input_label.to_string(),
         status: "valid".to_string(),
-        input_sha256: sha256,
-        hash_source: "externally_supplied".to_string(),
-        externally_verified: true,
         entry_count,
         control: LabValidateControlResponse {
             package_id: control.package_id,
@@ -182,48 +198,26 @@ pub fn validate_lab_package_bytes(
     })
 }
 
-#[cfg(test)]
-fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<LabValidateResponse> {
-    validate_lab_package_zip_with_expected(zip_path, None)
-}
-
 struct ContainedLabInput {
-    sha256: String,
-    hash_source: &'static str,
-    externally_verified: bool,
     bundle: LoadedBundle,
 }
 
+/// Workflow #336 PKG-S4 (option 丙): the published Lab package admitted structurally; no
+/// digest of its bytes is computed.
 fn load_lab_package_for_validation(
     zip_path: &Path,
     instance_label: &str,
-    expected_input_sha256: Option<Sha256Hash>,
 ) -> CliOutcome<ContainedLabInput> {
     let bytes = open_published_package(zip_path)?.read_all()?;
-    let externally_verified = expected_input_sha256.is_some();
-    let expected = expected_input_sha256.unwrap_or_else(|| Sha256Hash::digest(&bytes));
     let instance = InstanceId::new(instance_label).map_err(containment_error)?;
     let mut containment = Containment::new();
     containment
-        .load(
-            &instance,
-            &bytes,
-            &PackageRef::LegacyZipSha256(expected.to_string()),
-        )
+        .load(&instance, &bytes, &PackageRef::default())
         .map_err(containment_error)?;
     let bundle = containment
         .take_loaded(&instance)
         .ok_or_else(|| CliError::package_invalid("containment did not retain loaded Lab bundle"))?;
-    Ok(ContainedLabInput {
-        sha256: expected.to_string(),
-        hash_source: if externally_verified {
-            "externally_supplied"
-        } else {
-            "self_computed_provenance_only"
-        },
-        externally_verified,
-        bundle,
-    })
+    Ok(ContainedLabInput { bundle })
 }
 
 fn containment_error(err: ContainmentError) -> CliError {

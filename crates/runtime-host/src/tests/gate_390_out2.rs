@@ -186,11 +186,7 @@ fn run_out2(cap: Option<i64>, inputs: usize) -> Out2Run {
         RuntimeOperation::run_contained_task(
             OUT2_ALIAS,
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(
-                package.display().to_string(),
-                actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-            )
-            .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
     let _receipt = client.send(&request);

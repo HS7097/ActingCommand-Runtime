@@ -506,8 +506,8 @@ pub struct RuntimeHostConfig {
     /// `config.selection` with the manifest.
     config_selection: Option<actingcommand_contract::ConfigSelection>,
     /// Per instance alias: the contained task the host schedules by itself after a successful
-    /// emulator `start` / `restart` (slice #316-B3). Same locator + digest semantics as
-    /// `actingctl task-run --package / --expected-sha256`.
+    /// emulator `start` / `restart` (slice #316-B3). Same locator semantics as
+    /// `actingctl task-run --package`.
     startup_packages: BTreeMap<String, ContainedTaskRequest>,
     /// Workflow #369 S6c: the aliases whose stopped emulator the daemon starts at its start, in
     /// configuration order (actingd's `start_emulator`, S6a). Empty by default: nothing starts.

@@ -217,16 +217,11 @@ pub(super) fn ladder_setup_with_package(
 ) -> (RuntimeHostConfig, ContainedTaskRequest) {
     let package_path = root.join("physical-scheduled-task.zip");
     fs::write(&package_path, package).expect("write scheduled package");
-    let package_sha256 = format!("{:x}", Sha256::digest(package));
     let return_home = neutral_non_home_start_contained_task_package(true);
     let return_home_path = root.join("return-home.zip");
     fs::write(&return_home_path, &return_home).expect("write return-home package");
-    let return_home_sha256 = format!("{:x}", Sha256::digest(&return_home));
-    let startup = ContainedTaskRequest::new(
-        package_path.to_string_lossy().into_owned(),
-        package_sha256.clone(),
-    )
-    .expect("startup package");
+    let startup = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("startup package");
     let host_config = RuntimeHostConfig::new(root, b"runtime-host-test-salt")
         .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
         .with_procedure_manifest(procedure_manifest_with_primary(
@@ -245,15 +240,13 @@ pub(super) fn ladder_setup_with_package(
             startup,
         )]))
         .with_scheduled_procedures(["procedure.observe".to_owned()]);
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .and_then(|request| {
-                request.with_recovery(ContainedTaskRecoveryBinding::new(
-                    return_home_path.to_string_lossy().into_owned(),
-                    return_home_sha256,
-                )?)
-            })
-            .expect("scheduled package request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .and_then(|request| {
+            request.with_recovery(ContainedTaskRecoveryBinding::new(
+                return_home_path.to_string_lossy().into_owned(),
+            )?)
+        })
+        .expect("scheduled package request");
     (host_config, request)
 }
 
@@ -722,13 +715,11 @@ fn a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release(
 fn a_ladder_blocked_in_the_readiness_wait_does_not_hold_up_another_instances_startup_claim() {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
-    let package = fs::read(root.path().join("physical-scheduled-task.zip")).expect("package");
     let startup = ContainedTaskRequest::new(
         root.path()
             .join("physical-scheduled-task.zip")
             .to_string_lossy()
             .into_owned(),
-        format!("{:x}", Sha256::digest(&package)),
     )
     .expect("startup package");
     let ladder_state = Arc::new(FakeState::default());
@@ -1171,8 +1162,7 @@ fn startup_package_request(root: &TempDir, deadline_ms: u64) -> ContainedTaskReq
     let package = neutral_contained_task_package(true);
     let package_path = root.path().join("startup-package.zip");
     fs::write(&package_path, &package).expect("write startup package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
-    ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+    ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
         .and_then(|request| request.with_response_deadline_ms(deadline_ms))
         .expect("startup package request")
 }

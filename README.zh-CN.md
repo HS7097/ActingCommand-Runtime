@@ -16,7 +16,7 @@
 
 # ActingCommand Runtime
 
-ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟器上执行多目标自动化。程序本体（Runtime、Tools 与 MCP 服务）保持中立：不含任何具体目标的逻辑或信息——没有名称、页面、角色、关卡、资源名、数值或规则。代码、合约、默认值与夹具都在 CI 里由守卫测试 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` 与 `r2f_product_and_authoring_paths_have_no_builtin_game_identity` 扫描。一切目标专属内容（截图素材、识别区域、点击框、任务顺序、数据表）都在声明式资源包里：任务包按目标汇成一个标准包，按内容摘要密封，装载前核对；支持另一个目标就是换一份包，程序不改。运行时只接受带哈希校验的密封包（`actingctl task-run` 要求 `--package`，并要求 `--expected-sha256` 或 `--package-ref` 二者之一）。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。Runtime 只监听本机环回地址，本身没有网络代码。所有边界都 Fail Loud：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级；拒绝也是一份回执；「未知」从不当作「否」。
+ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟器上执行多目标自动化。程序本体（Runtime、Tools 与 MCP 服务）保持中立：不含任何具体目标的逻辑或信息——没有名称、页面、角色、关卡、资源名、数值或规则。代码、合约、默认值与夹具都在 CI 里由守卫测试 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` 与 `r2f_product_and_authoring_paths_have_no_builtin_game_identity` 扫描。一切目标专属内容（截图素材、识别区域、点击框、任务顺序、数据表）都在声明式资源包里：任务包按目标汇成一个标准包，每个包以其 `package_id` 为身份，装载前做结构准入；支持另一个目标就是换一份包，程序不改。运行时按路径找包（`actingctl task-run --package <路径>`），不收包摘要。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。Runtime 只监听本机环回地址，本身没有网络代码。所有边界都 Fail Loud：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级；拒绝也是一份回执；「未知」从不当作「否」。
 
 [CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / 七个模块测试作业） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases)（按需发版：Actions → release → Run workflow） · 许可 `AGPL-3.0-only` · [伞仓](https://github.com/HS7097/ActingCommand) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI)
 
@@ -264,8 +264,7 @@ actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>]
 actingctl resume --state-root <state-root> [--instance <alias>]     # 解除该暂停；status 显示全局与各实例的暂停态
 actingctl selfcheck <alias> --state-root <state-root>     # 立即重连并自检一个物理实例（在专用准备租约下打开 Nemu / ADB，不发输入、不留帧）；按 resume 回执的形状打印自检结果；自检通过前该实例对策略不可用（contracts/runtime-fact-store.md）
 actingctl ladder-drill --state-root <state-root> --instance <alias>     # 演练一个物理实例的卡死恢复阶梯：记录与真阶梯相同、标 drill；不带 --device 时只演练计划、绝不动设备，带 --device 时真的逐级执行（contracts/emulator-control.md，"Drills"）；MCP 对应 ac_ladder_drill
-actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>     # 可选：--recovery-package <pkg.zip> --recovery-expected-sha256 <hex>
-actingctl task-run --state-root <state-root> --instance <alias> --package <dir | D.zip | D.json> --package-ref '<reference>'     # 内容目录或内容外壳文件，配内容目录引用，例如 Lab 包（contracts/package-reference.md，"Containers"）
+actingctl task-run --state-root <state-root> --instance <alias> --package <dir | pkg.zip | pkg.json>     # 按路径给包，按路径决定读法，例如 Lab 包（contracts/package-reference.md，"Containers"）；可选：--recovery-package <路径>
 actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # 手动优先级偏移（±1000000 milli），写成 session.task.<task_id>.priority_offset 事实；不带 --instance 时为任务级，作用于唯一配置的目标（否则 task_offset_scope_ambiguous）
 actingctl request-shutdown --state-root <state-root>
 actingctl request-shutdown --state-root <state-root> --wait 60     # 随后等待（1..=3600 秒）直到 owner 记录关闭且进程退出；只读
@@ -298,7 +297,7 @@ actingctl pause --state-root <state-root> --instance <alias>     # 先暂停：�
 actinglab --json --instance <alias> record start --task-id <task_id>
 actinglab --json --instance <alias> capture --record     # 下一步的画面；也可用 observe --capture --record，或离线 record mark --frame <png>
 actinglab --json --instance <alias> record mark --page <name> --template <id>=x,y,w,h --color <id>=x,y,w,h --click x,y,w,h
-actinglab --json --instance <alias> do --capture --record --package <载体包> --package-ref '<reference>'     # 在本步点击矩形内按下
+actinglab --json --instance <alias> do --capture --record --package <载体包>     # 在本步点击矩形内按下
 actinglab --json --instance <alias> session app restart --record     # 以应用操作代替点击：launch | restart | stop | force-stop
 actinglab --json --instance <alias> record mark --step <n> --transition window --min-ms <ms> --max-ms <ms>     # 或 --transition page --frame <png> 加标记，或 --to-transition <n>
 actinglab --json --instance <alias> record mark --optional --settle-ms <ms>     # 不一定出现的画面
@@ -343,7 +342,7 @@ actingcommand-vision-provider-check --models-root <vision root>\models --hash
 - 账本：主机的生产写者只走 SQLite。段写入只留在账本 crate 自己的测试里；既有段目录是离线导入源，由 `ledger-maintenance` 冻结并导入。只读一侧仍保留段读取面：状态根里没有 SQLite 账本时，`open_evidence` 退回读段目录及其段字节快照。
 - 工件保留：保留类有 DebugFull / Adaptive / Light 三个取值，各工件种类默认 Adaptive。采集帧按类别到期：截图清理器（v0.11.6）跑在主机的性能监视循环上，至多每 10 分钟清扫一遍，每轮在 1 秒内至多处理 16 帧。除非配置把 `frame_retention_enabled` 设为 `false`，它就是开启的。近似重复帧在其运行结束后删除，资源读数帧在运行结束 7 天后、其他帧在运行结束 1 天后删除；每次错误前 30 秒的帧和 Lab 帧移入 `<state root>\kept\<日期>\<叶目录>\`，由人删除；清理不往账本写任何记录。读取方仍能按工件 ID 找到被移走的帧，被删的帧读作缺失，被占用的帧留到后面一遍再处理。`frame_retention_dedup_error`（默认开）和 `frame_retention_dedup_lab`（默认关）决定错误窗口内与 Lab 输出里的近似重复帧是否也删除。第一次删除或移动之后，状态根只能向前：v0.11.5 及更早拒绝它。其他工件种类不会被自动回收。
 - UI 在独立仓：一个在线 / 离线安装向导，以及一个可启动守护进程的只读监控台。它只经运行时 API 或账本的官方读取面与运行时交互，不拥有运行时生命周期。
-- 资源：实例配置的 `resource_package` 会被校验（`check-config` 与启动时）并在运行时状态里显示，但调度仍运行 `actingd` 配置里钉住的包（`policy.procedure_manifest[]` 的 `package_digest` 加 `scheduled_execution.package_path`）。资源自动更新尚未建成。
+- 资源：实例配置的 `resource_package` 会被校验（`check-config` 与启动时）并在运行时状态里显示，但调度仍运行 `actingd` 配置里钉住的包（`policy.procedure_manifest[]` 的 `scheduled_execution.package_path`）。资源自动更新尚未建成。
 - 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`，把唤醒请求记进账本（`agent.wake_requested`，来自策略的时间线与漂移信号）并管理有界的代理会话，可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。智能体经 MCP 服务接入；没有任何东西会自动唤起外部智能体，自主探索与完整的自维护回路尚未建成。
 - 恢复阶梯的触发条件与级序写在代码里；截图尺寸与包的分辨率不同时任务失败。
 

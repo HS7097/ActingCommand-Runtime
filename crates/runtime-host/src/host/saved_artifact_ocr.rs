@@ -238,8 +238,8 @@ impl HostShared {
         })?;
         let png_read = png_started.elapsed();
         let package_started = Instant::now();
-        // Workflow #336 PKG-S1: the path chooses the loader; the request's reference is recorded
-        // and compared with nothing.
+        // Workflow #336 PKG-S1/PKG-S4: the path chooses the loader; the request names its
+        // package by its path only.
         let provider = self.execution()?.vision_provider().ok_or_else(|| {
             source_error(
                 HostCode::SavedOcrProviderUnavailable,
@@ -249,7 +249,7 @@ impl HostShared {
         let bundle = ExternallyVerifiedBundle::load_path(
             "saved_artifact_ocr",
             Path::new(&input.package_path),
-            &input.expected_sha256,
+            &actingcommand_contract::PackageRef::default(),
             false,
             Some(provider),
             deadline,
@@ -332,7 +332,7 @@ impl HostShared {
                     "material_scope": material_scope,
                 },
             },
-            "package_sha256": input.expected_sha256, "target_id": input.target_id,
+            "target_id": input.target_id,
             "observation": observation,
             // Workflow #363: wall time per phase, recorded for the deadline horizon.
             "phase_ms": {

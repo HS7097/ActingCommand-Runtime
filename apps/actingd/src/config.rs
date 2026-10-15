@@ -163,7 +163,7 @@ pub(super) struct ActingdConfigFile {
     #[serde(default)]
     allow_env_overrides: Option<bool>,
     /// Workflow #336 L2b: the packages a `linear_steps` package may name as its
-    /// `prerequisite_package_id`, each with its locator and content reference. Not a
+    /// `prerequisite_package_id`, each with its locator (Workflow #336 PKG-S4: no digest). Not a
     /// configuration fact; read at startup.
     #[serde(default)]
     prerequisite_packages: Option<Vec<PrerequisitePackageConfigFile>>,
@@ -214,17 +214,17 @@ pub(super) struct ActingdConfigFile {
 }
 
 /// One `prerequisite_packages` entry (Workflow #336 L2b): the package id a `linear_steps`
-/// package names, the package locator (a relative path resolves against the configuration
-/// file's directory) and its content reference, in the form of a procedure binding's
-/// `package_digest`. Nothing is opened or hashed at assembly; a run admits the package against
-/// the reference when it resolves its prerequisite chain.
+/// package names and the package locator (a relative path resolves against the configuration
+/// file's directory). Workflow #336 PKG-S4 (option 丙, M-PKG D7): no digest; an entry that
+/// still names `package_digest` does not decode (`config_decode_failed`). Nothing is opened or
+/// hashed at assembly; a run admits the package by its path when it resolves its prerequisite
+/// chain, and refuses it when its control declares another `package_id`
+/// (`contained_task_prerequisite_mismatch`).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrerequisitePackageConfigFile {
     package_id: String,
     package_path: PathBuf,
-    #[serde(with = "actingcommand_contract::package::prefixed_reference")]
-    package_digest: PackageRef,
 }
 
 /// The prerequisite package map by package id: at most `MAX_TASKS` entries
@@ -243,14 +243,10 @@ fn assemble_prerequisite_packages(
         if !prerequisite_package_id_valid(&entry.package_id) {
             return Err(ActingdCode::PrerequisitePackageIdInvalid.code());
         }
-        let request =
-            contained_task_request(source_root, &entry.package_digest, Some(entry.package_path))
-                .map_err(prerequisite_package_code)?;
-        let binding = ContainedTaskRecoveryBinding::new(
-            request.package_path(),
-            request.expected_sha256().clone(),
-        )
-        .map_err(|_| ActingdCode::PrerequisitePackageRequestInvalid.code())?;
+        let request = contained_task_request(source_root, Some(entry.package_path))
+            .map_err(prerequisite_package_code)?;
+        let binding = ContainedTaskRecoveryBinding::new(request.package_path())
+            .map_err(|_| ActingdCode::PrerequisitePackageRequestInvalid.code())?;
         if packages.insert(entry.package_id, binding).is_some() {
             return Err(ActingdCode::PrerequisitePackageDuplicate.code());
         }
@@ -272,10 +268,6 @@ fn prerequisite_package_code(code: Code) -> Code {
         (
             ActingdCode::ProcedurePackageContainerUnsupported.code(),
             ActingdCode::PrerequisitePackageContainerUnsupported,
-        ),
-        (
-            SharedCode::ProcedurePackageDigestInvalid.code(),
-            ActingdCode::PrerequisitePackageDigestInvalid,
         ),
         (
             ActingdCode::ProcedureTaskRequestInvalid.code(),
@@ -879,16 +871,15 @@ struct InstanceConfig {
     adb: ac_adb::InstanceAdb,
 }
 
-/// Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: the
-/// locator (relative paths resolve against the configuration file's directory) and the
-/// bare lowercase hex digest. Workflow #336 PKG-S1: the locator's path chooses the loader and
-/// no name is read as an identity; the digest is only recorded, as the request's reference,
-/// until PKG-S4 removes the key. Nothing is opened or hashed at assembly.
+/// Same semantics as `actingctl task-run --package <locator>`: the locator (relative paths
+/// resolve against the configuration file's directory). Workflow #336 PKG-S1/PKG-S4 (option
+/// 丙): the locator's path chooses the loader and no name is read as an identity; the entry is
+/// `{package}` only, and one that still names `expected_sha256` does not decode
+/// (`config_decode_failed`). Nothing is opened or hashed at assembly.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartupPackageConfigFile {
     package: PathBuf,
-    expected_sha256: String,
 }
 
 impl StartupPackageConfigFile {
@@ -901,11 +892,7 @@ impl StartupPackageConfigFile {
         if !path.is_absolute() {
             return Err(ActingdCode::StartupPackagePathInvalid.code());
         }
-        let digest = PackageRef::from(self.expected_sha256);
-        if digest.validate().is_err() {
-            return Err(ActingdCode::StartupPackageDigestInvalid.code());
-        }
-        ContainedTaskRequest::new(path.to_string_lossy().into_owned(), digest)
+        ContainedTaskRequest::new(path.to_string_lossy().into_owned())
             .and_then(|request| {
                 request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
             })
@@ -1937,7 +1924,6 @@ fn procedure_binding(
 ) -> Result<AssembledProcedureBinding, Code> {
     let ProcedureBindingConfigFile {
         procedure_ref,
-        package_digest,
         operation_id,
         yield_points,
         scheduled_execution,
@@ -1945,9 +1931,9 @@ fn procedure_binding(
     if yield_points.len() > MAX_REFERENCES_PER_TASK {
         return Err(ActingdCode::ProcedureBindingSizeInvalid.code());
     }
-    // Workflow #336 PKG-S3: the binding names no package content (tuple v3, M-PKG D13). The
-    // configuration's `package_digest` is still read into the scheduled request until PKG-S4
-    // removes the key; the binding carries the scheduled request's path as its location.
+    // Workflow #336 PKG-S3/PKG-S4: the binding names no package content (tuple v3, M-PKG D13)
+    // and the configuration names its package by its path only; the binding carries the
+    // scheduled request's path as its location.
     let binding = ProcedureBinding::new(procedure_ref.clone(), operation_id, yield_points)
         .map_err(|_| ActingdCode::ProcedureBindingInvalid.code())?;
     let scheduled_task = match scheduled_execution {
@@ -1955,14 +1941,14 @@ fn procedure_binding(
         Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => Some((
             procedure_ref,
             ScheduledProcedureTask {
-                request: contained_task_request(source_root, &package_digest, package_path)?,
+                request: contained_task_request(source_root, package_path)?,
                 mode: ScheduledExecutionMode::FixtureSimulation,
             },
         )),
         Some(ScheduledExecutionConfigFile::DeviceRegistry { package_path }) => Some((
             procedure_ref,
             ScheduledProcedureTask {
-                request: contained_task_request(source_root, &package_digest, package_path)?,
+                request: contained_task_request(source_root, package_path)?,
                 mode: ScheduledExecutionMode::DeviceRegistry,
             },
         )),
@@ -1974,9 +1960,15 @@ fn procedure_binding(
     Ok((binding, scheduled_task))
 }
 
+/// The request of a procedure binding or a prerequisite package (Workflow #336 PKG-S4, option
+/// 丙): its package by its path only. A relative path resolves against the configuration
+/// file's directory, and the path keeps its components so containment can refuse a link. The
+/// path chooses how the package is read, as containment does (M-PKG §3.2): a directory is a
+/// content directory, a `.zip` or `.json` file (ASCII case-insensitive) a container, an
+/// assembled ZIP among them; another file is `procedure_package_container_unsupported`. Nothing
+/// is opened or hashed here.
 fn contained_task_request(
     source_root: &Path,
-    package_digest: &actingcommand_contract::PackageRef,
     package_path: Option<PathBuf>,
 ) -> Result<ContainedTaskRequest, Code> {
     let package_path = package_path.ok_or(ActingdCode::ProcedurePackagePathMissing.code())?;
@@ -1985,26 +1977,15 @@ fn contained_task_request(
     } else {
         source_root.join(package_path)
     };
-    // Preserve source locator components so containment can reject link ambiguity.
-    let path = match package_digest {
-        actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
-            fs::canonicalize(path).map_err(|_| ActingdCode::ProcedurePackageUnavailable.code())?
-        }
-        actingcommand_contract::PackageRef::GitSourceTree(_)
-        | actingcommand_contract::PackageRef::ContentDirectory(_)
-            if path.is_absolute() =>
-        {
-            path
-        }
-        actingcommand_contract::PackageRef::GitSourceTree(_)
-        | actingcommand_contract::PackageRef::ContentDirectory(_) => std::env::current_dir()
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
             .map_err(|_| ActingdCode::ProcedurePackageUnavailable.code())?
-            .join(path),
+            .join(path)
     };
     let metadata =
         fs::metadata(&path).map_err(|_| ActingdCode::ProcedurePackageUnavailable.code())?;
-    // Workflow #336: a content-directory package is a directory or a content container file
-    // (`.zip` or `.json`, ASCII case-insensitive); containment reads and checks either.
     let container = || {
         path.extension()
             .and_then(|extension| extension.to_str())
@@ -2012,27 +1993,13 @@ fn contained_task_request(
                 extension.eq_ignore_ascii_case("zip") || extension.eq_ignore_ascii_case("json")
             })
     };
-    let refusal = match package_digest {
-        actingcommand_contract::PackageRef::LegacyZipSha256(_) => {
-            (!metadata.is_file()).then_some(ActingdCode::ProcedurePackageNotRegular.code())
-        }
-        actingcommand_contract::PackageRef::GitSourceTree(_) => {
-            (!metadata.is_dir()).then_some(ActingdCode::ProcedurePackageNotRegular.code())
-        }
-        actingcommand_contract::PackageRef::ContentDirectory(_) if metadata.is_file() => {
-            (!container()).then_some(ActingdCode::ProcedurePackageContainerUnsupported.code())
-        }
-        actingcommand_contract::PackageRef::ContentDirectory(_) => {
-            (!metadata.is_dir()).then_some(ActingdCode::ProcedurePackageNotRegular.code())
-        }
-    };
-    if let Some(code) = refusal {
-        return Err(code);
+    if metadata.is_file() && !container() {
+        return Err(ActingdCode::ProcedurePackageContainerUnsupported.code());
     }
-    package_digest
-        .validate()
-        .map_err(|_| SharedCode::ProcedurePackageDigestInvalid.code())?;
-    ContainedTaskRequest::new(path.to_string_lossy().into_owned(), package_digest.clone())
+    if !metadata.is_file() && !metadata.is_dir() {
+        return Err(ActingdCode::ProcedurePackageNotRegular.code());
+    }
+    ContainedTaskRequest::new(path.to_string_lossy().into_owned())
         .and_then(|request| {
             request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
         })

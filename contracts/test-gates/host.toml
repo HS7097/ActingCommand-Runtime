@@ -933,3 +933,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_389_mcp9a::mcp9a_config_catalog_names_the_active_generation_its_record_approval_and_predecessor",
 ]
 incident = ["#389 MCP-9a"]
+# Workflow #336 PKG-S4 (option 丙): a configured prerequisite package is the package its configured package_id names; a package at its path whose control declares another package_id is refused with contained_task_prerequisite_mismatch before any input, as a layer of a linear_steps chain and as the configured return-home package of a page-graph entry (M-PKG v1.1 §4.5 S4-T6, decision D7); a startup package named by its path alone runs after an emulator start (the Runtime half of S4-T2; key after T-c's reservations host 79 and 80)
+[[gate]]
+key = "81"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs4::s4_t6_a_chain_layer_whose_control_names_another_package_id_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs4::s4_t6_a_configured_return_home_package_whose_control_names_another_package_id_is_refused",
+    "actingcommand-runtime-host::lib::tests::instance_workers::a_start_hands_its_key_to_the_startup_claim_with_no_dispatch_between",
+]
+incident = ["#336 PKG-S4"]

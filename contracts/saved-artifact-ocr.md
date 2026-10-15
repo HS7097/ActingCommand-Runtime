@@ -7,8 +7,8 @@ The destination Runtime records a new historical recognition. It owns the
 configured production Provider and closes it through
 its normal lifecycle. This command requires Lab origin.
 
-The request JSON contains `source`, `package_path`, `expected_sha256`, and
-`target_id`. `source` contains an absolute `state_root`, `through_sequence`,
+The request JSON contains `source`, `package_path` and `target_id` (Workflow
+#336 PKG-S4: a request that still names `expected_sha256` does not decode). `source` contains an absolute `state_root`, `through_sequence`,
 `frame_id`, the complete native `artifact` reference (including its `sha256`),
 and the `created`, `verified`, and `captured` event locators. Each locator contains
 `sequence` and `event_id`. The three source events must describe the same frame,
@@ -89,4 +89,4 @@ accuracy, and the result is not a current balance.
 
 Task: [Workflow #269, SAVED-ARTIFACT-OCR-v1](https://github.com/HS7097/ActingCommand-Workflow/issues/269).
 
-`expected_sha256` accepts the complete [package reference](package-reference.md). A source reference locates an exact local bundle directory through `package_path`; the original frozen-frame provenance and OCR deadline also bound source admission.
+`package_path` names the package by its path, read as the path chooses ([package references](package-reference.md)); the original frozen-frame provenance and OCR deadline also bound its admission. The diagnostic artifact names no package digest.

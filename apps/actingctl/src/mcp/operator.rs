@@ -9,8 +9,6 @@
 //! Runtime's answer, passed on unchanged. Nothing here pauses implicitly (C1 甲). A refusal
 //! keeps the Runtime receipt's outcome on top (`client_error`, Workflow #378 A5).
 
-use super::child;
-use super::lab;
 use super::observer::select_instance;
 use super::runtime::client_error;
 use super::tools::{
@@ -22,16 +20,15 @@ use actingcommand_contract::outcome::{Code, IoOp, Outcome};
 use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
     ContainedTaskRequest, EmulatorInstanceAction, EventActor, EventSource, GovernanceIdentityCard,
-    MAX_RESOURCE_TARGETS_DOCUMENT_BYTES, OwnerEpoch, PackageRef, RequestId,
-    SchedulingPauseExpectation, SchedulingPauseScope,
+    MAX_RESOURCE_TARGETS_DOCUMENT_BYTES, OwnerEpoch, RequestId, SchedulingPauseExpectation,
+    SchedulingPauseScope,
 };
 use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_client::{
     ContainedTaskResetOutcome, RunKey, RunStatusMode, RuntimeClient,
 };
 use serde_json::{Map, Value, json};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MCP_SURFACE: &str = "mcp";
@@ -47,8 +44,6 @@ const MAX_VALID_DAYS: u64 = 365;
 const MAX_POINTER_BYTES: usize = 512;
 /// Time kept back from the call budget for answering after a job wait.
 const ANSWER_RESERVE: Duration = Duration::from_secs(2);
-/// Time kept back from the call budget for an actinglab digest subprocess.
-const DIGEST_RESERVE: Duration = Duration::from_secs(10);
 
 /// One write's connection after its provenance was recorded, with the warnings (each
 /// `{outcome}`) recording it gave.
@@ -177,57 +172,29 @@ pub(super) fn job_answer(
 pub(super) fn run_pack(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(
         arguments,
-        &[
-            "instance",
-            "package",
-            "package_ref",
-            "recovery_package",
-            "recovery_package_ref",
-            "deadline_s",
-        ],
+        // Workflow #336 PKG-S4 (option 丙): a package and its recovery package by their paths
+        // only; `package_ref` and `recovery_package_ref` are no arguments, and no digest is
+        // computed.
+        &["instance", "package", "recovery_package", "deadline_s"],
     )?;
     let selector = arguments.required_string("instance")?;
     let package = package_path(arguments.required_string("package")?, "package")?;
     let deadline_s = arguments
         .integer("deadline_s", MIN_DEADLINE_S, MAX_DEADLINE_S)?
         .unwrap_or(MAX_DEADLINE_S);
-    let recovery = match (
-        arguments.string("recovery_package")?,
-        arguments.string("recovery_package_ref")?,
-    ) {
-        (Some(path), reference) => Some((package_path(path, "recovery_package")?, reference)),
-        (None, None) => None,
-        // The recovery package is given as a pair: the ref needs recovery_package.
-        (None, Some(_)) => {
-            return Err(invalid_argument(
-                "recovery_package_ref",
-                ArgumentProblem::Conflicting,
-            ));
-        }
+    let recovery = match arguments.string("recovery_package")? {
+        Some(path) => Some(package_path(path, "recovery_package")?),
+        None => None,
     };
     context.jobs.has_capacity()?;
     let alias = resolve_alias(context, selector)?;
-    let package_ref = match arguments.string("package_ref")? {
-        Some(reference) => reference.to_owned(),
-        None => package_digest(context, &package)?,
-    };
     // A refused request part is `arguments_invalid` for its argument, caused by the contract's
     // code.
-    let mut request = ContainedTaskRequest::new(
-        package.display().to_string(),
-        parse_package_ref(&package_ref, "package_ref")?,
-    )
-    .map_err(|error| refused_argument("package", error.code()))?;
-    if let Some((path, reference)) = recovery {
-        let reference = match reference {
-            Some(reference) => reference.to_owned(),
-            None => package_digest(context, &path)?,
-        };
-        let binding = ContainedTaskRecoveryBinding::new(
-            path.display().to_string(),
-            parse_package_ref(&reference, "recovery_package_ref")?,
-        )
-        .map_err(|error| refused_argument("recovery_package", error.code()))?;
+    let mut request = ContainedTaskRequest::new(package.display().to_string())
+        .map_err(|error| refused_argument("package", error.code()))?;
+    if let Some(path) = recovery {
+        let binding = ContainedTaskRecoveryBinding::new(path.display().to_string())
+            .map_err(|error| refused_argument("recovery_package", error.code()))?;
         request = request
             .with_recovery(binding)
             .map_err(|error| refused_argument("recovery_package", error.code()))?;
@@ -278,47 +245,6 @@ fn package_path(text: &str, argument: &str) -> Result<PathBuf, ToolError> {
         invalid_argument(argument, ArgumentProblem::Unusable)
             .caused_by(Outcome::from_io_error(&error, IoOp::Canonicalize).path(text))
     })
-}
-
-fn parse_package_ref(text: &str, argument: &str) -> Result<PackageRef, ToolError> {
-    PackageRef::parse_argument(text).map_err(|error| {
-        invalid_argument(argument, ArgumentProblem::NotRecognised)
-            .caused_by(Outcome::new(error.code()))
-    })
-}
-
-/// `<install root>\tools\actinglab.exe --json package digest --package <path>`: the package's
-/// content reference, as actinglab computes it.
-fn package_digest(context: &ToolContext<'_>, package: &Path) -> Result<String, ToolError> {
-    // Workflow #389 MCP-7 scope extension: the child gets the selection of this call.
-    let location = context.runtime.locate_now()?;
-    // No install root, so actinglab cannot compute the package_ref: pass package_ref.
-    let Some(root) = location.install_root else {
-        return Err(
-            ToolError::usage(ActingctlCode::LabToolUnavailable).blocked_by(McpBlocker::InstallRoot)
-        );
-    };
-    let mut command = Command::new(root.join("tools").join("actinglab.exe"));
-    super::runtime::pin_child(&mut command, location.installation.as_ref());
-    command
-        .arg("--json")
-        .arg("package")
-        .arg("digest")
-        .arg("--package")
-        .arg(package);
-    let deadline = context
-        .deadline
-        .checked_sub(DIGEST_RESERVE)
-        .unwrap_or(context.deadline);
-    let captured = child::run_captured(command, deadline)
-        .map_err(|failure| lab::child_failure(&failure, "package digest"))?;
-    // The S3 runner's reading of the envelope: the exit code gives the class.
-    let digest = lab::interpret(&captured, "package digest").result?;
-    // An answer without a package reference is no usable envelope.
-    digest
-        .get("reference")
-        .map(Value::to_string)
-        .ok_or_else(|| ToolError::new("runtime", ActingctlCode::LabProcessFailed))
 }
 
 // ---------------------------------------------------------------- ac_stop_run

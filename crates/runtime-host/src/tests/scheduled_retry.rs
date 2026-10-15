@@ -8,7 +8,6 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
     let package = neutral_region_retrying_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root).with_procedure_manifest(procedure_manifest_with_primary(
@@ -25,9 +24,8 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
     let admission = host
         .admit_scheduled_policy_dispatch(
             &intent,
@@ -172,7 +170,6 @@ fn scheduled_guarded_retry_stops_after_third_attempt_success() {
     let package = neutral_retrying_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .transition_capture_after_inputs
@@ -198,9 +195,8 @@ fn scheduled_guarded_retry_stops_after_third_attempt_success() {
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected one policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
         .expect("third guarded attempt must complete the scheduled run");
@@ -274,7 +270,6 @@ fn scheduled_declared_error_page_skips_ordinary_retry() {
     let package = neutral_error_page_retrying_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .error_capture_after_input
@@ -300,9 +295,8 @@ fn scheduled_declared_error_page_skips_ordinary_retry() {
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected one policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("declared error page must not enter the ordinary retry path");
@@ -364,7 +358,6 @@ fn scheduled_non_retryable_destination_observation_is_fail_closed_and_no_destina
         };
         let package_path = root.path().join("scheduled-task.zip");
         fs::write(&package_path, &package).expect("write package");
-        let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let state = Arc::new(FakeState::default());
         if reaches_target {
             state
@@ -397,9 +390,8 @@ fn scheduled_non_retryable_destination_observation_is_fail_closed_and_no_destina
         else {
             panic!("{case}: expected one policy run context")
         };
-        let request =
-            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-                .unwrap_or_else(|error| panic!("{case}: contained task request: {error}"));
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .unwrap_or_else(|error| panic!("{case}: contained task request: {error}"));
 
         if expected_success {
             let receipt = host
@@ -479,7 +471,6 @@ fn scheduled_fresh_retry_observation_target_prevents_second_effect() {
     let package = neutral_retrying_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .transition_capture_after_capture
@@ -505,9 +496,8 @@ fn scheduled_fresh_retry_observation_target_prevents_second_effect() {
     else {
         panic!("expected one policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
 
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
@@ -553,7 +543,6 @@ fn scheduled_fresh_retry_observation_error_page_prevents_second_effect() {
     let package = neutral_error_page_retrying_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .error_capture_after_capture
@@ -579,9 +568,8 @@ fn scheduled_fresh_retry_observation_error_page_prevents_second_effect() {
     else {
         panic!("expected one policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
 
     let error = host
         .run_scheduled_contained_task(&context, &request)

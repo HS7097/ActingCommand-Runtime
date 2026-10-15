@@ -32,16 +32,15 @@ actingd check-config --config <path>
 (no `--config`) follow the normal `FATAL actingd: <code>` line with exit code 1.
 
 Policy sections are assembled as at startup: catalog documents are read and
-resource packages are stat'ed or canonicalized from disk. Relative directory
-package paths (`GitSourceTree` or `ContentDirectory`) resolve against the process
-working directory, exactly as startup does, so run the check from the directory the
-daemon will be started in. A procedure binding's `scheduled_execution.package_path` must
-name a regular file for a ZIP digest, a directory for a Git source-tree reference, and a
-directory or a content container file (`.zip` or `.json`, ASCII case-insensitive; see
-"Containers" in `contracts/package-reference.md`, Workflow #336) for a content-directory
-reference. A content-directory binding to any other file fails
-`procedure_package_container_unsupported`; a path that is not of its reference's kind fails
-`procedure_package_not_regular`, as before. Procedure packages are not read here: their
+resource packages are stat'ed from disk. A procedure binding names its package by its path
+only (Workflow #336 PKG-S4, option 丙: a binding that still names `package_digest` fails
+`config_decode_failed`). A relative `scheduled_execution.package_path` resolves against the
+configuration file's directory, and then, if that is relative, against the process working
+directory, exactly as startup does; the path keeps its components. The path chooses the
+reading, as in `contracts/package-reference.md`, "Content-directory admission": it must name a
+directory or a `.zip` or `.json` file (ASCII case-insensitive, "Containers"); another file
+fails `procedure_package_container_unsupported`, and a path that is neither a file nor a
+directory fails `procedure_package_not_regular`. Procedure packages are not read here: their
 content is admitted when the task runs. An empty `instances` array passes, as at startup,
 and describes a control-plane-only daemon.
 
@@ -135,7 +134,7 @@ file without it keeps its revision.
 Exactly one JSON object is written to stdout on both outcomes.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip","expected_sha256":"<64 hex>"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"config_selection":{"config_sha256":"sha256:<64 hex>","defaults_sha256":"sha256:<64 hex>"},"not_checked":["vision_model_content","instruction_values"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"],"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}
+{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"config_selection":{"config_sha256":"sha256:<64 hex>","defaults_sha256":"sha256:<64 hex>"},"not_checked":["vision_model_content","instruction_values"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"],"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -199,18 +198,15 @@ revision.
   no ADB fields: the target is completed by one `MuMuManager` discovery inside
   host startup (see `contracts/provider-startup.md`), which this command never
   runs. Nothing is probed and no serial is parsed. `startup_package` is the
-  instance's `startup_package { package, expected_sha256 }` declaration as
-  assembled (slice #316-B3, `contracts/application-lifecycle.md`): the locator
-  with a relative path resolved against the configuration file's directory and
-  the bare hex digest, or `null` when none is declared. When the locator's last
-  segment equals that digest (a content directory named by its digest, Workflow
-  #288), `expected_sha256` is the content-directory reference object
-  (`contracts/package-reference.md`) instead of the bare digest. The package is
-  neither opened nor hashed here; admission happens when the package runs. A
-  `startup_package` on a fixture instance fails assembly with
-  `instance_config_invalid`; a non-absolute locator, a digest that is not 64
-  lowercase hex digits or a request the contract refuses fail with
-  `startup_package_path_invalid`, `startup_package_digest_invalid`,
+  instance's `startup_package { package }` declaration as assembled (slice
+  #316-B3, `contracts/application-lifecycle.md`): the locator with a relative
+  path resolved against the configuration file's directory, or `null` when none
+  is declared. Workflow #336 PKG-S4 (option 丙): the declaration names the
+  package by its path only; one that still names `expected_sha256` fails
+  `config_decode_failed`. The package is neither opened nor hashed here;
+  admission happens when the package runs. A `startup_package` on a fixture
+  instance fails assembly with `instance_config_invalid`; a non-absolute locator
+  or a request the contract refuses fail with `startup_package_path_invalid`,
   `startup_package_invalid`. `stuck_recovery` and `stuck_recovery_cooldown_secs`
   are the instance's effective stuck-recovery ladder settings (slice #316-B4,
   `contracts/emulator-control.md`, "Stuck-recovery ladder"): the configured
@@ -647,22 +643,24 @@ packages a `linear_steps` package may name as its `prerequisite_package_id`
 (`contracts/linear-steps.md`, "Prerequisite packages"):
 
 ```json
-"prerequisite_packages":[{"package_id":"neutral.test.stage_page","package_path":"packages/neutral/<D>.zip","package_digest":{"schema_version":"actingcommand.package.content-directory.v1","sha256":"<D>"}}]
+"prerequisite_packages":[{"package_id":"neutral.test.stage_page","package_path":"packages/neutral/neutral.test.stage_page.zip"}]
 ```
 
-Each entry has exactly these three fields. `package_id` is not empty, at most
-256 bytes and has no control character (`prerequisite_package_id_invalid`); no
-two entries share one (`prerequisite_package_duplicate`); at most as many
-entries as a catalog has tasks (`prerequisite_packages_size_invalid`).
-`package_digest` takes the forms of a procedure binding's `package_digest`, and
-`package_path` is checked as a procedure binding's
-`scheduled_execution.package_path` is (a relative path resolves against the
-configuration file's directory), under its own codes:
+Each entry has exactly these two fields (Workflow #336 PKG-S4, option 丙: an
+entry that still names `package_digest` fails `config_decode_failed`).
+`package_id` is not empty, at most 256 bytes and has no control character
+(`prerequisite_package_id_invalid`); no two entries share one
+(`prerequisite_package_duplicate`); at most as many entries as a catalog has
+tasks (`prerequisite_packages_size_invalid`). `package_path` is checked as a
+procedure binding's `scheduled_execution.package_path` is (a relative path
+resolves against the configuration file's directory), under its own codes:
 `prerequisite_package_unavailable`, `prerequisite_package_not_regular`,
 `prerequisite_package_container_unsupported`,
-`prerequisite_package_digest_invalid`, `prerequisite_package_request_invalid`.
-All of them fail at stage `assemble`. No package is opened or hashed here: a
-run admits each package against its reference when it resolves its chain. The
+`prerequisite_package_request_invalid`. All of them fail at stage `assemble`.
+No package is opened or hashed here: a run admits each package by its path when
+it resolves its chain, and refuses one whose control declares another
+`package_id` than its entry with `contained_task_prerequisite_mismatch` (M-PKG
+D7), also as a configured return-home package. The
 map needs no `policy` section, so a manual `task-run` uses it too; it is not a
 configuration fact (neither the `config_manifest` nor the `config.*` runtime
 facts name it) and it is read once at startup, so a change needs a restart. A
@@ -697,8 +695,8 @@ the main package at its procedure binding's `scheduled_execution.package_path`
 or, for a `linear_steps` task, a `prerequisite_packages` entry its run went
 through, or its game and server's `return_home_packages` entry names another
 package or that package's content changed. A package changed in place takes
-effect at the pair's next due evaluation, without a restart; a binding's
-`package_digest` takes no part (PKG-S4 removes the key). `actingd suspended
+effect at the pair's next due evaluation, without a restart; a binding names no
+package content (PKG-S3) and has no `package_digest` key (PKG-S4). `actingd suspended
 --config <path>` loads and assembles the
 configuration exactly as this command does and lists the paused, lifted and
 repeating tasks (`contracts/policy-suspension.md`, "Lifting (R19)" and

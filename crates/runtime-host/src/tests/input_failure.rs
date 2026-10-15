@@ -120,12 +120,10 @@ fn input_failure_closes_retained_capture_for_direct_and_contained_clients() {
                 let bytes = neutral_contained_task_package(true);
                 let package = root.path().join("input-failure-task.zip");
                 fs::write(&package, &bytes).expect("existing inline package");
-                let expected =
-                    actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
                 client
                     .run_contained_task(
                         "node.a",
-                        ContainedTaskRequest::new(package.display().to_string(), expected)
+                        ContainedTaskRequest::new(package.display().to_string())
                             .expect("task request"),
                     )
                     .expect_err("contained input failure")
