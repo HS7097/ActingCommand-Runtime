@@ -607,7 +607,7 @@ impl Tally {
                 self.original_hits += u64::from(original);
                 self.hits += u64::from(matched);
                 self.lost += u64::from(original && !matched);
-                self.gained += u64::from(!original && matched);
+                self.gained += u64::from(!original && !matched);
             }
             (TargetStatus::Absent, _) => self.absent += 1,
             _ => self.failed += 1,
