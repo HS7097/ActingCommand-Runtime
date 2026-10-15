@@ -1024,7 +1024,7 @@ pub(super) fn validate_resource_packages(
             )
         })?;
         let metadata = fs::metadata(&path)
-            .map_err(|_| rejected(ActingdCode::ResourcePackageMissing.code(), &path, None))?;
+            .map_err(|_| rejected(ActingdCode::ResourcePackageInvalid.code(), &path, None))?;
         let invalid = |code, message: String| {
             rejected(
                 ActingdCode::ResourcePackageInvalid.code(),
