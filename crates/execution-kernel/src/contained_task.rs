@@ -117,6 +117,9 @@ mod gate_384_d2s3;
 // Workflow #390 READ-1: a fraction reading's denominator as a second reading key.
 #[cfg(test)]
 mod gate_390_read1;
+// Workflow #390 R-10.
+#[cfg(test)]
+mod gate_390_r10;
 
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]

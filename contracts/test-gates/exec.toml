@@ -1167,3 +1167,17 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result",
 ]
 incident = ["#410"]
+
+# Workflow #390 R-10 (forced-compromises mapping R-10; REC-M §8.6, option 2; register §1.80): an OCR target located relative to an anchor template whose anchor did not pass did not pass, with failure ocr_region_unresolved, its region evidence (unresolved anchor_not_matched) and no provider call, in a page rule, an any_of group (another member may pass it), a check member and a guard (guard.check or verify_text: the guard refuses with zero input); one page's missing anchor no longer fails the recognition of the other pages; in forbidden, directly or as a member of a check, such a target is admitted only when its anchor is directly in the page's required (refused at /pages/<i>/forbidden/<j> otherwise, an anchor inside a required check included), and then a missing anchor rules the page out through required while the text present rules it out and its absence does not; an anchor that matched with its region out of the frame stays an evaluation error; the observation's page recognition and the package dry run decide the same page
+[[gate]]
+key = "75"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_r10::r10_a_missing_anchor_rules_out_only_its_page_and_calls_no_provider",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_r10::r10_an_any_of_member_without_its_anchor_does_not_pass_and_another_member_may",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_r10::r10_an_anchored_ocr_target_in_forbidden_needs_its_anchor_directly_in_required",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_r10::r10_a_guard_on_an_ocr_target_without_its_anchor_refuses_with_zero_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_r10::r10_an_anchor_that_matched_with_its_region_out_of_frame_stays_an_error",
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_r10::r10_the_observation_and_the_dry_run_decide_the_same_page_without_the_anchor",
+]
+incident = ["#390"]

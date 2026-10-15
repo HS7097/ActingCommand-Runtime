@@ -281,6 +281,20 @@ would let the page match unseen; declare the opposite comparison in `required` i
 test is never clicked, locates nothing, and is refused as a candidate layout slot target or
 feature and with `target_consensus`.
 
+Workflow #390 R-10. An OCR target whose region is `template_relative` (`ocr-fields.md`) cannot
+be evaluated while its anchor template does not pass: wherever its pass or fail is asked (a page
+rule, a member of a check, `guard.target_id`, `guard.check`) it did not pass, with `failure`
+`ocr_region_unresolved` and its region evidence (`unresolved` `anchor_not_matched`), and calls
+no provider. In `required` its page does not match, in `any_of` it is one member that did not
+pass, and a guard on it refuses its input (`contained_task_guard_refused`); every other page of
+the frame is recognized as before. In `forbidden`, directly or as a member of a check, such a
+target is admitted only when its anchor template stands directly in the same page's
+`required`; otherwise it is refused at the page set's `/pages/<i>/forbidden/<j>`
+(`InvalidValue`), for the reason a value test is: without its anchor it would let the page match
+unseen. With the anchor required, a missing anchor rules the page out through `required`, and a
+present one evaluates the text as usual (the text present rules the page out). An anchor inside
+a required check does not count.
+
 A page recognition evaluates each page's immediate targets first, in the order `required`,
 `any_of`, `optional`, `forbidden`. Its lazy targets (located text, value tests and checks
 holding either) follow in the order `required`, `any_of`, `forbidden`, `optional`, and only

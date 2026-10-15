@@ -1319,6 +1319,20 @@ table goes from 34 to 35 tools (observer 19 to 20).
 | GL-1 | `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl` (below `APPDATA` without `LOCALAPPDATA`), one line per gap `{schema_version: "actingcommand.capability-gap.v1", recorded_at_unix_ms, via, capability, why}` | local file (client side, not the state root, not the ledger) | gaplog | gaplog (`actingctl capability-gap`, `ac_capability_gap`) | appended with one write per line; `via` `cli` or `mcp`; nothing reads it back, exports it or sends it |
 | GL-2 | `actingctl capability-gap --capability <text> --why <text>` ↔ `ac_capability_gap` (`capability`, `why`): `{path, gap}`, the log and the line written | client instruction output (no persisted record beyond GL-1, no runtime-client shape) | gaplog | gaplog | each text one line, `capability` 1–120 and `why` 1–500 characters, else refused before writing (`actingctl_usage_invalid` / `arguments_invalid` with `value_missing`, `not_recognised` or `out_of_range`); MCP observer tier before U-3, a general tool after it; CLI success `actingctl_capability_gap_recorded` |
 
+### 1.80 Wave 16 slice R-10 (#390, forced-compromises mapping R-10; REC-M §8.6, option 2)
+
+R-10 decides what an OCR target located relative to an anchor template is while that anchor
+does not pass: it did not pass, instead of an error that failed the whole page recognition. It
+adds no event type, member, enum value, code or configuration key: an existing code becomes a
+target's `failure`, and the page set gets one admission rule.
+[resource-declarations.md](resource-declarations.md) (the R-10 paragraph after the value tests)
+and [ocr-fields.md](ocr-fields.md) (the unresolved-region paragraph) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R10-1 | a target evaluation (the task diagnostic `target` row and its `ocr` row) of an OCR target with a `template_relative` region whose anchor did not pass | new rule of existing members (shapes unchanged) | R-10 | R-10 | `passed: false`, `failure` `ocr_region_unresolved` (no values), the `ocr` row's `region` with `unresolved: anchor_not_matched` and no `roi`, empty `raw_text` and `derived_text`, no `confidence`, `block_count` 0, and no provider call; in a page rule, a check member, `guard.target_id` and `guard.check` alike (a guard refuses its input with `contained_task_guard_refused`, its `cause=` token `ocr_region_unresolved` when the guard target is the OCR target). `out_of_frame` and `coordinate_overflow` stay evaluation errors; fields and readings keep `region_unresolved` |
+| R10-2 | the page set's `forbidden` (`recognition.pages.json`): an OCR target with a `template_relative` region, directly or as a member of a check | new admission rule (resource file format) | R-10 | — | admitted only when its anchor template is directly in the same page's `required`; otherwise `resource_declaration_invalid` at `/pages/<i>/forbidden/<j>` (`InvalidValue`). No pack in the three resource repositories at their 10-15 heads names such a target in a page rule |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
