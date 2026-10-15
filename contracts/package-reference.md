@@ -371,6 +371,79 @@ Publication callers requesting maintenance must require the machine-readable res
 declarations. A zero exit status from a tool that ignored an unknown flag is insufficient.
 Consumers that do not understand v4 must reject it before deriving bindings.
 
+### Formatting and editing a content directory
+
+Workflow #390 TOOL-1 (forced compromise P-03). Two `actinglab` tools work on a content
+directory named by its path (`--package <directory>`, relative to the working directory when it
+is not absolute; a file such as a `.zip` or `.json` container is a usage error,
+`validation_failed`). Each reads the directory once with the loader's own snapshot (the rules of
+"Content-directory admission": no links, no LFS pointers, the same limits; a refusal is
+`package_invalid`). Neither computes, compares nor reports a digest, and a changed package needs
+no other step: the next admission reads it as it is (option 丙).
+
+The canonical serialization of a JSON file of a package: UTF-8 without a byte-order mark;
+two-space indentation, one object member or array element per line, `": "` after a member name,
+an empty object or array as `{}` or `[]`; members in their document order; only what JSON
+requires escaped (text stays UTF-8, a line break inside a string stays `\n`); every line ends
+with CRLF, the last one included. An integer keeps its digits; any other number is written in
+the shortest form that reads back the same value (`0.90` becomes `0.9`). A file is a JSON file by its extension `.json` (ASCII case
+insensitive); a JSON file that does not parse (a byte-order mark is accepted on input) is
+`package_invalid`, and nothing is written.
+
+`actinglab package fmt --package <directory> [--check]` rewrites every JSON file of the
+directory that is not in the canonical serialization and leaves every other file byte for byte:
+
+```json
+{"mode":"package_fmt","package":"<directory>","json_files":12,"reformatted":["resources/operations/task/task.json"]}
+```
+
+With `--check` it writes nothing. When every JSON file is canonical it answers
+`{"mode":"package_fmt_check","package":…,"json_files":…,"unformatted":[]}`; otherwise it fails
+with `package_fmt_check_failed` (exit 2), whose details carry `package`, `json_files` and
+`unformatted`, the paths in the directory's `/`-separated form, so a CI job can require it.
+
+`actinglab package edit --package <directory> --patch <file>` applies a list of edits, each an
+RFC 6902 `add` or `replace` operation on one JSON file of the package:
+
+```json
+[{"file":"resources/operations/task/task.json","op":"replace","path":"/defaults/template_threshold","value":0.92},
+ {"file":"resources/operations/task/task.json","op":"add","path":"/operations/-","value":{"id":"…"}}]
+```
+
+`file` is a path in the directory (`\` is read as `/`), `path` an RFC 6901 JSON pointer (`""` is
+the whole document, `~1` is `/`, `~0` is `~`) and `value` any JSON value; no other member is
+accepted, and the file is at most 32 MiB. `--file <path> --add <pointer> --value <JSON>` (or
+`--replace <pointer>`) gives one edit instead of `--patch`. As RFC 6902 says, `add` sets an
+object member (an existing member is replaced in its place, a new one goes last) or inserts
+into an array at an index up to its length (`-` appends), and its parent must exist; `replace`
+needs the member or element to exist. The edits apply in order, in memory, each seeing the ones
+before it. A list that cannot be read, an unknown operation or member, a file the package does
+not hold or that is not a JSON file, or a path that is not a JSON pointer is
+`package_edit_patch_invalid`; a pointer that names no place its operation can take is
+`package_edit_pointer_unresolved`. Both name the edit by its index (`edit`, with `file` and
+`path`).
+
+Then the edited content table, each edited file in the canonical serialization, is admitted
+structurally, as actingd admits a content directory (the shared entry rules, source
+compilation, declaration validation and task preparation; `PreparedContainedTask::load_content_entries`).
+A refusal is `package_edit_admission_refused` (details: `package`, the admission's `code`,
+`detail` and `declaration` with its file, JSON pointer and reason, `written: false`) and nothing
+is written. So control.json and a task that must agree are edited in one list, and a list that
+leaves them apart is refused. Only after admission are the files the edits changed written:
+
+```json
+{"mode":"package_edit","package":"<directory>","package_id":"neutral.test.task","task_id":"task","edits":2,"files":["resources/operations/task/task.json"],"admission":"passed","written":true}
+```
+
+With the global `--dry-run` the edits are applied and admitted the same way and nothing is
+written (`written: false`, `status: "validated"`, `dry_run: true`, `persisted: false`).
+
+Both tools write a file to `<name>.<process id>.part` beside it and rename it over the old one,
+so a reader sees the old file or the new one. A failed write stops at that file:
+`package_fmt_write_failed` or `package_edit_write_failed`, with `package`, `file`, the files
+already `written` and `part_left`, the `.part` file left behind (`null` when none); nothing is
+removed.
+
 ## Consumers
 
 Workflow #336 PKG-S4 (option 丙): `actingctl task-run --package <path>` and the optional

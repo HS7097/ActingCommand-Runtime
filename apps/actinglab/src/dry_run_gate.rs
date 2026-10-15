@@ -116,6 +116,11 @@ const SESSION_INSTANCE_FORMS: &[(&str, Mode)] = &[
     ),
     ("app <launch|stop|force-stop|restart>", UNSUPPORTED),
 ];
+// Workflow #390 TOOL-1: `--check` only reads; the other form rewrites JSON files.
+const PACKAGE_FMT_FORMS: &[(&str, Mode)] = &[
+    ("--check", Mode::NoEffect),
+    ("without --check", UNSUPPORTED),
+];
 const RECORD_FORMS: &[(&str, Mode)] = &[
     ("start", UNSUPPORTED),
     ("stop", DRY_RUN),
@@ -150,6 +155,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("navigate", EXECUTED_FALSE),
     ("session recover", EXECUTED_FALSE),
     ("session stream", Mode::Preview("capture_dry_run")),
+    // Workflow #390 TOOL-1: the edits are applied and admitted in memory; no file is written.
+    ("package edit", DRY_RUN),
     // refused
     (
         "resource convert",
@@ -254,6 +261,7 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session instance", Mode::Mixed(SESSION_INSTANCE_FORMS)),
     ("record", Mode::Mixed(RECORD_FORMS)),
     ("session record", Mode::Mixed(RECORD_FORMS)),
+    ("package fmt", Mode::Mixed(PACKAGE_FMT_FORMS)),
     // no_effect
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),

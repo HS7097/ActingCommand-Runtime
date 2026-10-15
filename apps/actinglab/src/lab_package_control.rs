@@ -164,6 +164,9 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
             )?;
             package_build::run_bundle(&flags)
         }
+        // Workflow #390 TOOL-1: the content-directory authoring tools.
+        "fmt" => crate::package_tool::run_fmt(global, &flags),
+        "edit" => crate::package_tool::run_edit(global, &flags),
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
 }

@@ -1204,6 +1204,25 @@ class `none`) are catalog entries, not rows (§7).
 |---|---|---|---|---|---|
 | RS1-1 | `actinglab recognition-regression --state-root <root> --evidence <file>... (--package <path> \| --zip <path>)`: `{mode: "offline_recognition_regression", executed: false, request_id, package_id, frames: [{ref, steps, frame_id, status, targets?: [{target, original_matched, status, matched?, agrees?, score?, failure?}]}], targets: [{target, frames, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli}], summary: {records, compared, absent, failed, original_hits, hits, lost, gained, disagreements, error_rate_milli, frames_referenced, frames_replayed, frames_material_missing, frames_without_original_record}, ocr, production_global_ledger_written: false}` | operation output (no persisted record; an actinglab result, read by a person or an agent) | RSU-1 | RSU-1 | a frame's `status` is `compared`, `material_missing` (#375 retention removed it) or `no_original_record`; a target's `status` is `compared`, `absent` (not in the package) or `failed`; `score` is `{kind, score_milli, threshold_milli}` (template), `{kind, distance_milli, max_distance_milli}` (colour), `{kind, confidence_milli}` (OCR) or `{kind, score_milli}` (classifier); `error_rate_milli` is the disagreements (`lost` + `gained`) per mille of the frames compared, rounded down, `null` when none was compared; the original record is the run's last `task.recognition_completed` fact on the frame; the input is MCP-6's evidence ([runtime-interface.md](runtime-interface.md), `run evidence`), of which only `request_id`, `steps[].step_index` and `steps[].frames[].ref` are read; exit 0 whenever the comparison was made |
 
+### 1.75 Wave 15 slice TOOL-1 (#390, forced-compromises mapping row TOOL-1, P-03; coordinator ruling 3 of wave 15)
+
+TOOL-1 adds two actinglab authoring commands that take a content directory by its path,
+`package fmt` and `package edit`. They write no ledger record, wire shape or configuration key;
+their new shapes are two operation outputs (TL1-1, TL1-3) and the edit list an author gives
+(TL1-2). [package-reference.md](package-reference.md), "Formatting and editing a content
+directory", is the contract. Nothing computes, compares or reports a digest (option 丙). The
+actinglab codes `package_fmt_check_failed`, `package_fmt_write_failed`,
+`package_edit_patch_invalid`, `package_edit_pointer_unresolved`, `package_edit_admission_refused`
+and `package_edit_write_failed` (error, ladder class `none`, in the new domains `package_fmt_` and
+`package_edit_` of actinglab) are catalog entries, not rows (§7); a read or parse failure reuses
+`package_invalid`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| TL1-1 | `actinglab package fmt --package <directory>`: `{mode: "package_fmt", package, json_files, reformatted: [path]}`; with `--check`: `{mode: "package_fmt_check", package, json_files, unformatted: []}` | operation output (no persisted record; an actinglab result, read by a person or a CI job) | TOOL-1 | TOOL-1 | the canonical serialization of a JSON file: UTF-8 without a byte-order mark, two-space indentation, one member or element per line, members in their document order, CRLF line endings with a last CRLF; other files are left byte for byte; paths are the directory's `/`-separated paths; `--check` writes nothing, and a JSON file that is not canonical makes it `package_fmt_check_failed` (exit 2) with details `{package, json_files, unformatted}` |
+| TL1-2 | `package edit --patch <file>`: a JSON array of `{file, op: add \| replace, path, value}`, no other member, at most 32 MiB | input document (an author's file; the Runtime never stores it) | TOOL-1 | — | `op` is an RFC 6902 operation, `path` an RFC 6901 JSON pointer into the JSON file `file` of the package; the edits apply in order; `--file <path> --add <pointer> --value <JSON>` (or `--replace`) gives one edit instead |
+| TL1-3 | `actinglab package edit --package <directory> (--patch <file> \| --file <path> (--add \| --replace) <pointer> --value <JSON>)`: `{mode: "package_edit", package, package_id, task_id, edits, files: [path], admission: "passed", written}`; with the global `--dry-run` also `status: "validated", dry_run: true, persisted: false` and `written: false` | operation output (no persisted record) | TOOL-1 | TOOL-1 | the edited content table is admitted as actingd admits a content directory before any file is written, and `files` (the files the edits changed, written in the canonical serialization of TL1-1) are written only after it passes; a refusal is `package_edit_admission_refused` with details `{package, code, detail, declaration, written: false}`; a write failure (`package_fmt_write_failed`, `package_edit_write_failed`) carries `{package, file, written, part_left}` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
