@@ -326,7 +326,7 @@ impl Tick {
                     self.writer = Some("busy");
                     return Ok((
                         StartProbes {
-                            writer_busy: true,
+                            writer_busy: false,
                             selection_changed: false,
                             processes: Vec::new(),
                             boot_unix_ms: None,
