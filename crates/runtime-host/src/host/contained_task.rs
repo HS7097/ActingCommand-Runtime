@@ -4823,13 +4823,13 @@ pub(super) fn prepare_measured_contained_task(
     deadline: Instant,
 ) -> Result<(PreparedContainedTask, PackageLoad), RequestFailure> {
     let path = contained_task_package_path(request)?;
-    // Workflow #336 PKG-S1 (option 丙): the path chooses the loader; the request's reference is
-    // recorded as the caller gave it and compared with nothing.
+    // Workflow #336 PKG-S1/PKG-S4 (option 丙): the path chooses the loader and admission is
+    // structural only; the request names no digest, so the package carries no reference.
     let started = Instant::now();
     let (prepared, bytes) = PreparedContainedTask::load_path_with_resident_bytes(
         instance_alias,
         path,
-        request.expected_sha256(),
+        &actingcommand_contract::PackageRef::default(),
         vision_provider,
         deadline,
     )
