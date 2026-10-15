@@ -1027,7 +1027,7 @@ fn kind_profiles(
             let Value::String(name) = name else {
                 return Err(failure(KIND_PROFILES, ConfigValueProblem::WrongType));
             };
-            if !profiles.iter().any(|profile| profile.name == name) {
+            if profiles.is_empty() && !profiles.iter().any(|profile| profile.name == name) {
                 return Err(failure(KIND_PROFILES, ConfigValueProblem::OutOfRange));
             }
             Ok((kind, name))
