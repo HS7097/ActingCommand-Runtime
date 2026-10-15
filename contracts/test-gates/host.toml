@@ -859,3 +859,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_exec1::exec1_a_guard_refusal_falls_to_the_next_candidate_in_the_ledger",
 ]
 incident = ["#390"]
+
+# Workflow #308 SEL-L3b (register §1.58): an input request naming single_touch_drag_with_pause_and_brake_v1 is performed through the host and its input provider as one prepared segmented plan (press, drag, the pause's hold, the brake, release); the input intent keeps the action whole in its provenance and records no execution plan (the maa_2_0 record is the vertical-brake drag's); a drag with neither a pause nor a brake breaks the action's contract (invalid_segmented_swipe_contract) and is refused before any input
+[[gate]]
+key = "84"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_308_l3b::l3b_the_host_performs_a_drag_with_a_pause_and_a_brake_as_one_prepared_plan",
+]
+incident = ["#308"]

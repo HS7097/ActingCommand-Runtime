@@ -303,6 +303,10 @@ impl SemanticInputExecutor for RecordingSemanticInput {
             ),
             // Workflow #406: reserved before T-3; the recording fake names it only.
             InputAction::SingleTouchPathDragV1 { .. } => "single_touch_path_drag_v1".to_string(),
+            // Workflow #308 SEL-L3b: no Lab path drives it; the recording fake names it only.
+            InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. } => {
+                "single_touch_drag_with_pause_and_brake_v1".to_string()
+            }
             InputAction::Key { key } => format!("key:{key}"),
             InputAction::Text { text } => format!("text:{text}"),
             InputAction::Reset => "reset".to_string(),

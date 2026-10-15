@@ -884,6 +884,23 @@ error, `pack_logic_mismatch`; values `page_id`, `count`) is a catalog entry, not
 | EC2 | `task.step_finished` of a candidate passed over after its guard refused | new rule of an existing record (shape unchanged) | EXEC-1 | EXEC-1 | written right after the step's `task.step_started` and its guard evaluation, with no `task.effect_intent` or `task.effect_completed` between, `page_label` the page of the frame the guard refused on and no phase; the step stays counted in the run's executed steps, and the next candidate starts the next step index on the same frame |
 | EC3 | task diagnostic stream: the `target` and `error` rows' guard `phase` value `when` | new value of an existing member | EXEC-1 | EXEC-1 | the evaluation of a candidate's `when` target on the frame its step would start on, written before that step's `step_started` row (a withdrawn candidate starts no step) |
 
+### 1.58 Wave 13 slice SEL-L3b (#308, forced compromises E-10, E-11, E-12; scan session of S0 v2.1 §2)
+
+SEL-L3b widens how a scan moves: a list along either axis, a drag that ends with a pause and a
+brake across the axis, and the page flip, aligned by its overlap or by page-order evidence. It
+brings one input primitive, the drag with a pause and a brake, which a backend performs from the
+same prepared segmented plan as the vertical-brake drag, through the same provider operation
+(`segmented_swipe`) and error chain. It adds no code, location or key: a page-order viewport that
+shows no single admitted page fails the existing `selection_scan_alignment_rejected` (its catalog
+entry now names that case), and a broken action is refused with the existing
+`invalid_input_coordinate`, `invalid_input_duration` and `invalid_segmented_swipe_contract`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L3B-1 | `InputAction::SingleTouchDragWithPauseAndBrakeV1 {x1, y1, x2, y2, drag_duration_ms, pause_ms, x3, y3, brake_duration_ms}` (`single_touch_drag_with_pause_and_brake_v1`) | new enum value (wire `Input` request; ledger: an input intent's `provenance.input_action`, a `task.effect_intent`'s `action`) | SEL-L3b | SEL-L3b (a scan drag that declares a pause or a brake; online from SEL-L4b, which lets a package declare `scan`) | one press at (`x1`, `y1`) dragged to (`x2`, `y2`) over `drag_duration_ms`, held there `pause_ms`, moved to (`x3`, `y3`) over `brake_duration_ms`, released; every point on the screen, `drag_duration_ms` 1..=60 000, the others at most 60 000; without a brake `brake_duration_ms` is 0 and (`x3`, `y3`) is (`x2`, `y2`), with one it moves; a pause or a brake is present (else it is a swipe); event action `input.swipe`; `Debug` redacted; its sampling evidence is the swipe's (the press in the first region, the drag's end in the second); the input intent records no `execution_plan` (the `maa_2_0` record is the vertical-brake drag's): the action in the provenance determines the plan; the foreground gate and the Nemu input take it as they take the vertical-brake drag; the adb shell backend refuses it as it refuses every segmented swipe |
+| L3B-2 | `task.effect_intent` of a select step's scan move | existing record, written as row L3-1 states | SEL-L3b | SEL-L4b | a scan move is also a page-flip tap (`InputAction::Tap`, sampled in `rect`, or in `back_rect` for a corrective or a rewind) or the drag of row L3B-1; each is followed by its input and by no `task.effect_completed` |
+| L3B-3 | package format: a select step's `scan.advance` and `scan.reposition` | new members (resource file format, not a ledger shape) | SEL-L3b (types); SEL-L4b (parse and admission) | resource side | `kind: drag` gains the optional `pause_ms` (at least 1) and `brake {cross_px, duration_ms}` (`cross_px` not 0, signed, across the axis; `duration_ms` at least 1); `kind: rect` is new: `advance {rect, back_rect}` with `min_content_step_px` and `max_content_step_px` (aligned by overlap) or with `page_order {checks: [check target ids, page 0 first], page_step_px}` (at least one check and 1 px; aligned by the one page check that passes, the same page or the next one), never both; `reposition {rect, back_rect, max_content_step_px}`, whose rewind taps `back_rect`; `axis` takes `vertical` or `horizontal` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

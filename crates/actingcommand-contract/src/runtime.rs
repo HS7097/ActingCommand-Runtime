@@ -706,6 +706,24 @@ pub enum InputAction {
         segment_duration_ms: Vec<u64>,
         corner_hold_ms: u64,
     },
+    /// Workflow #308 SEL-L3b (register §1.58): one press at (`x1`, `y1`) dragged to (`x2`, `y2`)
+    /// over `drag_duration_ms`, held still there for `pause_ms`, then moved to (`x3`, `y3`) over
+    /// `brake_duration_ms` (the brake), and released. A drag without a brake has
+    /// `brake_duration_ms` 0 and (`x3`, `y3`) equal to (`x2`, `y2`); one without a pause has
+    /// `pause_ms` 0; it has at least one of the two, which end the drag without fling. Every
+    /// point lies on the screen, `drag_duration_ms` is 1 to 60 000 and the other two durations are
+    /// at most 60 000.
+    SingleTouchDragWithPauseAndBrakeV1 {
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        drag_duration_ms: u64,
+        pause_ms: u64,
+        x3: i32,
+        y3: i32,
+        brake_duration_ms: u64,
+    },
     Key {
         key: String,
     },
@@ -835,6 +853,37 @@ impl InputAction {
                 segment_duration_ms,
                 *corner_hold_ms,
             ),
+            Self::SingleTouchDragWithPauseAndBrakeV1 {
+                x1,
+                y1,
+                x2,
+                y2,
+                drag_duration_ms,
+                pause_ms,
+                x3,
+                y3,
+                brake_duration_ms,
+            } => {
+                validate_point(*x1, *y1)?;
+                validate_point(*x2, *y2)?;
+                validate_point(*x3, *y3)?;
+                validate_duration(*drag_duration_ms)?;
+                if *pause_ms > MAX_INPUT_DURATION_MS || *brake_duration_ms > MAX_INPUT_DURATION_MS {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidInputDuration,
+                    ));
+                }
+                // A brake moves the touch and takes time, or there is none; a drag with neither
+                // a pause nor a brake is a plain swipe.
+                let braked = *brake_duration_ms > 0;
+                let brake_moves = (*x3, *y3) != (*x2, *y2);
+                if braked != brake_moves || (*pause_ms == 0 && !braked) {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidSegmentedSwipeContract,
+                    ));
+                }
+                Ok(())
+            }
             Self::Key { key } => {
                 validate_bounded_text(key, MAX_INPUT_KEY_BYTES, RuntimeContractCode::InvalidKey)
             }
@@ -858,6 +907,7 @@ impl InputAction {
             Self::Swipe { .. } => crate::EventAction::InputSwipe,
             Self::SingleTouchDragWithVerticalBrakeV1 { .. } => crate::EventAction::InputSwipe,
             Self::SingleTouchPathDragV1 { .. } => crate::EventAction::InputSwipe,
+            Self::SingleTouchDragWithPauseAndBrakeV1 { .. } => crate::EventAction::InputSwipe,
             Self::Key { .. } => crate::EventAction::InputKey,
             Self::Text { .. } => crate::EventAction::InputText,
             Self::Reset => crate::EventAction::InputReset,
@@ -876,6 +926,9 @@ impl fmt::Debug for InputAction {
             }
             Self::SingleTouchPathDragV1 { .. } => {
                 "InputAction::SingleTouchPathDragV1(<redacted-coordinates>)"
+            }
+            Self::SingleTouchDragWithPauseAndBrakeV1 { .. } => {
+                "InputAction::SingleTouchDragWithPauseAndBrakeV1(<redacted-coordinates>)"
             }
             Self::Key { .. } => "InputAction::Key(<redacted-key>)",
             Self::Text { .. } => "InputAction::Text(<redacted-text>)",

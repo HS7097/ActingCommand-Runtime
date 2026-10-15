@@ -990,3 +990,24 @@ tests = [
     "actingcommand-pack-containment::lib::source::declarations::tests::exec1_when_and_on_guard_refused_declare_a_candidate_operation",
 ]
 incident = ["#390"]
+
+# Workflow #308 SEL-L3b (forced compromises E-10, E-11, E-12; scan session of the frozen selector model S0 v2.1 §2; register §1.58): a scan reads a list along the horizontal axis; a drag may end with a pause and a brake across the axis (the input single_touch_drag_with_pause_and_brake_v1, one contact: press, drag, hold, brake, release), and a gap's corrective reverses it with the same pause and brake; a page flip is a tap that aligns by its overlap within the declared steps (its corrective and the rewind tap back_rect), or, without overlap, by page-order evidence: exactly one declared page check passes on each viewport and each flip shows the same page or the next, so a skipped page fails unexpected_displacement, no or two page checks fail no_consistent_shift or ambiguous_shift, and two absorbed flips fail end_unconfirmed; over the kernel's own path the held drag and the tap are each one input and one task.effect_intent of the select step, and the page is read from the captured frame
+[[gate]]
+key = "64"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_horizontal_strip_is_covered_from_its_start_to_its_end",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_drag_with_a_pause_and_a_brake_brakes_across_the_axis_and_its_corrective_reverses_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_page_flip_aligns_by_its_overlap_and_rewinds_by_its_reverse_tap",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_page_flip_gap_is_closed_by_one_tap_on_its_back_rect",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_pages_without_overlap_are_placed_by_page_order_evidence",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_skipped_page_fails_unexpected_displacement",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_a_viewport_with_no_page_check_or_with_two_fails",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::l3b_two_absorbed_page_flips_fail_end_unconfirmed",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::kernel_path::l3b_a_drag_with_a_pause_and_a_brake_is_one_effect_intent_and_one_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l3b::kernel_path::l3b_a_page_flip_is_one_tap_and_its_page_is_read_from_the_captured_frame",
+    "actingcommand-device::lib::input::tests::l3b_a_drag_with_a_pause_and_a_brake_holds_then_brakes_in_one_contact",
+    "actingcommand-device::lib::input::tests::l3b_a_pause_alone_or_a_brake_alone_is_one_drag",
+    "actingcommand-device::lib::input::tests::l3b_a_drag_without_a_pause_or_a_brake_or_with_a_still_brake_is_refused",
+]
+incident = ["#308"]

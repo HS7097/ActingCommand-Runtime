@@ -4446,6 +4446,12 @@ impl InputSamplingEvidence {
                     && *x3 == *x2
                     && y2.checked_sub(*brake_distance_px) == Some(*y3)
             }
+            // Workflow #308 SEL-L3b: the press and the drag's end are sampled in their regions;
+            // the brake's end follows from the drag's end by the declared brake.
+            (
+                InputAction::SingleTouchDragWithPauseAndBrakeV1 { x1, y1, x2, y2, .. },
+                [from, to],
+            ) => from.contains(*x1, *y1) && to.contains(*x2, *y2),
             _ => false,
         };
         if valid {
@@ -4938,6 +4944,7 @@ fn redact_sensitive_input(action: &mut InputAction) {
         | InputAction::Swipe { .. }
         | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
         | InputAction::SingleTouchPathDragV1 { .. }
+        | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
         | InputAction::Reset => {}
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{DeviceCloseAuthority, DeviceError, DeviceResourceCloseOutcome, DeviceResult};
-use actingcommand_contract::FencedWrite;
+use actingcommand_contract::{FencedWrite, MAX_INPUT_DURATION_MS};
 use serde::{Deserialize, Serialize};
 
 pub const SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS: u64 = 200;
@@ -59,14 +59,81 @@ pub enum SegmentedSwipeEvent {
     Up,
 }
 
+/// Workflow #308 SEL-L3b (register §1.58): a drag from `points[0]` to `points[1]` over
+/// `drag_duration_ms`, held still at `points[1]` for `pause_ms`, then moved to `points[2]` over
+/// `brake_duration_ms` (the brake), and released. Without a brake `brake_duration_ms` is 0 and
+/// `points[2]` is `points[1]`; without a pause `pause_ms` is 0; one of the two is present. The
+/// contract's `single_touch_drag_with_pause_and_brake_v1`, as a backend performs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DragWithPauseAndBrakeAction {
+    pub points: [(i32, i32); 3],
+    pub drag_duration_ms: u64,
+    pub pause_ms: u64,
+    pub brake_duration_ms: u64,
+}
+
+impl DragWithPauseAndBrakeAction {
+    pub fn validate(self) -> DeviceResult<()> {
+        let [_, end, brake] = self.points;
+        let braked = self.brake_duration_ms > 0;
+        let brake_moves = brake != end;
+        if self.points.into_iter().any(|(x, y)| x < 0 || y < 0)
+            || !(1..=MAX_INPUT_DURATION_MS).contains(&self.drag_duration_ms)
+            || self.pause_ms > MAX_INPUT_DURATION_MS
+            || self.brake_duration_ms > MAX_INPUT_DURATION_MS
+            || braked != brake_moves
+            || (self.pause_ms == 0 && !braked)
+        {
+            return Err(DeviceError::fatal(
+                "single_touch_drag_with_pause_and_brake_v1 contract is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The single-touch drag a prepared plan performs: the fixed vertical-brake drag, or the drag
+/// with a pause and a brake (Workflow #308 SEL-L3b). Both are one press, segments and a release,
+/// which every backend that supports the segmented swipe performs from the plan's events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentedDragAction {
+    VerticalBrake(SegmentedSwipeAction),
+    PauseAndBrake(DragWithPauseAndBrakeAction),
+}
+
+impl SegmentedDragAction {
+    pub fn validate(self) -> DeviceResult<()> {
+        match self {
+            Self::VerticalBrake(action) => action.validate(),
+            Self::PauseAndBrake(action) => action.validate(),
+        }
+    }
+
+    /// The contract's name of the action.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::VerticalBrake(_) => "single_touch_drag_with_vertical_brake_v1",
+            Self::PauseAndBrake(_) => "single_touch_drag_with_pause_and_brake_v1",
+        }
+    }
+
+    /// The press, the end of the first segment and the end of the last one.
+    pub const fn points(self) -> [(i32, i32); 3] {
+        match self {
+            Self::VerticalBrake(action) => action.points,
+            Self::PauseAndBrake(action) => action.points,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedSegmentedSwipePlan {
-    action: SegmentedSwipeAction,
+    action: SegmentedDragAction,
     events: Vec<SegmentedSwipeEvent>,
 }
 
 impl PreparedSegmentedSwipePlan {
-    pub const fn action(&self) -> SegmentedSwipeAction {
+    pub const fn action(&self) -> SegmentedDragAction {
         self.action
     }
 
@@ -86,7 +153,35 @@ pub fn prepare_segmented_swipe(
     events.push(SegmentedSwipeEvent::Hold(action.corner_hold_ms));
     append_maa_2_0_segment(&mut events, corner, end, action.brake_duration_ms);
     events.push(SegmentedSwipeEvent::Up);
-    Ok(PreparedSegmentedSwipePlan { action, events })
+    Ok(PreparedSegmentedSwipePlan {
+        action: SegmentedDragAction::VerticalBrake(action),
+        events,
+    })
+}
+
+/// Workflow #308 SEL-L3b: the plan of a drag with a pause and a brake. The press, the drag's
+/// segment, the hold when `pause_ms` is not 0, the brake's segment when there is a brake, and the
+/// release; each segment follows the same MAA 2.0 curve and frame steps as the vertical-brake
+/// drag's.
+pub fn prepare_drag_with_pause_and_brake(
+    action: DragWithPauseAndBrakeAction,
+) -> DeviceResult<PreparedSegmentedSwipePlan> {
+    action.validate()?;
+    let [start, end, brake] = action.points;
+    let mut events = Vec::with_capacity(32);
+    events.push(SegmentedSwipeEvent::Down(start));
+    append_maa_2_0_segment(&mut events, start, end, action.drag_duration_ms);
+    if action.pause_ms > 0 {
+        events.push(SegmentedSwipeEvent::Hold(action.pause_ms));
+    }
+    if action.brake_duration_ms > 0 {
+        append_maa_2_0_segment(&mut events, end, brake, action.brake_duration_ms);
+    }
+    events.push(SegmentedSwipeEvent::Up);
+    Ok(PreparedSegmentedSwipePlan {
+        action: SegmentedDragAction::PauseAndBrake(action),
+        events,
+    })
 }
 
 pub fn segmented_swipe_capability_error() -> DeviceError {
@@ -350,5 +445,138 @@ mod tests {
         action.slope_in = 2;
         action.points[2].0 += 1;
         assert!(prepare_segmented_swipe(action).is_err());
+    }
+
+    // The time the moves of `events` take.
+    fn move_time(events: &[SegmentedSwipeEvent]) -> u64 {
+        events
+            .iter()
+            .map(|event| match event {
+                SegmentedSwipeEvent::Move {
+                    delay_before_ms, ..
+                } => *delay_before_ms,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    // The point the last move of `events` reaches.
+    fn last_point(events: &[SegmentedSwipeEvent]) -> Option<(i32, i32)> {
+        events.iter().rev().find_map(|event| match event {
+            SegmentedSwipeEvent::Move { point, .. } => Some(*point),
+            _ => None,
+        })
+    }
+
+    const PAUSE_AND_BRAKE: DragWithPauseAndBrakeAction = DragWithPauseAndBrakeAction {
+        points: [(1000, 360), (200, 360), (200, 260)],
+        drag_duration_ms: 400,
+        pause_ms: 150,
+        brake_duration_ms: 200,
+    };
+
+    // Workflow #308 SEL-L3b (register §1.58): a drag with a pause and a brake is one contact: the
+    // press, the drag's moves over its duration up to its end, the hold of the pause, the
+    // brake's moves over its duration up to the brake's end, and the release.
+    #[test]
+    fn l3b_a_drag_with_a_pause_and_a_brake_holds_then_brakes_in_one_contact() {
+        let plan = prepare_drag_with_pause_and_brake(PAUSE_AND_BRAKE).expect("valid plan");
+        assert_eq!(
+            plan.action(),
+            SegmentedDragAction::PauseAndBrake(PAUSE_AND_BRAKE)
+        );
+        let events = plan.events();
+        assert_eq!(
+            events.first(),
+            Some(&SegmentedSwipeEvent::Down((1000, 360)))
+        );
+        assert_eq!(events.last(), Some(&SegmentedSwipeEvent::Up));
+        let holds = events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| matches!(event, SegmentedSwipeEvent::Hold(_)))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let [hold] = holds.as_slice() else {
+            panic!("one hold, got {events:?}");
+        };
+        assert_eq!(events[*hold], SegmentedSwipeEvent::Hold(150));
+        let drag = &events[1..*hold];
+        let brake = &events[*hold + 1..events.len() - 1];
+        assert!(
+            drag.iter()
+                .chain(brake)
+                .all(|event| matches!(event, SegmentedSwipeEvent::Move { .. })),
+            "only moves between the press, the hold and the release: {events:?}"
+        );
+        assert_eq!(move_time(drag), 400);
+        assert_eq!(last_point(drag), Some((200, 360)));
+        assert_eq!(move_time(brake), 200);
+        assert_eq!(last_point(brake), Some((200, 260)));
+    }
+
+    // A pause alone ends the drag with its hold and the release; a brake alone follows the drag
+    // at once.
+    #[test]
+    fn l3b_a_pause_alone_or_a_brake_alone_is_one_drag() {
+        let paused = prepare_drag_with_pause_and_brake(DragWithPauseAndBrakeAction {
+            points: [(1000, 360), (200, 360), (200, 360)],
+            brake_duration_ms: 0,
+            ..PAUSE_AND_BRAKE
+        })
+        .expect("a pause alone");
+        let events = paused.events();
+        assert_eq!(
+            &events[events.len() - 2..],
+            [SegmentedSwipeEvent::Hold(150), SegmentedSwipeEvent::Up]
+        );
+        assert_eq!(move_time(events), 400);
+        assert_eq!(last_point(events), Some((200, 360)));
+
+        let braked = prepare_drag_with_pause_and_brake(DragWithPauseAndBrakeAction {
+            pause_ms: 0,
+            ..PAUSE_AND_BRAKE
+        })
+        .expect("a brake alone");
+        let events = braked.events();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SegmentedSwipeEvent::Hold(_)))
+        );
+        assert_eq!(move_time(events), 600);
+        assert_eq!(last_point(events), Some((200, 260)));
+    }
+
+    // Register §1.58: the drag takes time and has a pause or a brake, and a brake moves and
+    // takes time; anything else is refused before a plan exists.
+    #[test]
+    fn l3b_a_drag_without_a_pause_or_a_brake_or_with_a_still_brake_is_refused() {
+        let still = [(1000, 360), (200, 360), (200, 360)];
+        for refused in [
+            DragWithPauseAndBrakeAction {
+                points: still,
+                pause_ms: 0,
+                brake_duration_ms: 0,
+                ..PAUSE_AND_BRAKE
+            },
+            DragWithPauseAndBrakeAction {
+                points: still,
+                ..PAUSE_AND_BRAKE
+            },
+            DragWithPauseAndBrakeAction {
+                brake_duration_ms: 0,
+                ..PAUSE_AND_BRAKE
+            },
+            DragWithPauseAndBrakeAction {
+                drag_duration_ms: 0,
+                ..PAUSE_AND_BRAKE
+            },
+        ] {
+            assert!(
+                prepare_drag_with_pause_and_brake(refused).is_err(),
+                "{refused:?}"
+            );
+        }
     }
 }

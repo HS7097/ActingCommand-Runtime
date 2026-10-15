@@ -6323,6 +6323,21 @@ fn input_response_timeout(
                     ClientLocation::RuntimeInput.location(),
                 )
             })?,
+        // Workflow #308 SEL-L3b: the drag, its pause and its brake.
+        InputAction::SingleTouchDragWithPauseAndBrakeV1 {
+            drag_duration_ms,
+            pause_ms,
+            brake_duration_ms,
+            ..
+        } => drag_duration_ms
+            .checked_add(*pause_ms)
+            .and_then(|value| value.checked_add(*brake_duration_ms))
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    ClientCode::RuntimeInputTimeoutOverflow,
+                    ClientLocation::RuntimeInput.location(),
+                )
+            })?,
         _ => 0,
     };
     // Opening and failure cleanup are sequential backend work before the receipt.
