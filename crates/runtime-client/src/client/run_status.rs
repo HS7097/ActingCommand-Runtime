@@ -78,6 +78,7 @@ pub enum ContainedRunState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContainedRunStatus {
     pub schema_version: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<RequestId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<CorrelationId>,
