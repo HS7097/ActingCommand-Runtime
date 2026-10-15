@@ -9,7 +9,7 @@
 //! embeds, not the fragments: a fragment change is seen once its CI-regenerated merged file
 //! is committed.
 
-use super::{Category, CodeStr, KeyKind, Outcome, key_kind};
+use super::{Category, Code, CodeStr, KeyKind, Outcome, key_kind};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
@@ -71,6 +71,18 @@ const CONTEXT_KEYS: [&str; 5] = [
 /// The category of a registered code in the catalog this build embeds.
 pub(crate) fn code_category(spelling: &str) -> Option<Category> {
     index().codes.get(spelling).map(|entry| entry.category)
+}
+
+/// Workflow #384 D2-S4: the registered code a received spelling names, built from the catalog's
+/// own spelling and its category, so a received spelling can be emitted again as that code.
+pub(crate) fn registered_code(spelling: &str) -> Option<Code> {
+    index()
+        .codes
+        .get_key_value(spelling)
+        .map(|(name, entry)| Code {
+            name: name.as_str(),
+            category: entry.category,
+        })
 }
 
 /// Whether the catalog this build embeds lists the location.

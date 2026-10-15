@@ -634,6 +634,10 @@
       "type": "vocab:adjustment_reason",
       "description": "Why a run's confirmed resource adjustment wrote nothing (Workflow #384 D2-S3)."
     },
+    "refresh_limit": {
+      "type": "vocab:refresh_limit",
+      "description": "Which limit holds an instance's recognition maintenance package back (Workflow #384 D2-S4)."
+    },
     "entry_problem": {
       "type": "vocab:entry_problem",
       "description": "Why a contained task's entry page set is refused at admission (Workflow #373 NAV-3b)."
@@ -2823,6 +2827,26 @@
         },
         "after_read_missing": {
           "description": "No reading of the key followed the confirmation; the key's record is dropped."
+        }
+      }
+    },
+    "refresh_limit": {
+      "description": "Which limit holds an instance's recognition maintenance package back (Workflow #384 D2-S4).",
+      "tokens": {
+        "daily_limit": {
+          "description": "The package's dispatches today reached scheduling.fact_refresh.daily_limit."
+        },
+        "failure_pause": {
+          "description": "Its failed runs in a row reached scheduling.fact_refresh.max_consecutive_failures today."
+        },
+        "schedulable_state": {
+          "description": "The instance's schedulable-pack state does not include the package now."
+        },
+        "activity_window": {
+          "description": "The instance's activity window is closed or its activity budget spent."
+        },
+        "placement": {
+          "description": "The instance cannot place the package."
         }
       }
     },

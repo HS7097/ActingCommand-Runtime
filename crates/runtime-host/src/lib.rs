@@ -14,6 +14,7 @@ pub mod codes;
 mod emulator_control;
 mod error;
 mod events;
+mod fact_refresh;
 mod fact_store;
 mod failure_identity;
 mod host;

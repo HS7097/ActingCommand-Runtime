@@ -385,6 +385,30 @@ impl HostShared {
             })
     }
 
+    /// Workflow #384 D2-S4: the `scheduling.fact_refresh` pace in effect, read at every policy
+    /// cycle (D2 model §3.4).
+    pub(super) fn fact_refresh_settings(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_policy::FactRefreshSettings> {
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .fact_refresh()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        Ok(actingcommand_policy::FactRefreshSettings {
+            enabled: config.enabled,
+            min_interval_ms: config.min_interval_ms,
+            daily_limit: config.daily_limit,
+            failure_backoff_ms: config.failure_backoff_ms,
+            max_consecutive_failures: config.max_consecutive_failures,
+        })
+    }
+
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
     /// at each suspension lift check.
     pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {

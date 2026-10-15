@@ -943,3 +943,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::instance_workers::a_start_hands_its_key_to_the_startup_claim_with_no_dispatch_between",
 ]
 incident = ["#336 PKG-S4"]
+# Workflow #384 D2-CHAIN and D2-S4 (D2 model v1.4.2 §3.2, §3.4, §3.5, §3.8, row T33; additions-v012 §8.2): with a fake recognition maintenance package and fake facts, an unknown instance fact dispatches the package, its reading is written to the instance fact store, the next round scores the task that reads it and dispatches it, each ring visible in the ledger; a package that no longer qualifies as a reader is refused at its dispatch before any input with fact_reader_binding_invalid
+[[gate]]
+key = "82"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s4::d2s4_chain_an_unknown_fact_is_read_written_rescored_and_dispatched",
+    "actingcommand-runtime-host::lib::tests::gate_384_d2s4::d2s4_t33_a_package_that_no_longer_qualifies_is_refused_before_any_input",
+]
+incident = ["#384"]

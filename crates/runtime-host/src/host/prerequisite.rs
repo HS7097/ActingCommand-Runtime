@@ -253,7 +253,7 @@ pub(super) fn run_linear_gated(
             outcome: None,
         })
         .map_err(ContainedTaskRunError::Boundary)?;
-    let mut outcome = prepared.run(runtime)?;
+    let mut outcome = runtime.run_main(prepared)?;
     outcome.executed_steps = runtime
         .layer_end(outcome.executed_steps)
         .ok_or_else(|| ContainedTaskRunError::task(STEP_LIMIT))?;

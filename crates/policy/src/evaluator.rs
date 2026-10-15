@@ -24,6 +24,15 @@ use crate::{
     ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
+mod fact_refresh;
+
+use fact_refresh::{AffectedCandidate, RefreshGate, RefreshKey};
+pub use fact_refresh::{
+    FACT_REFRESH_EXPECTED_DURATION_MS, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
+    FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, InstanceHold,
+    fact_refresh_task,
+};
+
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
 pub const MAX_EVALUATION_OUTCOMES: usize = 16_384;
 pub const MAX_EVALUATION_TASK_STATES: usize = 8_192;
@@ -634,6 +643,16 @@ pub enum CandidateEligibility {
         reason: DecisionReason,
         next_wake_unix_ms: Option<u64>,
     },
+    /// Workflow #384 D2-S4: the Runtime's deferral of a fact refresh dispatch, with the code of
+    /// the gate that deferred it and, when that gate is a limit, which one (D2 model §3.7 row 4);
+    /// without a limit the deferral is for now (row 6). The candidate is deferred as under
+    /// `Deferred`.
+    Refresh {
+        reason: DecisionReason,
+        next_wake_unix_ms: Option<u64>,
+        gate: Code,
+        limit: Option<crate::codes::RefreshLimit>,
+    },
 }
 
 /// Consults the Runtime's read-only admission state before allocating an instance winner.
@@ -669,6 +688,58 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     time: EvaluationTime,
     seed: u64,
     immediate_retries: &BTreeSet<(String, String)>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_scheduling(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        None,
+        eligibility,
+    )
+}
+
+/// Workflow #384 D2-S4: `evaluate_with_immediate_retries` with the fact refresh (D2 model §3.3,
+/// §3.4, §3.7). A candidate that reads an unknown realistic instance fact is deferred under
+/// one reason per key, and the instance's recognition maintenance package is requested for the
+/// keys its marks write: a dispatch intent of the reserved task [`FACT_REFRESH_TASK_ID`] that
+/// competes with the instance's other candidates. Without these inputs (the other entry
+/// points) such a candidate is only deferred, `fact_refresh_unbound` without a reader problem.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_scheduling(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        Some(fact_refresh),
+        eligibility,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    refresh_inputs: Option<&FactRefreshInputs>,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -769,6 +840,8 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
+    // Workflow #384 D2-S4: the candidates deferred for unknown realistic keys they read.
+    let mut affected = Vec::new();
 
     for task in &catalog_bundle.tasks.tasks {
         let referenced_outcome_keys = catalog.referenced_outcome_keys(&task.id);
@@ -847,6 +920,17 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                     ));
                 }
                 PredicateTruth::Unknown => {
+                    if refresh_inputs.is_some() {
+                        affected.extend(predicate_refresh(
+                            work.len(),
+                            task,
+                            state,
+                            instance,
+                            &placement_context,
+                            facts,
+                            &trigger.suggestions,
+                        )?);
+                    }
                     task_work.suggestions = trigger.suggestions;
                     task_work.reasons.push(reason(
                         PolicyCode::TriggerUnknown,
@@ -943,6 +1027,17 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                             ));
                         }
                         PredicateTruth::Unknown => {
+                            if refresh_inputs.is_some() {
+                                affected.extend(predicate_refresh(
+                                    work.len(),
+                                    task,
+                                    state,
+                                    instance,
+                                    &placement_context,
+                                    facts,
+                                    &stop.suggestions,
+                                )?);
+                            }
                             task_work.suggestions = stop.suggestions;
                             task_work.reasons.push(reason(
                                 PolicyCode::FeedbackStopUnknown,
@@ -1016,14 +1111,37 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         }
     }
 
-    let mut candidates = apply_priority_selection(
+    let (mut candidates, scored_affected) = apply_priority_selection(
         catalog,
         facts,
         time,
         candidates,
         &mut work,
         &target_policies,
+        refresh_inputs.is_some(),
     )?;
+    affected.extend(scored_affected);
+    // Workflow #384 D2-S4: every instance's recognition maintenance package joins the allocation
+    // for the keys its affected candidates read, unless its own gates hold it back.
+    let refresh_plans = match refresh_inputs {
+        Some(inputs) => fact_refresh::plan(
+            &fact_refresh::PlanContext {
+                inputs,
+                facts,
+                profiles: catalog_bundle.activity.profiles.as_slice(),
+                hosts: &host_resources,
+                task_states: &task_states,
+                time,
+                seed,
+            },
+            affected,
+            &mut work,
+            &mut candidates,
+        )?,
+        None => Vec::new(),
+    };
+    // The gate that kept each planned package from the allocation's dispatch, by work index.
+    let mut refresh_gates = BTreeMap::<usize, RefreshGate>::new();
 
     candidates.sort_by(|left, right| {
         right
@@ -1044,11 +1162,23 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
     let mut selected = Vec::new();
 
     for candidate in candidates {
+        // Workflow #384 D2-S4: the recognition maintenance package's own deferrals are read by
+        // the fact refresh's table (D2 model §3.7 rows 4 and 6).
+        let refresh = candidate.task_id == FACT_REFRESH_TASK_ID;
         if selected_instances.contains(candidate.instance_id.as_str()) {
             work[candidate.work_index].reasons.push(reason(
                 PolicyCode::InstanceAlreadySelected,
                 "a higher-ranked task already owns this instance for the evaluation round",
             ));
+            if refresh {
+                refresh_gates.insert(
+                    candidate.work_index,
+                    RefreshGate::Temporary {
+                        gate: Some(PolicyCode::InstanceAlreadySelected.code()),
+                        wake: None,
+                    },
+                );
+            }
             continue;
         }
         let host = remaining
@@ -1076,6 +1206,15 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
             work[candidate.work_index]
                 .reasons
                 .push(reason(code, detail));
+            if refresh {
+                refresh_gates.insert(
+                    candidate.work_index,
+                    RefreshGate::Temporary {
+                        gate: Some(code.code()),
+                        wake: None,
+                    },
+                );
+            }
             continue;
         }
         let decision_id = deterministic_decision_id(
@@ -1129,15 +1268,46 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
                 urgency_milli: candidate.rank.urgency_milli,
             },
         };
-        if let CandidateEligibility::Deferred {
-            reason,
-            next_wake_unix_ms,
-        } = eligibility(&intent)?
-        {
+        let (deferral, gate) = match eligibility(&intent)? {
+            CandidateEligibility::Eligible => (None, None),
+            CandidateEligibility::Deferred {
+                reason,
+                next_wake_unix_ms,
+            } => (
+                Some((reason, next_wake_unix_ms)),
+                Some(RefreshGate::Temporary {
+                    gate: None,
+                    wake: next_wake_unix_ms,
+                }),
+            ),
+            CandidateEligibility::Refresh {
+                reason,
+                next_wake_unix_ms,
+                gate,
+                limit,
+            } => (
+                Some((reason, next_wake_unix_ms)),
+                Some(match limit {
+                    Some(limit) => RefreshGate::Limit {
+                        limit,
+                        gate: Some(gate),
+                        wake: next_wake_unix_ms,
+                    },
+                    None => RefreshGate::Temporary {
+                        gate: Some(gate),
+                        wake: next_wake_unix_ms,
+                    },
+                }),
+            ),
+        };
+        if let Some((reason, next_wake_unix_ms)) = deferral {
             let task_work = &mut work[candidate.work_index];
             task_work.state = SchedulingDecisionState::Deferred;
             task_work.reasons.push(reason);
             task_work.next_wake_unix_ms = next_wake_unix_ms;
+            if let Some(gate) = gate.filter(|_| refresh) {
+                refresh_gates.insert(candidate.work_index, gate);
+            }
             continue;
         }
         host.consume(candidate.load);
@@ -1153,6 +1323,18 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         task_work.state = SchedulingDecisionState::Selected;
         task_work.rank = Some(candidate.rank);
         task_work.reasons = reasons;
+    }
+    // Workflow #384 D2-S4: the affected candidates' reasons, before any dispatch decision record
+    // lists them.
+    if let Some(inputs) = refresh_inputs {
+        fact_refresh::finish(
+            &refresh_plans,
+            &refresh_gates,
+            inputs,
+            facts,
+            time,
+            &mut work,
+        )?;
     }
     append_decision_records(&mut work, &mut reason_chains, &selected, &target_policies)?;
     work.sort_by(|left, right| {
@@ -1864,9 +2046,12 @@ enum CandidateScore {
         gate_id: String,
         known_until_unix_ms: Option<u64>,
     },
-    /// A gate or term met an unknown input: the candidate is deferred with these reasons and no
-    /// wake, and takes no part in ranking (Workflow #384, D2 S1).
-    Deferred(Vec<DecisionReason>),
+    /// A gate or term met an input no reading can supply: the candidate is deferred with these
+    /// reasons and no wake, and takes no part in ranking (Workflow #384, D2 S1).
+    InputUnknown(Vec<DecisionReason>),
+    /// Gates or terms met only unknown realistic keys: the candidate is deferred and takes no
+    /// part in ranking; the fact refresh gives its reasons (Workflow #384, D2 S1, S4).
+    RefreshNeeded(Vec<RefreshKey>),
 }
 
 /// How one scored candidate leaves the score stage, with the reason detail it records.
@@ -2079,6 +2264,11 @@ struct StagedCandidate {
 /// revisited here: only candidates that already passed trigger, feedback stop, cooldown and
 /// placement are scored. Without a selection document, without a declared value, without
 /// offsets and without a resource target policy it is a no-op.
+///
+/// Workflow #384 D2-S4: with `refreshing`, a candidate whose document read unknown realistic
+/// keys only is deferred and returned as affected, for the fact refresh to give its reasons;
+/// without it, it is deferred under `fact_refresh_unbound` (D2-S1).
+#[allow(clippy::type_complexity)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -2086,7 +2276,8 @@ fn apply_priority_selection(
     candidates: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
-) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
+    refreshing: bool,
+) -> PolicyEvaluationResult<(Vec<PlacementCandidate>, Vec<AffectedCandidate>)> {
     let policy = catalog.selection_policy();
     // The utility fields join the `score_computed` detail only once the catalog can score or
     // value a task, so an offset-only evaluation keeps its detail byte for byte.
@@ -2098,7 +2289,7 @@ fn apply_priority_selection(
             .iter()
             .any(|task| task.value_milli.is_some());
     if !utility_fields && facts.priority_offsets.is_empty() && target_policies.is_empty() {
-        return Ok(candidates);
+        return Ok((candidates, Vec::new()));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
     // against the catalog, its inventory in the time-validity projected facts.
@@ -2131,6 +2322,7 @@ fn apply_priority_selection(
     };
     let mut ranked = Vec::with_capacity(candidates.len());
     let mut staged = Vec::with_capacity(candidates.len());
+    let mut affected = Vec::new();
     for (mut candidate, score) in candidates.into_iter().zip(scores) {
         let (score_milli, unknown_rule, known_until_unix_ms) = match score {
             None => (None, None, None),
@@ -2145,10 +2337,36 @@ fn apply_priority_selection(
             // An unknown input of the document defers only this candidate, with no wake: it is
             // evaluated again when its facts, the catalog or the configuration change, and it
             // takes no part in ranking (D2 S1; model §3.3, §3.7 rows 1-2).
-            Some(CandidateScore::Deferred(reasons)) => {
+            Some(CandidateScore::InputUnknown(reasons)) => {
                 let task_work = &mut work[candidate.work_index];
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.extend(reasons);
+                continue;
+            }
+            // Unknown realistic keys only: the fact refresh gives the reasons (D2-S4; model
+            // §3.7 rows 2-6), with the rank this candidate lends the reader; without it, no reader
+            // is bound (D2-S1).
+            Some(CandidateScore::RefreshNeeded(keys)) => {
+                let task_work = &mut work[candidate.work_index];
+                task_work.state = SchedulingDecisionState::Deferred;
+                if refreshing {
+                    affected.push(AffectedCandidate {
+                        work_index: candidate.work_index,
+                        instance_id: candidate.instance_id.clone(),
+                        rank: offset_rank(
+                            &candidate.rank,
+                            facts,
+                            &candidate.task_id,
+                            &candidate.instance_id,
+                        ),
+                        keys,
+                        predicate: false,
+                    });
+                } else {
+                    task_work.reasons.extend(keys.iter().map(|key| {
+                        fact_refresh::unbound_reason(&candidate.instance_id, key, None)
+                    }));
+                }
                 continue;
             }
         };
@@ -2481,7 +2699,7 @@ fn apply_priority_selection(
             ScoreDisposition::Neutral => ranked.push(candidate),
         }
     }
-    Ok(ranked)
+    Ok((ranked, affected))
 }
 
 /// Runs the selection document once per instance over that instance's eligible candidates
@@ -2563,9 +2781,9 @@ fn score_candidates(
                     gate_id: gate_id.clone(),
                     known_until_unix_ms,
                 },
-                CollectedVerdict::Unknown { inputs } => CandidateScore::Deferred(
-                    unknown_input_reasons(instance_id, inputs, &projection.expired_fields),
-                ),
+                CollectedVerdict::Unknown { inputs } => {
+                    unknown_inputs(instance_id, inputs, &projection.expired_fields)
+                }
             });
         }
     }
@@ -2575,19 +2793,20 @@ fn score_candidates(
 /// The instance fact families recognition writes: the realistic keys (model §3.1).
 const REALISTIC_FACT_PREFIXES: [&str; 2] = ["resource.", "inventory."];
 
-/// The deferral reasons of a candidate the document met unknown inputs for, by the first row
-/// of model §3.7 that matches:
+/// What a candidate the document met unknown inputs for carries, by the first row of model
+/// §3.7 that matches:
 ///
 /// 1. any input that is not a realistic key (an instruction key, pack data, a fixed field or a
 ///    lookup that covers no value) gives one `selection_input_unknown` per gate or term that
 ///    met one: a reading cannot supply it;
-/// 2. otherwise every unknown key gives one `fact_refresh_unbound`. S1 binds no reader yet, so
-///    the optional `reader_problem` is not written (decision D6).
-fn unknown_input_reasons(
+/// 2. otherwise every unknown key, once, with the rule that read it first, for the fact refresh
+///    (D2-S4) or, without it, for `fact_refresh_unbound` with no reader problem (D2-S1,
+///    decision D6).
+fn unknown_inputs(
     instance_id: &str,
     inputs: &[UnknownInput],
     expired_fields: &BTreeSet<String>,
-) -> Vec<DecisionReason> {
+) -> CandidateScore {
     let inputs = inputs
         .iter()
         .map(|unknown| {
@@ -2615,40 +2834,37 @@ fn unknown_input_reasons(
         .iter()
         .all(|(_, key, unknown_reason)| is_realistic(key, *unknown_reason))
     {
-        inputs
-            .iter()
-            .filter(|(_, key, _)| seen.insert(*key))
-            .map(|(_, key, unknown_reason)| {
-                reason_with(
-                    Outcome::new(PolicyCode::FactRefreshUnbound)
-                        .instance_id(instance_id)
-                        .fact_key(*key)
-                        .unknown_reason(UnknownReasonToken(*unknown_reason)),
-                    format!(
-                        "instance_id={instance_id} fact_key={key} unknown_reason={}",
-                        unknown_token(*unknown_reason)
-                    ),
-                )
-            })
-            .collect()
+        CandidateScore::RefreshNeeded(
+            inputs
+                .iter()
+                .filter(|(_, key, _)| seen.insert(*key))
+                .map(|(rule_id, key, unknown_reason)| RefreshKey {
+                    fact_key: (*key).to_owned(),
+                    unknown_reason: *unknown_reason,
+                    rule_id: Some((*rule_id).to_owned()),
+                })
+                .collect(),
+        )
     } else {
-        inputs
-            .iter()
-            .filter(|(_, key, unknown_reason)| !is_realistic(key, *unknown_reason))
-            .filter(|(rule_id, _, _)| seen.insert(*rule_id))
-            .map(|(rule_id, _, unknown_reason)| {
-                reason_with(
-                    Outcome::new(PolicyCode::SelectionInputUnknown)
-                        .instance_id(instance_id)
-                        .rule_id(*rule_id)
-                        .unknown_reason(UnknownReasonToken(*unknown_reason)),
-                    format!(
-                        "instance_id={instance_id} rule_id={rule_id} unknown_reason={}",
-                        unknown_token(*unknown_reason)
-                    ),
-                )
-            })
-            .collect()
+        CandidateScore::InputUnknown(
+            inputs
+                .iter()
+                .filter(|(_, key, unknown_reason)| !is_realistic(key, *unknown_reason))
+                .filter(|(rule_id, _, _)| seen.insert(*rule_id))
+                .map(|(rule_id, _, unknown_reason)| {
+                    reason_with(
+                        Outcome::new(PolicyCode::SelectionInputUnknown)
+                            .instance_id(instance_id)
+                            .rule_id(*rule_id)
+                            .unknown_reason(UnknownReasonToken(*unknown_reason)),
+                        format!(
+                            "instance_id={instance_id} rule_id={rule_id} unknown_reason={}",
+                            unknown_token(*unknown_reason)
+                        ),
+                    )
+                })
+                .collect(),
+        )
     }
 }
 
@@ -2808,6 +3024,53 @@ fn selection_candidate(
         candidate_id: format!("{}@{}", candidate.task_id, candidate.instance_id),
         fields,
     })
+}
+
+/// Workflow #384 D2-S4 (D2 model §3.3, catalog predicates): a task whose undecided trigger or
+/// feedback stop read unknown realistic keys in exactly its instance's scope is affected by
+/// them, with the rank its placement on the instance gives it; a task the instance cannot place
+/// is not.
+fn predicate_refresh(
+    work_index: usize,
+    task: &TaskSpec,
+    state: Option<&TaskRuntimeSnapshot>,
+    instance: &InstanceSnapshot,
+    context: &PlacementContext<'_>,
+    facts: &EvaluationFacts,
+    suggestions: &[DetectionSuggestion],
+) -> PolicyEvaluationResult<Option<AffectedCandidate>> {
+    let keys = fact_refresh::predicate_keys(suggestions, instance);
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    let PlacementResult::Candidate(candidate) =
+        build_candidate(work_index, task, state, instance, context, None)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AffectedCandidate {
+        work_index,
+        instance_id: instance.instance_id.clone(),
+        keys,
+        rank: offset_rank(&candidate.rank, facts, &task.id, &instance.instance_id),
+        predicate: true,
+    }))
+}
+
+/// The rank a candidate lends its instance's recognition maintenance package (D2 model §3.4):
+/// its catalog rank with its manual offset, in the unit the score stage adds it in.
+fn offset_rank(
+    rank: &TaskRank,
+    facts: &EvaluationFacts,
+    task_id: &str,
+    instance_id: &str,
+) -> TaskRank {
+    let offset = effective_priority_offset(facts, task_id, instance_id).unwrap_or(0);
+    let mut rank = rank.clone();
+    rank.total_score = rank
+        .total_score
+        .saturating_add(i64::from(offset).saturating_mul(1_000));
+    rank
 }
 
 /// The instance-level entry wins over the task-level entry; neither means no offset.
@@ -4484,7 +4747,9 @@ fn validate_inputs(
     for state in &facts.tasks {
         validate_id("task state id", &state.task_id)?;
         validate_instance_alias(&state.instance_id)?;
-        if !task_ids.contains(state.task_id.as_str()) {
+        // Workflow #384 D2-S4: a recognition maintenance package's dispatches keep their clocks
+        // under the reserved fact refresh task.
+        if state.task_id != FACT_REFRESH_TASK_ID && !task_ids.contains(state.task_id.as_str()) {
             return Err(PolicyEvaluationError::invalid(format!(
                 "task state references unknown task '{}'",
                 state.task_id

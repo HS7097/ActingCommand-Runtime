@@ -887,6 +887,25 @@ reader of the old form exists.
 | P4-5 | actingctl `task-run --package <path> [--recovery-package <path>]`; MCP `ac_run_pack {instance, package, recovery_package?, deadline_s?}` and `ac_pack_check {package}` → `{preflight}`; actinglab `--package <path>` or `--zip <path>` | removed flags and arguments `--expected-sha256`, `--package-ref`, `--recovery-expected-sha256`, `--recovery-package-ref`, `package_ref`, `recovery_package_ref`; removed answer members `digest`, `package_ref_check` | PKG-S4 | PKG-S4 | actingctl refuses a removed flag as unknown (`actingctl_usage_invalid`, `argument_problem` `unknown`); MCP refuses a removed argument (`arguments_invalid`, `unknown`) and computes no digest; actinglab refuses the removed flags by name (`validation_failed`) except `lab replay-evidence --expected-sha256`, the evidence archive's own hash (M-PKG §1.3); `actingd suspended`'s `takeover` hint names `--package <package>` only |
 | P4-6 | actinglab outputs: `package preflight` `package_label` (was `package_ref`); `package validate` and `lab validate` without `input_sha256`, `hash_source` and `externally_verified`; `package dry-run` result record and answer `package_label` (was `package_sha256`), taking `--package` or `--zip`; capabilities `package_locator {by: path, readings}` (was `package_reference`) | changed output members | PKG-S4 | PKG-S4 | `package dry-run` reads its package by its path, so a content directory is simulated (forced compromise T-01); the dry-run record's `package_label` comes ahead of PKG-S5, which listed it, because its input reference is gone |
 
+### 1.56 Wave 13 slice D2-S4 (#384 D2M §3.3, §3.4, §3.7, §3.9, §6 S4; v1.4.2)
+
+D2-S4 brings its own shapes and writes them; [scheduling/README.md](scheduling/README.md),
+"Fact Refresh", and [runtime-config.md](runtime-config.md) are the contract. No new event type
+and no new member of a persisted record: a fact refresh is recorded as every policy dispatch, run
+and reading is, under a reserved task identity.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D41 | `config.parameters.scheduling`: `scheduling.fact_refresh.enabled`, `.min_interval_ms`, `.daily_limit`, `.failure_backoff_ms`, `.max_consecutive_failures` | new configuration rows | D2-S4 | D2-S4 | boolean, milliseconds, integer `0..=4294967295`, milliseconds, integer `0..=4294967295`; defaults `true`, `300000`, `96`, `600000`, `3` (`actingd.defaults.json`); settable, read at every policy cycle; `overdue_ms` of the §5 row is left to D2-S5, its reader (a settable key without a default has no value an instruction can replace yet) |
+| D42 | `policy.dispatch` records of a fact refresh (intent, admitted, rejected, completed) and its `policy.execution_recorded` | new values of existing members (shape unchanged) | D2-S4 | D2-S4 | `task_id` `_fact_refresh` (a catalog task id never starts with `_`), `operation_id` `_fact_refresh`, the procedure binding digest of the Runtime-owned procedure `_fact_refresh` (operation `_fact_refresh`, no yield points); the reason chain carries one `fact_refresh_requested` per requested key, which is the run's requested key set; the admission's budget receipt counts the Runtime-owned task spec (task daily and window limits `4294967295`, task runtime limit `4294967295` ms, 60 000 ms reserved per run) and the instance's activity profile; a settled run writes the four settlement runtime facts `task._fact_refresh.*` as any settled dispatch does |
+| D43 | a fact refresh run's `runtime.request` (`RunContainedTask`) | new value of an existing member (shape unchanged) | D2-S4 | D2-S4 | `package_path` the instance's kept recognition maintenance package; `expected_sha256` the placeholder `0` × 64, recorded as given and compared with nothing, until PKG-S4 removes the member (M-PKG §4.4); no package content is read to fill it |
+
+The codes `fact_refresh_requested` (info), `fact_refresh_pending` (info),
+`fact_refresh_unresolved` (warning) and `fact_refresh_exhausted` (warning) (policy, ladder class
+`none`), the key and vocabulary `refresh_limit` (`daily_limit`, `failure_pause`,
+`schedulable_state`, `activity_window`, `placement`), and `fact_reader_binding_invalid` as a
+fact refresh run's failure code are catalog entries, not rows (§7).
+
 ### 1.57 Wave 13 slice EXEC-1 (#390, forced-compromises mapping E-04, E-13)
 
 EXEC-1 brings its own shapes and writes them; [resource-declarations.md](resource-declarations.md)
@@ -1089,7 +1108,7 @@ when it takes effect.
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
-| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4; `recognition_join_timeout_ms` D2-S2 (built, §1.28) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2 |
+| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |

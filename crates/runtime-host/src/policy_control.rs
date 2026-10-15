@@ -810,6 +810,23 @@ impl PolicyControlState {
             })
     }
 
+    /// Workflow #384 D2-S4: the dispatches of `task_id` on `instance_id` admitted in the activity
+    /// day `local_day` (the day the task daily budget counts).
+    pub(crate) fn task_daily_count(&self, task_id: &str, instance_id: &str, local_day: i64) -> u32 {
+        self.task_daily
+            .get(&(task_id.to_owned(), instance_id.to_owned(), local_day))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Workflow #384 D2-S4: the registered code of the pair's latest failure while no success
+    /// has followed it.
+    pub(crate) fn latest_failure_code(&self, task_id: &str, instance_id: &str) -> Option<Code> {
+        self.failure_streaks
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .and_then(|failure| failure.failure_code.registered())
+    }
+
     /// R22 eligibility is bounded by the original normal admission, including after replay.
     /// Backoff and all remaining admission gates are checked by the ordinary predicate.
     pub(crate) fn immediate_retry_pairs(
@@ -996,18 +1013,13 @@ fn task_and_profile<'a>(
     catalog: &'a CompiledCatalog,
     intent: &DispatchIntent,
 ) -> RuntimeHostResult<(&'a TaskSpec, &'a ActivityProfile)> {
-    let task = catalog
-        .catalog()
-        .tasks
-        .tasks
-        .iter()
-        .find(|task| task.id == intent.task_id)
-        .ok_or_else(|| {
-            request(
-                HostCode::PolicyTaskMissing,
-                HostLocation::ResolvePolicyControl,
-            )
-        })?;
+    // Workflow #384 D2-S4: a fact refresh dispatch runs under the Runtime-owned task spec.
+    let task = catalog.dispatch_task(&intent.task_id).ok_or_else(|| {
+        request(
+            HostCode::PolicyTaskMissing,
+            HostLocation::ResolvePolicyControl,
+        )
+    })?;
     let profile = catalog
         .catalog()
         .activity
