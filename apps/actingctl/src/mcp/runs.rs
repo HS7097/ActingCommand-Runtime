@@ -202,9 +202,9 @@ impl Diagnosis {
             // Workflow #389 MCP-7 (command table §4.8): the groups go first, the fewest-count
             // groups of each list first (each list is ordered by count, the most frequent
             // first): failures_grouped, then runs_grouped. Then the clock-slot rows, from the
-            // end of their list (the owed rows before the refused and deferred ones, each
-            // oldest first): the full list stays in actingd suspended and clock_slots_total
-            // points there (#372 K3). Then what another tool can read again: the errors page
+            // end of their list (the owed rows, then the deferred and expired ones, then the
+            // refused and superseded ones, each oldest first): the full list stays in actingd
+            // suspended and clock_slots_total points there (#372 K3, K4). Then what another tool can read again: the errors page
             // (ac_events), then the runs, oldest first (ac_get_run / ac_events). The other rows
             // of the actingd suspended report have no other MCP route, so they go last:
             // repeating, lift, suspended, the suspended task packages (Workflow #386 SR-3), then

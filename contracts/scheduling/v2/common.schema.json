@@ -302,6 +302,15 @@
         }
       ]
     },
+    "missedSlotRule": {
+      "type": "object",
+      "required": ["kind", "grace_ms"],
+      "properties": {
+        "kind": { "const": "skip_after" },
+        "grace_ms": { "type": "integer", "minimum": 60000, "maximum": 604800000 }
+      },
+      "additionalProperties": false
+    },
     "predicate": {
       "oneOf": [
         {
@@ -346,7 +355,8 @@
           "required": ["kind", "schedule"],
           "properties": {
             "kind": { "const": "clock" },
-            "schedule": { "$ref": "#/$defs/clockSchedule" }
+            "schedule": { "$ref": "#/$defs/clockSchedule" },
+            "missed": { "$ref": "#/$defs/missedSlotRule" }
           },
           "additionalProperties": false
         },

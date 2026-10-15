@@ -46,10 +46,10 @@ fn daily(minutes: &[u16]) -> serde_json::Value {
 
 /// One generic task on the fixture instance.
 pub(super) struct SlotTask {
-    id: &'static str,
-    priority: u32,
-    trigger: serde_json::Value,
-    daily_limit: u32,
+    pub(super) id: &'static str,
+    pub(super) priority: u32,
+    pub(super) trigger: serde_json::Value,
+    pub(super) daily_limit: u32,
 }
 
 /// One task with a `daily` clock at `minutes` and `daily_limit` runs a day.
@@ -127,19 +127,19 @@ pub(super) fn slot_sources(
 
 /// One clock-slot record as the ledger holds it.
 #[derive(Debug, Clone)]
-struct SlotRow {
+pub(super) struct SlotRow {
     /// `refused`, `deferred` or `owed`: the `signal_id` segment after the prefix.
-    kind: String,
+    pub(super) kind: String,
     /// The record outcome's code.
-    code: String,
-    task_id: String,
-    observed_at_unix_ms: u64,
+    pub(super) code: String,
+    pub(super) task_id: String,
+    pub(super) observed_at_unix_ms: u64,
     /// The outcome's values other than its task and alias, as text.
-    values: BTreeMap<String, String>,
+    pub(super) values: BTreeMap<String, String>,
 }
 
 impl SlotRow {
-    fn time(&self, key: &str) -> Option<u64> {
+    pub(super) fn time(&self, key: &str) -> Option<u64> {
         self.values.get(key).map(|value| {
             value
                 .parse()
@@ -147,13 +147,13 @@ impl SlotRow {
         })
     }
 
-    fn text(&self, key: &str) -> Option<&str> {
+    pub(super) fn text(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }
 }
 
 /// Every clock-slot record in the ledger, in ledger order.
-fn slot_rows(host: &RuntimeHost) -> Vec<SlotRow> {
+pub(super) fn slot_rows(host: &RuntimeHost) -> Vec<SlotRow> {
     host.query_persisted_events_for_test(EventQuery {
         event_type: Some(EventType::PolicyPlanningSignalObserved),
         ..EventQuery::default()
@@ -377,13 +377,13 @@ impl Slots {
     }
 
     /// A client lease that holds the instance until it is released.
-    fn hold(&self) -> (TestClient, LeaseToken) {
+    pub(super) fn hold(&self) -> (TestClient, LeaseToken) {
         let mut holder = TestClient::connect(&self.host);
         let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS);
         (holder, token)
     }
 
-    fn release((mut holder, token): (TestClient, LeaseToken)) {
+    pub(super) fn release((mut holder, token): (TestClient, LeaseToken)) {
         let release = holder.request(RuntimeOperation::ReleaseLease { token });
         assert_eq!(
             holder.send(&release).state(),
@@ -392,7 +392,7 @@ impl Slots {
     }
 
     /// The clock-slot records written since the last call, in ledger order.
-    fn new_rows(&mut self) -> Vec<SlotRow> {
+    pub(super) fn new_rows(&mut self) -> Vec<SlotRow> {
         let rows = slot_rows(&self.host);
         let new = rows[self.read..].to_vec();
         self.read = rows.len();
@@ -400,7 +400,7 @@ impl Slots {
     }
 
     /// A clean stop and a new start on the same state root.
-    fn restart(self, unix_ms: u64) -> Self {
+    pub(super) fn restart(self, unix_ms: u64) -> Self {
         let Self {
             host,
             root,
@@ -426,7 +426,7 @@ impl Slots {
         }
     }
 
-    fn close(self) {
+    pub(super) fn close(self) {
         self.host.close().expect("close the clock-slot host");
     }
 

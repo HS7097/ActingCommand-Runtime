@@ -681,8 +681,10 @@ fn resolve_runtime_navigation_edge_input(
     scene: &Scene,
     edge: &NavigationEdge,
 ) -> CliOutcome<(SemanticInput, Value)> {
-    let SemanticInput::TargetCenter { target_id } = &edge.input else {
-        return Ok((edge.input.clone(), Value::Null));
+    let (target_id, offset) = match &edge.input {
+        SemanticInput::TargetCenter { target_id } => (target_id, None),
+        SemanticInput::TargetOffset { target_id, offset } => (target_id, Some(*offset)),
+        _ => return Ok((edge.input.clone(), Value::Null)),
     };
     let evaluation = evaluator
         .evaluate_target(scene, target_id)
@@ -697,7 +699,10 @@ fn resolve_runtime_navigation_edge_input(
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
+    let rect = match offset {
+        Some(offset) => target_offset_rect(&evaluation, offset)?,
+        None => target_evaluation_rect(&evaluation)?,
+    };
     Ok((
         SemanticInput::Tap {
             rect,
@@ -728,9 +733,9 @@ fn runtime_input_action(input: &SemanticInput) -> CliOutcome<InputAction> {
             y2: to.y,
             duration_ms: *duration_ms,
         }),
-        SemanticInput::TargetCenter { .. } => Err(CliError::device(
-            "Runtime navigation target was not resolved before input",
-        )),
+        SemanticInput::TargetCenter { .. } | SemanticInput::TargetOffset { .. } => Err(
+            CliError::device("Runtime navigation target was not resolved before input"),
+        ),
     }
 }
 
@@ -1677,7 +1682,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--click-from <id>",
                 "--click-follow <id>",
                 "--drag-to x,y,w,h",
-                "--long-press x,y",
+                "--long-press x,y,w,h",
                 "--duration-ms <1..60000>",
                 "--click-guard <id>",
                 "--click-retry <2..5>",

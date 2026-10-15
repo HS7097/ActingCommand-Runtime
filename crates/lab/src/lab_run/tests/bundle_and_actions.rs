@@ -263,6 +263,33 @@ fn segmented_swipe_validates_the_closed_three_point_declaration() {
     }
 }
 
+// Workflow #390 lpbox (exec key 76): a long press click declares its click box inside the
+// frame, or its point as before; half a box, or a box past the frame's edge, is refused.
+#[test]
+fn lpbox_lab_validation_takes_a_long_press_click_box_inside_the_frame() {
+    let control = test_control();
+    let click = |value: Value| -> OperationClick {
+        serde_json::from_value(value).expect("long press click")
+    };
+    for value in [
+        json!({"kind": "long_press", "x": 100, "y": 110, "width": 40, "height": 30, "duration_ms": 700}),
+        json!({"kind": "long_press", "x": 100, "y": 110, "duration_ms": 700}),
+    ] {
+        click(value.clone())
+            .validate_for_schema(&control, "0.9")
+            .unwrap_or_else(|error| panic!("{value}: {}", error.message));
+    }
+    for value in [
+        json!({"kind": "long_press", "x": 100, "y": 110, "width": 40, "duration_ms": 700}),
+        json!({"kind": "long_tap", "x": 100, "y": 110, "height": 30, "duration_ms": 700}),
+        json!({"kind": "long_press", "x": 1260, "y": 110, "width": 40, "height": 30, "duration_ms": 700}),
+    ] {
+        click(value.clone())
+            .validate_for_schema(&control, "0.9")
+            .expect_err(&value.to_string());
+    }
+}
+
 #[test]
 fn operation_validate_allows_color_guard_for_absolute_coordinate() {
     let control = test_control();

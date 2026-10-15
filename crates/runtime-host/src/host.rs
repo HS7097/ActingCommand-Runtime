@@ -1163,8 +1163,10 @@ impl RuntimeHost {
         let held_startup = config.install_held.is_some();
         #[cfg(any(test, feature = "test-hooks"))]
         let preparation_test_hook = config.preparation_test_hook.clone();
-        let lifecycle_admission =
-            installation::LifecycleAdmission::new(config.install_held.clone())?;
+        let lifecycle_admission = installation::LifecycleAdmission::new(
+            config.install_held.clone(),
+            config.clock.as_ref(),
+        )?;
         fs::create_dir_all(&config.state_root).map_err(|_| {
             RuntimeHostError::fatal(
                 SharedCode::StateRootCreateFailed,

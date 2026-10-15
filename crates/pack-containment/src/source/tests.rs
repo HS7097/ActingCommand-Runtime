@@ -616,3 +616,72 @@ fn candidate_layout_gate_refuses_each_repeated_anchor_rule_at_its_pointer() {
         assert_eq!((issue.field_path.as_str(), issue.reason), (pointer, reason));
     }
 }
+
+// Workflow #390 lpbox (exec key 76; Alice 10-09: pack taps use click boxes): a source long press
+// declares its click box with both `width` and `height`, or its point as the contract already
+// allowed; the navigation projection and a guard synthesized from the click keep the box, and
+// half a box is refused at the member it lacks.
+#[test]
+fn lpbox_a_source_long_press_keeps_its_click_box_in_the_navigation_and_the_guard() {
+    let boxed = json!({"kind":"long_press","x":12,"y":34,"width":8,"height":6,"duration_ms":700});
+    let point = json!({"kind":"long_press","x":12,"y":34,"duration_ms":700});
+    assert_eq!(click_to_navigation(&boxed).unwrap(), boxed);
+    assert_eq!(
+        click_to_guard_rect(&boxed).unwrap(),
+        json!({"x":12,"y":34,"width":8,"height":6})
+    );
+    assert_eq!(click_to_navigation(&point).unwrap(), point);
+    assert_eq!(
+        click_to_guard_rect(&point).unwrap(),
+        json!({"x":12,"y":34,"width":1,"height":1})
+    );
+    for click in [&boxed, &point] {
+        let click = click_to_navigation(click).expect("generated navigation click");
+        validate_navigation_declarations(
+            Path::new("navigation/fixture.navigation.json"),
+            &json!({"navigation": [
+                {"id":"hold","from_page":"home","to_page":"next","click":click}
+            ]}),
+        )
+        .expect("a long press navigation click");
+    }
+
+    for (missing, click) in [
+        (
+            "height",
+            json!({"kind":"long_press","x":12,"y":34,"width":8,"duration_ms":700}),
+        ),
+        (
+            "width",
+            json!({"kind":"long_tap","x":12,"y":34,"height":6,"duration_ms":700}),
+        ),
+    ] {
+        let operation = json!({"id": "hold", "from": "home", "click": click});
+        let bundle = Bundle {
+            task_id: "fixture".to_string(),
+            dir: PathBuf::from("operations/fixture"),
+            data: json!({
+                "schema_version": "0.6",
+                "task_id": "fixture",
+                "game": "fixture",
+                "server_scope": ["test"],
+                "coordinate_space": {"width": 1280, "height": 720},
+                "operations": [operation.clone()]
+            }),
+        };
+        let mut errors = Vec::new();
+        validate_click_shape(&bundle, &operation, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains(&format!("click missing \"{missing}\""))),
+            "{missing}: {errors:?}"
+        );
+        let rejection = declaration_file_requests(&[bundle]).expect_err("half a click box");
+        assert_eq!(rejection.code, "resource_declaration_invalid");
+        let issue: ResourceDeclarationIssue =
+            serde_json::from_value(rejection.details.unwrap()).unwrap();
+        assert_eq!(issue.field_path, format!("/operations/0/click/{missing}"));
+        assert_eq!(issue.reason, ResourceDeclarationReason::MissingField);
+    }
+}

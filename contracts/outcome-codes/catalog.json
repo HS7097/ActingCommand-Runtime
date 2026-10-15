@@ -226,6 +226,10 @@
       "type": "boolean",
       "description": "The pair had no earlier dispatch."
     },
+    "grace_ms": {
+      "type": "duration_ms",
+      "description": "The grace of a clock predicate's `missed: skip_after` rule, in milliseconds."
+    },
     "count": {
       "type": "integer",
       "description": "A count."
@@ -5643,6 +5647,9 @@
     ],
     "clock_slot_": [
       "runtime-host"
+    ],
+    "clock_occurrence_": [
+      "policy"
     ],
     "accept_": [
       "runtime-host"

@@ -767,6 +767,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "clock_occurrence_expired": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "occurrence_unix_ms": "required",
+        "grace_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Scheduling decision reason (Workflow #361 R7): a clock predicate whose catalog sets missed {kind: skip_after, grace_ms} is not due, because its latest occurrence (occurrence_unix_ms) was not served before occurrence_unix_ms + grace_ms. The clock waits for its next occurrence; when it decides the trigger, the decision is trigger_false. The Runtime records the skipped occurrence once as clock_slot_expired.",
+      "common_causes": "The instance was busy, paused, held or refused by a budget until the occurrence's grace ran out, or no Runtime was running.",
+      "handling": "Nothing to repair: the catalog asked for the skip. Widen grace_ms in the catalog if the occurrence should still run later."
+    },
     "resource_targets": {
       "category": "info",
       "ladder_class": "none",

@@ -170,7 +170,10 @@ An unmatched anchor, checked-coordinate overflow, or out-of-frame ROI produces
 Required fields then fail the existing fields criterion; optional fields retain their
 unresolved result without a fabricated value. Real provider failures keep their original
 classification. Field/page gates, capture return values and backend session ownership
-retain their existing contracts.
+retain their existing contracts. Where a target's pass or fail is asked (a page rule, a
+check member, a guard), an unmatched anchor is no error: the target did not pass, with
+`failure` `ocr_region_unresolved` and this region evidence (Workflow #390 R-10,
+`resource-declarations.md`); an overflowing or out-of-frame ROI stays an evaluation error.
 
 OCR observations and field records carry `region` evidence: anchor identity, actual
 matched rectangle/raw score/score/threshold/pass decision, offset, frame dimensions,

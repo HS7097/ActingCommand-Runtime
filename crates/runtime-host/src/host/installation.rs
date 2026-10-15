@@ -27,7 +27,9 @@ pub(super) struct LifecycleAdmission {
     closed: bool,
     stopping: bool,
     preparing: bool,
-    held_deadline: Option<Instant>,
+    /// The held start's deadline on the host's `RuntimeClock` (monotonic milliseconds; test plan
+    /// v2.2 section 3.10 H-1-rest, HOST-I2).
+    held_deadline_ms: Option<u64>,
     active: std::collections::HashMap<thread::ThreadId, usize>,
     held: Option<InstallHeldStartup>,
     transition: Option<LiveTransition>,
@@ -40,7 +42,8 @@ pub(super) struct LifecycleAdmission {
 
 struct LiveTransition {
     status: InstallTransitionStatus,
-    deadline: Instant,
+    /// The phase's deadline on the host's `RuntimeClock` (monotonic milliseconds, HOST-I2).
+    deadline_ms: u64,
     entered_event_id: Option<EventId>,
     /// The recorded held or release timeout that failed this transition; a held start ends
     /// with it (Workflow #381 A R5′, #672 ruling).
@@ -48,18 +51,29 @@ struct LiveTransition {
 }
 
 impl LifecycleAdmission {
-    pub(super) fn new(held: Option<InstallHeldStartup>) -> RuntimeHostResult<Self> {
+    /// `clock` is the host's `RuntimeClock`, the one every installation deadline reads (test plan
+    /// v2.2 section 3.10 H-1-rest, HOST-I2): `SystemRuntimeClock` in production, monotonic
+    /// milliseconds of the same source as `Instant::now()`.
+    pub(super) fn new(
+        held: Option<InstallHeldStartup>,
+        clock: &dyn RuntimeClock,
+    ) -> RuntimeHostResult<Self> {
         if let Some(held) = &held {
             held.validate()
                 .map_err(|error| install_error(error.code()))?;
         }
+        let held_deadline_ms = match &held {
+            Some(held) => Some(deadline_after(
+                clock.sample()?.monotonic_ms,
+                held.timeout_ms,
+            )?),
+            None => None,
+        };
         Ok(Self {
             closed: true,
             stopping: false,
             preparing: held.is_none(),
-            held_deadline: held
-                .as_ref()
-                .map(|held| Instant::now() + Duration::from_millis(held.timeout_ms)),
+            held_deadline_ms,
             active: std::collections::HashMap::new(),
             held,
             transition: None,
@@ -98,6 +112,18 @@ impl Drop for LifecycleWork<'_> {
             }
         }
     }
+}
+
+/// The deadline `timeout_ms` after `now_ms` on the host's monotonic clock (HOST-I2); the
+/// recovery ladder's readiness window reads the same clock.
+pub(super) fn deadline_after(now_ms: u64, timeout_ms: u64) -> RuntimeHostResult<u64> {
+    now_ms.checked_add(timeout_ms).ok_or_else(|| {
+        RuntimeHostError::fatal(
+            HostCode::MonotonicClockOverflow,
+            HostLocation::ReadRuntimeClock,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+    })
 }
 
 fn install_error(code: impl Into<Code>) -> RuntimeHostError {
@@ -152,6 +178,20 @@ impl HostShared {
     /// Workflow #369 S6c: the configured emulator starts, in configuration order.
     pub(super) fn emulator_autostart(&self) -> RuntimeHostResult<&[(InstanceId, String)]> {
         prepared(&self.emulator_autostart).map(Vec::as_slice)
+    }
+
+    /// Now on the clock every installation deadline reads: the host's `RuntimeClock`, monotonic
+    /// milliseconds (test plan v2.2 section 3.10 H-1-rest, HOST-I2).
+    fn install_now_ms(&self) -> RuntimeHostResult<u64> {
+        Ok(self.clock.sample()?.monotonic_ms)
+    }
+
+    /// The wall-clock instant of `deadline_ms`, for the waits HOST-I2 leaves on the wall clock
+    /// (the previous transition's verification, a held start's backend opens): now plus what
+    /// remains of it on the host clock, the same instant in production.
+    fn install_wall_deadline(&self, deadline_ms: u64) -> RuntimeHostResult<Instant> {
+        let remaining_ms = deadline_ms.saturating_sub(self.install_now_ms()?);
+        Ok(Instant::now() + Duration::from_millis(remaining_ms))
     }
 
     fn count_work<'a>(&'a self, admission: &mut LifecycleAdmission) -> LifecycleWork<'a> {
@@ -317,13 +357,17 @@ impl HostShared {
         };
         let deadline = Instant::now() + SHUTDOWN_SETTLE_TIMEOUT;
         loop {
+            let commit_refused = match commit {
+                Some(ticket) => !Self::commit_drained(&admission, ticket, self.install_now_ms()?),
+                None => false,
+            };
             if admission.active.is_empty()
                 || admission.active.contains_key(&thread::current().id())
                 || target != self.shutdown_target
                 || admission.stopping
                 || admission.preparing
                 || self.fatal.is_shutdown_requested()
-                || commit.is_some_and(|ticket| !Self::commit_drained(&admission, ticket))
+                || commit_refused
                 || !self.nothing_held_or_waiting()?
             {
                 return Ok(admission);
@@ -346,13 +390,17 @@ impl HostShared {
         }
     }
 
-    /// The live transition is `ticket`'s, drained and before its deadline: nothing about the
-    /// transition itself refuses its CommitShutdown.
-    fn commit_drained(admission: &LifecycleAdmission, ticket: &InstallTransitionTicket) -> bool {
+    /// The live transition is `ticket`'s, drained and before its deadline at `now_ms` on the host
+    /// clock: nothing about the transition itself refuses its CommitShutdown.
+    fn commit_drained(
+        admission: &LifecycleAdmission,
+        ticket: &InstallTransitionTicket,
+        now_ms: u64,
+    ) -> bool {
         admission.transition.as_ref().is_some_and(|transition| {
             transition.status.ticket == *ticket
                 && transition.status.phase == Phase::Drained
-                && Instant::now() < transition.deadline
+                && now_ms < transition.deadline_ms
         })
     }
 
@@ -645,9 +693,10 @@ impl HostShared {
                     RequestFailure::poison_without_terminal(error)
                 })?;
                 admission.closed = true;
+                let deadline_ms = deadline_after(self.install_now_ms()?, *timeout_ms)?;
                 admission.transition = Some(LiveTransition {
                     status,
-                    deadline: Instant::now() + Duration::from_millis(*timeout_ms),
+                    deadline_ms,
                     entered_event_id,
                     timed_out: None,
                 });
@@ -718,11 +767,12 @@ impl HostShared {
                         status.timeout_ms = *timeout_ms;
                         self.record_install_status(&status)?;
                         admission.preparing = true;
+                        let deadline_ms = deadline_after(self.install_now_ms()?, *timeout_ms)?;
                         admission
                             .transition
                             .as_mut()
                             .expect("validated transition")
-                            .deadline = Instant::now() + Duration::from_millis(*timeout_ms);
+                            .deadline_ms = deadline_ms;
                     }
                     _ => unreachable!(),
                 }
@@ -784,7 +834,7 @@ impl HostShared {
         }
         let mut status = transition.status.clone();
         let mut timed_out = None;
-        if Instant::now() >= transition.deadline {
+        if self.install_now_ms()? >= transition.deadline_ms {
             let (stage, code, reopen) = match status.phase {
                 Phase::Draining | Phase::Drained => (
                     RuntimeLifecycleFailureStage::InstallDrain,
@@ -859,7 +909,8 @@ impl HostShared {
             .as_ref()
             .and_then(|held| held.previous.as_ref())
             .map(|ticket| {
-                self.recover_install_pauses(ticket, admission.held_deadline.expect("held deadline"))
+                self.install_wall_deadline(admission.held_deadline_ms.expect("held deadline"))
+                    .and_then(|deadline| self.recover_install_pauses(ticket, deadline))
             })
             .transpose();
         for key in [TRANSITION_KEY, PAUSES_KEY] {
@@ -890,7 +941,7 @@ impl HostShared {
             let entered_event_id = self.record_install_status(&status)?;
             admission.transition = Some(LiveTransition {
                 status,
-                deadline: admission.held_deadline.expect("held deadline"),
+                deadline_ms: admission.held_deadline_ms.expect("held deadline"),
                 entered_event_id,
                 timed_out: None,
             });
@@ -961,16 +1012,23 @@ impl HostShared {
         Ok(())
     }
 
+    /// The release deadline of a held start that prepares, as the wall-clock instant its backend
+    /// opens are bounded by (HOST-I2 leaves those on the wall clock).
     pub(super) fn install_preparation_deadline(&self) -> RuntimeHostResult<Option<Instant>> {
-        let admission = lock(
-            &self.lifecycle_admission,
-            HostLocation::ReadInstallPreparationDeadline,
-        )?;
-        Ok(admission
-            .transition
-            .as_ref()
-            .filter(|_| admission.held.is_some() && admission.preparing)
-            .map(|transition| transition.deadline))
+        let deadline_ms = {
+            let admission = lock(
+                &self.lifecycle_admission,
+                HostLocation::ReadInstallPreparationDeadline,
+            )?;
+            admission
+                .transition
+                .as_ref()
+                .filter(|_| admission.held.is_some() && admission.preparing)
+                .map(|transition| transition.deadline_ms)
+        };
+        deadline_ms
+            .map(|deadline_ms| self.install_wall_deadline(deadline_ms))
+            .transpose()
     }
 
     /// INST-1 (Workflow #390, FCM D-01): an install start's verdict on the self-checks of its

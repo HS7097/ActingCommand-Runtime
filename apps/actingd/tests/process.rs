@@ -3311,6 +3311,65 @@ fn rd1b_t9_check_config_of_an_emulator_only_configuration_is_unchanged() {
     );
 }
 
+// Workflow #398 RD-4, test row RD-4-T7 at the process (model-398 v1.1 §6.6, option B): under
+// `recovery_ladder.rules.start_beyond_profile = refuse` every start rung must fit every ladder
+// profile. The defaults start `navigation_exhausted` at rung 3 and give the `handset` profile two
+// rungs, so check-config and the start alike refuse with `recovery_ladder_config_invalid` naming
+// that profile (`start_rung_out_of_range`) and exit code 1, before any ledger is opened.
+#[test]
+fn rd4_t7_refuse_with_a_start_beyond_a_profile_refuses_check_config_and_the_start() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_config(&config_path, root.path(), instance_id(), false);
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config");
+    config["recovery_ladder"] = json!({"rules": {"start_beyond_profile": "refuse"}});
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("config JSON"),
+    )
+    .expect("write config");
+    let config_argument = config_path.to_str().expect("config path");
+
+    let checked = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["check-config", "--config", config_argument])
+        .output()
+        .expect("run actingd check-config");
+    assert_eq!(checked.status.code(), Some(1), "check-config");
+    let report: Value = serde_json::from_slice(&checked.stdout).expect("check-config report");
+    assert_eq!(
+        report["outcome"]["code"], "recovery_ladder_config_invalid",
+        "{report}"
+    );
+    assert_eq!(
+        report["outcome"]["values"]["config_key"], "recovery_ladder.profiles.handset",
+        "{report}"
+    );
+    assert_eq!(
+        report["outcome"]["values"]["config_value_problem"], "start_rung_out_of_range",
+        "{report}"
+    );
+
+    let started = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_argument])
+        .output()
+        .expect("run actingd");
+    assert_eq!(started.status.code(), Some(1), "startup");
+    let terminal = terminal_outcome(&started.stderr);
+    assert_eq!(
+        terminal["code"], "recovery_ladder_config_invalid",
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal["values"]["config_key"], "recovery_ladder.profiles.handset",
+        "{terminal}"
+    );
+    assert!(
+        !root.path().join("runtime-state.sqlite").exists(),
+        "no ledger may be opened"
+    );
+}
+
 /// Workflow #369 S6a (model 369 v3.1 H-5, slice S6a "check-config shows `start_emulator`"; ORD
 /// §3.5 item 17, default off): each discovery-bound entry of the report carries its
 /// `start_emulator`, `true` for the instance that names it and `false` for one that does not; the

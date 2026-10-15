@@ -226,6 +226,10 @@
       "type": "boolean",
       "description": "The pair had no earlier dispatch."
     },
+    "grace_ms": {
+      "type": "duration_ms",
+      "description": "The grace of a clock predicate's `missed: skip_after` rule, in milliseconds."
+    },
     "count": {
       "type": "integer",
       "description": "A count."
@@ -5643,6 +5647,9 @@
     ],
     "clock_slot_": [
       "runtime-host"
+    ],
+    "clock_occurrence_": [
+      "policy"
     ],
     "accept_": [
       "runtime-host"
@@ -16435,6 +16442,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "clock_occurrence_expired": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "occurrence_unix_ms": "required",
+        "grace_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Scheduling decision reason (Workflow #361 R7): a clock predicate whose catalog sets missed {kind: skip_after, grace_ms} is not due, because its latest occurrence (occurrence_unix_ms) was not served before occurrence_unix_ms + grace_ms. The clock waits for its next occurrence; when it decides the trigger, the decision is trigger_false. The Runtime records the skipped occurrence once as clock_slot_expired.",
+      "common_causes": "The instance was busy, paused, held or refused by a budget until the occurrence's grace ran out, or no Runtime was running.",
+      "handling": "Nothing to repair: the catalog asked for the skip. Widen grace_ms in the catalog if the occurrence should still run later."
+    },
     "clock_slot_deferred": {
       "category": "info",
       "ladder_class": "none",
@@ -16462,6 +16491,31 @@
       "description": "A transient gate held back a due clock slot of a policy task on an instance (task_id, alias). An operator scheduling pause is recorded at first sight; a queue wait (a held instance, a retry backoff, an activity interval or any other deferral) or an unavailable instance only at an evaluation where the pair's activity window is closed, that is once the wait outlasted the window. gate_code is the gate's own code. Recorded once per task, instance and occurrence as a goal_missed planning signal whose signal_id is signal:clock_slot:deferred:<sha256 of task, alias and occurrence>; it carries the same values as clock_slot_refused. A later refusal of the same occurrence because its window closed is not recorded.",
       "common_causes": "An operator paused scheduling across the slot; another claim held the instance until the activity window closed; the instance stayed unavailable until the window closed.",
       "handling": "Nothing to repair for an operator pause. For a wait that outlasted the window, check what held the instance (actingctl status) or why it stayed unavailable."
+    },
+    "clock_slot_expired": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "alias": "required",
+        "occurrence_unix_ms": "required",
+        "grace_ms": "required",
+        "next_occurrence_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A clock occurrence (occurrence_unix_ms) of a policy task on an instance (task_id, alias) was not served before the grace of its clock's missed: skip_after rule (grace_ms) ran out, so the occurrence is skipped and the clock waits for its next occurrence (next_occurrence_unix_ms). Written only for a pair with an earlier dispatch whose trigger would have been true with its clocks counted due, at the first evaluation at or after occurrence_unix_ms + grace_ms, once per task, instance and occurrence, as a goal_missed planning signal whose signal_id is signal:clock_slot:expired:<sha256 of task, alias and occurrence>. It is written even after a refused or deferred record of the same occurrence, which then settles as expired.",
+      "common_causes": "The instance was busy, paused or held, or a gate refused the occurrence, until its grace ran out; no Runtime ran across the grace.",
+      "handling": "Nothing to repair: the catalog asked for the skip. A refused or deferred record of the same occurrence names the gate that made it wait. Widen grace_ms in the catalog if the occurrence should still run later."
     },
     "clock_slot_owed": {
       "category": "info",
@@ -16516,6 +16570,30 @@
       "description": "A persistent gate refused a due clock slot of a policy task on an instance (task_id, alias): a budget (policy_budget_exhausted, with budget_dimension), a closed activity window, a task paused by failure suspension, or the configuration (the task disabled for the instance, a missing capability or activity profile). gate_code is the gate's own code. Recorded once per task, instance and occurrence (occurrence_unix_ms) as a goal_missed planning signal whose outcome is this code with these values and whose signal_id is signal:clock_slot:refused:<sha256 of task, alias and occurrence>. window_end_unix_ms is the end of the activity window open at the refusal, next_eligible_unix_ms the first time the pair may be admitted again, next_occurrence_unix_ms the next clock occurrence.",
       "common_causes": "A daily or window budget already used that day, often by an owed run that served the previous day's slot; the activity window closed before the slot could run; the task is paused after repeated failures; the task is disabled for the instance, or the instance lacks the operation or a matching activity profile.",
       "handling": "Compare next_eligible_unix_ms with next_occurrence_unix_ms: below it, the slot runs later in the same or the next window; at or above it, the slot is lost to the next occurrence. Change the catalog (budget, slot times, activity window) or the instance configuration if the slot must run."
+    },
+    "clock_slot_superseded": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "alias": "required",
+        "occurrence_unix_ms": "required",
+        "next_occurrence_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A clock occurrence (occurrence_unix_ms) of a policy task on an instance (task_id, alias) was not served before a later occurrence of the pair's clocks (next_occurrence_unix_ms) came and absorbed it, and no refused, deferred or expired record names it: the slot was lost with no other trace. Written only for a pair with an earlier dispatch whose trigger would have been true with its clocks counted due, for occurrences within 48 h of the evaluation and at most 32 per pair, once per task, instance and occurrence, as a goal_missed planning signal whose signal_id is signal:clock_slot:superseded:<sha256 of task, alias and occurrence>.",
+      "common_causes": "No Runtime ran, or no evaluation came, across two occurrences of a task with several clock slots.",
+      "handling": "Check why no Runtime ran across the slot (a runtime.started gap, the watchdog). If such slots must not be lost, give the clock a missed: skip_after rule or move the slots."
     },
     "clock_unavailable": {
       "category": "error",

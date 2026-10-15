@@ -772,7 +772,8 @@ pub(crate) struct Diagnosis {
     /// The outcome of a report that is unavailable or failed (Workflow #378 A5), rendered into
     /// the status as `outcome` in the frontend's detail.
     pub(crate) report_outcome: Option<Outcome>,
-    /// At most 10 clock-slot rows (#372 K3), refused and deferred first.
+    /// At most 10 clock-slot rows (#372 K3), refused and superseded first, then deferred and
+    /// expired, then owed (#372 K4).
     pub(crate) clock_slots: Vec<Value>,
     /// The clock-slot rows in the window, kept or not.
     pub(crate) clock_slots_total: usize,
@@ -1054,8 +1055,8 @@ pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> V
 }
 
 /// The instance's `clock_slots` rows of the report recorded since `since_unix_ms` (#372 K3):
-/// at most 10, the newest refused and deferred rows (those with a `gate_code`) first, then the
-/// newest owed rows; and how many there are in the window.
+/// at most 10, in the order of [`clock_slot_rank`], newest first within each rank; and how many
+/// there are in the window.
 pub(crate) fn clock_slot_rows(
     document: &Value,
     alias: &str,
@@ -1071,7 +1072,7 @@ fn clock_slot_rows_of(
     instance: Option<(&str, &Value)>,
     since_unix_ms: u64,
 ) -> (Vec<Value>, usize) {
-    let rows = document
+    let mut rows = document
         .get("clock_slots")
         .and_then(Value::as_array)
         .map(|rows| {
@@ -1087,17 +1088,34 @@ fn clock_slot_rows_of(
         })
         .unwrap_or_default();
     let total = rows.len();
-    // The report lists them newest first; the partition keeps that order on each side.
-    let (stopped, owed): (Vec<_>, Vec<_>) = rows
-        .into_iter()
-        .partition(|row| row.get("gate_code").is_some());
-    let kept = stopped
-        .into_iter()
-        .chain(owed)
-        .take(CLOCK_SLOTS)
-        .cloned()
-        .collect();
+    // The report lists them newest first; the stable sort keeps that order within each rank.
+    rows.sort_by_key(|row| clock_slot_rank(row));
+    let kept = rows.into_iter().take(CLOCK_SLOTS).cloned().collect();
     (kept, total)
+}
+
+/// The rank of a `clock_slots` row in `ac_diagnose` (#372 K4.4): 0 for a slot lost or refused
+/// at `warning` (a refused or a superseded record), 1 for another slot that was held back or
+/// skipped (a deferred record, which carries a `gate_code`, or an expired one, which carries a
+/// `grace_ms`), 2 for the rest: the owed records, the unparsed ones and any code the catalog
+/// does not register. A row's category is its code's, read from the catalog this build embeds.
+fn clock_slot_rank(row: &Value) -> u8 {
+    if row.get("parse_state").is_some() || row.get("window_start_unix_ms").is_some() {
+        return 2;
+    }
+    let category = row
+        .get("code")
+        .and_then(Value::as_str)
+        .map(Outcome::relayed)
+        .filter(|outcome| !outcome.is(ContractCode::OutcomeRelayUnregistered))
+        .map(|outcome| outcome.category());
+    if category == Some(Category::Warning) {
+        0
+    } else if row.get("gate_code").is_some() || row.get("grace_ms").is_some() {
+        1
+    } else {
+        2
+    }
 }
 
 /// Whether two paths name the same directory, as written or once resolved.

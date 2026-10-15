@@ -419,12 +419,12 @@ jobs:
     timeout-minutes: 35
     env:
       CI_PACKAGES: -p actingcommand-runtime-client
-      CI_SKIP: tests::runtime_input_proxy_renews_before_short_lease_expiry
+      CI_SKIP: ''
       # Call 2: the recorder tests that exist only under the feature and the tests with
       # feature-only trace assertions. A test that gains such an assertion joins this filter in
       # the same PR.
       CI_EXTRA_FEATURES: test-observation
-      CI_EXTRA_FILTER: 'test_observation:: runtime_input_proxy_renews_before_short_lease_expiry long_input_extends_only_its_response_wait'
+      CI_EXTRA_FILTER: 'test_observation:: gate_one_beat_sends_one_renewal_frame_and_the_renewed_token_carries_the_next_input long_input_extends_only_its_response_wait'
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup
@@ -605,7 +605,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     env:
-      FLAKY_TESTS: actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry@test-observation actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success@actingcommand-runtime-host/fixture-backends
+      FLAKY_TESTS: actingcommand-actingctl::c4_process::process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal actingcommand-runtime-host::lib::tests::capture_failure::readonly_failures_are_visible_and_terminal_without_fake_success@actingcommand-runtime-host/fixture-backends
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust-setup

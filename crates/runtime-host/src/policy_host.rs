@@ -1518,8 +1518,8 @@ impl PolicyHost {
         let clock_slot_signals = clock_slot::preview(
             &self.store,
             &active.compiled,
-            &facts.tasks,
-            &facts.instances,
+            facts,
+            resources,
             &evaluation,
             &pending_dispatch_intents,
             &in_flight,

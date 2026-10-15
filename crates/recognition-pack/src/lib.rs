@@ -856,7 +856,8 @@ pub struct TargetEvaluation {
     pub value_test: Option<Box<ValueTestEvaluation>>,
     /// Why the target did not pass, when a registered reason exists (Workflow #396 REC-1:
     /// `text_locate_not_found`, `text_locate_outside_cells`; REC-2: `target_match_not_unique`;
-    /// REC-6: `value_test_unresolved`, `value_test_not_met`); absent otherwise.
+    /// REC-6: `value_test_unresolved`, `value_test_not_met`; Workflow #390 R-10:
+    /// `ocr_region_unresolved` for an OCR target whose anchor did not pass); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<Outcome>,
     /// Workflow #396 REC-2: the uniqueness check of a target that declares `unique` (a second
@@ -1378,6 +1379,54 @@ impl SceneEvaluation<'_> {
     }
 }
 
+/// Workflow #390 R-10 (REC-M §8.6): an OCR target whose `template_relative` anchor did not pass
+/// cannot be evaluated. Asked for its pass or fail (a page rule, a check member, a guard), it
+/// did not pass: `failure` `ocr_region_unresolved`, its region evidence (`unresolved`
+/// `anchor_not_matched`), no provider call and no error. Every other error of its region
+/// (`out_of_frame`, `coordinate_overflow`, an anchor evaluation that failed) is returned.
+pub(crate) fn anchor_not_matched(
+    target: &OcrTarget,
+    error: RecognitionPackError,
+) -> RecognitionPackResult<TargetEvaluation> {
+    let evidence = match error.region.as_deref() {
+        Some(evidence)
+            if error.code == RecognitionPackErrorCode::RegionUnresolved
+                && evidence.unresolved == Some(OcrRegionUnresolvedReason::AnchorNotMatched) =>
+        {
+            evidence.clone()
+        }
+        _ => return Err(error),
+    };
+    Ok(TargetEvaluation {
+        id: target.id.clone(),
+        kind: TargetKind::Ocr,
+        sample_evaluations: Vec::new(),
+        sampling: None,
+        passed: false,
+        template: None,
+        color: None,
+        ocr: Some(Box::new(OcrEvaluation {
+            ppocr_diagnostics: Vec::new(),
+            region: Box::new(evidence),
+            raw_text: String::new(),
+            block_source_order: Vec::new(),
+            text: String::new(),
+            confidence: None,
+            matched_expected: None,
+            match_mode: target.match_mode,
+            blocks: Vec::new(),
+            located: None,
+        })),
+        nn: None,
+        color_digest: None,
+        composite: None,
+        value_test: None,
+        failure: Some(Outcome::new(RecognitionPackCode::OcrRegionUnresolved)),
+        uniqueness: None,
+        message: "ocr region unresolved: anchor not matched".to_owned(),
+    })
+}
+
 impl<'a> SceneEvaluation<'a> {
     /// Workflow #396 REC-6: an evaluation of one of `targets`, an ordinary OCR target, here keeps
     /// its provider observation (with its execution evidence) by target; a later evaluation of
@@ -1413,6 +1462,26 @@ impl RecognitionEvaluator {
             _ => None,
         })
     }
+
+    /// Workflow #390 R-10 (REC-M §8.6): the anchor templates of the anchored OCR targets that
+    /// `target_id` names: its own anchor when it is an OCR target with a `template_relative`
+    /// region, each such member's anchor when it is a check.
+    pub fn ocr_anchors(&self, target_id: &str) -> RecognitionPackResult<Vec<&str>> {
+        let members: Vec<&str> = match self.target(target_id)? {
+            RecognitionTarget::Composite(composite) => {
+                composite.members.iter().map(String::as_str).collect()
+            }
+            _ => vec![target_id],
+        };
+        let mut anchors = Vec::new();
+        for member in members {
+            if let Some(anchor) = self.ocr_anchor_target_id(member)? {
+                anchors.push(anchor);
+            }
+        }
+        Ok(anchors)
+    }
+
     pub fn scene_context<'a>(&'a self, scene: &'a Scene) -> SceneEvaluation<'a> {
         SceneEvaluation {
             evaluator: self,
@@ -2256,7 +2325,10 @@ impl RecognitionEvaluator {
             return self.evaluate_located_text(context, target, locate);
         }
         let scene = context.scene;
-        let (region, region_evidence) = context.ocr_region(target)?;
+        let (region, region_evidence) = match context.ocr_region(target) {
+            Ok(region) => region,
+            Err(error) => return anchor_not_matched(target, error),
+        };
         (|| {
             let provider = self.vision_provider.as_ref().ok_or_else(|| {
                 RecognitionPackError::fatal_with_code(
@@ -4902,14 +4974,26 @@ mod tests {
             let evaluator =
                 RecognitionEvaluator::new(fixture.dir.path.clone(), relative_pack(offset)).unwrap();
             let scene = Scene::from_rgb8(2, 1, &pixels).unwrap();
-            for error in [
-                evaluator.evaluate_target(&scene, "ocr/page").unwrap_err(),
-                evaluator
-                    .evaluate_ocr_observation(&scene, "ocr/page")
-                    .unwrap_err(),
-            ] {
-                assert_eq!(error.code(), RecognitionPackErrorCode::RegionUnresolved);
-                assert_eq!(error.region().unwrap().unresolved, Some(reason));
+            let error = evaluator
+                .evaluate_ocr_observation(&scene, "ocr/page")
+                .unwrap_err();
+            assert_eq!(error.code(), RecognitionPackErrorCode::RegionUnresolved);
+            assert_eq!(error.region().unwrap().unresolved, Some(reason));
+            // Workflow #390 R-10: a target evaluation whose anchor did not pass did not pass;
+            // an out-of-frame or overflowing region stays an error.
+            match evaluator.evaluate_target(&scene, "ocr/page") {
+                Ok(evaluation) if reason == OcrRegionUnresolvedReason::AnchorNotMatched => {
+                    assert!(!evaluation.passed);
+                    assert!(evaluation.failure.as_ref().is_some_and(|failure| {
+                        failure.is(RecognitionPackCode::OcrRegionUnresolved)
+                    }));
+                    assert_eq!(*evaluation.ocr.unwrap().region, *error.region().unwrap());
+                }
+                Err(error) if reason != OcrRegionUnresolvedReason::AnchorNotMatched => {
+                    assert_eq!(error.code(), RecognitionPackErrorCode::RegionUnresolved);
+                    assert_eq!(error.region().unwrap().unresolved, Some(reason));
+                }
+                other => panic!("{reason:?}: {other:?}"),
             }
         }
     }
