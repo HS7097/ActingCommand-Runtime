@@ -25,6 +25,7 @@ use actingcommand_contract::{
     RuntimeErrorCode, RuntimeErrorProjection, RuntimeOperation, RuntimeReceipt,
     RuntimeReceiptState, RuntimeResult,
 };
+use std::slice;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -181,7 +182,7 @@ fn gate_each_heartbeat_beat_renews_once_with_the_token_the_previous_renewal_retu
         let calls = authority.calls();
         assert_eq!(calls.acquisitions, 1);
         assert!(calls.renewed.is_empty(), "a renewal without a beat");
-        assert_eq!(calls.released, [authority.granted.clone()]);
+        assert_eq!(calls.released, slice::from_ref(&authority.granted));
     }
     assert!(reports.try_recv().is_err(), "a renewal without a beat");
 
@@ -256,7 +257,7 @@ fn gate_dropping_the_proxy_releases_its_lease_once_and_a_later_beat_renews_nothi
     drop(proxy);
     {
         let calls = authority.calls();
-        assert_eq!(calls.released, [authority.granted.clone()]);
+        assert_eq!(calls.released, slice::from_ref(&authority.granted));
     }
 
     assert!(
@@ -383,6 +384,9 @@ fn gate_one_beat_sends_one_renewal_frame_and_the_renewed_token_carries_the_next_
         "{receipt:?}"
     );
     proxy.close().expect("close the proxy");
+    // The closed proxy still holds its clone of the client, and with it the one connection;
+    // the scripted Runtime finishes once every clone is gone and that connection is closed.
+    drop(proxy);
     drop(heartbeat);
     drop(client);
     let record = runtime.finish();
@@ -416,7 +420,7 @@ fn gate_one_beat_sends_one_renewal_frame_and_the_renewed_token_carries_the_next_
     });
     assert_eq!(
         inputs,
-        [renewed_token.clone()],
+        slice::from_ref(&renewed_token),
         "the next input carries the renewed token"
     );
     let releases = tokens(requests, |operation| match operation {
