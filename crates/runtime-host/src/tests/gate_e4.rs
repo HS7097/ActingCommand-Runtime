@@ -9,9 +9,11 @@
 // incrementally"). The offline half is resource-tooling's `gate_e4`. Requirement basis:
 // rd-1009/tests/req-basis-el.md section E-4, row "G4b".
 
+// The one module of the shared fixture in this crate's tests; gate_336_pkgs4 uses it from here
+// (clippy `duplicate_mod`).
 #[allow(dead_code)]
 #[path = "../../../../tests/support/exec_i6.rs"]
-mod exec_i6;
+pub(super) mod exec_i6;
 
 use super::*;
 use actingcommand_contract::ContainedTaskRecoveryBinding;

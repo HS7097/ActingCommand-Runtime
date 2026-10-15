@@ -7,13 +7,9 @@
 // layer of a `linear_steps` package's chain, and as the configured return-home package of a
 // page-graph entry.
 
-#[allow(dead_code)]
-#[path = "../../../../tests/support/exec_i6.rs"]
-mod exec_i6;
-
+use super::gate_e4::exec_i6::{self, I6Pack, RESOLUTION, ROOT};
 use super::*;
 use actingcommand_contract::ContainedTaskRecoveryBinding;
-use exec_i6::{I6Pack, RESOLUTION, ROOT};
 
 const MISMATCH: &str = "contained_task_prerequisite_mismatch";
 
