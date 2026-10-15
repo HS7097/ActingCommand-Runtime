@@ -66,7 +66,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     let missing_request = missing_client.request(RuntimeOperation::run_contained_task(
         "neutral.instance",
         missing_client.ids.mint_holder_id().expect("holder"),
-        ContainedTaskRequest::new(missing_package.display().to_string(), expected.clone())
+        ContainedTaskRequest::new(missing_package.display().to_string())
             .expect("missing-provider task request"),
     ));
     let missing_receipt = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -140,7 +140,7 @@ fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     let injected_request = injected_client.request(RuntimeOperation::run_contained_task(
         "neutral.instance",
         injected_client.ids.mint_holder_id().expect("holder"),
-        ContainedTaskRequest::new(injected_package.display().to_string(), expected)
+        ContainedTaskRequest::new(injected_package.display().to_string())
             .expect("injected-provider task request"),
     ));
     let injected_receipt = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

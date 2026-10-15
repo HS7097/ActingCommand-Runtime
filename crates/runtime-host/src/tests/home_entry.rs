@@ -47,11 +47,7 @@ fn explicit_home_entry_mismatch_fails_before_target_input() {
         RuntimeOperation::run_contained_task(
             "fixture01.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(
-                target_path.display().to_string(),
-                format!("{:x}", Sha256::digest(&target)),
-            )
-            .expect("target request"),
+            ContainedTaskRequest::new(target_path.display().to_string()).expect("target request"),
         ),
     );
 
@@ -137,11 +133,7 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
         RuntimeOperation::run_contained_task(
             "fixture01.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(
-                target_path.display().to_string(),
-                format!("{:x}", Sha256::digest(&target)),
-            )
-            .expect("target request"),
+            ContainedTaskRequest::new(target_path.display().to_string()).expect("target request"),
         ),
     );
 
@@ -236,11 +228,7 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
             RuntimeOperation::run_contained_task(
                 "fixture01.instance",
                 client.ids.mint_holder_id().unwrap(),
-                ContainedTaskRequest::new(
-                    path.display().to_string(),
-                    format!("{:x}", Sha256::digest(&bytes)),
-                )
-                .unwrap(),
+                ContainedTaskRequest::new(path.display().to_string()).unwrap(),
             ),
         );
         let receipt = client.send(&request);
@@ -334,7 +322,6 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     let recovery_path = root.path().join("return-home.zip");
     fs::write(&target_path, &target).expect("write target package");
     fs::write(&recovery_path, &recovery).expect("write recovery package");
-    let recovery_sha256 = format!("{:x}", Sha256::digest(&recovery));
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -353,17 +340,13 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
-    let task_request = ContainedTaskRequest::new(
-        target_path.display().to_string(),
-        format!("{:x}", Sha256::digest(&target)),
-    )
-    .and_then(|request| {
-        request.with_recovery(ContainedTaskRecoveryBinding::new(
-            recovery_path.display().to_string(),
-            recovery_sha256.clone(),
-        )?)
-    })
-    .expect("target request with recovery");
+    let task_request = ContainedTaskRequest::new(target_path.display().to_string())
+        .and_then(|request| {
+            request.with_recovery(ContainedTaskRecoveryBinding::new(
+                recovery_path.display().to_string(),
+            )?)
+        })
+        .expect("target request with recovery");
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::run_contained_task(
@@ -501,15 +484,12 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().unwrap();
     let correlation_id = *correlation.transport();
-    let binding = ContainedTaskRequest::new(
-        target_path.display().to_string(),
-        format!("{:x}", Sha256::digest(&target)),
-    )
-    .unwrap()
-    .with_recovery(
-        ContainedTaskRecoveryBinding::new(recovery_path.display().to_string(), hash).unwrap(),
-    )
-    .unwrap();
+    let binding = ContainedTaskRequest::new(target_path.display().to_string())
+        .unwrap()
+        .with_recovery(
+            ContainedTaskRecoveryBinding::new(recovery_path.display().to_string()).unwrap(),
+        )
+        .unwrap();
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::run_contained_task(
@@ -582,7 +562,6 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
         let recovery_path = root.path().join("return-home.zip");
         fs::write(&target_path, &target).expect("write target package");
         fs::write(&recovery_path, &recovery).expect("write recovery package");
-        let recovery_sha256 = format!("{:x}", Sha256::digest(&recovery));
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         state
@@ -601,17 +580,13 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
         client.set_receipt_read_timeout();
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
-        let task_request = ContainedTaskRequest::new(
-            target_path.display().to_string(),
-            format!("{:x}", Sha256::digest(&target)),
-        )
-        .and_then(|request| {
-            request.with_recovery(ContainedTaskRecoveryBinding::new(
-                recovery_path.display().to_string(),
-                recovery_sha256.clone(),
-            )?)
-        })
-        .expect("target request with recovery");
+        let task_request = ContainedTaskRequest::new(target_path.display().to_string())
+            .and_then(|request| {
+                request.with_recovery(ContainedTaskRecoveryBinding::new(
+                    recovery_path.display().to_string(),
+                )?)
+            })
+            .expect("target request with recovery");
         let request = client.request_with_correlation(
             correlation,
             RuntimeOperation::run_contained_task(
@@ -723,17 +698,13 @@ fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
-    let task_request = ContainedTaskRequest::new(
-        target_path.display().to_string(),
-        format!("{:x}", Sha256::digest(&target)),
-    )
-    .and_then(|request| {
-        request.with_recovery(ContainedTaskRecoveryBinding::new(
-            root.path().join("unused.zip").display().to_string(),
-            "9".repeat(64),
-        )?)
-    })
-    .expect("neutral request with unused recovery binding");
+    let task_request = ContainedTaskRequest::new(target_path.display().to_string())
+        .and_then(|request| {
+            request.with_recovery(ContainedTaskRecoveryBinding::new(
+                root.path().join("unused.zip").display().to_string(),
+            )?)
+        })
+        .expect("neutral request with unused recovery binding");
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::run_contained_task(

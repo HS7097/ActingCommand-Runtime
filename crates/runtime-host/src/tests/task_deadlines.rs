@@ -13,7 +13,6 @@ fn direct_contained_task_max_deadline_survives_past_default_lease_boundary() {
         ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS,
     );
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -36,7 +35,7 @@ fn direct_contained_task_max_deadline_survives_past_default_lease_boundary() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
+            ContainedTaskRequest::new(package.display().to_string())
                 .expect("contained task request")
                 .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
                 .expect("bounded response deadline"),
@@ -139,7 +138,6 @@ fn contained_task_deadline_checkpoint_fails_closed_on_lease_identity_mismatch() 
     let package = root.path().join("identity-mismatch-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -163,7 +161,7 @@ fn contained_task_deadline_checkpoint_fails_closed_on_lease_identity_mismatch() 
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
+            ContainedTaskRequest::new(package.display().to_string())
                 .expect("contained task request")
                 .with_response_deadline_ms(7_000)
                 .expect("bounded response deadline"),
@@ -234,7 +232,6 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
     let package = root.path().join("deadline-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
@@ -249,7 +246,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
     )
     .expect("runtime host");
     let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let task_request = ContainedTaskRequest::new(package.display().to_string(), expected)
+    let task_request = ContainedTaskRequest::new(package.display().to_string())
         .expect("contained task request")
         .with_response_deadline_ms(25)
         .expect("bounded task deadline");
@@ -398,13 +395,10 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
     // The geometry prerequisite bounds its reads by the response deadline in
     // wall time, so the budget must comfortably cover reaching the blocked
     // input; the manual clock still decides when the deadline is exceeded.
-    let task_request = ContainedTaskRequest::new(
-        package.display().to_string(),
-        actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-    )
-    .unwrap()
-    .with_response_deadline_ms(2_500)
-    .unwrap();
+    let task_request = ContainedTaskRequest::new(package.display().to_string())
+        .unwrap()
+        .with_response_deadline_ms(2_500)
+        .unwrap();
     let request = runtime_request(
         &ids,
         RuntimeOperation::run_contained_task(
@@ -471,13 +465,10 @@ fn scheduled_contained_task_deadline_uses_existing_failure_settlement() {
         let package = neutral_contained_task_package_with_execution_timeout(true, budget_ms);
         let package_path = root.path().join("scheduled-task.zip");
         fs::write(&package_path, &package).expect("write scheduled package");
-        let request = ContainedTaskRequest::new(
-            package_path.to_string_lossy().into_owned(),
-            format!("{:x}", Sha256::digest(&package)),
-        )
-        .expect("scheduled package request")
-        .with_response_deadline_ms(budget_ms)
-        .expect("bounded scheduled response budget");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("scheduled package request")
+            .with_response_deadline_ms(budget_ms)
+            .expect("bounded scheduled response budget");
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         state

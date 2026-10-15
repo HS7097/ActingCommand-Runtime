@@ -116,11 +116,7 @@ fn run_package_at(root: &TempDir, width: u32, height: u32) -> RuntimeFlowOutput 
     let bytes = package_at(width, height);
     let path = root.path().join(format!("display-{width}x{height}.zip"));
     fs::write(&path, &bytes).expect("write package");
-    let request = ContainedTaskRequest::new(
-        path.display().to_string(),
-        actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-    )
-    .expect("task request");
+    let request = ContainedTaskRequest::new(path.display().to_string()).expect("task request");
     RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
         actingcommand_runtime_client::RuntimeChannel::Cli,

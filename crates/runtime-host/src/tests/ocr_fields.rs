@@ -208,7 +208,6 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             let mut request = SavedArtifactOcrRequest {
                 source: binding.clone(),
                 package_path: package_path.to_str().unwrap().into(),
-                expected_sha256: format!("{:x}", Sha256::digest(&package)).into(),
                 target_id: "fixture/ocr".into(),
             };
             if mode == 1 {
@@ -486,7 +485,6 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         package.write_all(&bytes).unwrap();
     }
     let bytes = package.finish().unwrap().into_inner();
-    let expected_sha = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
 
     for (capture, fatal, fail_report, successful) in [
         (true, false, false, false),
@@ -571,8 +569,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             ),
         )
         .expect("formal host with existing fake backends");
-        let request =
-            ContainedTaskRequest::new(package_path.display().to_string(), &expected_sha).unwrap();
+        let request = ContainedTaskRequest::new(package_path.display().to_string()).unwrap();
         let client_root = root.path().to_path_buf();
         let execution = thread::spawn(move || {
             let client = RuntimeClient::connect(RuntimeClientConfig::new(
@@ -949,19 +946,12 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             EventSource::Cli,
         ))
         .unwrap();
-        let request = ContainedTaskRequest::new(
-            target_path.display().to_string(),
-            format!("{:x}", Sha256::digest(&target)),
-        )
-        .unwrap()
-        .with_recovery(
-            ContainedTaskRecoveryBinding::new(
-                recovery_path.display().to_string(),
-                format!("{:x}", Sha256::digest(&recovery)),
+        let request = ContainedTaskRequest::new(target_path.display().to_string())
+            .unwrap()
+            .with_recovery(
+                ContainedTaskRecoveryBinding::new(recovery_path.display().to_string()).unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
+            .unwrap();
         let output = client
             .run_contained_task("fixture01.instance", request)
             .unwrap();
@@ -1136,7 +1126,7 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
         .expect("official client");
         let result = client.run_contained_task(
             "neutral.instance",
-            ContainedTaskRequest::new(package_path.display().to_string(), expected).unwrap(),
+            ContainedTaskRequest::new(package_path.display().to_string()).unwrap(),
         );
         let events = host
             .query_persisted_events_for_test(EventQuery::default())

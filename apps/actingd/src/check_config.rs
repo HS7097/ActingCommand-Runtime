@@ -437,13 +437,13 @@ fn summarize(
                     ));
                 }
             };
-            // The startup package as assembled: locator and digest, neither opened nor hashed.
-            let startup_package = checked.host.startup_packages().get(&alias).map(|request| {
-                json!({
-                    "package": request.package_path(),
-                    "expected_sha256": request.expected_sha256(),
-                })
-            });
+            // The startup package as assembled: its locator, neither opened nor hashed
+            // (Workflow #336 PKG-S4: no digest).
+            let startup_package = checked
+                .host
+                .startup_packages()
+                .get(&alias)
+                .map(|request| json!({ "package": request.package_path() }));
             // The effective stuck-recovery ladder settings (slice #316-B4): the instance's own,
             // or the `recovery_ladder` section's (Workflow #387 D1c).
             let stuck_recovery = checked

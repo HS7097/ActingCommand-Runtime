@@ -115,11 +115,8 @@ fn policy_dispatch_crash_child_process() {
                 .expect("expire exact child policy lease");
         }
         let package = package.expect("scheduled package");
-        let request = ContainedTaskRequest::new(
-            package_path.to_string_lossy().into_owned(),
-            format!("{:x}", Sha256::digest(package)),
-        )
-        .expect("scheduled request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("scheduled request");
         match recovery_case.as_deref() {
             Some("task-recoverable" | "task-severe" | "lease-expired") => {
                 let error = host

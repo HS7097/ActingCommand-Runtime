@@ -8,7 +8,6 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
     let package = root.path().join("recovered-task.zip");
     let bytes = neutral_contained_task_package(false);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
     let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
@@ -33,7 +32,7 @@ fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expir
         RuntimeOperation::RunContainedTask {
             instance_alias: "neutral.instance".to_owned(),
             holder_id: token.holder_id(),
-            request: ContainedTaskRequest::new(package.display().to_string(), expected)
+            request: ContainedTaskRequest::new(package.display().to_string())
                 .expect("task request"),
         },
     );
@@ -104,7 +103,6 @@ fn contained_task_replay_without_connection_cache_reuses_runtime_terminal() {
     let package = root.path().join("neutral-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -117,8 +115,7 @@ fn contained_task_replay_without_connection_cache_reuses_runtime_terminal() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
     let connection = ConnectionId::new(91).expect("connection");

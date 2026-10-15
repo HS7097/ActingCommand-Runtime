@@ -9,7 +9,6 @@ use actingcommand_contract::{
     RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, TaskOutcome, TaskPayload,
     TaskSemanticFact,
 };
-use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
 use std::fs;
@@ -234,7 +233,7 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
     let frame = root.path().join("sealed.png");
     support::write_sealed_frame(&frame);
     let package = root.path().join("neutral-task.zip");
-    let expected_sha256 = write_neutral_contained_task_package(&package);
+    write_neutral_contained_task_package(&package);
     let mut runtime = support::RuntimeChild::spawn_for_instance(
         root.path(),
         "c4_runtime_child_process",
@@ -252,8 +251,6 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
             "neutral.instance",
             "--package",
             package.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ],
     );
 
@@ -295,7 +292,7 @@ fn actingctl_task_run_that_waited_prints_exactly_one_stdout_json_line() {
     let frame = root.path().join("sealed.png");
     support::write_sealed_frame(&frame);
     let package = root.path().join("neutral-task.zip");
-    let expected_sha256 = write_neutral_contained_task_package(&package);
+    write_neutral_contained_task_package(&package);
     let mut runtime = support::RuntimeChild::spawn_for_instance(
         root.path(),
         "c4_runtime_child_process",
@@ -322,8 +319,6 @@ fn actingctl_task_run_that_waited_prints_exactly_one_stdout_json_line() {
             "neutral.instance",
             "--package",
             package.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -374,7 +369,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     let frame = root.path().join("sealed.png");
     support::write_sealed_frame(&frame);
     let package = root.path().join("neutral-task.zip");
-    let expected_sha256 = write_neutral_contained_task_package(&package);
+    write_neutral_contained_task_package(&package);
     let mut runtime = support::RuntimeChild::spawn_for_instance(
         root.path(),
         "c4_runtime_child_process",
@@ -394,7 +389,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("holder id"),
-            ContainedTaskRequest::new(package.display().to_string(), &expected_sha256)
+            ContainedTaskRequest::new(package.display().to_string())
                 .expect("contained task request"),
         ),
     )
@@ -454,7 +449,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
     // Workflow #336 PKG-S2 (M-PKG v1.1 §4.3, S2-T6): a replay names its package by
     // `package_id`, so the conflicting request names another package (another `package_id`).
     let other_package = root.path().join("other-task.zip");
-    let other_sha256 = write_contained_task_package(&other_package, "neutral.semantic.other");
+    write_contained_task_package(&other_package, "neutral.semantic.other");
     let conflicting = RuntimeRequest::new(
         request_id,
         correlation_id,
@@ -465,7 +460,7 @@ fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("conflicting holder id"),
-            ContainedTaskRequest::new(other_package.display().to_string(), &other_sha256)
+            ContainedTaskRequest::new(other_package.display().to_string())
                 .expect("conflicting contained task request"),
         ),
     )
@@ -543,7 +538,7 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
     let frame = root.path().join("sealed.png");
     support::write_sealed_frame(&frame);
     let package = root.path().join("neutral-task.zip");
-    let expected_sha256 = write_neutral_contained_task_package(&package);
+    write_neutral_contained_task_package(&package);
     let mut runtime = support::RuntimeChild::spawn_for_instance_with_input_delay(
         root.path(),
         "c4_runtime_child_process",
@@ -561,8 +556,6 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
             "neutral.instance",
             "--package",
             package.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -740,12 +733,12 @@ fn raw_exchange(info: &RuntimeInfo, request: &RuntimeRequest) -> RuntimeReceipt 
     receipt
 }
 
-fn write_neutral_contained_task_package(path: &Path) -> String {
+fn write_neutral_contained_task_package(path: &Path) {
     write_contained_task_package(path, "neutral.semantic.task")
 }
 
 // The neutral contained task package under `package_id`; only `control.json` names the id.
-fn write_contained_task_package(path: &Path, package_id: &str) -> String {
+fn write_contained_task_package(path: &Path, package_id: &str) {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -820,7 +813,6 @@ fn write_contained_task_package(path: &Path, package_id: &str) -> String {
     }
     let bytes = zip.finish().expect("finish zip").into_inner();
     fs::write(path, &bytes).expect("write neutral contained package");
-    Sha256Hash::digest(&bytes).to_string()
 }
 
 /// Workflow #378 A5 (model §7.3): a successful subcommand's line is `{…result, outcome}` with

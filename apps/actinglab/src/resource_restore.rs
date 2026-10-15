@@ -33,9 +33,7 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
                 | "--request-id"
                 | "--through-sequence"
                 | "--zip"
-                | "--expected-sha256"
                 | "--package"
-                | "--package-ref"
                 | "--task-id"
                 | "--entry-page"
                 | "--target-page"
@@ -83,8 +81,8 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             return Err(CliError::usage("duplicate --request-id"));
         }
     }
+    // Workflow #336 PKG-S4 (option 丙): the original package by its path only.
     let package = crate::contained_resources::PackageInput::open(&flags)?;
-    let expected = package.reference.clone();
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(
             actingcommand_contract::ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
@@ -96,7 +94,7 @@ pub(super) fn run_resource_restore(args: &[String]) -> CliOutcome<Value> {
             &InstanceId::new("resource-restore")
                 .map_err(|_| restore_error("invalid containment identity"))?,
             package.path(),
-            &expected,
+            &actingcommand_contract::PackageRef::default(),
             true,
             deadline,
         )

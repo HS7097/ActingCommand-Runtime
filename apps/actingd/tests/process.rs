@@ -2812,7 +2812,6 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
         "catalog_approval_ids": ["approval:fixture-a"],
         "procedure_manifest": [{
             "procedure_ref": "procedure.observe",
-            "package_digest": format!("sha256:{}", "c".repeat(64)),
             "operation_id": "operation.observe",
             "yield_points": ["after_observation"]
         }]
@@ -3696,6 +3695,78 @@ fn rd1b_check_config(config_path: &Path) -> (bool, Value) {
     (output.status.success(), report)
 }
 
+/// Workflow #336 PKG-S4 (option 丙), model M-PKG v1.1 §4.5 S4-T1 and the configuration half of
+/// S4-T2: a configuration names its packages by their paths only. With `startup_package`
+/// `{package}` and a `prerequisite_packages` entry `{package_id, package_path}` it assembles and
+/// check-config passes, reporting the startup package by its path alone. One that still carries
+/// `startup_package.expected_sha256`, `prerequisite_packages[].package_digest` or
+/// `policy.procedure_manifest[].package_digest` is refused with `config_decode_failed` at stage
+/// `config_load`.
+#[test]
+fn s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let package = root.path().join("packages").join("neutral.home");
+    fs::create_dir_all(&package).expect("package directory");
+    let read = || -> Value {
+        serde_json::from_slice(&fs::read(&config_path).expect("read config")).expect("config JSON")
+    };
+    let write = |value: &Value| {
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(value).expect("config JSON"),
+        )
+        .expect("write config")
+    };
+    write_config(&config_path, root.path(), instance_id(), false);
+    let mut config = read();
+    config["instances"][0]["startup_package"] = json!({"package": package});
+    config["prerequisite_packages"] =
+        json!([{"package_id": "neutral.home", "package_path": package}]);
+    write(&config);
+
+    let (succeeded, checked) = rd1b_check_config(&config_path);
+    assert!(succeeded, "{checked}");
+    assert_eq!(checked["outcome"]["code"], "check_config_passed");
+    assert_eq!(
+        checked["report"]["instances"][0]["startup_package"],
+        json!({"package": package}),
+        "{checked}"
+    );
+
+    let digest = json!(format!("sha256:{}", "c".repeat(64)));
+    let mut startup = config.clone();
+    startup["instances"][0]["startup_package"]["expected_sha256"] = json!("c".repeat(64));
+    let mut prerequisite = config.clone();
+    prerequisite["prerequisite_packages"][0]["package_digest"] = digest.clone();
+    write_legacy_physical_policy_config(&config_path, root.path(), instance_id());
+    let policy = read();
+    let (_, decoded) = rd1b_check_config(&config_path);
+    assert_ne!(
+        decoded["outcome"]["code"], "config_decode_failed",
+        "{decoded}"
+    );
+    let mut binding = policy.clone();
+    binding["policy"]["procedure_manifest"][0]["package_digest"] = digest;
+    for (key, refused) in [
+        ("startup_package.expected_sha256", startup),
+        ("prerequisite_packages[].package_digest", prerequisite),
+        ("policy.procedure_manifest[].package_digest", binding),
+    ] {
+        write(&refused);
+        let (succeeded, checked) = rd1b_check_config(&config_path);
+        assert!(!succeeded, "{key}: {checked}");
+        assert_eq!(
+            (
+                &checked["outcome"]["code"],
+                &checked["outcome"]["values"]["stage"]
+            ),
+            (&json!("config_decode_failed"), &json!("config_load")),
+            "{key}: {checked}"
+        );
+    }
+}
+
 /// Workflow #398 RD-1b, test row T4, check-config (model-398 v1.1 §3.6): a handset instance the
 /// private binding file binds no device to (here there is no file at all) fails the check with
 /// `device_binding_missing` at stage `assemble`, naming the instance.
@@ -3953,7 +4024,6 @@ fn write_legacy_physical_policy_config(path: &Path, state_root: &Path, instance_
             "catalog_approval_ids": ["approval:fixture-a"],
             "procedure_manifest": [{
                 "procedure_ref": "procedure.observe",
-                "package_digest": format!("sha256:{}", "c".repeat(64)),
                 "operation_id": "operation.observe",
                 "yield_points": ["after_observation"]
             }]
@@ -4012,10 +4082,6 @@ fn write_policy_execution_config_with_package(
         fs::write(policy_root.join(name), source.bytes).expect("write policy document");
     }
     fs::write(policy_root.join("task.zip"), package).expect("write contained package");
-    let package_sha256 = Sha256::digest(package)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
     let fixture_frames = frames
         .iter()
         .map(|rgb| json!({"width": 2, "height": 1, "rgb": rgb}))
@@ -4039,7 +4105,6 @@ fn write_policy_execution_config_with_package(
             "catalog_approval_ids": ["approval:fixture-a"],
             "procedure_manifest": [{
                 "procedure_ref": "procedure.observe",
-                "package_digest": format!("sha256:{package_sha256}"),
                 "operation_id": "operation.observe",
                 "yield_points": ["after_observation"],
                 "scheduled_execution": {

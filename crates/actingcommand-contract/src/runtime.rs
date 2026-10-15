@@ -2289,21 +2289,18 @@ impl ReadonlyObservationOutcome {
     }
 }
 
+/// Workflow #336 PKG-S4 (option 丙): a package is named by its path only; the request carries
+/// no digest, and a request that still names `expected_sha256` does not decode.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageDebugRequest {
     package_path: String,
-    expected_sha256: crate::PackageRef,
 }
 
 impl PackageDebugRequest {
-    pub fn new(
-        package_path: impl Into<String>,
-        expected_sha256: impl Into<crate::PackageRef>,
-    ) -> RuntimeContractResult<Self> {
+    pub fn new(package_path: impl Into<String>) -> RuntimeContractResult<Self> {
         let request = Self {
             package_path: package_path.into(),
-            expected_sha256: expected_sha256.into(),
         };
         request.validate()?;
         Ok(request)
@@ -2318,17 +2315,11 @@ impl PackageDebugRequest {
                 RuntimeContractCode::InvalidDebugPackagePath,
             ));
         }
-        self.expected_sha256
-            .validate()
-            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidDebugPackageHash))
+        Ok(())
     }
 
     pub fn package_path(&self) -> &str {
         &self.package_path
-    }
-
-    pub fn expected_sha256(&self) -> &crate::PackageRef {
-        &self.expected_sha256
     }
 }
 
@@ -2337,26 +2328,21 @@ impl fmt::Debug for PackageDebugRequest {
         formatter
             .debug_struct("PackageDebugRequest")
             .field("package_path", &"<redacted-path>")
-            .field("expected_sha256", &"<redacted-hash>")
             .finish()
     }
 }
 
+/// Workflow #336 PKG-S4: the recovery package by its path only, as `ContainedTaskRequest`.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainedTaskRecoveryBinding {
     package_path: String,
-    expected_sha256: crate::PackageRef,
 }
 
 impl ContainedTaskRecoveryBinding {
-    pub fn new(
-        package_path: impl Into<String>,
-        expected_sha256: impl Into<crate::PackageRef>,
-    ) -> RuntimeContractResult<Self> {
+    pub fn new(package_path: impl Into<String>) -> RuntimeContractResult<Self> {
         let binding = Self {
             package_path: package_path.into(),
-            expected_sha256: expected_sha256.into(),
         };
         binding.validate()?;
         Ok(binding)
@@ -2371,17 +2357,11 @@ impl ContainedTaskRecoveryBinding {
                 RuntimeContractCode::InvalidContainedTaskRecoveryPath,
             ));
         }
-        self.expected_sha256.validate().map_err(|_| {
-            RuntimeContractError::new(RuntimeContractCode::InvalidContainedTaskRecoveryHash)
-        })
+        Ok(())
     }
 
     pub fn package_path(&self) -> &str {
         &self.package_path
-    }
-
-    pub fn expected_sha256(&self) -> &crate::PackageRef {
-        &self.expected_sha256
     }
 }
 
@@ -2390,16 +2370,18 @@ impl fmt::Debug for ContainedTaskRecoveryBinding {
         formatter
             .debug_struct("ContainedTaskRecoveryBinding")
             .field("package_path", &"<redacted-path>")
-            .field("expected_sha256", &"<redacted-hash>")
             .finish()
     }
 }
 
+/// Workflow #336 PKG-S4 (option 丙): the package of a contained task is found by its path; the
+/// path chooses how it is read and its admission is structural only. The request carries no
+/// digest: a request that still names `expected_sha256` does not decode
+/// (`deny_unknown_fields`).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainedTaskRequest {
     package_path: String,
-    expected_sha256: crate::PackageRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recovery: Option<ContainedTaskRecoveryBinding>,
     #[serde(default = "default_contained_task_response_deadline_ms")]
@@ -2414,13 +2396,9 @@ impl ContainedTaskRequest {
     pub const DEFAULT_RESPONSE_DEADLINE_MS: u64 = 60_000;
     pub const MAX_RESPONSE_DEADLINE_MS: u64 = crate::MAX_CONTAINED_TASK_TIMEOUT_MS;
 
-    pub fn new(
-        package_path: impl Into<String>,
-        expected_sha256: impl Into<crate::PackageRef>,
-    ) -> RuntimeContractResult<Self> {
+    pub fn new(package_path: impl Into<String>) -> RuntimeContractResult<Self> {
         let request = Self {
             package_path: package_path.into(),
-            expected_sha256: expected_sha256.into(),
             recovery: None,
             response_deadline_ms: Self::DEFAULT_RESPONSE_DEADLINE_MS,
         };
@@ -2437,9 +2415,6 @@ impl ContainedTaskRequest {
                 RuntimeContractCode::InvalidContainedTaskPath,
             ));
         }
-        self.expected_sha256.validate().map_err(|_| {
-            RuntimeContractError::new(RuntimeContractCode::InvalidContainedTaskHash)
-        })?;
         if let Some(recovery) = &self.recovery {
             recovery.validate()?;
         }
@@ -2453,10 +2428,6 @@ impl ContainedTaskRequest {
 
     pub fn package_path(&self) -> &str {
         &self.package_path
-    }
-
-    pub fn expected_sha256(&self) -> &crate::PackageRef {
-        &self.expected_sha256
     }
 
     pub const fn recovery(&self) -> Option<&ContainedTaskRecoveryBinding> {
@@ -2491,7 +2462,6 @@ impl fmt::Debug for ContainedTaskRequest {
         formatter
             .debug_struct("ContainedTaskRequest")
             .field("package_path", &"<redacted-path>")
-            .field("expected_sha256", &"<redacted-hash>")
             .field("recovery", &self.recovery)
             .field("response_deadline_ms", &self.response_deadline_ms)
             .finish()
@@ -2730,11 +2700,11 @@ pub enum PackageDebugLayout {
     Module,
 }
 
+/// Workflow #336 PKG-S4: the summary of an admitted package names no digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageDebugSummary {
     task_id: String,
-    verified_sha256: crate::PackageRef,
     layout: PackageDebugLayout,
     entry_count: u32,
     resident_bytes: u64,
@@ -2748,7 +2718,6 @@ impl PackageDebugSummary {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         task_id: impl Into<String>,
-        verified_sha256: impl Into<crate::PackageRef>,
         layout: PackageDebugLayout,
         entry_count: u32,
         resident_bytes: u64,
@@ -2759,7 +2728,6 @@ impl PackageDebugSummary {
     ) -> RuntimeContractResult<Self> {
         let summary = Self {
             task_id: task_id.into(),
-            verified_sha256: verified_sha256.into(),
             layout,
             entry_count,
             resident_bytes,
@@ -2783,17 +2751,11 @@ impl PackageDebugSummary {
                 RuntimeContractCode::InvalidDebugPackageSummary,
             ));
         }
-        self.verified_sha256
-            .validate()
-            .map_err(|_| RuntimeContractError::new(RuntimeContractCode::InvalidDebugPackageSummary))
+        Ok(())
     }
 
     pub fn task_id(&self) -> &str {
         &self.task_id
-    }
-
-    pub fn verified_sha256(&self) -> &crate::PackageRef {
-        &self.verified_sha256
     }
 
     pub const fn layout(&self) -> PackageDebugLayout {

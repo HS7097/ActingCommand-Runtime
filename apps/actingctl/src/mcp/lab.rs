@@ -40,9 +40,9 @@ use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, invalid_argument,
 };
 use crate::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_contract::ClientActionValue;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome, OutcomeEnvelope, RawSource};
-use actingcommand_contract::{ClientActionValue, PackageRef};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -158,23 +158,12 @@ const PACKAGE: Flag = flag(
     Kind::Text,
     "--package: the resource package (directory, .zip or .json container).",
 );
+// Workflow #336 PKG-S4 (option 丙): a package by its path only; no reference or digest flag.
 const ZIP: Flag = flag(
     "zip",
     "--zip",
     Kind::Text,
-    "--zip: a published .zip package, with expected_sha256.",
-);
-const PACKAGE_REF: Flag = flag(
-    "package_ref",
-    "--package-ref",
-    Kind::Text,
-    "--package-ref: the package's reference (a sha256 or the content reference as JSON text).",
-);
-const EXPECTED_SHA256: Flag = flag(
-    "expected_sha256",
-    "--expected-sha256",
-    Kind::Text,
-    "--expected-sha256: the .zip package's sha256.",
+    "--zip: a published .zip package.",
 );
 const FIELDS: Flag = flag(
     "fields",
@@ -211,8 +200,6 @@ static OBSERVE: LabCommand = LabCommand {
         CAPTURE,
         PACKAGE,
         ZIP,
-        PACKAGE_REF,
-        EXPECTED_SHA256,
         flag(
             "targets",
             "--targets",
@@ -261,8 +248,6 @@ static DO: LabCommand = LabCommand {
         CAPTURE,
         PACKAGE,
         ZIP,
-        PACKAGE_REF,
-        EXPECTED_SHA256,
         flag("tap", "--tap", Kind::Text, "--tap: x,y."),
         flag(
             "swipe",
@@ -1073,40 +1058,20 @@ pub(super) fn app(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
 
 // ---------------------------------------------------------------- checks
 
-/// ac_pack_check: `package digest`, then `package preflight` with the given reference or,
-/// without one, the digest's; both answers verbatim. A failed step is its error alone.
+/// ac_pack_check: `package preflight` on the package, its answer verbatim as `{preflight}`.
+/// Workflow #336 PKG-S4 (option 丙, M-PKG §4.5): structural admission only; no digest is
+/// computed and no reference is taken.
 pub(super) fn pack_check(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
-    let arguments = Arguments::new(arguments, &["package", "package_ref"])?;
+    let arguments = Arguments::new(arguments, &["package"])?;
     let package = lab_string(&arguments, "package")?
         .ok_or_else(|| invalid_argument("package", ArgumentProblem::Required))?;
-    let given = lab_string(&arguments, "package_ref")?;
     let program = Program::locate(context)?;
     run_job(context, move |handle| {
         let result = (|| -> Result<Value, ToolError> {
-            let mut line = words(&["package", "digest", "--package"]);
-            line.push(package.clone());
-            let digest = program.call(&line, "package digest").result?;
-            let reference = digest
-                .get("reference")
-                .map(Value::to_string)
-                .ok_or_else(|| ToolError::new("runtime", ActingctlCode::LabProcessFailed))?;
-            // Whether the given reference is the digest's, as the contract parses both.
-            let check = given.as_ref().map(|given| {
-                let matches = matches!(
-                    (PackageRef::parse_argument(given), PackageRef::parse_argument(&reference)),
-                    (Ok(given), Ok(digest)) if given == digest
-                );
-                json!({"given": given, "matches_digest": matches})
-            });
             let mut line = words(&["package", "preflight", "--package"]);
-            line.extend([package.clone(), "--package-ref".to_owned()]);
-            line.push(given.clone().unwrap_or(reference));
+            line.push(package.clone());
             let preflight = program.call(&line, "package preflight").result?;
-            let mut answer = json!({"digest": digest, "preflight": preflight});
-            if let Some(check) = check {
-                answer["package_ref_check"] = check;
-            }
-            Ok(answer)
+            Ok(json!({"preflight": preflight}))
         })();
         finish(&plain(handle), result, None, Vec::new())
     })
@@ -1225,7 +1190,6 @@ pub(super) fn binding_draft(
     let binding_example = part("binding_example")?;
     let prerequisite_entry_example = part("prerequisite_entry_example")?;
     let catalog_on_failure_example = part("catalog_on_failure_example")?;
-    let package_ref = part("package_ref")?.to_string();
     // actinglab would read a package path that starts with `--` as a flag.
     let package = binding_example
         .get("scheduled_execution")
@@ -1252,8 +1216,9 @@ pub(super) fn binding_draft(
                 ActingctlCode::BindingRequiresUnavailable,
             )));
         }
+        // Workflow #336 PKG-S4: preflight takes the package by its path only.
         let mut line = words(&["package", "preflight", "--package"]);
-        line.extend([package.clone(), "--package-ref".to_owned(), package_ref]);
+        line.push(package.clone());
         let preflight = program.call(&line, "package preflight").result;
         let admission = match preflight {
             Ok(preflight) => json!({"package": package, "preflight": preflight}),
@@ -1389,12 +1354,6 @@ pub(super) fn pack_check_input() -> Value {
                 "pattern": NOT_A_FLAG,
                 "description": "The package: a directory, .zip or .json container.",
             },
-            "package_ref": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": NOT_A_FLAG,
-                "description": "A reference to check against the digest; preflight then uses it.",
-            },
         },
         "required": ["package"],
         "additionalProperties": false,
@@ -1405,15 +1364,7 @@ pub(super) fn pack_check_result() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "digest": {"type": "object"},
             "preflight": {"type": "object"},
-            "package_ref_check": {
-                "type": "object",
-                "properties": {
-                    "given": {"type": "string"},
-                    "matches_digest": {"type": "boolean"},
-                },
-            },
             "req_id": {"type": ["string", "null"]},
             "export": export_schema(),
             "overflowed": {"type": "boolean"},

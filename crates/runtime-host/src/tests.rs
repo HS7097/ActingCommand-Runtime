@@ -112,6 +112,8 @@ mod gate_336_pkgs2;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;
+// Workflow #336 PKG-S4: a configured prerequisite package is the package its `package_id` names.
+mod gate_336_pkgs4;
 mod gate_369s5;
 mod gate_372k2;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.

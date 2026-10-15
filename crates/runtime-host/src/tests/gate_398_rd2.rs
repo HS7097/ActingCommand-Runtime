@@ -320,8 +320,7 @@ fn rd2_t4_a_run_whose_device_fails_after_the_cable_left_ends_with_device_link_lo
                 RuntimeOperation::run_contained_task(
                     POLICY_INSTANCE_ALIAS,
                     ids.mint_holder_id().expect("holder"),
-                    ContainedTaskRequest::new(package.0.clone(), package.1.clone())
-                        .expect("task request"),
+                    ContainedTaskRequest::new(package).expect("task request"),
                 ),
             ),
             ConnectionId::new(399).expect("connection"),

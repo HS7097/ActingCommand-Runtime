@@ -4928,26 +4928,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_debug_package_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid debug package hash. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_contained_task_recovery_path": {
       "category": "error",
       "ladder_class": "none",
@@ -4968,26 +4948,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "invalid_contained_task_recovery_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid contained task recovery hash. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "invalid_contained_task_path": {
       "category": "error",
       "ladder_class": "none",
@@ -5005,26 +4965,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Runtime contract validation refused a value: invalid contained task path.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "invalid_contained_task_hash": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid contained task hash. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -16360,26 +16300,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3): policy catalog unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "procedure_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "contract",
-      "layer": "contract",
-      "uncertain": false,
-      "values": {
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): procedure package digest invalid. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

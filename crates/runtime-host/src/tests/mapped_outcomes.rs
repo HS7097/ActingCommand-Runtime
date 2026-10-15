@@ -28,7 +28,6 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
         let package = neutral_mapped_contained_task_package(outcome_key, effect);
         let package_path = root.path().join("scheduled-mapped-task.zip");
         fs::write(&package_path, &package).expect("write mapped package");
-        let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let shared_instance_id = instance_id();
         let clock = Arc::new(ManualRuntimeClock::new(
             POLICY_NOW_UNIX_MS,
@@ -136,9 +135,8 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
             PolicyTrigger::FactsChanged,
         )
         .unwrap_or_else(|error| panic!("{case}: clear caller outcome: {error}"));
-        let request =
-            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-                .expect("mapped task request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("mapped task request");
         let receipt = host
             .run_scheduled_contained_task(&context, &request)
             .unwrap_or_else(|error| panic!("{case}: mapped run: {error}"));
@@ -770,7 +768,6 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
     let package = neutral_two_key_mapped_contained_task_package(false, effect_key, no_effect_key);
     let package_path = root.path().join("two-key-mapped-task.zip");
     fs::write(&package_path, &package).expect("write two-key mapped package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     let runtime_instance_id = instance_id();
     state
@@ -834,9 +831,8 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
     else {
         panic!("expected two-key mapped policy context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("two-key package request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("two-key package request");
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
         .expect("two-key mapped run");
@@ -1152,11 +1148,8 @@ fn unconsumed_package_outcome_preserves_terminal_and_recovers_without_projection
     else {
         panic!("expected scheduled context")
     };
-    let request = ContainedTaskRequest::new(
-        package_path.to_string_lossy().into_owned(),
-        format!("{:x}", Sha256::digest(&package)),
-    )
-    .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
         .expect("valid package output without a catalog consumer");
@@ -1345,7 +1338,6 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
         let package = root.path().join("mapped-task.zip");
         let bytes = neutral_two_key_mapped_contained_task_package(true, "claimed", "no-op");
         fs::write(&package, &bytes).expect("write mapped package");
-        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         if performs_effect {
@@ -1375,7 +1367,7 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
             RuntimeOperation::run_contained_task(
                 "neutral.instance",
                 client.ids.mint_holder_id().expect("holder"),
-                ContainedTaskRequest::new(package.display().to_string(), expected)
+                ContainedTaskRequest::new(package.display().to_string())
                     .expect("mapped task request"),
             ),
         );
@@ -1923,11 +1915,8 @@ fn a_catalog_first_referencing_an_earlier_run_outcome_reads_it_as_unknown_until_
             neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
         let package_path = root.path().join("first-referenced-task.zip");
         fs::write(&package_path, &package).expect("write producer package");
-        let request = ContainedTaskRequest::new(
-            package_path.to_string_lossy().into_owned(),
-            format!("{:x}", Sha256::digest(&package)),
-        )
-        .expect("producer request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("producer request");
         let state = Arc::new(FakeState::default());
         state
             .transition_capture_after_input
@@ -2150,11 +2139,8 @@ fn write_key_change_package(root: &TempDir, outcome_key: &str) -> (Vec<u8>, Cont
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
     let package_path = root.path().join(format!("{outcome_key}-producer.zip"));
     fs::write(&package_path, &package).expect("write producer package");
-    let request = ContainedTaskRequest::new(
-        package_path.to_string_lossy().into_owned(),
-        format!("{:x}", Sha256::digest(&package)),
-    )
-    .expect("producer request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("producer request");
     (package, request)
 }
 

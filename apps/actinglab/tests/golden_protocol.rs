@@ -9,7 +9,6 @@ use actingcommand_runtime_host::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
@@ -1023,7 +1022,6 @@ struct Fixture {
     bad_hash_package: PathBuf,
     lab_package: PathBuf,
     semantic_package: PathBuf,
-    semantic_package_sha256: String,
     fake_adb: PathBuf,
     _runtime_host: Option<RuntimeHost>,
 }
@@ -1064,10 +1062,6 @@ impl Fixture {
         fs::write(&invalid_pages, b"not-json").expect("invalid pages");
         write_semantic_resources(&resource_root);
         write_semantic_package(&semantic_package, &resource_root);
-        let semantic_package_sha256 = format!(
-            "{:x}",
-            Sha256::digest(fs::read(&semantic_package).expect("semantic package bytes"))
-        );
         write_package_repo(&package_repo);
         write_safe_packages(&safe_package, &bad_hash_package);
         write_lab_package(&lab_package, &encode_png(2, 2, [255, 0, 0]));
@@ -1100,7 +1094,6 @@ impl Fixture {
             bad_hash_package,
             lab_package,
             semantic_package,
-            semantic_package_sha256,
             fake_adb,
             _runtime_host: runtime_host,
         }
@@ -1272,7 +1265,6 @@ impl Fixture {
                 args.push(self.safe_package.clone().into_os_string());
             }
             "lab_run_success" => {
-                let expected = sha256_file(&self.lab_package);
                 args.extend([
                     os("--instance"),
                     os("fixture:5555"),
@@ -1280,8 +1272,6 @@ impl Fixture {
                     os("run"),
                     os("--zip"),
                     self.lab_package.clone().into_os_string(),
-                    os("--expected-sha256"),
-                    os(&expected),
                     os("--out"),
                     self.root().join("lab-result.zip").into_os_string(),
                 ]);
@@ -1366,17 +1356,14 @@ impl Fixture {
                 | "do_success"
                 | "do_failure"
         ) {
-            args.extend([os("--zip"), self.semantic_package.clone().into_os_string()]);
-            // Workflow #336 PKG-S1: a well-formed reference is recorded and compared with
-            // nothing, so the failure case passes a malformed one, refused by the format check.
-            args.extend([
-                os("--expected-sha256"),
-                os(if name == "detect_page_failure" {
-                    "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"
-                } else {
-                    &self.semantic_package_sha256
-                }),
-            ]);
+            // Workflow #336 PKG-S4 (option 丙): the package by its path only, so the failure case
+            // names a package that is not there.
+            let package = if name == "detect_page_failure" {
+                self.root().join("missing-semantic.zip")
+            } else {
+                self.semantic_package.clone()
+            };
+            args.extend([os("--zip"), package.into_os_string()]);
         }
         args
     }
@@ -1528,11 +1515,6 @@ impl ExecutionBackendProvider for GoldenRuntimeProvider {
             "recognize-only golden run must not control applications",
         ))
     }
-}
-
-fn sha256_file(path: &Path) -> String {
-    let bytes = fs::read(path).expect("read package for external expected hash");
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn os(value: &str) -> OsString {

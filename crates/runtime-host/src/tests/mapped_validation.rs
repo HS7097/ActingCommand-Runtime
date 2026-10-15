@@ -31,7 +31,6 @@ fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
         let root = TempDir::new().expect("tempdir");
         let package_path = root.path().join(format!("{case}.zip"));
         fs::write(&package_path, &package).expect("write mismatched package");
-        let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let state = Arc::new(FakeState::default());
         state
             .transition_capture_after_input
@@ -86,9 +85,8 @@ fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
         else {
             panic!("{case}: expected mapped policy context")
         };
-        let request =
-            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-                .expect("mismatched package request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("mismatched package request");
         let error = host
             .run_scheduled_contained_task(&context, &request)
             .expect_err("mapped catalog must reject a key the package does not declare");
@@ -129,7 +127,6 @@ fn mapped_terminal_page_conflicts_and_error_pages_fail_without_success() {
         );
         let package_path = root.path().join(format!("{case}.zip"));
         fs::write(&package_path, &package).expect("write mapped package");
-        let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let state = Arc::new(FakeState::default());
         state
             .transition_capture_after_input
@@ -184,9 +181,8 @@ fn mapped_terminal_page_conflicts_and_error_pages_fail_without_success() {
         else {
             panic!("{case}: expected mapped policy context")
         };
-        let request =
-            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-                .expect("mapped package request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("mapped package request");
         let error = host
             .run_scheduled_contained_task(&context, &request)
             .expect_err("invalid terminal evidence cannot return success");
@@ -236,7 +232,6 @@ fn duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch() {
     let package = neutral_mapped_retrying_contained_task_package("mapped-result");
     let package_path = root.path().join("duplicate-designated-effects.zip");
     fs::write(&package_path, &package).expect("write mapped retry package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .transition_capture_after_inputs
@@ -291,9 +286,8 @@ fn duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch() {
     else {
         panic!("expected mapped policy context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("mapped retry package request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("mapped retry package request");
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("duplicate designated effects cannot commit a disposition");

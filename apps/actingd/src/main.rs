@@ -2114,7 +2114,6 @@ mod tests {
     // Workflow #383 AO-7: the wake mapping moved to the host; its tests here are unchanged.
     use actingcommand_runtime_host::{policy_trigger_for_event, policy_trigger_for_family};
     use serde_json::{Value, json};
-    use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, VecDeque};
     use std::ffi::OsString;
     use std::io::{Cursor, Write};
@@ -2406,7 +2405,6 @@ mod tests {
         let ids = IdentifierIssuer::new().expect("identifier issuer");
         let instance_id = *ids.mint_instance_id().expect("instance id").transport();
         let package = resident_test_package();
-        let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let package_path = root.path().join("task.zip");
         std::fs::write(&package_path, &package).expect("write package");
         let input_count = Arc::new(AtomicUsize::new(0));
@@ -2451,13 +2449,10 @@ mod tests {
             scheduled_tasks: BTreeMap::from([(
                 "procedure.observe".to_string(),
                 ScheduledProcedureTask {
-                    request: ContainedTaskRequest::new(
-                        package_path.to_string_lossy().into_owned(),
-                        &package_sha256,
-                    )
-                    .expect("contained task request")
-                    .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
-                    .expect("bounded scheduled request budget"),
+                    request: ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+                        .expect("contained task request")
+                        .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+                        .expect("bounded scheduled request budget"),
                     mode: ScheduledExecutionMode::DeviceRegistry,
                 },
             )]),

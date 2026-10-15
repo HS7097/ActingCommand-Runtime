@@ -573,12 +573,12 @@ mod tests {
         let mapping = BTreeMap::from([
             (
                 "neutral.layer".to_owned(),
-                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy(), "0".repeat(64))
+                ContainedTaskRecoveryBinding::new(layer_path.to_string_lossy())
                     .expect("layer binding"),
             ),
             (
                 "neutral.home".to_owned(),
-                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy(), "0".repeat(64))
+                ContainedTaskRecoveryBinding::new(home_path.to_string_lossy())
                     .expect("home binding"),
             ),
         ]);

@@ -218,7 +218,6 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         let request = actingcommand_contract::ContainedObservationRequest::new(
             path.to_str()
                 .ok_or_else(|| CliError::package_invalid("package path is not UTF-8"))?,
-            reader.reference.clone(),
             target_list(flags),
         )
         .map_err(|error| CliError::package_invalid(error.to_string()))?;

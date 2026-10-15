@@ -30,7 +30,6 @@ fn admitted_mapped_run_fixture_with_policy_time(
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
     let package_path = root.path().join(format!("{outcome_key}-mapped-task.zip"));
     fs::write(&package_path, &package).expect("write mapped package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .transition_capture_after_input
@@ -87,7 +86,7 @@ fn admitted_mapped_run_fixture_with_policy_time(
         panic!("expected mapped policy context")
     };
     let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
             .expect("mapped package request");
     (host, state, context, request, policy_unix_ms, clock)
 }
@@ -220,7 +219,6 @@ fn admitted_physical_run_fixture(
     let package = neutral_contained_task_package(true);
     let package_path = root.path().join("physical-scheduled-task.zip");
     fs::write(&package_path, &package).expect("write physical package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -254,7 +252,7 @@ fn admitted_physical_run_fixture(
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
     let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
             .expect("physical package request");
     let PolicyDispatchAdmission::Granted { context } = host
         .admit_scheduled_policy_dispatch(

@@ -25,7 +25,7 @@ fn frozen_host(root: &TempDir, instance: InstanceId, state: Arc<FakeState>) -> R
 }
 
 /// A neutral package for a direct run, with its digest computed as the existing tests do.
-pub(super) fn direct_run_package(root: &TempDir, state: &FakeState) -> (String, String) {
+pub(super) fn direct_run_package(root: &TempDir, state: &FakeState) -> String {
     let package = root.path().join("neutral-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
@@ -33,10 +33,7 @@ pub(super) fn direct_run_package(root: &TempDir, state: &FakeState) -> (String, 
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
-    (
-        package.display().to_string(),
-        actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-    )
+    package.display().to_string()
 }
 
 /// Returns once an event of `event_type` is recorded under `request_id` (a ledger
@@ -161,7 +158,7 @@ fn assert_one_expiry_record(host: &RuntimeHost, request: &RuntimeRequest, instan
 fn gate_a_direct_run_behind_a_hold_runs_after_the_release() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let (package, expected) = direct_run_package(&root, &state);
+    let package = direct_run_package(&root, &state);
     let host = frozen_host(&root, instance_id(), Arc::clone(&state));
     let mut holder = TestClient::connect(&host);
     let (_, token) = holder.acquire(ALIAS);
@@ -171,7 +168,7 @@ fn gate_a_direct_run_behind_a_hold_runs_after_the_release() {
         RuntimeOperation::run_contained_task(
             ALIAS,
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package, expected).expect("task request"),
+            ContainedTaskRequest::new(package).expect("task request"),
         ),
     );
     let release = holder.request(RuntimeOperation::ReleaseLease { token });
@@ -234,7 +231,7 @@ fn gate_a_direct_run_behind_a_hold_runs_after_the_release() {
 fn gate_a_direct_run_whose_wait_expires_is_denied_without_task_events() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let (package, expected) = direct_run_package(&root, &state);
+    let package = direct_run_package(&root, &state);
     let instance = instance_id();
     let host = frozen_host(&root, instance, Arc::clone(&state));
     let mut holder = TestClient::connect(&host);
@@ -246,7 +243,7 @@ fn gate_a_direct_run_whose_wait_expires_is_denied_without_task_events() {
         RuntimeOperation::run_contained_task(
             ALIAS,
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package, expected)
+            ContainedTaskRequest::new(package)
                 .expect("task request")
                 .with_response_deadline_ms(31_000)
                 .expect("response deadline"),

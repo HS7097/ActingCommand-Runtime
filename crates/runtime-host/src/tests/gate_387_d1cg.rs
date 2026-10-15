@@ -40,14 +40,14 @@ fn unconfirmed_adb_probe() -> DeviceError {
 }
 
 // A direct run of the neutral package on `instance_alias`, as `actingctl` sends it.
-fn direct_run(instance_alias: &str, package: &(String, String)) -> RuntimeRequest {
+fn direct_run(instance_alias: &str, package: &str) -> RuntimeRequest {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     runtime_request(
         &ids,
         RuntimeOperation::run_contained_task(
             instance_alias,
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.0.clone(), package.1.clone()).expect("task request"),
+            ContainedTaskRequest::new(package).expect("task request"),
         ),
     )
 }
@@ -355,7 +355,7 @@ fn assert_fenced_and_the_other_runs(
     host: &RuntimeHost,
     fenced: InstanceId,
     cause: &str,
-    other_package: &(String, String),
+    other_package: &str,
     connection: u64,
 ) {
     wait_until(WAIT, || {
@@ -397,7 +397,7 @@ fn d1cg_an_unconfirmed_startup_package_adb_probe_fences_its_instance_and_the_oth
     let other_package = super::gate_369s5::direct_run_package(&root, &other_state);
     *state.adb_probe_error.lock().expect("adb probe error") = Some(unconfirmed_adb_probe());
     let fenced = instance_id();
-    let startup = ContainedTaskRequest::new(package.0, package.1).expect("startup package");
+    let startup = ContainedTaskRequest::new(package).expect("startup package");
     let host = RuntimeHost::start(
         config(&root).with_startup_packages(BTreeMap::from([(
             POLICY_INSTANCE_ALIAS.to_owned(),

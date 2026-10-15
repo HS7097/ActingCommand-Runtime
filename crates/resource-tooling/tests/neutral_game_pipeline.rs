@@ -188,15 +188,12 @@ fn zero_input_fields_source_and_admission_boundaries() {
         Ok::<_, Box<actingcommand_contract::LabError>>(())
     };
     build(&task, "navigable_route", "fields").expect("zero-input source and Runtime admission");
-    let bytes = fs::read(temp.path().join("fields.zip")).unwrap();
     let validated = validate_package(PackageValidateRequest {
         zip_path: temp.path().join("fields.zip"),
         include_entries: true,
-        expected_input_sha256: Some(actingcommand_pack_containment::Sha256Hash::digest(&bytes)),
     })
-    .expect("hash-bound package validation");
+    .expect("package validation");
     assert_eq!(validated.status, "valid");
-    assert!(validated.externally_verified);
     for case in 0..11 {
         let mut invalid = task.clone();
         let mut mode = "navigable_route";

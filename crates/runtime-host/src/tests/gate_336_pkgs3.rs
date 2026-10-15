@@ -92,7 +92,7 @@ fn suspension_config(
         .with_procedure_manifest(manifest_at(&packages.main))
         .with_prerequisite_packages(BTreeMap::from([(
             LAYER_ID.to_owned(),
-            ContainedTaskRecoveryBinding::new(packages.layer.to_string_lossy(), "0".repeat(64))
+            ContainedTaskRecoveryBinding::new(packages.layer.to_string_lossy())
                 .expect("layer mapping"),
         )]))
 }

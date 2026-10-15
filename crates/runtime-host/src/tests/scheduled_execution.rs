@@ -116,7 +116,6 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     let package = neutral_region_contained_task_package(false);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state
         .transition_capture_after_input
@@ -147,9 +146,8 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
         host.runtime_info().owner_epoch(),
         "scheduled context must retain the Runtime fencing epoch validated at admission"
     );
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
         .expect("scheduled policy run receipt");
@@ -291,7 +289,6 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
     let package = neutral_contained_task_package(false);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root).with_procedure_manifest(procedure_manifest_with_primary(
@@ -314,9 +311,8 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
 
     let error = host
         .run_scheduled_contained_task(&context, &request)
@@ -410,7 +406,6 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
         };
         let package_path = root.path().join("scheduled-task.zip");
         fs::write(&package_path, &package).expect("write package");
-        let package_sha256 = format!("{:x}", Sha256::digest(&package));
         let state = Arc::new(FakeState::default());
         if case == "recognition-uncertain" {
             state.unknown_capture.store(true, Ordering::Release);
@@ -438,9 +433,8 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
         let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("{case}: expected policy run context")
         };
-        let request =
-            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-                .expect("contained task request");
+        let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+            .expect("contained task request");
 
         let error = match host.run_scheduled_contained_task(&context, &request) {
             Ok(_) => panic!("{case}: scheduled failure missing"),
@@ -599,7 +593,6 @@ fn scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain() 
     let package = neutral_contained_task_package(true);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -627,9 +620,8 @@ fn scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain() 
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
 
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
@@ -761,7 +753,6 @@ fn scheduled_physical_identity_and_package_path_mismatches_fail_before_io() {
                     .join("another-scheduled-task.zip")
                     .to_string_lossy()
                     .into_owned(),
-                request.expected_sha256().clone(),
             )
             .expect("physical package request at another path")
         } else {
@@ -790,7 +781,6 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
     let package = neutral_contained_task_package(false);
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = RuntimeHost::start(
@@ -823,9 +813,8 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected policy run context")
     };
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("contained task request");
 
     let mut client = TestClient::connect(&host);
     clock.advance(2_100);

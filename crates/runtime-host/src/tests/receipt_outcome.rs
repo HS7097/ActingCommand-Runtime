@@ -297,8 +297,7 @@ fn a4_a_relayed_kernel_failure_tops_its_failed_receipt_without_its_values() {
         RuntimeOperation::run_contained_task(
             "node.a",
             ids.mint_holder_id().expect("holder id"),
-            ContainedTaskRequest::new(r"C:\fixture\contained-task.zip", "0".repeat(64))
-                .expect("task request"),
+            ContainedTaskRequest::new(r"C:\fixture\contained-task.zip").expect("task request"),
         ),
     );
     let error = RuntimeHostError::relayed_request(

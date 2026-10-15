@@ -2056,14 +2056,13 @@ impl HostShared {
         // Workflow #336 L2d (R24): the configured package takes the configured deadline
         // (Workflow #387 D1c, `rungs[return_home].configured_package_deadline_ms`); a bound one
         // keeps the default.
-        let request = ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256())
-            .and_then(|request| {
-                if pending.recovery_configured.is_some() {
-                    request.with_response_deadline_ms(configured_package_deadline_ms)
-                } else {
-                    Ok(request)
-                }
-            });
+        let request = ContainedTaskRequest::new(binding.package_path()).and_then(|request| {
+            if pending.recovery_configured.is_some() {
+                request.with_response_deadline_ms(configured_package_deadline_ms)
+            } else {
+                Ok(request)
+            }
+        });
         let request = match request {
             Ok(request) => request,
             Err(error) => {

@@ -78,7 +78,6 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
         .unwrap()
         .1 = &manifest;
     write_zip(&package, &package_files);
-    let hash = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .unwrap()
@@ -151,7 +150,6 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
                 "node.a",
                 ContainedLabOperationRequest {
                     package_path: package.to_str().unwrap().to_string(),
-                    expected_sha256: hash.clone().into(),
                     selection,
                     projection_hint: LabProjectionHint {
                         sequence: None,
@@ -377,7 +375,6 @@ fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
         .unwrap()
         .1 = &manifest;
     write_zip(&package, &package_files);
-    let hash = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .unwrap()
@@ -418,7 +415,6 @@ fn lab_operation_on_a_held_instance_is_refused_busy_before_any_input() {
             "node.a",
             ContainedLabOperationRequest {
                 package_path: package.to_str().unwrap().to_string(),
-                expected_sha256: hash.into(),
                 selection: LabOperationSelection::Coordinates {
                     action: InputAction::Tap { x: 0, y: 0 },
                 },
@@ -553,11 +549,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             .map(|(path, bytes)| (*path, bytes.as_slice()))
             .collect::<Vec<_>>(),
     );
-    let source_bytes = open_published_package(&original)
-        .unwrap()
-        .read_all()
-        .unwrap();
-    let hash = format!("{:x}", Sha256::digest(&source_bytes));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .unwrap()
@@ -591,8 +582,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
                 "--capture",
                 "--zip",
                 original.to_str().unwrap(),
-                "--expected-sha256",
-                &hash,
                 "--after-page",
                 "neutral/home",
                 "--verbose",
@@ -645,7 +634,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             "node.a",
             ContainedLabOperationRequest {
                 package_path: published_source.path().to_str().unwrap().into(),
-                expected_sha256: hash.clone().into(),
                 selection: LabOperationSelection::Element {
                     id: "undeclared".into(),
                 },
@@ -683,8 +671,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             "--capture",
             "--zip",
             original.to_str().unwrap(),
-            "--expected-sha256",
-            &hash,
             "--after-page",
             "neutral/home",
             "--after-timeout-ms",
@@ -736,8 +722,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             &through,
             "--zip",
             original.to_str().unwrap(),
-            "--expected-sha256",
-            &hash,
             "--task-id",
             "restored",
             "--entry-page",
@@ -866,8 +850,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             &through,
             "--zip",
             original.to_str().unwrap(),
-            "--expected-sha256",
-            &hash,
             "--task-id",
             "pending",
         ],
@@ -931,8 +913,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             &through,
             "--zip",
             original.to_str().unwrap(),
-            "--expected-sha256",
-            &hash,
             "--task-id",
             "pending",
         ],
@@ -965,8 +945,6 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
             &through,
             "--zip",
             original.to_str().unwrap(),
-            "--expected-sha256",
-            &hash,
             "--task-id",
             "restored",
         ],
@@ -1087,26 +1065,25 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
                 ),
             ],
         );
-        let hash = format!("{:x}", Sha256::digest(fs::read(&path).unwrap()));
-        (path, hash)
+        path
     };
-    let (original, original_hash) = write_package(
+    let original = write_package(
         "original.zip",
         "neutral.test.seed",
         serde_json::to_vec(&source_task).unwrap(),
     );
     // The same package with its task file rewritten in place (same declarations, other bytes).
-    let (changed, changed_hash) = write_package(
+    let changed = write_package(
         "changed.zip",
         "neutral.test.seed",
         serde_json::to_vec_pretty(&source_task).unwrap(),
     );
-    let (other, other_hash) = write_package(
+    let other = write_package(
         "other.zip",
         "neutral.test.other",
         serde_json::to_vec(&source_task).unwrap(),
     );
-    assert_ne!(original_hash, changed_hash);
+    assert_ne!(fs::read(&original).unwrap(), fs::read(&changed).unwrap());
 
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
@@ -1138,8 +1115,6 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
             "--capture",
             "--zip",
             original.to_str().unwrap(),
-            "--expected-sha256",
-            &original_hash,
             "--after-page",
             "neutral/home",
             "--verbose",
@@ -1166,10 +1141,7 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
     .latest_sequence()
     .to_string();
 
-    for (repo, package, hash) in [
-        ("restored", &original, &original_hash),
-        ("restored-changed", &changed, &changed_hash),
-    ] {
+    for (repo, package) in [("restored", &original), ("restored-changed", &changed)] {
         let restored = run_actinglab_json(
             &config,
             &runtime_root,
@@ -1188,8 +1160,6 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
                 &through,
                 "--zip",
                 package.to_str().unwrap(),
-                "--expected-sha256",
-                hash,
                 "--task-id",
                 "restored",
             ],
@@ -1218,8 +1188,6 @@ fn s2_t5_lab_do_names_its_package_and_restore_pairs_by_package_id() {
             &through,
             "--zip",
             other.to_str().unwrap(),
-            "--expected-sha256",
-            &other_hash,
             "--task-id",
             "restored",
         ],
@@ -1281,8 +1249,6 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
             "--capture",
             "--zip",
             package.to_str().unwrap(),
-            "--expected-sha256",
-            &expected,
             "--targets",
             "anchor",
             "--with-frame",
@@ -1322,8 +1288,6 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
             "--capture",
             "--zip",
             package.to_str().unwrap(),
-            "--expected-sha256",
-            &expected,
         ],
     );
     assert!(
@@ -1354,8 +1318,6 @@ fn online_observe_cli_consumes_verified_projection_and_keeps_raw_offline_contrac
             frame.to_str().unwrap(),
             "--zip",
             package.to_str().unwrap(),
-            "--expected-sha256",
-            &expected,
             "--verbose",
         ],
     );
@@ -2069,7 +2031,6 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     fs::write(&config_path, "{}").expect("write config");
     let package = root.path().join("debug-package.zip");
     write_runtime_owned_lab_package(&package);
-    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).expect("package")));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -2097,15 +2058,15 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
             "debug-package",
             "--zip",
             package.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ],
     );
     assert_eq!(output["data"]["authority"], "runtime");
     assert_eq!(output["data"]["summary"]["task_id"], "task");
-    assert_eq!(
-        output["data"]["summary"]["verified_sha256"],
-        expected_sha256
+    // Workflow #336 PKG-S4 (option 丙): the package is named by its path; the summary names no
+    // digest.
+    assert!(
+        output["data"]["summary"].get("verified_sha256").is_none(),
+        "{output}"
     );
     assert_eq!(
         output["data"]["terminal_receipt"]["correlation_id"],
@@ -2297,23 +2258,6 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
 
-    let unrelated = "0".repeat(64);
-    let recorded = run_actinglab_json(
-        &config_path,
-        &runtime_root,
-        &local_app_data,
-        [
-            "--json",
-            "lab",
-            "debug-package",
-            "--zip",
-            package.to_str().expect("package path"),
-            "--expected-sha256",
-            &unrelated,
-        ],
-    );
-    assert_eq!(recorded["data"]["summary"]["task_id"], "task");
-    assert_eq!(recorded["data"]["summary"]["verified_sha256"], unrelated);
     assert_eq!(host.runtime_info().pid(), std::process::id());
     host.close().expect("close host");
 }
@@ -2328,7 +2272,6 @@ fn runtime_owned_evidence_export_without_formal_summary_fails_closed() {
     let evidence = root.path().join("runtime-evidence.zip");
     fs::write(&config_path, "{}").expect("write config");
     write_runtime_owned_lab_package(&package);
-    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).expect("package")));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -2356,8 +2299,6 @@ fn runtime_owned_evidence_export_without_formal_summary_fails_closed() {
             "export-evidence",
             "--zip",
             package.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
             "--out",
             evidence.to_str().expect("evidence path"),
             "--outcome",
@@ -2416,7 +2357,6 @@ fn runtime_debug_session_export_without_formal_summary_fails_closed() {
     let package = root.path().join("debug-package.zip");
     let evidence = root.path().join("captured-evidence.zip");
     write_runtime_owned_lab_package(&package);
-    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).expect("package")));
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -2443,7 +2383,7 @@ fn runtime_debug_session_export_without_formal_summary_fails_closed() {
     let session = client.begin_debug_session().expect("debug session");
     session
         .debug_package(
-            PackageDebugRequest::new(package.to_string_lossy().into_owned(), expected_sha256)
+            PackageDebugRequest::new(package.to_string_lossy().into_owned())
                 .expect("debug package request"),
         )
         .expect("debug package");
@@ -2517,10 +2457,6 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     fs::write(&config_path, "{}").expect("write config");
     write_semantic_resources(&resources);
     write_semantic_package(&semantic_package, &resources);
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
-    );
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -2549,8 +2485,6 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ])
         .env("ACTINGLAB_CONFIG_PATH", &config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
@@ -2602,10 +2536,6 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
         ("resources/recognition/arknights.cn.pages.json", &pages),
         ("resources/navigation/arknights.cn.navigation.json", &navigation),
     ]);
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
-    );
     let state = Arc::new(FakeState::default());
     state.transition_after_tap.store(true, Ordering::Release);
     let instance_id = *IdentifierIssuer::new()
@@ -2636,8 +2566,6 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
             "--verbose",
         ],
     );
@@ -2672,8 +2600,6 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
             "--projection-sequence",
             &old_sequence,
             "--projection-hash",
@@ -2778,8 +2704,6 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
                 "--capture",
                 "--zip",
                 semantic_package.to_str().unwrap(),
-                "--expected-sha256",
-                &expected_sha256,
                 "--projection-sequence",
                 &old_sequence,
                 "--projection-hash",
@@ -2906,10 +2830,6 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     )
     .expect("declared arrival page");
     write_semantic_package(&semantic_package, &resources);
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
-    );
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -2940,8 +2860,6 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
             "--capture",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
             "--verbose",
         ],
     );
@@ -2991,8 +2909,6 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
             "--capture",
             "--zip",
             semantic_package.to_str().unwrap(),
-            "--expected-sha256",
-            &expected_sha256,
             "--verbose",
         ],
     );
@@ -3022,8 +2938,6 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
                     "--capture",
                     "--zip",
                     semantic_package.to_str().unwrap(),
-                    "--expected-sha256",
-                    &expected_sha256,
                     "--after-page",
                     "arknights/home",
                     "--verbose",
@@ -3127,8 +3041,6 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
             "--capture",
             "--zip",
             semantic_package.to_str().unwrap(),
-            "--expected-sha256",
-            &expected_sha256,
             "--verbose",
         ],
     );
@@ -3148,10 +3060,6 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
     fs::write(&config_path, "{}").expect("write config");
     write_navigation_resources(&resources);
     write_semantic_package(&semantic_package, &resources);
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
-    );
     let state = Arc::new(FakeState::default());
     state.transition_after_tap.store(true, Ordering::Release);
     let instance_id = *IdentifierIssuer::new()
@@ -3184,8 +3092,6 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
             "home",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ],
     );
     assert_eq!(wait_home["data"]["state"], "arrived");
@@ -3212,8 +3118,6 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
             "1",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ],
     );
     assert_eq!(ensure["data"]["state"], "arrived");
@@ -3238,8 +3142,6 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
             "target_anchor",
             "--zip",
             semantic_package.to_str().expect("semantic package path"),
-            "--expected-sha256",
-            &expected_sha256,
         ],
     );
     assert_eq!(wait_stable["data"]["state"], "stable");
@@ -3460,10 +3362,6 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let adb_marker = root.path().join("forbidden-adb-invoked");
     fs::write(&config_path, "{}").expect("write config");
     write_runtime_owned_lab_package(&package_path);
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&package_path).expect("read package"))
-    );
     let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
@@ -3497,8 +3395,6 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
             "run",
             "--zip",
             package_path.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
             "--out",
             result_path.to_str().expect("result path"),
         ])
@@ -3614,10 +3510,6 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
     let adb_marker = root.path().join("forbidden-adb-invoked");
     fs::write(&config_path, "{}").expect("write config");
     write_runtime_owned_lab_package(&package_path);
-    let expected_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&package_path).expect("read package"))
-    );
     let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
@@ -3652,8 +3544,6 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
             "run",
             "--zip",
             package_path.to_str().expect("package path"),
-            "--expected-sha256",
-            &expected_sha256,
             "--out",
             result_path.to_str().expect("result path"),
         ])

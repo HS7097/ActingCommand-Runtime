@@ -643,12 +643,11 @@ pub(crate) fn schema_capabilities() -> Value {
         },
         "recognition_pack": {"supported": ["0.1", "0.3", "0.4", "0.5", "0.6", "0.7"]},
         "control": {"supported": ["Lab-1y.control.v1", actingcommand_contract::PHASED_CONTROL_SCHEMA]},
-        "package_reference": {
-            "legacy_zip": {"kind": "sha256"},
-            "content_directory": {
-                "schema_version": actingcommand_contract::ContentDirectoryVersion::V1,
-                "containers": ["directory", "zip", "json"]
-            }
+        // Workflow #336 PKG-S4 (option 丙): a package is found by its path, which chooses how
+        // it is read; no reference or digest names it.
+        "package_locator": {
+            "by": "path",
+            "readings": ["directory", "zip", "json"]
         }
     })
 }
