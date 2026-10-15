@@ -137,6 +137,12 @@ mod gate_e5_select;
 // Workflow #390 lpbox (exec key 76): a long press takes a click box.
 #[cfg(test)]
 mod gate_390_lpbox;
+// Test plan v2.2 §3.10 E-3, EXEC-I4: shared test support (the scripted-frame runtime).
+#[cfg(test)]
+mod tests;
+// Test plan v2.2 E-3 G3 (exec keys 5 and 21): the screen disagrees with the pack.
+#[cfg(test)]
+mod gate_382_e3;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
