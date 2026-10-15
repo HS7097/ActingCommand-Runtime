@@ -39,9 +39,10 @@ const POLL_LIMIT: usize = 100_000;
 
 // The manual Runtime clock of the install and ladder rows (HOST-I2): its monotonic time, the one
 // every installation deadline and the ladder's readiness wait read, moves only when the test
-// moves it. Its wall time moves 1 ms at every reading, so records keep strictly increasing times
-// as on a real clock (a fact observed at the same instant as the one before it, from another
-// source, is refused).
+// moves it or a wait of the contained-task kernel spends it (test plan E-3, EXEC-I3: the kernel's
+// timers read this clock and its waits are this clock's `pause`). Its wall time moves 1 ms at
+// every reading, so records keep strictly increasing times as on a real clock (a fact observed
+// at the same instant as the one before it, from another source, is refused).
 pub(super) struct ManualMonotonicClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
@@ -67,6 +68,14 @@ impl RuntimeClock for ManualMonotonicClock {
             unix_ms: self.unix_ms.fetch_add(1, Ordering::SeqCst) + 1,
             monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
         })
+    }
+
+    // Test plan E-3 (§3.10): a wait of the contained-task kernel moves the monotonic time forward
+    // by its duration, in whole milliseconds rounded up, and returns at once, as
+    // `ManualRuntimeClock` does; a kernel wait therefore ends at its budget on this clock too.
+    fn pause(&self, duration: Duration) {
+        let duration_ms = duration.as_nanos().div_ceil(1_000_000);
+        self.advance(u64::try_from(duration_ms).unwrap_or(u64::MAX));
     }
 }
 
