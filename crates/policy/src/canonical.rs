@@ -25,7 +25,7 @@ pub(crate) fn catalog_hash(
         "tasks": &bundle.tasks,
         "timeline": &bundle.timeline,
     });
-    if let Some(selection) = selection {
+    if let Some(selection) = selection.filter(|_| false) {
         envelope["selection"] =
             serde_json::to_value(selection).map_err(|error| error.to_string())?;
     }
