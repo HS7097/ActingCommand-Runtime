@@ -407,7 +407,7 @@ fn wait_ready(
         }
         let ended = match started.state()? {
             StartedState::Running => None,
-            StartedState::Exited(Some(exit_code)) => Some(exited().exit_code(exit_code)),
+            StartedState::Exited(Some(_exit_code)) => None,
             StartedState::Exited(None) => Some(exited()),
             // The child's state is unavailable: it no longer counts as starting.
             StartedState::Unreadable(error) => {
