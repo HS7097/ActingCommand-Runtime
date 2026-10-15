@@ -168,3 +168,46 @@ operation record. Private observation facts remain in the controlled diagnostic
 artifacts, and the shared resource privacy merge controls public target/field
 values and details. Geometry remains available as operation information. This
 entry creates no local recording authority or persistent session fact store.
+
+## The frame's coordinate system and the after-action attachment (Workflow #410 item 1)
+
+Every `do` answer (online, `--capture --dry-run` and offline `--scene --dry-run`)
+states the coordinate system of the frame its coordinates refer to, the before
+frame online, as `frame_coordinates {unit: "device_pixel", width, height,
+orientation, origin: "top_left", applies_to: ["tap", "tap_rect", "swipe"]}`:
+`orientation` is `landscape` when the frame is wider than high, `portrait` when
+higher than wide, `square` otherwise, and `--tap`, `--tap-rect` and `--swipe`
+take coordinates in exactly these frame pixels.
+
+After an action the online form attaches its result by default, so the caller
+needs no extra observation. Whenever the operation has an after frame (also in a
+failure's details), the answer carries `after_attachment`:
+
+* the after projection is `recognized` (a known page): `{kind: "page_projection",
+  observation}`, the after page's shared projection. In the default Min view it
+  is cut on its own as `observe` cuts its projection (entries from the end while
+  it is over 1 KiB, keeping one actionable element; the identity alone, marked
+  truncated with its counts, when that is over 2 KiB); `--verbose` and `--pretty`
+  answer it whole. It joins the answer after the operation members' Min
+  projection, which keeps its own budget. With `--preview` it also has `preview`
+  of the after frame.
+* otherwise (no match, a conflict, a partial evaluation or no after projection):
+  `{kind: "frame", frame_coordinates, frame_path, preview}`, the after frame's
+  coordinate system, the after frame read verified from the Runtime's artifact
+  store and written as `<sha256>.png`, and its preview, with or without
+  `--preview`.
+
+`preview` is `{path, width, height, scale}`: a JPEG (quality 75) whose long edge
+is at most 1024 pixels, the other edge keeping the aspect; `scale` is frame
+pixels per preview pixel (1 for a frame no larger), so a point read on the
+preview is a frame point after multiplying x and y by `scale`. Frames and
+previews are written into the Lab frame directory
+`%LOCALAPPDATA%\ActingCommand\actinglab\frames`, named by the SHA-256 of the
+frame's PNG (`<sha256>.png`, `<sha256>.preview.jpg`), through a partial file
+renamed into place. No image is ever put into an answer, only paths. A part that
+could not be written (the frame not read, the preview not encoded, a file not
+written) is `{failure: {code: "lab_frame_export_failed", path?, raw_text?}}` in
+its place, and the answer still succeeds: the action was performed. `--preview`
+without `--capture`, or with `--dry-run` or the global `--dry-run`, is refused
+with `validation_failed` before any Runtime connection: it previews the frame
+after a performed action.

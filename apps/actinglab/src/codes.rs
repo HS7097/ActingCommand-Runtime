@@ -61,5 +61,13 @@ actingcommand_contract::outcome_codes! {
         /// decode.
         RecognitionRegressionFrameInvalid => "recognition_regression_frame_invalid": error / none,
         // ---- end of RSU-1
+        // ---- Workflow #410 item 1 (pending): observe and do say what their frame is.
+        /// Warning. `observe --preview` or a performed `do` could not export a frame: reading the
+        /// Runtime's verified frame, encoding its JPEG preview or writing the frame or the
+        /// preview into the Lab frame directory failed. The answer still succeeds and carries,
+        /// in place of the part not written, `failure {code, path?, raw_text?}` (keys `path`,
+        /// `raw_text`).
+        LabFrameExportFailed => "lab_frame_export_failed": warning / none,
+        // ---- end of #410 item 1
     }
 }

@@ -1104,3 +1104,15 @@ tests = [
     "actingcommand-actinglab::runtime_input_proxy::rsu1_recognition_regression_replays_the_kept_frames_against_the_original_record",
 ]
 incident = ["#331"]
+
+# Workflow #410 item 1 (board #410, approved by Alice 2026-10-15): every actinglab observe and do answer states its frame's coordinate system as frame_coordinates (device pixels W x H, the orientation landscape, portrait or square, the top-left origin, and tap and tap_rect taking coordinates in that same system); --preview writes a JPEG preview of the frame whose long edge is at most 1024 and answers its path, size and scale (frame pixels per preview pixel); after an action, do --capture attaches its result by default: the after page's projection when the page is known, the after frame's path and its preview's path when it is not, and no image is ever in the answer
+[[gate]]
+key = "74"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::labobs_the_coordinate_statement_names_device_pixels_the_orientation_and_the_inputs",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::labobs_the_preview_long_edge_is_1024_and_its_scale_maps_back_to_frame_pixels",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::frame::tests::labobs_the_preview_is_a_jpeg_of_the_answered_size_and_scale",
+    "actingcommand-actinglab::runtime_input_proxy::labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result",
+]
+incident = ["#410"]

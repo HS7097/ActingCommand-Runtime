@@ -216,6 +216,23 @@
       "description": "A frame that the evidence of actinglab recognition-regression references is not a PNG image, or its material does not read for another reason than its absence, or its PNG does not decode. Nothing was compared. A frame whose material is gone is not this error: it is listed as material_missing.",
       "common_causes": "The frame's material was replaced or damaged.",
       "handling": "Check the state root's artifact store; replay another run."
+    },
+    "lab_frame_export_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional",
+        "raw_text": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab observe --preview, or do after an action it performed, could not export a frame (Workflow #410 item 1): reading the Runtime's verified frame, encoding its JPEG preview or writing the frame or the preview into the Lab frame directory (%LOCALAPPDATA%\\ActingCommand\\actinglab\\frames) failed. The answer still succeeds, and with do the action was performed: the part not written (preview, or after_attachment.frame_path or .preview) is answered as failure {code, path, raw_text} in its place, with the path it was written to when one was known and the operating system's text as raw_text. No image is put into the answer instead.",
+      "common_causes": "LOCALAPPDATA is not set; the disk is full or the folder is not writable; the Runtime's frame was removed from its artifact store.",
+      "handling": "Free or fix the Lab frame directory and observe again (with preview), or read the frame with ac_material."
     }
   }
 }

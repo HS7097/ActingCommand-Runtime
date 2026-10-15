@@ -118,6 +118,12 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
             payload["after_condition"] = json!(prepared.after);
             payload["arrival"] = json!(record.arrival);
         }
+        // Workflow #410 item 1: the coordinate system of the frame the action's coordinates
+        // were chosen on (the before frame).
+        if let Some(before) = &prepared.before_frame {
+            payload["frame_coordinates"] =
+                super::frame::coordinates(before.observation.width(), before.observation.height());
+        }
         if global.verbose || flags.bool("--verbose") || flags.bool("--pretty") {
             payload["operation_record"] = json!(operation);
         }
@@ -138,8 +144,19 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         if global.verbose && projection_request.verbosity == ProjectionVerbosity::Min {
             projection_request.verbosity = ProjectionVerbosity::Normal;
         }
-        let projected = project_record(&payload, &projection_request)
+        let mut projected = project_record(&payload, &projection_request)
             .map_err(|error| CliError::device(error.to_string()))?;
+        // Workflow #410 item 1: after an action, its result by default: the after page's
+        // projection when the page is known, otherwise the after frame's path and preview path.
+        // It joins the answer after the Min projection of the operation members, so they keep
+        // their budget, and it is in the details of a failure too.
+        if let Some(attachment) = super::frame::after_attachment(
+            record,
+            flags.bool("--preview"),
+            projection_request.verbosity == ProjectionVerbosity::Min,
+        )? {
+            projected["after_attachment"] = attachment;
+        }
         if let Some((lock, plan)) = &recording {
             if !matches!(record.effect, EffectDisposition::NotPerformed) {
                 return commit_record_click(lock, plan, record, &payload, projected);

@@ -96,7 +96,12 @@ const OBSERVE_FORMS: &[(&str, Mode)] = &[
         Mode::Refused("record_flag_unsupported"),
     ),
     ("--with-frame <path>", UNSUPPORTED),
-    ("without --with-frame <path> or --record", Mode::NoEffect),
+    // Workflow #410 item 1: the preview is a file written.
+    ("--preview", UNSUPPORTED),
+    (
+        "without --with-frame <path>, --preview or --record",
+        Mode::NoEffect,
+    ),
 ];
 const STREAM_FORMS: &[(&str, Mode)] = &[
     ("check", Mode::NoEffect),
