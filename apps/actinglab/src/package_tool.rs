@@ -267,7 +267,7 @@ fn canonical_bytes(value: &Value) -> CliOutcome<Vec<u8>> {
     value.serialize(&mut serializer).map_err(|error| {
         CliError::package_invalid(format!("a JSON document does not serialize: {error}"))
     })?;
-    canonical.push(b'\n');
+    canonical.extend_from_slice(b"\r\n");
     Ok(canonical)
 }
 
