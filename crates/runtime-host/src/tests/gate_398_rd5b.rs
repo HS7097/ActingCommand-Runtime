@@ -179,8 +179,7 @@ fn state_records(events: &[PersistedEvent], code: impl Into<Code> + Copy) -> Vec
         .collect()
 }
 
-// The run did not start: it failed before its first step with `code`, not fatally, and named
-// the handset by its label when the code carries it.
+// The run did not start: it failed before its first step with `code`, not fatally.
 fn assert_refused(receipt: &RuntimeReceipt, code: impl Into<Code> + Copy) -> Outcome {
     assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
     assert!(!receipt.error_projection().expect("the run's failure").fatal);
