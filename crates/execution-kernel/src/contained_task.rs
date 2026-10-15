@@ -5660,7 +5660,6 @@ impl PreparedContainedTask {
                 Err(scene) => self.offer_shared_interrupt(runtime, &scene)?,
             };
             if let Some(paused) = paused {
-                started += paused;
                 window_started += paused;
                 continue;
             }
