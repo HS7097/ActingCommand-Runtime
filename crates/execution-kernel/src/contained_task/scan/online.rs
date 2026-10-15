@@ -549,7 +549,13 @@ pub fn replay_scan(
         crate::OfflineReplayFacts::Snapshot {
             snapshot,
             read_at_unix_ms,
-        } => (snapshot.clone(), *read_at_unix_ms),
+        } => (
+            actingcommand_contract::InstanceFactSnapshot {
+                records: Vec::new(),
+                ..snapshot.clone()
+            },
+            *read_at_unix_ms,
+        ),
     };
     if now_unix_ms == 0 || snapshot.validate().is_err() {
         return Err(ContainedTaskError::with_detail(
