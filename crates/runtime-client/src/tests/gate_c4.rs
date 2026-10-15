@@ -384,6 +384,9 @@ fn gate_one_beat_sends_one_renewal_frame_and_the_renewed_token_carries_the_next_
         "{receipt:?}"
     );
     proxy.close().expect("close the proxy");
+    // The closed proxy still holds its clone of the client, and with it the one connection;
+    // the scripted Runtime finishes once every clone is gone and that connection is closed.
+    drop(proxy);
     drop(heartbeat);
     drop(client);
     let record = runtime.finish();
