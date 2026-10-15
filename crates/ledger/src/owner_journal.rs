@@ -452,7 +452,7 @@ impl RuntimeOwnerJournal {
             if rest.is_empty() || appended {
                 return Ok(OwnerCompactionRecovery::Completed);
             }
-            if length == seal.predecessor_bytes {
+            if length == seal.image_bytes {
                 file.set_len(seal.image_bytes).map_err(repair)?;
                 file.sync_all().map_err(repair)?;
                 return Ok(OwnerCompactionRecovery::Truncated);
