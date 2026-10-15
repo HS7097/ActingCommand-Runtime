@@ -8,8 +8,8 @@
 //! both from the command table; until then this module keeps their parameters and output the
 //! same.
 //!
-//! `detail` opens `brief` and `payload`; `summary`, which reads A3's `outcome`, follows once A3
-//! (#721) has merged (coordinator ruling Q4).
+//! `detail` is `brief`, `summary` or `payload`. `summary`, the MCP-1 follow-up after A3 (#721,
+//! coordinator ruling Q4), adds the outcome a record carries since ledger revision 3.
 //!
 //! Paging. A cursor is bound to the process and the Runtime connection that issued it (§4.1).
 //! MCP pages with `next_cursor` inside its server's connection. The CLI pages with
@@ -21,7 +21,7 @@ use crate::cli_line;
 use crate::codes::{self, ActingctlCode};
 use crate::instance_selector::{self, SelectorMiss};
 use crate::material_export;
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::outcome::{Code, Detail as OutcomeDetail, Outcome};
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSeverity, EventSource, EventType, InstanceId,
     LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, ProjectedEvent, ProjectionPayload,
@@ -89,13 +89,16 @@ pub(crate) const MAX_WAIT_S: u64 = 20;
 pub(crate) const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
+const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|summary|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
 
 /// What each row carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Detail {
     /// The row's identity, links, diagnostic code and material refs.
     Brief,
+    /// The brief row and the outcome the record carries (ledger revision 3, #378 A3), when it
+    /// carries one; a record without one is a state change and its row stays brief (§4.1).
+    Summary,
     /// The brief row and the event's projected payload, verbatim.
     Payload,
 }
@@ -150,7 +153,7 @@ pub(crate) enum ArgumentProblem {
     OutOfRange { minimum: u64, maximum: u64 },
     /// Text that is none of its type's spellings; the type, as in "a ledger view".
     NotA(&'static str),
-    /// `detail` other than `brief` or `payload`.
+    /// `detail` other than `brief`, `summary` or `payload`.
     DetailUnknown,
     /// `event_types` or `exclude_event_types` that is not a list of event types.
     NotEventTypes,
@@ -173,7 +176,7 @@ impl std::fmt::Display for ArgumentProblem {
                 write!(formatter, "must be an integer from {minimum} to {maximum}")
             }
             Self::NotA(what) => write!(formatter, "is not {what}"),
-            Self::DetailUnknown => formatter.write_str("must be brief or payload"),
+            Self::DetailUnknown => formatter.write_str("must be brief, summary or payload"),
             Self::NotEventTypes => formatter.write_str("must list event types"),
             Self::CursorWithAfterSequence => formatter.write_str(
                 "and after_sequence exclude each other: a cursor already holds where its pages go on",
@@ -299,6 +302,7 @@ pub(crate) fn parse(
     }
     let detail = match text(arguments, "detail")? {
         None | Some("brief") => Detail::Brief,
+        Some("summary") => Detail::Summary,
         Some("payload") => Detail::Payload,
         Some(_) => {
             return Err(EventsError::argument(
@@ -588,11 +592,24 @@ pub(crate) fn read(
     }
 }
 
-/// A row of `detail`.
-pub(crate) fn row(event: &ProjectedEvent, detail: Detail) -> Value {
+/// A row of `detail`; `envelope` writes an outcome as the frontend writes it (the CLI line's and
+/// the MCP server's outcome detail).
+pub(crate) fn row(
+    event: &ProjectedEvent,
+    detail: Detail,
+    envelope: &dyn Fn(&Outcome) -> Value,
+) -> Value {
     let mut row = brief_row(event);
-    if detail == Detail::Payload {
-        row["payload"] = json!(event.payload);
+    match detail {
+        Detail::Brief => {}
+        Detail::Summary => {
+            if let ProjectionPayload::Full(payload) = &event.payload
+                && let Some(outcome) = payload.outcome()
+            {
+                row["outcome"] = envelope(outcome);
+            }
+        }
+        Detail::Payload => row["payload"] = json!(event.payload),
     }
     row
 }
@@ -703,10 +720,13 @@ fn run_cli(arguments: &[OsString]) -> Result<Value, EventsError> {
         Instant::now() + request.wait,
         &|| false,
     )?;
+    // The outcome detail main checked before this command ran (Workflow #378 A5).
+    let outcome_detail = cli_line::detail().unwrap_or(OutcomeDetail::Full);
+    let envelope = |outcome: &Outcome| cli_line::outcome_value(outcome, outcome_detail);
     let rows = page
         .events()
         .iter()
-        .map(|event| row(event, request.detail))
+        .map(|event| row(event, request.detail, &envelope))
         .collect::<Vec<_>>();
     let next_cursor = page
         .next_cursor()?
@@ -776,7 +796,7 @@ pub(crate) fn process_session() -> u64 {
 }
 
 // Test-only: Workflow #378 A5, an argument failure of `events` as an outcome; Workflow #389
-// MCP-2, the query rule of `event_types` and `fact_key`.
+// MCP-2, the query rule of `event_types` and `fact_key`; the MCP-1 follow-up, `detail summary`.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,5 +979,36 @@ mod tests {
                 "{arguments:?}"
             );
         }
+    }
+
+    // Workflow #389 MCP-1 follow-up (MCP-0 command table v1.1 §4.1, coordinator ruling Q4):
+    // `detail` takes `summary` beside `brief` (the default) and `payload`; any other value is
+    // refused naming `detail` as not recognised.
+    #[test]
+    fn mcp1_follow_up_detail_takes_summary_beside_brief_and_payload() {
+        for (given, detail) in [
+            (None, Detail::Brief),
+            (Some("brief"), Detail::Brief),
+            (Some("summary"), Detail::Summary),
+            (Some("payload"), Detail::Payload),
+        ] {
+            let mut arguments = Map::new();
+            if let Some(given) = given {
+                arguments.insert("detail".to_owned(), json!(given));
+            }
+            let request = parse(&arguments, CLI_MAX_LIMIT)
+                .unwrap_or_else(|error| panic!("detail {given:?} was refused: {error}"));
+            assert_eq!(request.detail, detail, "detail {given:?}");
+        }
+        let mut arguments = Map::new();
+        arguments.insert("detail".to_owned(), json!("full"));
+        let error = parse(&arguments, CLI_MAX_LIMIT).expect_err("detail full was taken");
+        let outcome = error.outcome();
+        assert!(
+            outcome.is(ActingctlCode::ActingctlUsageInvalid)
+                && outcome.value("argument") == Some(&json!("detail"))
+                && outcome.value("argument_problem") == Some(&json!("not_recognised")),
+            "{outcome}"
+        );
     }
 }

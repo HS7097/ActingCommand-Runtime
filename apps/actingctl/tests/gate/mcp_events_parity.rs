@@ -13,9 +13,10 @@
 
 use crate::c4_runtime::{RuntimeChild, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
+use actingcommand_contract::outcome::Detail as OutcomeDetail;
 use actingcommand_contract::{
-    EventActor, EventQuery, EventSource, EventType, ProjectionProfile, SchedulingPauseReason,
-    SchedulingPauseScope, priority_offset_fact_key,
+    EventActor, EventQuery, EventSource, EventType, ProjectionPayload, ProjectionProfile,
+    SchedulingPauseReason, SchedulingPauseScope, priority_offset_fact_key,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Map, Value, json};
@@ -363,6 +364,116 @@ fn gate_actingctl_events_and_ac_events_answer_the_same_page_for_a_type_union_and
         ),
         (&json!(EventType::FactPublished), &json!(key)),
         "fact_key {key} answered another record than the one that publishes it: {answer}"
+    );
+
+    mcp.close_input();
+    runtime.stop_clean();
+    drop(mcp);
+}
+
+// Workflow #389 MCP-1 follow-up (MCP-0 command table v1.1 §2.3, §4.1; coordinator ruling Q4):
+// `detail` `summary` through the same real CLI and MCP server on one c4 fake Runtime child. The
+// expected page is §4.1's: each row is the brief row plus the outcome its record carries (ledger
+// revision 3, #378 A3), as the record's `actingcommand.outcome.v1` envelope, and a record that
+// carries none (a state change) has no `outcome` member. A second holder asking for the lease
+// another holder keeps is refused, which records a refusal with its outcome among records that
+// carry none. The CLI's stdout JSON equals the ac_events result (the page fits the output
+// budget, so §2.2 leaves no presentation member).
+#[test]
+fn gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome() {
+    let root = TempDir::new().expect("tempdir");
+    write_sealed_frame(&root.path().join("sealed.png"));
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let connect = || {
+        RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            actingcommand_runtime_client::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        ))
+        .expect("connect a Runtime client")
+    };
+    let holder = connect();
+    let before = holder
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("read the ledger")
+        .last()
+        .map_or(0, |event| event.sequence);
+    let token = holder.acquire_lease(ALIAS).expect("hold the instance");
+    let second = connect();
+    assert!(
+        second.acquire_lease(ALIAS).is_err(),
+        "setup: a second holder got the lease of a held instance"
+    );
+    drop(second);
+    holder.release_lease(&token).expect("release the instance");
+    let range = holder
+        .query_events(
+            EventQuery {
+                from_sequence: Some(before + 1),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("read the range");
+    drop(holder);
+    let through = range
+        .last()
+        .expect("setup: the lease requests left no rows")
+        .sequence;
+    // Each row's sequence and the envelope of the outcome its record carries, if any.
+    let expected = range
+        .iter()
+        .map(|event| {
+            let outcome = match &event.payload {
+                ProjectionPayload::Full(payload) => payload.outcome().map(|outcome| {
+                    serde_json::to_value(outcome.envelope(OutcomeDetail::Full))
+                        .expect("an outcome envelope serialises")
+                }),
+                _ => None,
+            };
+            (json!(event.sequence), outcome)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        expected.iter().any(|(_, outcome)| outcome.is_some())
+            && expected.iter().any(|(_, outcome)| outcome.is_none()),
+        "setup: the range does not hold both a record with an outcome and one without"
+    );
+
+    let parameters = [
+        ("after_sequence", json!(before)),
+        ("through_sequence", json!(through)),
+        ("detail", json!("summary")),
+        ("limit", json!(100)),
+    ];
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    let printed = cli_events(root.path(), &parameters);
+    let answer = mcp.call_tool(2, "ac_events", arguments_of(&parameters));
+    let result = accepted(&answer, "ac_events");
+    assert_eq!(
+        &printed, result,
+        "actingctl events printed another summary page than ac_events answered"
+    );
+    assert!(
+        result.get("next_cursor").is_none() && result.get("truncated").is_none(),
+        "setup: the range does not fit one page: {answer}"
+    );
+    let rows = result["events"]
+        .as_array()
+        .unwrap_or_else(|| panic!("ac_events answered no events member: {answer}"));
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["seq"].clone(), row.get("outcome").cloned()))
+            .collect::<Vec<_>>(),
+        expected,
+        "a summary row does not carry exactly the outcome of its record: {answer}"
+    );
+    assert!(
+        rows.iter().all(|row| row.get("payload").is_none()),
+        "a summary row carries the payload: {answer}"
     );
 
     mcp.close_input();
