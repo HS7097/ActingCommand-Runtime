@@ -2805,9 +2805,7 @@ impl PreparedContainedTask {
             && first.is_some_and(|operation| {
                 operation.from == "any" && operation.application.is_some()
             });
-        let capture = !(application_entry
-            && (self.control.execution_mode == linear::LINEAR_STEPS
-                || self.has_graph_application_entry()));
+        let capture = !(application_entry && self.control.execution_mode == linear::LINEAR_STEPS);
         let input = self.control.execution_mode != "recognize_only"
             && !application_entry
             && self
