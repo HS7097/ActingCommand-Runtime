@@ -3390,7 +3390,8 @@ impl From<&HostResourceSnapshot> for HostRemaining {
             third_party_pressure_basis_points: value.third_party_pressure_basis_points,
             heavy_dispatch_limit: value.heavy_dispatch_limit,
             active_heavy_dispatches: value.active_heavy_dispatches,
-            heavy_threshold_milli: value.heavy_threshold_milli,
+            // One-off red proof: the evaluator ignores the configured heavy threshold.
+            heavy_threshold_milli: DEFAULT_HEAVY_THRESHOLD_MILLI,
         }
     }
 }
