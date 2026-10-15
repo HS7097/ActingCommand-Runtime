@@ -78,7 +78,10 @@ fn probe(page: &str) -> Value {
 }
 
 // A package's control and its one task: `entry` (a page or a set of pages), `target`, one
-// click per operation `(id, from, to)`; its pages are the ones these name.
+// click per operation `(id, from, to)`; its pages are the ones these name. The task is schema
+// `0.9` (an entry page set needs it), so the control is `Lab-1y.control.v2`: the kernel admits a
+// `0.9` task only with that control (`contracts/README.md`: "Its package control is
+// `Lab-1y.control.v2`"), as `tests/support/exec_i6.rs` writes.
 pub(super) struct Pack<'a> {
     pub(super) package_id: &'a str,
     pub(super) mode: &'a str,
@@ -103,7 +106,7 @@ impl Pack<'_> {
             pages.insert((*to).to_owned());
         }
         let mut control = json!({
-            "schema_version": "Lab-1y.control.v1",
+            "schema_version": "Lab-1y.control.v2",
             "package_id": self.package_id,
             "execution_mode": self.mode,
             "game": "neutral",
