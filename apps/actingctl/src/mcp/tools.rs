@@ -835,7 +835,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Stop a recording",
         tier: Tier::Author,
         description: concat!(
-            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example inline when they fit. It opens no Runtime connection and records no client.action.",
+            "Runs actinglab --json record stop: stops the recording session and generates its linear-steps package (lab_dir for the package directory; dry_run validates and writes nothing), answered verbatim, with lab.binding_example, lab.binding_requires and the other binding parts ac_binding_draft takes. Only the stop that generates the package answers lab.binding_requires; a later one answers lab.status already_generated without it. After ac_record_mark on a stopped recording, the next stop generates the package again and answers lab.status regenerated. An answer larger than the output budget still carries lab.binding_example, lab.binding_requires, lab.prerequisite_entry_example and lab.catalog_on_failure_example inline when they fit. It opens no Runtime connection and records no client.action.",
             lab_errors!(),
             lab_job!()
         ),
