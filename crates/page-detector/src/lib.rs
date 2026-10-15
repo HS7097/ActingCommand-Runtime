@@ -465,7 +465,7 @@ impl PageDetector {
                     .ocr_anchors(target_id)
                     .map_err(pack_error)?
                     .into_iter()
-                    .find(|anchor| !page.required.iter().any(|required| required == anchor))
+                    .find(|anchor| anchor.is_empty())
                 {
                     return Err(refused(
                         forbidden_index,
