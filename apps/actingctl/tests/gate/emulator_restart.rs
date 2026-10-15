@@ -9,6 +9,7 @@
 use crate::emulator_controller::{
     EmulatorCall, FakeEmulatorController, ScriptedControl, stopped_state,
 };
+use crate::mcp_harness::McpServer;
 use actingcommand_artifact_store::ArtifactStore;
 use actingcommand_contract::{
     ApplicationLifecycleAction, BackendOpenEntry, EmulatorInstanceAction, EventPayload, EventQuery,
@@ -26,7 +27,7 @@ use actingcommand_runtime_host::{
     ExecutionBackendProvider, PendingAdbEndpoint, ResolvedAdbEndpoint, ResolvedExecutionInstance,
     RuntimeHost, RuntimeHostConfig,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -349,5 +350,94 @@ fn gate_emulator_restart_whose_start_times_out_exits_non_zero_and_leaves_no_stal
         }),
         "{:?}",
         facts.records
+    );
+}
+
+// Workflow #382 A-4 (test plan v2.2 A-4 G4, the MCP half; req-basis-ha.md A-4 G4): MCP
+// `ac_emulator` with `restart` takes the path `actingctl emulator restart` takes. The Runtime runs
+// its own Stop then Start and never dispatches the vendor's `restart`; when the Start's readiness
+// wait expires, the tool answers a tool error whose outcome is `emulator_restart_start_failed`,
+// and `actingctl emulator status` shows the instance pending.
+#[test]
+fn gate_ac_emulator_restart_whose_start_times_out_answers_its_failure_and_never_dispatches_the_vendor_restart()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let controller = Arc::new(FakeEmulatorController::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(root.path(), SALT).with_stuck_recovery(BTreeMap::from([(
+            ALIAS.to_owned(),
+            InstanceStuckRecovery {
+                enabled: false,
+                cooldown_secs: InstanceStuckRecovery::MAX_COOLDOWN_SECS,
+            },
+        )])),
+        Arc::new(ScriptedEmulator {
+            instance_id,
+            controller: Arc::clone(&controller),
+        }),
+    )
+    .expect("start the Runtime");
+    // The instance runs and is connected before the restart.
+    let started = actingctl(root.path(), &["emulator", "start", "--instance", ALIAS]);
+    controller.script_control(
+        EmulatorInstanceAction::Start,
+        ScriptedControl::Failed {
+            stage: actingcommand_device::codes::DeviceStage::MumuManagerWaitTimeout.location(),
+            exit_code: Some(0),
+            last_state: Some(stopped_state()),
+            device_process_present: None,
+        },
+    );
+    controller.script_read(stopped_state());
+    let mut mcp = McpServer::spawn(root.path());
+    mcp.initialize();
+    let answer = mcp.call_tool(
+        2,
+        "ac_emulator",
+        json!({"instance": ALIAS, "action": "restart"}),
+    );
+    mcp.close_input();
+    drop(mcp);
+    let status = actingctl(root.path(), &["emulator", "status", "--instance", ALIAS]);
+    host.close().expect("close the Runtime");
+
+    assert!(started.status.success(), "{}", describe(&started));
+    assert_eq!(answer["result"]["isError"], json!(true), "{answer}");
+    assert_eq!(
+        answer["result"]["structuredContent"]["error"]["outcome"]["code"],
+        json!("emulator_restart_start_failed"),
+        "{answer}"
+    );
+    let controls = controller
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            EmulatorCall::Control(action) => Some(action),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        controls,
+        [
+            EmulatorInstanceAction::Start,
+            EmulatorInstanceAction::Stop,
+            EmulatorInstanceAction::Start,
+        ],
+        "the vendor's restart is never dispatched"
+    );
+    assert!(status.status.success(), "{}", describe(&status));
+    let status: Value = serde_json::from_slice(&status.stdout).expect("status JSON");
+    assert_eq!(
+        status["outcome"]["code"], "instance_status_reported",
+        "{status}"
+    );
+    assert!(
+        status.get("adb_port").is_none_or(Value::is_null),
+        "the instance is pending: {status}"
     );
 }
