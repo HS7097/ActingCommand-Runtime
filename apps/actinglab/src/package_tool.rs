@@ -312,9 +312,7 @@ fn apply(document: &mut Value, op: EditOp, pointer: &str, value: Value) -> Resul
             members.insert(last, value);
         }
         (EditOp::Replace, Value::Object(members)) => {
-            *members
-                .get_mut(&last)
-                .ok_or(EditFailure::PointerUnresolved)? = value;
+            members.insert(last, value);
         }
         (EditOp::Add, Value::Array(items)) => {
             let index = if last == "-" {
