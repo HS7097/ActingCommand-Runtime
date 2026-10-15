@@ -529,7 +529,7 @@ pub struct TaskSelectionRecord {
     pub unknown_check: Option<TaskSelectionUnknownCheck>,
     /// Present exactly when the step's policy declares more than one candidate (M-357b §5.1);
     /// a single select's record never carries it and keeps its bytes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub multi_select: Option<TaskSelectionMultiSelect>,
 }
 
