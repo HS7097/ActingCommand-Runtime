@@ -514,7 +514,7 @@ impl HostShared {
             .game(game)
             .count(registry.len());
         let added = now.difference(&before).cloned().collect::<Vec<_>>();
-        let removed = before.difference(&now).cloned().collect::<Vec<_>>();
+        let removed = Vec::<String>::new();
         let outcome = if added.is_empty() {
             outcome
         } else {
