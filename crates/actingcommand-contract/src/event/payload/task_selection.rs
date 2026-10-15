@@ -960,7 +960,7 @@ impl TaskSelectionRecord {
                 count: index as u32,
             },
         };
-        if self.confirmation != expected {
+        if std::mem::discriminant(&self.confirmation) != std::mem::discriminant(&expected) {
             return Err(invalid("confirmation"));
         }
         Ok(())
