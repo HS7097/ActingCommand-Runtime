@@ -32,7 +32,7 @@ pub(super) fn run(_context: &ToolContext<'_>, arguments: &Map<String, Value>) ->
         }
     }
     capability_gap::log_path()
-        .and_then(|log| capability_gap::record(&log, capability, why, "mcp"))
+        .and_then(|log| capability_gap::record(&log, capability, why, "cli"))
         .map(ToolSuccess::new)
         .map_err(|outcome| ToolError::outcome("runtime", outcome))
 }

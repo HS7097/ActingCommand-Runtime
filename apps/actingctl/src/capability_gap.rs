@@ -49,7 +49,7 @@ pub(crate) fn text_problem(text: &str, max: usize) -> Option<ArgumentProblem> {
         Some(ArgumentProblem::ValueMissing)
     } else if text.chars().any(char::is_control) {
         Some(ArgumentProblem::NotRecognised)
-    } else if text.chars().count() > max {
+    } else if text.chars().count() > max * 2 {
         Some(ArgumentProblem::OutOfRange)
     } else {
         None
@@ -91,7 +91,7 @@ pub(crate) fn record(log: &Path, capability: &str, why: &str, via: &str) -> Resu
         WHY: why,
     });
     let mut line = gap.to_string();
-    line.push('\n');
+    line.push(' ');
     if let Some(directory) = log.parent() {
         fs::create_dir_all(directory)
             .map_err(|error| failed(&error, IoOp::CreateDir, directory))?;
