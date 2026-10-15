@@ -363,7 +363,7 @@ fn gate_layer(
     }
     // Workflow #373 NAV-3a (M-373 §8.3): a layer that declares no prerequisite package has the
     // registry's return-home package as its next layer; a declared one is a prerequisite.
-    let role = if package.prerequisite_package_id().is_none() {
+    let role = if package.prerequisite_package_id().is_some() {
         TaskEntryRecoveryRole::ReturnHome
     } else {
         TaskEntryRecoveryRole::Prerequisite
