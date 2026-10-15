@@ -268,7 +268,7 @@ impl MonitorSettings {
     /// whole-section check does: a refusal is `perf_config_invalid` naming the key.
     pub fn parse(value: &dyn Fn(&str) -> Option<FactScalar>) -> Result<Self, ConfigFailure> {
         let values = Values { value };
-        check(&values)?;
+        // One-off red proof: no rule check.
         Ok(Self {
             sample_interval_ms: values.unsigned(SAMPLE_INTERVAL_MS)?,
             context_window_ms: values.unsigned(CONTEXT_WINDOW_MS)?,
@@ -284,7 +284,8 @@ impl MonitorSettings {
             pressure_end_samples: values.unsigned(PRESSURE_END_SAMPLES)?,
             thresholds: thresholds(&values.json(THRESHOLDS)?)?,
             severity: severity(&values.json(SEVERITY)?)?,
-            gpu_aggregate: gpu_aggregate(&values)?,
+            // One-off red proof: the default aggregate whatever the file says.
+            gpu_aggregate: GpuAggregate::MaxEngineType,
         })
     }
 }

@@ -109,6 +109,20 @@ impl PerformanceMonitorConfig {
     /// effect. `performance.load.heavy_threshold_milli` is the controller's
     /// (`PerformanceControlConfig::with_heavy_threshold_milli`).
     pub fn with_settings(self, settings: &MonitorSettings) -> Self {
+        // One-off red proof: only the streaks and the GPU aggregate are wired.
+        Self {
+            pressure_start_samples: settings.pressure_start_samples,
+            pressure_end_samples: settings.pressure_end_samples,
+            gpu_aggregate: match settings.gpu_aggregate {
+                ConfiguredGpuAggregate::MaxEngineType => GpuAggregate::MaxEngineType,
+                ConfiguredGpuAggregate::Sum => GpuAggregate::Sum,
+            },
+            ..self
+        }
+    }
+
+    /// One-off red proof: the slice's reading, unused.
+    pub fn with_settings_unused(self, settings: &MonitorSettings) -> Self {
         let MonitorSettings {
             sample_interval_ms,
             context_window_ms,

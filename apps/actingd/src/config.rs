@@ -273,8 +273,8 @@ fn performance_settings(
         .with_heavy_dispatch_limits(
             small(pacing::HEAVY_DISPATCH_LIMIT_NORMAL)?,
             small(pacing::HEAVY_DISPATCH_LIMIT_PAUSED)?,
-        )
-        .with_heavy_threshold_milli(monitor.heavy_threshold_milli);
+        );
+    // One-off red proof: the heavy threshold is not handed over.
     Ok((monitor_config, control_config))
 }
 

@@ -838,13 +838,13 @@ fn process_count_u32(value: usize) -> Result<u32, Code> {
 fn mark_partial_process_metrics(
     unavailable: &mut BTreeSet<HostMetric>,
     coverage: ProcessMetricCoverage,
-    min_coverage_basis_points: u16,
+    _min_coverage_basis_points: u16,
 ) {
     // Only independently confirmed Windows system/PPL processes leave the denominator. Ordinary
     // access denials remain unknown and make process-derived pressure unavailable.
     if coverage.unconfirmed_access_denied_processes > 0
         || coverage.sampled_processes == 0
-        || coverage.readable_basis_points < min_coverage_basis_points
+        || coverage.readable_basis_points < 9_900
     {
         unavailable.extend([
             HostMetric::ProcessCpu,

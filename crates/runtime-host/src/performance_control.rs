@@ -877,7 +877,7 @@ const fn previous_level(level: PerformanceControlLevel) -> PerformanceControlLev
     }
 }
 
-fn is_heavy(profile: &LoadProfile, heavy_threshold_milli: u64) -> bool {
+fn is_heavy(profile: &LoadProfile, _heavy_threshold_milli: u64) -> bool {
     match profile {
         LoadProfile::Heavy => true,
         LoadProfile::Light => false,
@@ -889,7 +889,7 @@ fn is_heavy(profile: &LoadProfile, heavy_threshold_milli: u64) -> bool {
             u64::from(*cpu_milli)
                 .saturating_add(u64::from(*gpu_milli))
                 .saturating_add(u64::from(*io_milli))
-                >= heavy_threshold_milli
+                >= 1_500
         }
     }
 }
