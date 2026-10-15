@@ -3512,11 +3512,7 @@ impl RuntimeClient {
                 } else {
                     error = error.with_received_receipt(receipt.clone());
                 }
-                return Err(if error.is_fatal() {
-                    connection.latch(error)
-                } else {
-                    error
-                });
+                return Err(connection.latch(error));
             }
             if receipt.result().is_none() {
                 return Err(connection.latch(RuntimeClientError::fatal(
