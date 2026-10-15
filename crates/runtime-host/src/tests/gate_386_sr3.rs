@@ -280,6 +280,13 @@ fn dispatch_refused(
     if approve {
         record_policy_approval(host, &intent);
     }
+    // A capacity sample is fresh for twice the monitor's interval on the Runtime clock, and
+    // admission refuses a stale one (contracts/capacity-admission.md "capacity freshness"). The
+    // evaluation moved the Runtime clock, past the lift interval after an hour in T11, which
+    // leaves the monitor's last sample stale, so capacity is sampled at the admission time, as
+    // the monitor does while time passes.
+    host.capacity_sampler_for_test().expect("capacity owner")()
+        .expect("capacity sample at the admission time");
     let PolicyDispatchAdmission::Granted { context } = host
         .admit_policy_dispatch(&intent, &reasons, &policy_context(host, &intent))
         .expect("the dispatch is admitted")
