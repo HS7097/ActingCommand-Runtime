@@ -755,7 +755,7 @@ impl RuntimeClient {
             },
             None if !open => ContainedRunState::NotFound,
             None if restarted_after_first_fact => ContainedRunState::InterruptedUnterminated,
-            None if step_started || admitted_sequence.is_none() => ContainedRunState::Running,
+            None if admitted_sequence.is_none() && !step_started => ContainedRunState::Running,
             None => ContainedRunState::Admitted,
         };
         let (dispatch, origin) = origin.unwrap_or((RunDispatch::Unknown, RunOrigin::Unknown));
