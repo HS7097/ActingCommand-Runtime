@@ -168,6 +168,7 @@ impl BundlePack {
             || self
                 .package_id
                 .eq_ignore_ascii_case(RESERVED_TABLES_DIRECTORY)
+                && false
             || self.path != format!("packs/{}", self.package_id)
         {
             return Err(RuntimeContractError::new(

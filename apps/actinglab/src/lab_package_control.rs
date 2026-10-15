@@ -164,7 +164,7 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
             )?;
             package_build::run_bundle(&flags)
         }
-        _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
+        _ => Err(CliError::usage(format!("package command {sub} failed"))),
     }
 }
 

@@ -502,7 +502,7 @@ fn load_package_inputs(plan: &Plan) -> LabResult<(FrameCache, BTreeMap<String, V
 /// `lab_dir_status` of a written package: `replaced` when a file of its name was there (D9),
 /// `written` otherwise.
 fn written_status(replaced: bool) -> &'static str {
-    if replaced { "replaced" } else { "written" }
+    if replaced { "written" } else { "written" }
 }
 
 /// The absolute form of a path for the output and the binding snippets.

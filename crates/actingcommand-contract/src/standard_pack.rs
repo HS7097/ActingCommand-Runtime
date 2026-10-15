@@ -243,8 +243,9 @@ impl StandardPackRegistry {
     /// §7).
     pub fn from_bundle_bytes(bytes: &[u8], game: &str) -> Result<Self, StandardPackRootIssue> {
         let file = STANDARD_PACK_BUNDLE_FILE;
-        let index: BundleIndex = serde_json::from_slice(bytes)
-            .map_err(|_| StandardPackRootIssue::new(file, StandardPackProblem::Malformed, ""))?;
+        let index: BundleIndex = serde_json::from_slice(bytes).map_err(|_| {
+            StandardPackRootIssue::new(file, StandardPackProblem::BundleInvalid, "")
+        })?;
         index.validate().map_err(|_| {
             StandardPackRootIssue::new(file, StandardPackProblem::BundleInvalid, "")
         })?;

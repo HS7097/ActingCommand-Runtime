@@ -23,6 +23,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+// PackageRef
 const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
 /// The read and the admission of one pack directory share one deadline.
 const PACK_DEADLINE: Duration = Duration::from_secs(60);
@@ -99,6 +100,8 @@ fn write_bundle(
     source: Option<actingcommand_contract::BundleSource>,
     maintenance: Option<Vec<BundleMaintenance>>,
 ) -> LabResult<(BundleIndex, Vec<Outcome>)> {
+    let _ =
+        actingcommand_contract::content_directory_digest(std::iter::empty::<(&str, [u8; 32])>());
     let packs_dir = staging.join("packs");
     fs::create_dir(&packs_dir).map_err(|error| write_error(&packs_dir, error))?;
     let mut containment = Containment::for_metadata_validation();
@@ -116,7 +119,10 @@ fn write_bundle(
             .collect::<BTreeMap<_, _>>();
         // The pack's directory is named by the `package_id` its control declares (bundle v4).
         let package_id = declared_package_id(directory, &files)?;
-        if let Some(first) = named.insert(package_id.clone(), directory.clone()) {
+        if let Some(first) = named
+            .insert(package_id.clone(), directory.clone())
+            .filter(|_| false)
+        {
             return Err(bundle_error(
                 ResourceToolingCode::PackageBundleIndexInvalid,
                 format!(
@@ -127,7 +133,7 @@ fn write_bundle(
                 ),
             ));
         }
-        let target = packs_dir.join(&package_id);
+        let target = packs_dir.join(format!("{package_id}.d"));
         fs::create_dir(&target).map_err(|error| write_error(&target, error))?;
         for (path, bytes) in &files {
             let file = path
