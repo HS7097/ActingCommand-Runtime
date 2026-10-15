@@ -145,7 +145,7 @@ fn cycle_at(host: &RuntimeHost, unix_ms: u64, seed: u64) -> PolicyCycle {
     .expect("policy cycle")
 }
 
-fn now() -> u64 {
+fn wall_unix_ms() -> u64 {
     unix_ms_now().expect("wall clock")
 }
 
@@ -208,7 +208,7 @@ fn d2s5_t35_each_change_of_a_wait_is_one_transition_numbered_through_the_epoch()
     let instance = json!(POLICY_INSTANCE_ALIAS);
     let package = json!(RECOGNITION_PACKAGE_ID);
 
-    let started = now();
+    let started = wall_unix_ms();
     let first = cycle_at(&host, started, 71);
     assert_eq!(
         transitions(&first),
@@ -242,7 +242,7 @@ fn d2s5_t35_each_change_of_a_wait_is_one_transition_numbered_through_the_epoch()
     host.complete_scheduled_policy_run(&context, &receipt)
         .expect("the fact refresh settles");
 
-    let unresolved = cycle_at(&host, now(), 73);
+    let unresolved = cycle_at(&host, wall_unix_ms(), 73);
     assert_eq!(
         transitions(&unresolved),
         vec![(3, 2, POLICY_INSTANCE_ALIAS, READ_KEY, UNRESOLVED)]
@@ -257,9 +257,9 @@ fn d2s5_t35_each_change_of_a_wait_is_one_transition_numbered_through_the_epoch()
         ],
     );
 
-    host.publish_fact(reading(now()))
+    host.publish_fact(reading(wall_unix_ms()))
         .expect("the reading lands");
-    let resolved = cycle_at(&host, now(), 74);
+    let resolved = cycle_at(&host, wall_unix_ms(), 74);
     assert_eq!(
         transitions(&resolved),
         vec![(4, 3, POLICY_INSTANCE_ALIAS, READ_KEY, RESOLVED)]
@@ -283,7 +283,7 @@ fn d2s5_t35_each_change_of_a_wait_is_one_transition_numbered_through_the_epoch()
 fn d2s5_t36_the_recorder_s_state_never_changes_an_evaluation() {
     let root = TempDir::new().expect("tempdir");
     let host = chain_host(&root, Arc::new(TerminalReadings), None);
-    let at = now();
+    let at = wall_unix_ms();
     let warm = cycle_at(&host, at, 61);
     cycle_at(&host, at, 61);
     let evaluation = warm.evaluation.as_ref().expect("a full evaluation");
@@ -315,7 +315,7 @@ fn d2s5_t36_the_recorder_s_state_never_changes_an_evaluation() {
     }
     let decided = |cycle: &PolicyCycle| {
         (
-            cycle.directive.clone(),
+            cycle.directive,
             cycle.evaluation.clone(),
             cycle.pending_dispatch_intents.clone(),
             cycle.detection_planning_signals.clone(),
@@ -353,7 +353,7 @@ fn d2s5_t38_a_wait_past_overdue_ms_is_reported_once_and_only_when_set() {
         Arc::new(TerminalReadings),
         Some(overdue_manifest(OVERDUE_MS)),
     );
-    let started = now();
+    let started = wall_unix_ms();
     let first = cycle_at(&host, started, 81);
     assert_eq!(
         transitions(&first),
@@ -387,7 +387,7 @@ fn d2s5_t38_a_wait_past_overdue_ms_is_reported_once_and_only_when_set() {
 
     let root = TempDir::new().expect("tempdir");
     let host = chain_host(&root, Arc::new(TerminalReadings), None);
-    let started = now();
+    let started = wall_unix_ms();
     cycle_at(&host, started, 82);
     let late = cycle_at(&host, started + 660_000, 82);
     assert_eq!(
@@ -406,7 +406,7 @@ fn d2s5_t38_a_wait_past_overdue_ms_is_reported_once_and_only_when_set() {
 fn d2s5_t39_the_status_read_answers_the_wait_from_memory_and_appends_nothing() {
     let root = TempDir::new().expect("tempdir");
     let host = chain_host(&root, Arc::new(TerminalReadings), None);
-    let started = now();
+    let started = wall_unix_ms();
     cycle_at(&host, started, 91);
 
     let mut client = TestClient::connect(&host);
@@ -469,12 +469,12 @@ fn d2s5_t39_the_status_read_answers_the_wait_from_memory_and_appends_nothing() {
 fn d2s4_t31_an_intent_evaluated_before_the_reading_is_stale_and_the_next_one_is_admitted() {
     let root = TempDir::new().expect("tempdir");
     let host = chain_host(&root, Arc::new(TerminalReadings), None);
-    let before = cycle_at(&host, now(), 31);
+    let before = cycle_at(&host, wall_unix_ms(), 31);
     let evaluation = before.evaluation.as_ref().expect("a full evaluation");
     let (refresh, refresh_chain) = intent_of(evaluation, FACT_REFRESH_TASK_ID);
     record_policy_approval(&host, &refresh);
 
-    host.publish_fact(reading(now()))
+    host.publish_fact(reading(wall_unix_ms()))
         .expect("the reading lands");
     let request = host
         .fact_refresh_request(&refresh)
@@ -490,7 +490,7 @@ fn d2s4_t31_an_intent_evaluated_before_the_reading_is_stale_and_the_next_one_is_
         .expect_err("an intent evaluated before the reading is stale");
     assert_eq!(refused.code(), STALE);
 
-    let after = cycle_at(&host, now(), 32);
+    let after = cycle_at(&host, wall_unix_ms(), 32);
     let evaluation = after.evaluation.as_ref().expect("a full evaluation");
     let (business, business_chain) = intent_of(evaluation, BUSINESS_TASK);
     let admission = host
@@ -518,7 +518,7 @@ fn d2s4_t32_the_transitions_stay_in_memory_and_the_ledger_gains_no_new_record_ki
         host.query_persisted_events_for_test(EventQuery::default())
             .expect("ledger events")
     };
-    let at = now();
+    let at = wall_unix_ms();
     let first = cycle_at(&host, at, 21);
     assert_eq!(first.fact_refresh_transitions.len(), 1);
     // The same wait met by an empty recorder: one transition, no record.
@@ -546,7 +546,7 @@ fn d2s4_t32_the_transitions_stay_in_memory_and_the_ledger_gains_no_new_record_ki
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     host.complete_scheduled_policy_run(&context, &receipt)
         .expect("the fact refresh settles");
-    let resolved = cycle_at(&host, now(), 22);
+    let resolved = cycle_at(&host, wall_unix_ms(), 22);
     assert_eq!(
         transitions(&resolved),
         vec![(2, 2, POLICY_INSTANCE_ALIAS, READ_KEY, RESOLVED)]
