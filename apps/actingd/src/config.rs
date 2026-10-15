@@ -978,7 +978,7 @@ impl ResourcePackageRejection {
     pub(super) fn outcome(&self) -> Outcome {
         let outcome = Outcome::new(self.code).alias(&self.alias).path(&self.path);
         match &self.loader {
-            Some((code, _)) => outcome.caused_by(Outcome::relayed(code)),
+            Some((_code, _)) => outcome,
             None => outcome,
         }
     }
