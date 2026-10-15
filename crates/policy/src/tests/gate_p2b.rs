@@ -242,7 +242,7 @@ fn gate_p2b_g12_each_realistic_mistake_of_either_version_is_refused_with_its_rea
     use ResourceTargetsRejectionReason as Reason;
     let catalog = g12_catalog();
     let facts = g12_facts();
-    let rows: [(&str, fn(&mut TargetsDocument), Reason, &str); 8] = [
+    let rows: [(&str, Mistake, Reason, &str); 8] = [
         (
             "a version no reader takes",
             |document| document.schema_version = Some("actingcommand.resource-targets.v3"),
@@ -530,6 +530,9 @@ fn with_text(
 }
 
 // --- G12: the I4 resource-target builder and its catalog ---
+
+// One realistic mistake, made on a builder document.
+type Mistake = fn(&mut TargetsDocument);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Version {

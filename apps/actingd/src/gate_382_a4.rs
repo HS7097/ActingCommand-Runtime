@@ -239,7 +239,7 @@ fn package_files(directory: &Path) -> Vec<(&'static str, Vec<u8>)> {
                 .fold(directory.to_path_buf(), |parent, segment| {
                     parent.join(segment)
                 });
-            (*name, fs::read(&path).expect("read a package file"))
+            (*name, fs::read(path).expect("read a package file"))
         })
         .collect()
 }
