@@ -711,9 +711,9 @@ impl PreparedContainedTask {
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
-            let started = Instant::now();
-            std::thread::sleep(interval);
-            let ended = Instant::now();
+            let started = runtime.monotonic_now();
+            runtime.pause(interval);
+            let ended = runtime.monotonic_now();
             runtime.observe_task_boundary(super::ContainedTaskBoundaryTiming {
                 boundary,
                 identity,

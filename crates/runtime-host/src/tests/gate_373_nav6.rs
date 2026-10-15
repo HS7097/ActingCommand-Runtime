@@ -465,9 +465,18 @@ fn notice_root(base: &Path, then: Value, max_per_run: u8) -> GameRoot {
 // ---- Running.
 
 fn start(temp: &TempDir, state: &Arc<FakeState>, root: Option<&GameRoot>) -> RuntimeHost {
+    start_with(config(temp), state, root)
+}
+
+/// `start` with `config` as the host's configuration.
+fn start_with(
+    config: RuntimeHostConfig,
+    state: &Arc<FakeState>,
+    root: Option<&GameRoot>,
+) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     RuntimeHost::start(
-        config(temp).with_standard_packs_root(root.map(|root| root.root.clone())),
+        config.with_standard_packs_root(root.map(|root| root.root.clone())),
         Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(state))),
     )
     .expect("runtime host")
@@ -781,13 +790,16 @@ fn n6_2_a_broken_game_root_never_stops_the_runtime() {
 /// input still confirms the step, after frames of the step's own wait that show no page of the
 /// run.
 ///
-/// The step's budget is wall-clock time and only the handling is paused, so every frame of the
-/// step's own wait (each one captured, stored, recorded and checked against the interrupt pages)
-/// spends it. The wait therefore sees a few such frames, not many: with ten, a loaded CI runner
-/// spent the 600 ms on them alone and the step ended `contained_task_step_unconfirmed` (CI run
-/// 38603013861), although nothing of the handling was counted.
+/// The budget is spent on the Runtime clock, which the kernel reads (test plan E-3, §3.10): a
+/// manual clock that every capture moves `N6_3_CAPTURE_MS` forward and every wait of the kernel
+/// by its length, so what the step's own frames spend no longer depends on the runner's load.
+/// The step's own wait sees `N6_3_OWN_WAIT_FRAMES` frames that show no page of the run, the
+/// count with which a loaded runner once spent the 600 ms of wall-clock time on them alone (CI
+/// run 38603013861); on the Runtime clock they spend about half of it.
 #[test]
 fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
+    const N6_3_CAPTURE_MS: u64 = 20;
+    const N6_3_OWN_WAIT_FRAMES: usize = 10;
     let state = Arc::new(FakeState::default());
     let temp = TempDir::new().expect("tempdir");
     let mut root = GameRoot::new(temp.path());
@@ -813,23 +825,32 @@ fn n6_3_a_notice_during_a_wait_is_handled_and_the_wait_keeps_its_own_budget() {
             1
         )]));
     // After the run's input the notice covers the page; after the handler's input the page is
-    // dark (the handler's destination) for three captures, the handler's own frame and then the
-    // step's own wait, then `home` shows. Captures are counted, the clock is not read (test plan
-    // v2.2 §2.1 guard 3).
+    // dark (the handler's destination) for the handler's own frame and then the step's own wait,
+    // then `home` shows. Captures are counted and each moves the Runtime clock; the process clock
+    // is not read (test plan v2.2 §2.1 guard 3).
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let script_clock = Arc::clone(&clock);
     let dark_from = std::sync::Mutex::new(None::<usize>);
-    script(&state, move |capture, inputs| match inputs {
-        0 => frame(RED, None),
-        1 => frame(RED, Some(Overlay::Notice)),
-        _ => {
-            let first = *dark_from.lock().expect("dark from").get_or_insert(capture);
-            if capture < first + 3 {
-                frame(BLACK, None)
-            } else {
-                frame(BLUE, None)
+    script(&state, move |capture, inputs| {
+        script_clock.advance(N6_3_CAPTURE_MS);
+        match inputs {
+            0 => frame(RED, None),
+            1 => frame(RED, Some(Overlay::Notice)),
+            _ => {
+                let first = *dark_from.lock().expect("dark from").get_or_insert(capture);
+                if capture <= first + N6_3_OWN_WAIT_FRAMES {
+                    frame(BLACK, None)
+                } else {
+                    frame(BLUE, None)
+                }
             }
         }
     });
-    let host = start(&temp, &state, Some(&root));
+    let host = start_with(
+        config(&temp).with_runtime_clock(clock.clone()),
+        &state,
+        Some(&root),
+    );
     let run = run(&host, &temp, "run", &away_to_home());
     host.close().expect("close runtime host");
 

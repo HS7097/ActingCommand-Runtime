@@ -11,7 +11,8 @@ use actingcommand_device::{
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
-    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
+    ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeClock, RuntimeClockSample,
+    RuntimeHost, RuntimeHostConfig, RuntimeHostResult,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -19,10 +20,10 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::FileOptions;
@@ -39,6 +40,51 @@ struct FakeState {
     tap_delay_ms: AtomicUsize,
     /// Serve 16x9 frames with a matching display geometry for Runtime-owned Task runs.
     physical_task_geometry: AtomicBool,
+    // Test plan E-3 G11 (§3.10): from this capture number on (when not zero) the transition after
+    // a tap is over and the page shows again.
+    home_from_capture: AtomicUsize,
+    // Test plan E-3 G11: the host's manual Runtime clock, and how far each capture moves it.
+    clock: OnceLock<Arc<ManualClock>>,
+    clock_ms_per_capture: AtomicU64,
+}
+
+// Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
+// the kernel) moves it, so an arrival wait's budget is spent on it and not on the wall clock.
+struct ManualClock {
+    unix_origin_ms: u64,
+    monotonic_ms: AtomicU64,
+}
+
+impl ManualClock {
+    fn new() -> Self {
+        let unix_origin_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after the epoch")
+            .as_millis();
+        Self {
+            unix_origin_ms: u64::try_from(unix_origin_ms).expect("unix ms in u64"),
+            monotonic_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn advance(&self, duration_ms: u64) {
+        self.monotonic_ms.fetch_add(duration_ms, Ordering::SeqCst);
+    }
+}
+
+impl RuntimeClock for ManualClock {
+    fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        let monotonic_ms = self.monotonic_ms.load(Ordering::SeqCst);
+        Ok(RuntimeClockSample {
+            unix_ms: self.unix_origin_ms + monotonic_ms,
+            monotonic_ms,
+        })
+    }
+
+    fn pause(&self, duration: Duration) {
+        let duration_ms = duration.as_nanos().div_ceil(1_000_000);
+        self.advance(u64::try_from(duration_ms).unwrap_or(u64::MAX));
+    }
 }
 
 #[test]
@@ -79,13 +125,18 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
         .1 = &manifest;
     write_zip(&package, &package_files);
     let state = Arc::new(FakeState::default());
+    // Test plan E-3 G11: the arrival waits run on a manual Runtime clock.
+    let clock = Arc::new(ManualClock::new());
+    if state.clock.set(Arc::clone(&clock)).is_err() {
+        panic!("the fake's clock is set once");
+    }
     let instance_id = *IdentifierIssuer::new()
         .unwrap()
         .mint_instance_id()
         .unwrap()
         .transport();
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(&runtime_root, b"lab-evidence-spec"),
+        RuntimeHostConfig::new(&runtime_root, b"lab-evidence-spec").with_runtime_clock(clock),
         Arc::new(FakeProvider {
             instance_alias: "node.a",
             instance_id,
@@ -133,18 +184,22 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
         state
             .transition_after_tap
             .store(timeout_ms.is_some(), Ordering::Release);
+        // Test plan E-3 G11 (§3.10): the reached row's transition ends at a capture, the third
+        // arrival sample after the operation's before frame; the timed-out row's captures move
+        // the Runtime clock past its `timeout_ms` (400 ms each); no row waits on the wall clock.
+        let captures = state.captures.load(Ordering::Acquire);
+        state.home_from_capture.store(
+            if timeout_ms == Some(5_000) {
+                captures + 4
+            } else {
+                0
+            },
+            Ordering::Release,
+        );
+        state
+            .clock_ms_per_capture
+            .store(if timed_out { 400 } else { 0 }, Ordering::Release);
         let session = client.begin_debug_session().unwrap();
-        let transition = (timeout_ms == Some(5_000)).then(|| {
-            let state = state.clone();
-            let captures = state.captures.load(Ordering::Acquire);
-            thread::spawn(move || {
-                wait_until(Duration::from_secs(5), || {
-                    state.captures.load(Ordering::Acquire) >= captures + 2
-                });
-                thread::sleep(Duration::from_millis(750));
-                state.transition_after_tap.store(false, Ordering::Release);
-            })
-        });
         let verified = session
             .run_contained_lab_operation(
                 "node.a",
@@ -162,9 +217,6 @@ fn lab_operation_evidence_consistency_preserves_complete_and_incomplete_records(
                 },
             )
             .unwrap();
-        if let Some(transition) = transition {
-            transition.join().unwrap();
-        }
         let operation = verified.operation().clone();
         let prepared = &operation.record.prepared;
         let events = client
@@ -1426,7 +1478,16 @@ struct FakeCapture {
 
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
-        self.state.captures.fetch_add(1, Ordering::AcqRel);
+        let captured = self.state.captures.fetch_add(1, Ordering::AcqRel) + 1;
+        let home_from = self.state.home_from_capture.load(Ordering::Acquire);
+        if home_from > 0 && captured >= home_from {
+            self.state
+                .transition_after_tap
+                .store(false, Ordering::Release);
+        }
+        if let Some(clock) = self.state.clock.get() {
+            clock.advance(self.state.clock_ms_per_capture.load(Ordering::Acquire));
+        }
         let color = if self.state.transition_after_tap.load(Ordering::Acquire)
             && self.state.taps.load(Ordering::Acquire) > 0
         {

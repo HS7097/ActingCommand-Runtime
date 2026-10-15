@@ -398,7 +398,9 @@ impl<'a> ReadingRelay<'a> {
 }
 
 /// Waits for one recognition's answer, until `deadline` when the runtime has a join timeout.
-fn receive(
+/// The time left is read on the runtime's clock (test plan E-3).
+fn receive<R: ContainedTaskRuntime>(
+    runtime: &mut R,
     results: &mpsc::Receiver<MarkResults>,
     deadline: Option<Instant>,
 ) -> Result<MarkResults, mpsc::RecvTimeoutError> {
@@ -406,7 +408,9 @@ fn receive(
         None => results
             .recv()
             .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-        Some(deadline) => results.recv_timeout(deadline.saturating_duration_since(Instant::now())),
+        Some(deadline) => {
+            results.recv_timeout(deadline.saturating_duration_since(runtime.monotonic_now()))
+        }
     }
 }
 
@@ -479,12 +483,12 @@ impl PreparedContainedTask {
         if relay.frames.is_empty() && relay.confirmations.is_empty() {
             return Ok(());
         }
-        let deadline = runtime
+        let join_timeout = runtime
             .reading_join_timeout()
-            .map_err(ContainedTaskRunError::operation::<R>)?
-            .map(|timeout| Instant::now() + timeout);
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let deadline = join_timeout.map(|timeout| runtime.monotonic_now() + timeout);
         for frame in relay.frames {
-            let answer = receive(&frame.results, deadline);
+            let answer = receive(runtime, &frame.results, deadline);
             let mut readings = Vec::new();
             let mut unresolved = Vec::new();
             match answer {
@@ -572,7 +576,7 @@ impl PreparedContainedTask {
         Result<ResourceAdjustmentAmountValue, ResourceReadingProblem>,
         ContainedTaskRunError<R::Error>,
     > {
-        let result = match receive(results, deadline) {
+        let result = match receive(runtime, results, deadline) {
             Ok(mut results) => match results.pop() {
                 Some(result) => result,
                 None => return Ok(Err(ResourceReadingProblem::ProviderFailed)),
