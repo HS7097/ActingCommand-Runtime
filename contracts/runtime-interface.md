@@ -507,7 +507,7 @@ two.
 
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|
-| `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
+| `ac_overview` | read | `actingctl overview` | `instance` ↔ `--instance`; `sections` ↔ `--sections` (#389 MCP-8: a list of block names, `global_pause`, `instances`, `run_window`, `lab_tool`, `install`, default all; `daemon` and `incomplete` are always answered; another name is `arguments_invalid`); each instance row carries `foreground {package, observed_at_unix_ms}` from the instance program fact `application.foreground` when it has one: the package last seen before a pointer input, read with RuntimeFactSnapshot, no wire change (#389 MCP-5b, D10); the server's location stands for `--root`; output as the CLI's; only MCP cuts an answer past the output budget, in the order below (presentation) | general |
 | `ac_events` | read | `actingctl events` | `instance`, `view`, `since_unix_ms`, `until_unix_ms`, `after_sequence`, `through_sequence`, `event_type`, `exclude_event_types`, `min_severity`, `max_severity`, `origin_module`, `task_id`, `run_id`, `request_id`, `correlation_id`, `detail`, `limit`, `cursor`, `wait_s` ↔ same flags (#389 MCP-1). Paging: MCP with `next_cursor`; the CLI with `--after-sequence <last_sequence>`, because a cursor is bound to the process and connection that issued it, so the `next_cursor` one CLI call prints always answers `cursor_invalid` in the next (by design) | general |
 | `ac_get_run` | read | `actingctl run get` | `handle` or `run_id` ↔ `--handle` or `--run-id`; `wait_s` is presentation | general |
 | `ac_material` | read | `actingctl material` | `ref`, `mode`, `offset`, `max_bytes` ↔ same flags | general |
@@ -540,7 +540,8 @@ two.
 - `ac_overview` past the output budget (#389 MCP-8, MCP-0 command table §4.9): it cuts one
   block at a time until the answer fits, in this order: `fact_refresh`, `host`, `startup`,
   `tagged_state`, `ledger`, `performance`, `watchdog`, `catalog`, `config_generation`, each
-  instance row's `run` (the last row first), each row's `monitor`, `install.build`. A cut
+  instance row's `run` (the last row first), each row's `monitor`, each row's `foreground`
+  (#389 MCP-5b), `install.build`. A cut
   block leaves `<block>_truncated: true` where it was. The daemon, the global pause, each
   row's identity, `pause`, `lease_active` and `queued`, and `incomplete` are never cut; an
   answer that still does not fit is `output_budget_exceeded`. A slice that adds an overview

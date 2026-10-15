@@ -3,8 +3,9 @@
 //! `actingctl overview` (Workflow #389 MCP-8; MCP-0 command table v1.1 §4.9), the CLI original
 //! of MCP `ac_overview`, and the read both share. An overview is a composite read (#389 R5) of
 //! named steps: Status (the daemon, the global pause and the instances), MonitorStatus (each
-//! row's monitor) and, per instance, its newest run of the last 24 h (QueryEvents); none of them
-//! records anything in the ledger (§2.5). `--instance` (alias, instance_id or ADB port) narrows
+//! row's monitor), RuntimeFactSnapshot (each row's `foreground`, Workflow #389 MCP-5b) and, per
+//! instance, its newest run of the last 24 h (QueryEvents); none of them records anything in the
+//! ledger (§2.5). `--instance` (alias, instance_id or ADB port) narrows
 //! the rows to one; `--sections` answers only the blocks it names, and the reads only those
 //! blocks need are skipped; `daemon` and `incomplete` are always answered. The install block and
 //! the Lab tool are found from the program root and the install root as mcp-serve finds them
@@ -23,7 +24,8 @@ use crate::instance_selector::{self, SelectorMiss};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    EventActor, EventSource, InstalledProcess, RuntimeControlPlaneStatus, RuntimeErrorCode,
+    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, FactValue, InstalledProcess,
+    InstanceId, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
@@ -295,9 +297,10 @@ fn now_unix_ms() -> Result<u64, Failure> {
         .ok_or(Failure::Clock)
 }
 
-/// One row per instance of `status` (only the `selected` one when given), each with its monitor
-/// and its newest run first recorded since `window`. A monitor or run read that fails leaves a
-/// warning and marks the overview incomplete; a run read past the deadline is not started.
+/// One row per instance of `status` (only the `selected` one when given), each with its monitor,
+/// the foreground package it last reported and its newest run first recorded since `window`. A
+/// monitor, program fact or run read that fails leaves a warning and marks the overview
+/// incomplete; a run read past the deadline is not started.
 fn instance_rows(
     client: &RuntimeClient,
     status: &RuntimeControlPlaneStatus,
@@ -309,6 +312,16 @@ fn instance_rows(
 ) -> Value {
     let monitors = match client.monitor_status() {
         Ok(monitors) => Some(monitors),
+        Err(error) => {
+            warnings.push(Warning::Runtime(error));
+            *incomplete = true;
+            None
+        }
+    };
+    // Workflow #389 MCP-5b (MCP-0 command table v1.1 §4.6, D10, ruling Q7): the program facts,
+    // read once for every row; RuntimeFactSnapshot records nothing.
+    let facts = match client.runtime_fact_snapshot() {
+        Ok(facts) => Some(facts),
         Err(error) => {
             warnings.push(Warning::Runtime(error));
             *incomplete = true;
@@ -328,6 +341,12 @@ fn instance_rows(
                 .find(|monitor| monitor.instance_alias() == instance.instance_alias())
         });
         let mut row = instance_row(instance, monitor);
+        if let Some(foreground) = facts
+            .as_ref()
+            .and_then(|facts| foreground(facts, instance.instance_id()))
+        {
+            row["foreground"] = foreground;
+        }
         // At most one brief run status per instance: its newest admitted run in the window,
         // which is the open one when a run is open.
         if Instant::now() + READ_RESERVE >= deadline {
@@ -402,6 +421,28 @@ fn instance_row(
         );
     }
     Value::Object(row)
+}
+
+/// `{package, observed_at_unix_ms}` (Workflow #389 MCP-5b, command table §4.6, D10): the
+/// instance's program fact `application.foreground`, the package the foreground gate last saw
+/// before a pointer input and recorded when it changed; so it is the last one seen, not a live
+/// read. `None` when the instance has no such fact: no block and no error. The gate writes the
+/// package as text (`record_foreground_application`), the one value this block reads.
+fn foreground(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Option<Value> {
+    facts
+        .records
+        .iter()
+        .find_map(|record| match (&record.scope, &record.value) {
+            (RuntimeFactScope::Instance { instance_id: scope }, FactValue::String(package))
+                if *scope == instance_id && record.key == APPLICATION_FOREGROUND_FACT_KEY =>
+            {
+                Some(json!({
+                    "package": package,
+                    "observed_at_unix_ms": record.observed_at_unix_ms,
+                }))
+            }
+            _ => None,
+        })
 }
 
 /// `{root, state_root, build}`: the program root, the state root and, when the program root holds

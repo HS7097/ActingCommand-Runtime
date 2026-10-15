@@ -385,7 +385,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_overview",
         title: "ActingCommand overview",
         tier: Tier::Observer,
-        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. sections (global_pause, instances, run_window, lab_tool, install; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings). An answer larger than the output budget is cut, one block at a time until it fits: each instance row's run (the last row first), then each row's monitor, then install.build; each cut block leaves <block>_truncated: true where it was. The daemon, the global pause, each row's identity, pause, lease_active and queued, and incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
+        description: "Snapshot of the local ActingCommand Runtime, the same read and answer as actingctl overview; call it first. Returns daemon {online, owner_epoch}, global_pause, and one row per configured instance: alias, instance_id, adb_port, game_id, lease_active, queued requests, its scheduling pause {revision, stage, pause_reason}, its resource_fence {cause, since_unix_ms, awaiting_person} when an unconfirmed close of its own resources fenced it, its monitor, foreground {package, observed_at_unix_ms}: the package the instance last reported in the foreground before a pointer input (not a live read; absent until one was seen), and run: its newest run admitted in run_window (the last 24 h; the open run when one is open) as a brief actingcommand.run-status.v1, with run_incomplete when that read did not finish; plus lab_tool {present} and install {root, state_root, build}. When actingd does not answer, daemon is {online: false, error {class, outcome}} (outcome runtime_unavailable, or install_state_root_unresolved) and there is no instances field at all: that is no answer, not an empty system. instance (alias, instance_id or ADB port) narrows the rows to one. sections (global_pause, instances, run_window, lab_tool, install; default all) answers only the blocks named; daemon and incomplete are always answered. incomplete true means part of the snapshot could not be read (see warnings). An answer larger than the output budget is cut, one block at a time until it fits: each instance row's run (the last row first), then each row's monitor, then each row's foreground, then install.build; each cut block leaves <block>_truncated: true where it was. The daemon, the global pause, each row's identity, pause, lease_active and queued, and incomplete are never cut; an answer that still does not fit is output_budget_exceeded: narrow it with instance or sections. It only reads: it starts, stops and pauses nothing, and it neither shows nor infers whether an emulator is running.",
         read_only: true,
         destructive: false,
         idempotent: true,
@@ -1102,11 +1102,21 @@ fn overview_result() -> Value {
                         "pause": {"type": "object"},
                         "resource_fence": {"type": "object"},
                         "monitor": {"type": "object"},
+                        // Workflow #389 MCP-5b: the last foreground package seen.
+                        "foreground": {
+                            "type": "object",
+                            "properties": {
+                                "package": {"type": "string"},
+                                "observed_at_unix_ms": {"type": "integer"},
+                            },
+                            "required": ["package", "observed_at_unix_ms"],
+                        },
                         "run": run_status_schema(),
                         "run_incomplete": {"type": "boolean"},
                         // Workflow #389 MCP-8: cut to the output budget.
                         "run_truncated": {"const": true},
                         "monitor_truncated": {"const": true},
+                        "foreground_truncated": {"const": true},
                     },
                     "required": ["alias", "instance_id", "lease_active", "queued"],
                 },
