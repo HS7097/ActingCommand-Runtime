@@ -3645,6 +3645,8 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
         &[
             "ControlEmulatorInstance",
             "DiscoverInstances",
+            // Workflow #390 DRILL-1: a ladder drill may restart the emulator.
+            "DrillRecoveryLadder",
             "SelfCheckInstance",
         ],
         &["invalid_emulator_control_origin"],
