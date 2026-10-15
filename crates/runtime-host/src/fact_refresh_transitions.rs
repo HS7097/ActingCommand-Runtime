@@ -117,6 +117,7 @@ impl FactRefreshRecorder {
         overdue_ms: Option<u64>,
     ) -> Vec<FactRefreshTransition> {
         self.cycle_seq = self.cycle_seq.saturating_add(1);
+        self.transition_seq = 0;
         let current = waited_for(evaluation);
         let keys = self
             .waiting
