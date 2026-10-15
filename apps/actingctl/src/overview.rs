@@ -29,6 +29,10 @@
 //! Workflow #385 P-m: the block `performance` is the shadow measurement's status
 //! (`PerformanceStatus`, PERF §4.6), the object `actingctl perf-status` prints; `--instance`
 //! narrows its rows as it narrows the instance rows.
+//!
+//! Workflow #384 D2-S5: the block `fact_refresh` is what the scheduler's fact refresh waits for
+//! (`FactRefreshStatus`, D2 model §6 S5): one row per instance with a waiting key, the object
+//! `actingctl fact-refresh` prints; `--instance` narrows its rows to the one instance.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -38,8 +42,9 @@ use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     APPLICATION_FOREGROUND_FACT_KEY, CONFIG_CATALOG_FACT_KEY, CONFIG_SELECTION_FACT_KEY,
     ConfigCatalog, EventActor, EventSource, FactScalar, FactValue, InstalledProcess, InstanceId,
-    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactScope, RuntimeFactSnapshot,
-    RuntimeInstanceStatus, RuntimeMonitorInstanceStatus, RuntimePerformanceStatus,
+    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactRefreshStatus, RuntimeFactScope,
+    RuntimeFactSnapshot, RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
+    RuntimePerformanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::{Map, Value, json};
@@ -50,7 +55,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog (default all); daemon and incomplete are always answered";
+const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh (default all); daemon and incomplete are always answered";
 /// The run window: the last 24 h.
 const RUN_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
@@ -77,10 +82,13 @@ pub(crate) enum Section {
     Catalog,
     ConfigGeneration,
     Watchdog,
+    /// Workflow #384 D2-S5 (D2 model §6 S5): what the fact refresh waits for, as
+    /// `fact-refresh` prints it.
+    FactRefresh,
 }
 
 impl Section {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::GlobalPause,
         Self::Instances,
         Self::RunWindow,
@@ -90,6 +98,7 @@ impl Section {
         Self::Catalog,
         Self::ConfigGeneration,
         Self::Watchdog,
+        Self::FactRefresh,
     ];
 
     /// The block's member name in the answer.
@@ -104,6 +113,7 @@ impl Section {
             Self::Catalog => "catalog",
             Self::ConfigGeneration => "config_generation",
             Self::Watchdog => "watchdog",
+            Self::FactRefresh => "fact_refresh",
         }
     }
 
@@ -118,21 +128,22 @@ impl Section {
             Self::Catalog => 6,
             Self::ConfigGeneration => 7,
             Self::Watchdog => 8,
+            Self::FactRefresh => 9,
         }
     }
 }
 
 /// The blocks one overview answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sections([bool; 9]);
+pub(crate) struct Sections([bool; 10]);
 
 impl Sections {
     /// Every block: `--sections` / `sections` omitted.
-    pub(crate) const ALL: Self = Self([true; 9]);
+    pub(crate) const ALL: Self = Self([true; 10]);
 
     /// The blocks `names` names, each once or more; `None` when one of them names no block.
     pub(crate) fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
-        let mut sections = [false; 9];
+        let mut sections = [false; 10];
         for name in names {
             let section = Section::ALL
                 .into_iter()
@@ -382,6 +393,19 @@ pub(crate) fn read(
             .then(|| config_generation_block(facts.as_ref(), selected.as_ref(), &mut warnings)),
     );
     insert(&mut result, Section::Watchdog, watchdog);
+    // Workflow #384 D2-S5 (D2 model §6 S5): what the fact refresh waits for; a read that fails
+    // leaves a warning and no block, never an empty one.
+    if sections.contains(Section::FactRefresh) {
+        match fact_refresh_block(client, selected_alias) {
+            Ok(status) => {
+                result.insert(Section::FactRefresh.name().to_owned(), json!(status));
+            }
+            Err(error) => {
+                warnings.push(Warning::Runtime(error));
+                incomplete = true;
+            }
+        }
+    }
     if incomplete {
         result.insert("incomplete".to_owned(), json!(true));
     }
@@ -513,6 +537,20 @@ pub(crate) fn performance_block(
     selected: Option<&str>,
 ) -> Result<RuntimePerformanceStatus, RuntimeClientError> {
     let mut status = client.performance_status()?;
+    if let Some(alias) = selected {
+        status.instances.retain(|row| row.instance_alias == alias);
+    }
+    Ok(status)
+}
+
+/// Workflow #384 D2-S5 (D2 model §6 S5, §8 T39): what the scheduler's fact refresh waits for
+/// (`FactRefreshStatus`), its rows narrowed to the instance `selected` names (an alias) when
+/// given. `fact-refresh` prints it and `ac_overview` answers it as its `fact_refresh` block.
+pub(crate) fn fact_refresh_block(
+    client: &RuntimeClient,
+    selected: Option<&str>,
+) -> Result<RuntimeFactRefreshStatus, RuntimeClientError> {
+    let mut status = client.fact_refresh_status()?;
     if let Some(alias) = selected {
         status.instances.retain(|row| row.instance_alias == alias);
     }

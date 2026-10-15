@@ -53,7 +53,7 @@ before SH-1 merges.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| D1 | `policy.fact_refresh_transition` | new event type, family `policy`, action `policy.fact_refresh` (new), info; G5 copies it; not tagged | SH-1 | AO-4 (gate) after D2-S5 (recorder) | payload `{cycle_seq, instance_id, fact_key, outcome}` (`outcome` = the transition's code); envelope `capture.source` = `fact_refresh_transitions`, lineage = owner epoch, revision = transition number (from 1 per epoch, +1 per transition, never reset); a skip is `ledger_store_revision_skipped` |
+| D1 | `policy.fact_refresh_transition` | new event type, family `policy`, action `policy.fact_refresh` (new), info; G5 copies it; not tagged | SH-1 | AO-4 (gate) after D2-S5 (recorder; built, §1.68, in memory only) | payload `{cycle_seq, instance_id, fact_key, outcome}` (`outcome` = the transition's code); envelope `capture.source` = `fact_refresh_transitions`, lineage = owner epoch, revision = transition number (from 1 per epoch, +1 per transition, never reset); a skip is `ledger_store_revision_skipped` |
 
 ### 1.3 Scheduling rules (#386, SCHED §11 X2)
 
@@ -1038,6 +1038,29 @@ configuration key.
 | DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
 | DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
 
+### 1.68 Wave 14 slice D2-S5 (#384 D2M §5.1 MP-3, §5.3 A-5, §6 S5, §7; v1.4.2)
+
+D2-S5 brings the fact refresh's transition recorder and its read;
+[scheduling/README.md](scheduling/README.md) ("Fact Refresh"),
+[runtime-interface.md](runtime-interface.md) and [runtime-config.md](runtime-config.md) are the
+contract. It writes no ledger record: the transitions stay in memory until AO-4's G5 gate copies
+them as D1 (§1.2), whose shape is unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| D51 | `RuntimeOperation::FactRefreshStatus` → `RuntimeResult::FactRefreshStatus { status }` (W17) | runtime-client 2 (§3) | D2-S5 | D2-S5 | a general read from memory that reads and records nothing in the ledger (U-1 row: general read, no G14 copy); `status` is a `RuntimeFactRefreshStatus {cycle_seq, transition_seq, instances}`: the numbers of the latest cycle the recorder observed and of its latest transition in this owner epoch (0 before the first), and one row `{instance_alias, demands}` per instance with a waiting key (at most 256), each demand `{fact_key, outcome, package_id?, since_unix_ms, overdue}` (at most 256 per row): the latest cycle's reason (`fact_refresh_pending`, `_unresolved`, `_exhausted` or `_unbound` with its values), the recognition maintenance package that serves the key, when the wait began and whether `fact_reader_overdue` was reported for it; a completed receipt carries `request_fact_refresh_status_completed`; a wrong shape is `invalid_fact_refresh_status`; a reply past one IPC frame is refused `runtime_fact_refresh_status_too_large_for_frame` |
+| D52 | `actingctl fact-refresh [--instance <alias\|instance_id\|ADB port>]` ↔ `ac_overview` block `fact_refresh` (`sections` gains `fact_refresh`) (W18) | read output of a general read (no persisted record; the CLI line carries it beside its outcome) | D2-S5 | D2-S5 | the D51 status, its `instances` narrowed to the selected one; CLI success `runtime_fact_refresh_reported`; actingd absent: the client's failure, exit 1; in `ac_overview` a failed read leaves a warning and `incomplete`, never an empty block; the block's place in the cut order (first) was registered by MCP-8 |
+| D53 | `config.parameters.scheduling`: `scheduling.fact_refresh.overdue_ms` | new configuration row | D2-S5 | D2-S5 | milliseconds, no default (§5: unset = not reported), so the row exists only when the configuration file names the key; settable, and an instruction can change it only then (`config_key_unknown` otherwise); read at every policy cycle's yield point |
+| D54 | actingd daemon lines on stderr: per fact refresh transition the developer line `<INFO\|WARN> actingd: <code> <values> cycle_seq=<n> transition_seq=<n>` and `OUTCOME actingd: <envelope>` (full) in one write (A6-1's writer) | process interface | D2-S5 | D2-S5 | the transitions of each evaluated cycle, in (instance, key) order; none for a deferred cycle; a line that cannot be written never stops the driver; a transition is an info or a warning, so it never becomes a terminal outcome the watchdog acts on (A6-9) |
+
+The codes `fact_refresh_resolved` (policy, info) and `fact_reader_overdue` (runtime-host,
+warning), both ladder class `none` and only transitions, never decision reasons; the read's
+`request_fact_refresh_status_completed`, `invalid_fact_refresh_status` (contract) and
+`runtime_fact_refresh_status_too_large_for_frame` (runtime-host); `runtime_fact_refresh_reported`
+(actingctl); and the locations `read_fact_refresh_status`, `record_fact_refresh_transitions`
+(runtime-host) and `runtime_fact_refresh_status` (runtime-client) are catalog entries, not rows
+(§7).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1079,6 +1102,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W13 | `RuntimeInstanceStatus.not_running` | runtime-client 3 | SR-6b | the per-instance not-run rows; they live in the workbench's memory only, and AO-4q (#746) stopped persisting the status (status reads append nothing), so the member is a wire shape, not a ledger one (re-check 10-14, §1.25) |
 | W14 | `EventQuery.event_types` (a set of event types, OR within it) and `EventQuery.fact_key` (an instance or runtime fact key) | runtime-client 2 | MCP-2 | two optional members of the `QueryEvents` query (`deny_unknown_fields`), absent when unused, so a query without them serializes, and fingerprints its cursor, as before; `event_types` is the alternative of `event_type` (at most 32, each once, none excluded, else `invalid_event_query_event_type_filter`); `fact_key` keeps only the records that name it (`fact.published`, `fact.invalidated`, `runtime.fact_recorded`, `runtime.fact_invalidated`), else `invalid_event_query_fact_key_filter`; [global-ledger-query.md](global-ledger-query.md) |
 | W15 | `RuntimeOperation::PerformanceStatus` → `RuntimeResult::PerformanceStatus { status }` | runtime-client 2 | P-m | the shadow measurement's status read; **done (P-m):** §1.61 W15, with its read output W16 |
+| W17 | `RuntimeOperation::FactRefreshStatus` → `RuntimeResult::FactRefreshStatus { status }` | runtime-client 2 | D2-S5 | the D2 S5 transition query (UIM §2.3); **done (D2-S5):** §1.68 D51, with its read output D52 (W18) |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
@@ -1129,7 +1153,7 @@ when it takes effect.
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 | SR-3 |
-| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
+| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |

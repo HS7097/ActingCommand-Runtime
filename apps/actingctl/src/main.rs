@@ -94,7 +94,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|fact-refresh [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
@@ -546,6 +546,34 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             };
             reported(
                 &overview::performance_block(&client, selected.as_deref())
+                    .map_err(ActingctlError::Runtime)?,
+                success,
+            )
+        }
+        // Workflow #384 D2-S5 (D2 model §6 S5): what the scheduler's fact refresh waits for, the
+        // object `ac_overview` answers as its `fact_refresh` block; `--instance` (alias,
+        // instance_id or ADB port) narrows its rows to one, resolved with one status read.
+        Command::FactRefreshStatus => {
+            let selected = match optional_instance.as_deref() {
+                Some(selector) => {
+                    let status = client.status().map_err(ActingctlError::Runtime)?;
+                    let alias = instance_selector::select(status.instances(), selector)
+                        .map_err(|miss| match miss {
+                            SelectorMiss::Unknown => {
+                                ActingctlError::InstanceUnknown(selector.to_owned())
+                            }
+                            SelectorMiss::Ambiguous => {
+                                ActingctlError::InstanceAmbiguous(selector.to_owned())
+                            }
+                        })?
+                        .instance_alias()
+                        .to_owned();
+                    Some(alias)
+                }
+                None => None,
+            };
+            reported(
+                &overview::fact_refresh_block(&client, selected.as_deref())
                     .map_err(ActingctlError::Runtime)?,
                 success,
             )
@@ -1074,6 +1102,8 @@ enum Command {
     MonitorStatus,
     /// `perf-status [--instance <selector>]` (Workflow #385 P-m).
     PerformanceStatus,
+    /// `fact-refresh [--instance <selector>]` (Workflow #384 D2-S5).
+    FactRefreshStatus,
     MonitorSet {
         policy: RuntimeMonitorPolicy,
     },
@@ -1350,6 +1380,7 @@ impl Invocation {
             },
             "monitor-status" => Command::MonitorStatus,
             "perf-status" => Command::PerformanceStatus,
+            "fact-refresh" => Command::FactRefreshStatus,
             "monitor-set" => Command::MonitorSet {
                 policy: RuntimeMonitorPolicy::new(
                     interval_ms.unwrap_or(30_000),
@@ -1404,14 +1435,15 @@ impl Invocation {
             _ => return Err(ActingctlError::Usage),
         };
         // `task-offset` takes `--instance` optionally: without it the offset is task-level;
-        // `pause` / `resume` without it are global; `perf-status` without it reads every row
-        // (Workflow #385 P-m).
+        // `pause` / `resume` without it are global; `perf-status` (Workflow #385 P-m) and
+        // `fact-refresh` (Workflow #384 D2-S5) without it read every row.
         if !matches!(
             command,
             Command::TaskOffset { .. }
                 | Command::Pause { .. }
                 | Command::Resume
                 | Command::PerformanceStatus
+                | Command::FactRefreshStatus
         ) && command.requires_instance() != instance.is_some()
         {
             return Err(ActingctlError::Usage);
@@ -1445,6 +1477,7 @@ impl Command {
             Self::InstanceFacts { .. } => ActingctlCode::InstanceFactsReported,
             Self::MonitorStatus => ActingctlCode::MonitorStatusReported,
             Self::PerformanceStatus => ActingctlCode::RuntimePerformanceReported,
+            Self::FactRefreshStatus => ActingctlCode::RuntimeFactRefreshReported,
             Self::MonitorSet { .. } => ActingctlCode::MonitorPolicySet,
             Self::MonitorClear => ActingctlCode::MonitorPolicyCleared,
             Self::EmulatorStatus => ActingctlCode::InstanceStatusReported,
@@ -1479,6 +1512,7 @@ impl Command {
                 | Self::ProgramFacts { .. }
                 | Self::MonitorStatus
                 | Self::PerformanceStatus
+                | Self::FactRefreshStatus
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
                 | Self::InstallTransition { .. }
@@ -1548,6 +1582,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         "status" => &["--state-root", "--config"],
         // Workflow #385 P-m: the shadow measurement's status, every row or one instance's.
         "perf-status" => &["--state-root", "--instance"],
+        // Workflow #384 D2-S5: what the fact refresh waits for, every row or one instance's.
+        "fact-refresh" => &["--state-root", "--instance"],
         "facts" => &["--state-root", "--program", "--instance", "--key-prefix"],
         // Workflow #390 DRILL-1: a ladder drill acts on the device only with `--device`.
         "ladder-drill" => &["--state-root", "--instance", "--device"],
@@ -2029,7 +2065,7 @@ mod tests {
     /// Runtime client failure is the client's outcome unchanged.
     #[test]
     fn every_command_has_its_success_code_and_every_failure_its_code() {
-        let commands: [(&[&str], &str); 26] = [
+        let commands: [(&[&str], &str); 27] = [
             (
                 &["agent-publish-facts", "--record-file", "observation.json"],
                 "agent_facts_published",
@@ -2080,6 +2116,7 @@ mod tests {
             ),
             (&["monitor-status"], "monitor_status_reported"),
             (&["perf-status"], "runtime_performance_reported"),
+            (&["fact-refresh"], "runtime_fact_refresh_reported"),
             (
                 &["monitor-set", "--instance", "neutral.instance"],
                 "monitor_policy_set",

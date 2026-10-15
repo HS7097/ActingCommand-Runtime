@@ -182,6 +182,8 @@ actingcommand_contract::outcome_codes! {
         RecoveryLadderDrillQueued => "recovery_ladder_drill_queued": success / none,
         // Workflow #385 P-m: `perf-status`.
         RuntimePerformanceReported => "runtime_performance_reported": success / none,
+        // Workflow #384 D2-S5: `fact-refresh`.
+        RuntimeFactRefreshReported => "runtime_fact_refresh_reported": success / none,
         PackageBindingsReported => "package_bindings_reported": success / none,
         StartRuntimeStarted => "start_runtime_started": success / none,
         StartRuntimeRestarted => "start_runtime_restarted": success / none,

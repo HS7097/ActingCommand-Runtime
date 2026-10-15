@@ -21413,6 +21413,50 @@
       "description": "A drill of an instance's stuck-recovery ladder was refused because the instance's cool-down window is open and recovery_ladder.trigger_defaults.respect_cooldown holds the drill (Workflow #390 DRILL-1). next_eligible_unix_ms is the window's end; its recovery_ladder_suppressed, tagged drill, says cooldown.",
       "common_causes": "A ladder got the instance's key within the cool-down window (recovery_ladder.cooldown_secs or the instance's stuck_recovery_cooldown_secs), or a device drill did.",
       "handling": "Ask again from next_eligible_unix_ms, or set recovery_ladder.trigger_defaults.respect_cooldown to false for the drill."
+    },
+    "fact_reader_overdue": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "elapsed_ms": "required",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #384 D2-S5: the candidates of the instance have waited for the key (fact_key) for elapsed_ms, at least scheduling.fact_refresh.overdue_ms, without a usable reading. A transition of the fact refresh recorder, reported once per wait and only while a recognition maintenance package (package_id) serves the key; it reports only and never takes part in a decision. Not reported while overdue_ms is unset.",
+      "common_causes": "The recognition maintenance package keeps failing or leaving the key unread, a limit holds it back, or the instance stays occupied; scheduling.fact_refresh.min_interval_ms is longer than the freshness the readers need.",
+      "handling": "Look at the instance's fact_refresh rows (actingctl fact-refresh, ac_overview) for the reason and the gate, then fix the package, the limit or the occupation."
+    },
+    "runtime_fact_refresh_status_too_large_for_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A FactRefreshStatus read (Workflow #384 D2-S5) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
@@ -28200,6 +28244,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: a person's drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
+    },
+    "read_fact_refresh_status": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: read what the fact refresh's transition recorder holds as waited for (Workflow #384 D2-S5)."
+    },
+    "record_fact_refresh_transitions": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: hand a policy cycle's waiting candidates to the fact refresh's transition recorder (Workflow #384 D2-S5)."
     }
   }
 }

@@ -275,6 +275,9 @@ impl HostShared {
             // Workflow #385 P-m (register §1.61 W15): the shadow measurement's status, a general
             // read from memory that records nothing.
             RuntimeOperation::PerformanceStatus => self.performance_status_read(),
+            // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general
+            // read from memory that records nothing.
+            RuntimeOperation::FactRefreshStatus => self.fact_refresh_status_read(request),
             RuntimeOperation::RuntimeFactSnapshot => {
                 let snapshot = self.runtime_fact_snapshot().map_err(|error| {
                     if error.is_fatal() {

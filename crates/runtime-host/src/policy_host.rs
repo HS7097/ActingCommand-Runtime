@@ -238,6 +238,10 @@ pub struct PolicyCycle {
     /// Workflow #372 K2: the clock-slot records this cycle appends after its detection signals.
     pub clock_slot_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
+    /// Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh recorder's transitions at this
+    /// cycle's yield point, in memory only: actingd writes them as daemon lines, and no
+    /// decision reads them. Empty for a deferred cycle.
+    pub fact_refresh_transitions: Vec<crate::FactRefreshTransition>,
 }
 
 pub(crate) struct PolicyEvaluationContext<'a> {
@@ -1381,6 +1385,7 @@ impl PolicyHost {
                 detection_planning_signals: Vec::new(),
                 clock_slot_signals: Vec::new(),
                 measurement: None,
+                fact_refresh_transitions: Vec::new(),
             });
         }
         let active = self.active.as_ref().ok_or_else(|| {
@@ -1527,6 +1532,8 @@ impl PolicyHost {
                 execution: PolicyEvaluationExecution::FullCatalogScan,
                 cost,
             }),
+            // The yield point adds the transitions (`evaluate_policy_cycle_authoritative`).
+            fact_refresh_transitions: Vec::new(),
         })
     }
 

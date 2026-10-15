@@ -3774,6 +3774,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // Workflow #387 D1b (M387 §5.6): a general instruction the three counters send; no origin
     // gate beyond the client sources the host checks.
     "ConfigureSettings",
+    // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general read from
+    // memory like Status.
+    "FactRefreshStatus",
     "Health",
     "Input",
     // Workflow #389 MCP-4 (register W2): a general read from memory, like Status.
@@ -7146,4 +7149,86 @@ fn rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings() {
             );
         }
     }
+}
+
+/// Workflow #384 D2-S4, test row T32 (frozen model D2 v1.4.2 §5.1, §8 T32; Alice 2026-10-09
+/// 22:1x and the ledger observer's exception table, contracts/ledger-observer.md §2 and §6): the
+/// fact refresh's code never calls the ledger's write interface. A direct write is allowed only
+/// where no probe can see the record, and every record of the D2 path is on a choke point a probe
+/// sees, so the exception table has no D2 row: a ledger write in D2's code fails here. The
+/// scheduler's half lives in the policy crate, which has no dependency path to the ledger at all
+/// (the pure-decision allow lists of B1); the Runtime's half is read below without its tests: the
+/// D2 modules whole, and the transition recorder's read in the policy dispatch module.
+#[test]
+fn d2_t32_the_fact_refresh_code_never_calls_the_ledger_write_interface() {
+    // The D2 modules of the scheduler (S4) and the Runtime (S2 bindings, S3 adjustments, S4
+    // dispatch, S5 transitions).
+    const D2_MODULES: [&str; 5] = [
+        "crates/policy/src/evaluator/fact_refresh.rs",
+        "crates/runtime-host/src/recognition_binding.rs",
+        "crates/runtime-host/src/resource_adjustment.rs",
+        "crates/runtime-host/src/fact_refresh.rs",
+        "crates/runtime-host/src/fact_refresh_transitions.rs",
+    ];
+    // D2-S5's read of the recorder, beside the policy dispatch it does not belong to.
+    const D2_FUNCTIONS: [(&str, &str, &str); 1] = [(
+        "crates/runtime-host/src/host/policy_dispatch.rs",
+        "HostShared",
+        "fact_refresh_status_read",
+    )];
+    // The ledger's write interface (contracts/ledger-observer.md §2): the `append*` family,
+    // `execute_critical`, `reconcile_*` and the maintenance writer's `import`, and the types that
+    // hold it.
+    let writes = |reference: &FunctionReference| match reference {
+        FunctionReference::Method(_, method) => {
+            method.starts_with("append")
+                || method == "execute_critical"
+                || method.starts_with("reconcile_")
+                || method == "import"
+        }
+        FunctionReference::Call(path)
+        | FunctionReference::Struct(path)
+        | FunctionReference::Value(path)
+        | FunctionReference::Pattern(path) => path.iter().any(|segment| {
+            segment.starts_with("append")
+                || segment == "execute_critical"
+                || segment.starts_with("reconcile_")
+                || segment == "GlobalLedger"
+                || segment == "LedgerMaintenance"
+                || segment == "EventAppender"
+        }),
+        FunctionReference::SelfField(_) | FunctionReference::Literal(_) => false,
+    };
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    let mut functions = Vec::new();
+    for facts in production_facts(&root, &D2_MODULES) {
+        functions.extend(facts.functions);
+    }
+    for (path, owner, name) in D2_FUNCTIONS {
+        let found = production_facts(&root, &[path])
+            .into_iter()
+            .flat_map(|facts| facts.functions)
+            .filter(|function| function.owner.as_deref() == Some(owner) && function.name == name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found.len(),
+            1,
+            "{path}: {owner}::{name} is not one production function"
+        );
+        functions.extend(found);
+    }
+    for function in &functions {
+        for (reference, line) in &function.references {
+            if writes(reference) {
+                violations.push(format!("{}:{line}: {reference:?}", function.site()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "the fact refresh's code calls the ledger's write interface; D2 has no row in the \
+         direct-write exception table:\n{}",
+        violations.join("\n")
+    );
 }

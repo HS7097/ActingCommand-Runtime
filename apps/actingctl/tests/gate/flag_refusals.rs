@@ -192,6 +192,18 @@ const CLIENT: &[Subcommand] = &[
         &["--config"],
         &["--instance", "neutral.instance"],
     ),
+    // Workflow #384 D2-S5: `fact-refresh`, every row or one instance's.
+    result(
+        &[
+            "fact-refresh",
+            "--instance",
+            "neutral.instance",
+            "--state-root",
+            ROOT,
+        ],
+        &["--config"],
+        &["--instance", "neutral.instance"],
+    ),
     result(
         &[
             "monitor-set",
