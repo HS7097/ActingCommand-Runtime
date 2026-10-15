@@ -151,6 +151,26 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     ] {
         assert!(event_types.contains(&required), "missing {required:?}");
     }
+    // Test plan v2.2 §4 #22: the run's lifecycle in order, each intent before its outcome, and
+    // one task terminal.
+    assert_events_in_order_with_one_terminal(
+        &event_types,
+        &[
+            EventType::TaskRequested,
+            EventType::TaskStarted,
+            EventType::TaskEffectIntent,
+            EventType::InputIntent,
+            EventType::InputCommitted,
+            EventType::TaskEffectCompleted,
+            EventType::TaskTerminalIntent,
+            EventType::TaskCompleted,
+        ],
+        &[
+            EventType::TaskCompleted,
+            EventType::TaskFailed,
+            EventType::TaskCancelled,
+        ],
+    );
     let events = projected_events(
         &mut client,
         EventQuery {

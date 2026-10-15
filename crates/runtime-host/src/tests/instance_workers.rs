@@ -28,7 +28,7 @@ fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
     }
 }
 
-fn all_events(host: &RuntimeHost) -> Vec<PersistedEvent> {
+pub(super) fn all_events(host: &RuntimeHost) -> Vec<PersistedEvent> {
     host.query_persisted_events_for_test(EventQuery::default())
         .expect("ledger events")
 }
@@ -45,7 +45,7 @@ pub(super) fn phases(events: &[PersistedEvent]) -> Vec<(&PersistedEvent, Runtime
         .collect()
 }
 
-fn ladder_finished(
+pub(super) fn ladder_finished(
     events: &[PersistedEvent],
 ) -> Option<(&PersistedEvent, RecoveryLadderOutcome, u8)> {
     phases(events)
@@ -61,7 +61,7 @@ fn ladder_finished(
 }
 
 /// Ledger revision 3 (#378 A3): the code of the ladder end's outcome (an exhausted climb's why).
-fn ladder_end_code(event: &PersistedEvent) -> Option<&str> {
+pub(super) fn ladder_end_code(event: &PersistedEvent) -> Option<&str> {
     match event.payload() {
         EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) => {
             value.outcome().map(|outcome| outcome.code().as_str())
@@ -153,7 +153,7 @@ pub(super) struct LadderRun {
     instance_id: InstanceId,
     pub(super) host: RuntimeHost,
     pub(super) state: Arc<FakeState>,
-    context: Box<PolicyRunContext>,
+    pub(super) context: Box<PolicyRunContext>,
     request: ContainedTaskRequest,
 }
 
@@ -640,7 +640,10 @@ fn pause_instance(host: &RuntimeHost, instance_alias: &str, connection: u64) -> 
 
 /// The ladder claim's own release records (request links only), found through the hand-off
 /// that took the failed run's lease.
-fn ladder_releases(events: &[PersistedEvent], run_lease: LeaseId) -> Vec<&PersistedEvent> {
+pub(super) fn ladder_releases(
+    events: &[PersistedEvent],
+    run_lease: LeaseId,
+) -> Vec<&PersistedEvent> {
     let ladder_request = events
         .iter()
         .find_map(|event| match event.payload() {
@@ -2113,7 +2116,10 @@ pub(super) fn closed_ledger_events(root: &Path) -> Vec<PersistedEvent> {
 /// Workflow #369 E3: the child process of the crash points around a hand-off. It starts the
 /// ladder fixture's host on `ACTINGCOMMAND_LADDER_CRASH_ROOT`, admits the scheduled run, notes
 /// its identity, arms the crash point and runs it; the crash point ends the process.
+// Test plan v2.2 §4 #15: a child-process entry, not a test; `spawn_ladder_crash_child_with`
+// runs it with `--ignored --exact`.
 #[test]
+#[ignore]
 fn ladder_hand_off_crash_child_process() {
     let Ok(root) = std::env::var("ACTINGCOMMAND_LADDER_CRASH_ROOT") else {
         return;
@@ -2410,7 +2416,7 @@ fn run_ended(events: &[PersistedEvent], run: &RunId) -> bool {
 }
 
 /// `admit_ladder_run` on a root whose catalog is already active, evaluated at `unix_ms`.
-fn admit_ladder_run_at(
+pub(super) fn admit_ladder_run_at(
     host: &RuntimeHost,
     request: &ContainedTaskRequest,
     unix_ms: u64,
@@ -2460,6 +2466,7 @@ fn spawn_ladder_crash_child_with(
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     command
         .args([
+            "--ignored",
             "--exact",
             "tests::instance_workers::ladder_hand_off_crash_child_process",
             "--nocapture",
