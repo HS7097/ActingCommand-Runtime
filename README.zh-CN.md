@@ -263,6 +263,7 @@ actingctl emulator discover --state-root <state-root>     # 重新执行 MuMu �
 actingctl pause --state-root <state-root> [--instance <alias>] [--reason <code>] [--drain-timeout-ms <n>]     # 停止策略派发：全局，或单个物理实例（先排空其在途运行）；无过期，熬过重启：下次启动时恢复暂停态（contracts/scheduling-pause.md）
 actingctl resume --state-root <state-root> [--instance <alias>]     # 解除该暂停；status 显示全局与各实例的暂停态
 actingctl selfcheck <alias> --state-root <state-root>     # 立即重连并自检一个物理实例（在专用准备租约下打开 Nemu / ADB，不发输入、不留帧）；按 resume 回执的形状打印自检结果；自检通过前该实例对策略不可用（contracts/runtime-fact-store.md）
+actingctl ladder-drill --state-root <state-root> --instance <alias>     # 演练一个物理实例的卡死恢复阶梯：记录与真阶梯相同、标 drill；不带 --device 时只演练计划、绝不动设备，带 --device 时真的逐级执行（contracts/emulator-control.md，"Drills"）；MCP 对应 ac_ladder_drill
 actingctl task-run --state-root <state-root> --instance <alias> --package <pkg.zip> --expected-sha256 <hex>     # 可选：--recovery-package <pkg.zip> --recovery-expected-sha256 <hex>
 actingctl task-run --state-root <state-root> --instance <alias> --package <dir | D.zip | D.json> --package-ref '<reference>'     # 内容目录或内容外壳文件，配内容目录引用，例如 Lab 包（contracts/package-reference.md，"Containers"）
 actingctl task-offset <task_id> <offset_milli> --state-root <state-root> [--instance <alias>]     # 手动优先级偏移（±1000000 milli），写成 session.task.<task_id>.priority_offset 事实；不带 --instance 时为任务级，作用于唯一配置的目标（否则 task_offset_scope_ambiguous）

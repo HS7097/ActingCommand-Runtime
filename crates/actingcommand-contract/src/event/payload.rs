@@ -1978,12 +1978,22 @@ pub struct RuntimeLifecyclePayload {
     action: EventAction,
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
+    /// Workflow #390 DRILL-1: the record is a drill's own ladder phase (a person's
+    /// `DrillRecoveryLadder`), recorded as a ladder a trigger started records it; absent on
+    /// every other record.
+    #[serde(default, skip_serializing_if = "is_false")]
+    drill: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     device_diagnostics: Option<Box<DeviceDiagnosticBudgetRecord>>,
     audit: SanitizedAudit,
 }
 
 impl RuntimeLifecyclePayload {
+    /// Workflow #390 DRILL-1: whether the record is tagged `drill`.
+    pub const fn drill(&self) -> bool {
+        self.drill
+    }
+
     /// The outcome the phase carries (ledger revision 3): why a recovery rung failed or was
     /// skipped, why a recovery ladder ended exhausted, or why an instance preparation failed;
     /// and the report of a tagged state load or seeding (Workflow #383 register X4).
@@ -8916,6 +8926,7 @@ struct RuntimeLifecycleDraft {
     adb_recovery: Option<Box<AdbTargetRecovery>>,
     owner_epoch: OwnerEpoch,
     phase: RuntimeLifecyclePhase,
+    drill: bool,
     device_diagnostics: Option<Box<DeviceDiagnosticBudgetRecord>>,
     audit: AuditInput,
 }
@@ -8936,6 +8947,7 @@ impl RuntimeLifecycleDraft {
             action: EventAction::RuntimeAction,
             owner_epoch: self.owner_epoch,
             phase: self.phase,
+            drill: self.drill,
             device_diagnostics: self.device_diagnostics,
             audit: self.audit.sanitize(fingerprinter)?,
         })
@@ -8956,6 +8968,7 @@ impl RuntimePayloadDraft {
             adb_recovery: None,
             owner_epoch,
             phase: RuntimeLifecyclePhase::BackendOpenObserved,
+            drill: false,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -8977,6 +8990,7 @@ impl RuntimePayloadDraft {
             adb_recovery: None,
             owner_epoch,
             phase,
+            drill: false,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -9031,6 +9045,7 @@ impl RuntimePayloadDraft {
             adb_recovery: None,
             owner_epoch,
             phase: RuntimeLifecyclePhase::DeviceDiagnosticSummary,
+            drill: false,
             device_diagnostics: Some(Box::new(record)),
             audit: AuditInput::new(),
         }))
@@ -9061,6 +9076,28 @@ impl RuntimePayloadDraft {
             adb_recovery: None,
             owner_epoch,
             phase,
+            drill: false,
+            device_diagnostics: None,
+            audit,
+        }))
+    }
+
+    /// Workflow #390 DRILL-1: one phase of a drill's own ladder (a person's
+    /// `DrillRecoveryLadder`), tagged `drill`. Only the ladder's phases take the tag; the
+    /// payload check refuses it on any other.
+    pub fn recovery_drill_observed(
+        owner_epoch: OwnerEpoch,
+        phase: RuntimeLifecyclePhase,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            backend_open: None,
+            prior_epoch_close: None,
+            vendor_stdio: None,
+            adb_recovery: None,
+            owner_epoch,
+            phase,
+            drill: true,
             device_diagnostics: None,
             audit,
         }))
@@ -9137,6 +9174,7 @@ impl RuntimePayloadDraft {
             owner_epoch,
             phase: RuntimeLifecyclePhase::AdbTargetRecovery,
             adb_recovery: Some(Box::new(recovery)),
+            drill: false,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -9154,6 +9192,7 @@ impl RuntimePayloadDraft {
             owner_epoch,
             phase: RuntimeLifecyclePhase::VendorStdioClose { instance_id },
             adb_recovery: None,
+            drill: false,
             device_diagnostics: None,
             audit: AuditInput::new(),
         }))
@@ -12225,6 +12264,7 @@ impl EventPayload {
                 recovery.validate()?;
             }
             validate_recovery_ladder_phase(&value.phase)?;
+            validate_recovery_drill_tag(&value.phase, value.drill)?;
             if let RuntimeLifecyclePhase::TaggedStateLoaded { stores, .. } = &value.phase {
                 observer::validate_tagged_state_stores(stores)?;
             }

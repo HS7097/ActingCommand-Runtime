@@ -163,6 +163,19 @@ const CLIENT: &[Subcommand] = &[
         &["--config"],
         &["--key-prefix", "session."],
     ),
+    // Workflow #390 DRILL-1: `ladder-drill --instance <selector> [--device]`.
+    result(
+        &[
+            "ladder-drill",
+            "--state-root",
+            ROOT,
+            "--instance",
+            "neutral.instance",
+            "--device",
+        ],
+        &["--wait", "60"],
+        &["--device"],
+    ),
     result(
         &["monitor-status", "--state-root", ROOT],
         &["--recover"],

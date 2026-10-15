@@ -391,3 +391,172 @@ fn d1_l1_preparation_suppression_and_end_records_keep_their_rules() {
         assert_eq!(accepted(value), valid, "{case}");
     }
 }
+
+// Workflow #390 DRILL-1 (forced compromise T-08; coordinator ruling 9 of wave 13), host gate 88:
+// a drill's ladder is recorded like a real one and tagged `drill`. Its trigger, stage `drill`,
+// names no run, task, preparation, rule or match; a plan drill skips with `drill_plan` and ends
+// `planned` with no rung tried and no outcome; only a ladder's own phases carry the tag, a
+// started ladder exactly when its trigger is a drill's, and only a drill ends `planned`.
+
+fn drill_trigger() -> Value {
+    json!({
+        "stage": "drill",
+        "failure_code": "recovery_ladder_drill_requested",
+        "start": "immediately",
+    })
+}
+
+fn planned(rungs_tried: u8) -> Value {
+    json!({
+        "kind": "recovery_ladder_finished",
+        "ladder_result": "planned",
+        "rungs_tried": rungs_tried,
+    })
+}
+
+fn tagged(value: Value, drill: bool) -> bool {
+    validate_recovery_drill_tag(&phase(value), drill).is_ok()
+}
+
+#[test]
+fn drill1_a_drill_trigger_names_nothing_but_its_code_and_a_planned_end_tries_nothing() {
+    let cases = [
+        ("a drill", started(drill_trigger()), true),
+        (
+            "a drill naming a rule",
+            with(started(drill_trigger()), "trigger", {
+                let mut trigger = drill_trigger();
+                trigger["rule"] = json!("pack_logic");
+                trigger
+            }),
+            false,
+        ),
+        (
+            "a drill naming a match",
+            with(started(drill_trigger()), "trigger", {
+                let mut trigger = drill_trigger();
+                trigger["matched"] = json!({"by": "code"});
+                trigger
+            }),
+            false,
+        ),
+        (
+            "a drill naming a run",
+            with(started(drill_trigger()), "trigger", {
+                let mut trigger = drill_trigger();
+                trigger["run_id"] = json!(RUN);
+                trigger["task_id"] = json!(TASK);
+                trigger
+            }),
+            false,
+        ),
+        (
+            "a drill naming a preparation",
+            with(started(drill_trigger()), "trigger", {
+                let mut trigger = drill_trigger();
+                trigger["preparation"] = json!({"sequence": 7, "event_id": EVENT});
+                trigger
+            }),
+            false,
+        ),
+        (
+            "a plan that skips a rung for the drill",
+            with(
+                started(drill_trigger()),
+                "rungs",
+                json!([
+                    {"rung": "return_home", "state": "skipped", "reason": "drill_plan"},
+                ]),
+            ),
+            true,
+        ),
+        ("a planned end that tried no rung", planned(0), true),
+        ("a planned end that tried a rung", planned(1), false),
+        (
+            "a planned end with an outcome",
+            with(
+                planned(0),
+                "outcome",
+                json!({"code": "recovery_ladder_exhausted", "category": "error", "values": {}}),
+            ),
+            false,
+        ),
+        (
+            "a drill's preparation",
+            json!({
+                "kind": "instance_preparation_finished",
+                "stage": "drill",
+                "capture": "passed",
+                "input": "passed",
+            }),
+            false,
+        ),
+    ];
+    for (case, value, valid) in cases {
+        assert_eq!(accepted(value), valid, "{case}");
+    }
+}
+
+#[test]
+fn drill1_only_a_ladder_s_own_phases_carry_the_drill_tag() {
+    let rung = json!({
+        "kind": "recovery_rung_finished",
+        "rung": "return_home",
+        "rung_result": "skipped",
+        "outcome": {"code": "recovery_rung_skipped_drill_plan", "category": "info", "values": {}},
+    });
+    let suppressed = json!({
+        "kind": "recovery_ladder_suppressed",
+        "reason": "cooldown",
+        "until_unix_ms": 9,
+    });
+    let exhausted = json!({
+        "kind": "recovery_ladder_finished",
+        "ladder_result": "exhausted",
+        "rungs_tried": 1,
+        "outcome": {"code": "recovery_ladder_exhausted", "category": "error", "values": {}},
+    });
+    let preparation = json!({
+        "kind": "instance_preparation_finished",
+        "stage": "recovery_preparation",
+        "capture": "passed",
+        "input": "passed",
+    });
+    let cases = [
+        (
+            "a drill's start, tagged",
+            started(drill_trigger()),
+            true,
+            true,
+        ),
+        (
+            "a drill's start, untagged",
+            started(drill_trigger()),
+            false,
+            false,
+        ),
+        (
+            "a task ladder's start, tagged",
+            started(task_trigger()),
+            true,
+            false,
+        ),
+        (
+            "a task ladder's start, untagged",
+            started(task_trigger()),
+            false,
+            true,
+        ),
+        ("a planned end, tagged", planned(0), true, true),
+        ("a planned end, untagged", planned(0), false, false),
+        ("an exhausted end, tagged", exhausted.clone(), true, true),
+        ("an exhausted end, untagged", exhausted, false, true),
+        ("a skipped rung, tagged", rung, true, true),
+        ("a suppression, tagged", suppressed, true, true),
+        ("a preparation, tagged", preparation.clone(), true, false),
+        ("a preparation, untagged", preparation, false, true),
+    ];
+    for (case, value, drill, valid) in cases {
+        assert_eq!(tagged(value, drill), valid, "{case}");
+    }
+}

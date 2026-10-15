@@ -21237,6 +21237,107 @@
       "description": "A drain or a shutdown ended the autostart claim before its start; it releases its key, and the next daemon start enqueues it again (Workflow #369 S6c, H-5). A report line.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "recovery_ladder_drill_requested": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The trigger of a drill's stuck-recovery ladder: a person asked for a drill of the instance's ladder (DrillRecoveryLadder, actingctl ladder-drill, MCP ac_ladder_drill; Workflow #390 DRILL-1). Its recovery_ladder_started names it as the trigger's failure_code with stage drill; every record of the drill's own is tagged drill.",
+      "common_causes": "A person asked for a drill of the instance's ladder.",
+      "handling": "Nothing to do; follow the drill's records by its ladder_request_id."
+    },
+    "recovery_rung_skipped_drill_plan": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A plan drill of a stuck-recovery ladder did not run a rung the ladder would have run: a plan drill never acts on the device (the rung's recovery_rung_finished outcome; skip reason drill_plan, Workflow #390 DRILL-1). The climb ends planned.",
+      "common_causes": "A drill was asked for without --device (MCP device false).",
+      "handling": "Nothing to do. Ask for the drill with --device (device true) to climb the rungs on the device."
+    },
+    "recovery_ladder_drill_disabled": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drill of an instance's stuck-recovery ladder was refused because stuck recovery is off for that instance, so no ladder starts on it (Workflow #390 DRILL-1). The command's command.rejected carries it; nothing else is recorded.",
+      "common_causes": "instances[].stuck_recovery or recovery_ladder.enabled is false for the instance.",
+      "handling": "Turn stuck recovery on for the instance (actingctl config set) if the drill should run, then ask again."
+    },
+    "recovery_ladder_drill_already_running": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drill of an instance's stuck-recovery ladder was refused because a ladder already holds or waits for the instance and recovery_ladder.rules.already_running is suppress (Workflow #390 DRILL-1). Its recovery_ladder_suppressed, tagged drill, says already_running.",
+      "common_causes": "A ladder a failure started, or an earlier drill, still holds or waits for the instance.",
+      "handling": "Wait until that ladder's recovery_ladder_finished, then ask again."
+    },
+    "recovery_ladder_drill_cooling_down": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "next_eligible_unix_ms": "required",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A drill of an instance's stuck-recovery ladder was refused because the instance's cool-down window is open and recovery_ladder.trigger_defaults.respect_cooldown holds the drill (Workflow #390 DRILL-1). next_eligible_unix_ms is the window's end; its recovery_ladder_suppressed, tagged drill, says cooldown.",
+      "common_causes": "A ladder got the instance's key within the cool-down window (recovery_ladder.cooldown_secs or the instance's stuck_recovery_cooldown_secs), or a device drill did.",
+      "handling": "Ask again from next_eligible_unix_ms, or set recovery_ladder.trigger_defaults.respect_cooldown to false for the drill."
     }
   },
   "locations": {
@@ -27960,6 +28061,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: the report lines of the configured emulator starts (Workflow #369 S6c)."
+    },
+    "recovery_ladder_drill": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A Runtime host operation or stage: a person's drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
     }
   }
 }

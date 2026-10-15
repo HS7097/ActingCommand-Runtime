@@ -174,6 +174,9 @@ mod gate_390_out2;
 // Workflow #390 READ-1 (forced compromise O-08): a fraction reading's denominator is published
 // under its second reading key.
 mod gate_390_read1;
+// Workflow #390 DRILL-1 (forced compromise T-08): a person's drill of an instance's ladder is
+// recorded like a real one, tagged `drill`, and acts on the device only when it says so.
+mod gate_390_drill1;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;

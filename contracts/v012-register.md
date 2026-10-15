@@ -944,6 +944,27 @@ domain `emulator_autostart_` are catalog entries, not rows (§7).
 | E6C-1 | actingd daemon lines on stderr: the autostart report lines, `emulator_autostart_queued` (`count`) once the claims are enqueued, before `runtime_ready`; per claim `…_network_ready` or `…_network_status_unknown`, then one of `…_started`, `…_preparation_failed`, `…_failed`, `…_network_unready`, `…_superseded`, `…_yielded`, `…_skipped`, `…_interrupted`, each with `alias`; one developer line and one `OUTCOME actingd:` line each (A6-1's writer) | process interface | S6c | S6c | none when no instance names `start_emulator` (the default, off); the lines of claims the host's close ended come before `runtime_stopped`; a line that cannot be written never stops actingd; #643's stdout lines `actingd emulator_autostart_* …` were never shipped |
 | E6C-2 | an autostart claim's records under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's synthesized connection): `lease.requested` and `scheduler.admitted` + `lease.granted`, or `scheduler.queued` (deadline `u64::MAX`, priority `normal`) while a pause holds it; the renew set; `lease.released`; at its Start `command.received` (Runtime origin) and H-4's start records; a refusal before the Start: `command.received`, `command.rejected`, `runtime.failed` (`emulator_autostart_network_unready` with `alias`, `elapsed_ms`; or the `lease_expired` / `lease_missing` of a refused renewal) | new use of existing records (shapes unchanged) | S6c | S6c | a claim that yields to a pause, is superseded by an operator control, finds its instance running, or is interrupted by a drain or a shutdown writes its release only (and, for a pause, its new claim's `lease.requested` + `scheduler.queued`), no `command.*` |
 
+### 1.63 Wave 13 slice DRILL-1 (#390, forced-compromises mapping T-08; coordinator ruling 9 of wave 13)
+
+DRILL-1 lets a person drill one instance's stuck-recovery ladder; a drill is recorded like a ladder
+a trigger started and tagged `drill`, and never acts on the device unless the request says so.
+[emulator-control.md](emulator-control.md), "Drills", is the contract;
+[runtime-interface.md](runtime-interface.md) has the request, CLI and MCP rows. Its codes
+(`recovery_ladder_drill_requested`, `recovery_rung_skipped_drill_plan`,
+`recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`,
+`recovery_ladder_drill_cooling_down`, `request_drill_recovery_ladder_completed`,
+`recovery_ladder_drill_queued`) and its locations are catalog entries, not rows (§7). No
+configuration key.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DR1 | `runtime.lifecycle_observed` payload member `drill` (boolean) | new optional member | DRILL-1 | DRILL-1 | present (`true`) only on a drill's own ladder phases (`recovery_ladder_started`, `recovery_rung_finished`, `recovery_instance_stopped`, `recovery_environment_ready`, `recovery_ladder_finished`, `recovery_ladder_suppressed`), absent on every other record; the payload check refuses it on any other phase, and a `recovery_ladder_started` carries it exactly when its trigger's stage is `drill` |
+| DR2 | `RecoveryTriggerStage::Drill`, spelled `drill`: `recovery_ladder_started.trigger.stage` | new enum value | DRILL-1 | DRILL-1 | a drill's trigger names no run, task, preparation, rule or match, `failure_code` `recovery_ladder_drill_requested`, `start` `immediately`; an `instance_preparation_finished` never names it; a `recovery_ladder.triggers[]` item that names it is refused `stage_not_allowed` |
+| DR3 | `RecoveryRungSkipReason::DrillPlan`, spelled `drill_plan`: `recovery_ladder_started.rungs[].reason` and the skip outcome `recovery_rung_skipped_drill_plan` of `recovery_rung_finished` | new enum value | DRILL-1 | DRILL-1 | written by a plan drill for each rung the ladder would have run (the started plan lists it `pending`) |
+| DR4 | `RecoveryLadderOutcome::Planned`, spelled `planned`: `recovery_ladder_finished.ladder_result` | new enum value | DRILL-1 | DRILL-1 | only on a drill's record (`drill: true`), with `rungs_tried` 0 and no `outcome`; info |
+| DR5 | `RuntimeOperation::DrillRecoveryLadder { instance_alias, mode }` (`mode` `plan` or `device`) → `RuntimeResult::RecoveryLadderDrillQueued { drill: {instance_alias, mode, ladder_request_id} }` | wire shape, runtime-client 2 (request kind of the option-two block, U-1's classification table gains the row; G14 copies it) | DRILL-1 | DRILL-1 | the emulator control origin gate (User+Ui, Cli+Cli, else `invalid_emulator_control_origin`); a physical instance only; a completed receipt carries `request_drill_recovery_ladder_completed`; `ladder_request_id` is the request id of every record of the drill's claim and ladder |
+| DR6 | `actingctl ladder-drill --instance <selector> [--device]` ↔ `ac_ladder_drill` (`instance`, `device`): `{instance_alias, mode, ladder_request_id}` | operation output (no persisted record; the CLI line carries it beside its outcome) | DRILL-1 | DRILL-1 | the selector is the alias, instance_id or ADB port, resolved with one status read; `--device` absent (`device` false) is a plan drill; CLI success `recovery_ladder_drill_queued`; MCP operator tier before U-3, marked destructive |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -683,6 +683,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: lab::app,
     },
     // ---- Workflow #389 MCP-13a (end) ----
+    // ---- Workflow #390 DRILL-1 (begin): `ac_ladder_drill` ↔ `actingctl ladder-drill`; operator
+    // before U-3, option two after it (forced compromise T-08). ----
+    ToolDef {
+        name: "ac_ladder_drill",
+        title: "Recovery ladder drill",
+        tier: Tier::Operator,
+        description: "Asks the Runtime for a drill of one instance's stuck-recovery ladder, as actingctl ladder-drill does; the Runtime takes it only from an operator origin. The drill is admitted, climbs and is recorded like a ladder a failure started, and every record of its own (recovery_ladder_started with trigger stage drill, recovery_rung_finished, recovery_ladder_finished, recovery_ladder_suppressed) is tagged drill. device false (the default): a plan drill that never acts on the device; each rung the ladder would run is recorded skipped with drill_plan, the climb ends planned, and the cool-down window is left as it was. device true: the drill climbs its rungs on the instance under the same key, admission and fences as a real ladder (return home, an application restart, an emulator restart), so it is destructive. It starts at the configured trigger_defaults.start_rung and the cool-down holds it as trigger_defaults.respect_cooldown says. A direct run still starts no ladder. The answer is {instance_alias, mode, ladder_request_id} once the drill is admitted, before it climbs; follow it with ac_events request_id <ladder_request_id>. Refusals: recovery_ladder_drill_disabled (stuck recovery is off for the instance), recovery_ladder_drill_already_running, recovery_ladder_drill_cooling_down (next_eligible_unix_ms), recovery_admission_denied (a pause, a shutdown or business capacity), instance_unknown, invalid_emulator_control_origin.",
+        read_only: false,
+        destructive: true,
+        idempotent: false,
+        input_schema: ladder_drill_input,
+        result_schema: ladder_drill_result,
+        run: operator::ladder_drill,
+    },
+    // ---- Workflow #390 DRILL-1 (end) ----
     ToolDef {
         name: "ac_targets_set",
         title: "Set resource targets",
@@ -1535,6 +1550,36 @@ fn emulator_input() -> Value {
         "additionalProperties": false,
     })
 }
+
+// ---- Workflow #390 DRILL-1 (begin): `ac_ladder_drill`'s arguments (the CLI's `--instance` and
+// `--device`, R2) and result (the CLI's line without its outcome). ----
+fn ladder_drill_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance": instance_argument(),
+            "device": {
+                "type": "boolean",
+                "description": "true: the drill acts on the device as a real ladder does (--device); false or absent: a plan drill that never acts on it.",
+            },
+        },
+        "required": ["instance"],
+        "additionalProperties": false,
+    })
+}
+
+fn ladder_drill_result() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "instance_alias": {"type": "string"},
+            "mode": {"type": "string", "enum": ["plan", "device"]},
+            "ladder_request_id": {"type": "string"},
+        },
+        "required": ["instance_alias", "mode", "ladder_request_id"],
+    })
+}
+// ---- Workflow #390 DRILL-1 (end) ----
 
 /// A job's outcome within the call budget, or its handle and phase.
 fn job_result() -> Value {

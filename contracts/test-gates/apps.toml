@@ -274,6 +274,7 @@ tests = [
     "actingcommand-actingctl::gate::mcp_run_evidence_parity::gate_actingctl_run_evidence_and_ac_run_evidence_answer_the_same_steps_for_the_same_arguments",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcp13a::gate_ac_app_runs_actinglab_session_app_with_the_same_action_and_instance",
     "actingcommand-actingctl::gate::emulator_wait::gate_an_emulator_control_that_ends_within_its_wait_answers_what_emulator_and_ac_emulator_answer",
+    "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
 ]
 incident = ["#389"]
 
@@ -481,3 +482,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_369_s6c::s6c_a_failed_report_write_does_not_stop_actingd",
 ]
 incident = ["#369", "#361"]
+
+# actingctl ladder-drill --instance <selector> [--device] and MCP ac_ladder_drill (instance, device) send the same DrillRecoveryLadder (a plan without --device or with device false, alias or instance_id resolved with one status read) and answer the same drill {instance_alias, mode, ladder_request_id}, the CLI beside recovery_ladder_drill_queued; a device that is not a boolean is arguments_invalid, and an observer server neither lists nor runs the operator tool (Workflow #390 DRILL-1)
+[[gate]]
+key = "63"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_ladder_drill_parity::gate_actingctl_ladder_drill_and_ac_ladder_drill_send_the_same_drill_and_answer_the_same_object",
+]
+incident = ["#390 DRILL-1"]

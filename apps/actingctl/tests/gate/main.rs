@@ -29,6 +29,8 @@ mod mcp_events_parity;
 mod mcp_facts_parity;
 mod mcp_harness;
 mod mcp_instance_alias;
+// Workflow #390 DRILL-1: `actingctl ladder-drill` ↔ `ac_ladder_drill`.
+mod mcp_ladder_drill_parity;
 mod mcp_observe_parity;
 // Workflow #389 MCP-8: `actingctl overview` ↔ `ac_overview`.
 mod mcp_overview_parity;

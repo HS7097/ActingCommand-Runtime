@@ -3520,6 +3520,17 @@ pub enum RuntimeOperation {
     SelfCheckInstance {
         instance_alias: String,
     },
+    /// Workflow #390 DRILL-1 (forced compromise T-08): a person's drill of one physical
+    /// instance's stuck-recovery ladder, an option-two operation. The drill is admitted, climbs
+    /// and is recorded like a ladder a trigger started, its own records tagged `drill`; with
+    /// `mode` `plan` it never acts on the device, with `device` it climbs its rungs on the
+    /// instance under the same key, admission and fences as a real ladder. A direct task run
+    /// still starts no ladder. Only an explicit User+Ui or Cli+Cli request may issue it (the
+    /// emulator control origin gate: a drill may restart the emulator).
+    DrillRecoveryLadder {
+        instance_alias: String,
+        mode: crate::RecoveryDrillMode,
+    },
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -3856,7 +3867,10 @@ impl RuntimeOperation {
                 }
                 Ok(())
             }
-            Self::SelfCheckInstance { instance_alias } => validate_instance_alias(instance_alias),
+            Self::SelfCheckInstance { instance_alias }
+            | Self::DrillRecoveryLadder { instance_alias, .. } => {
+                validate_instance_alias(instance_alias)
+            }
             Self::RecognizeArtifact { request } => request.validate(),
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::CaptureSequence {
@@ -4010,6 +4024,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::PauseScheduling { .. } => "RuntimeOperation::PauseScheduling(<redacted>)",
             Self::ResumeScheduling { .. } => "RuntimeOperation::ResumeScheduling(<redacted>)",
             Self::SelfCheckInstance { .. } => "RuntimeOperation::SelfCheckInstance(<redacted>)",
+            Self::DrillRecoveryLadder { .. } => "RuntimeOperation::DrillRecoveryLadder(<redacted>)",
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
@@ -4249,12 +4264,14 @@ impl RuntimeRequest {
         }
         // Only an explicit person (Ui) or operator (Cli) request may drive the emulator, spawn
         // its discovery tool or reconnect it for a self-check; Adapter/Agent origins are
-        // excluded so no scheduler or agent path can restart or reconnect it.
+        // excluded so no scheduler or agent path can restart or reconnect it. Workflow #390
+        // DRILL-1: a ladder drill may restart the emulator, so the same gate holds it.
         if matches!(
             self.operation,
             RuntimeOperation::ControlEmulatorInstance { .. }
                 | RuntimeOperation::DiscoverInstances
                 | RuntimeOperation::SelfCheckInstance { .. }
+                | RuntimeOperation::DrillRecoveryLadder { .. }
         ) && !matches!(
             (self.actor, self.source),
             (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
@@ -4954,6 +4971,11 @@ pub enum RuntimeResult {
         instance_alias: String,
         selfcheck: SchedulingResumeSelfCheck,
     },
+    /// `DrillRecoveryLadder` (Workflow #390 DRILL-1): the drill was admitted and its claim
+    /// waits for the instance's key; its ladder records follow under `drill.ladder_request_id`.
+    RecoveryLadderDrillQueued {
+        drill: crate::RecoveryLadderDrill,
+    },
     ContainedTaskCompleted {
         run_id: RunId,
         task_id: crate::TaskId,
@@ -5628,6 +5650,10 @@ impl RuntimeReceipt {
                     ));
                 }
                 selfcheck.validate()?;
+            }
+            // Workflow #390 DRILL-1: an admitted drill names a registered instance alias.
+            Some(RuntimeResult::RecoveryLadderDrillQueued { drill }) => {
+                validate_instance_alias(&drill.instance_alias)?;
             }
             Some(RuntimeResult::ProjectInterface { response }) => {
                 response.validate().map_err(|_| {

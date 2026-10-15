@@ -180,6 +180,8 @@ crate::outcome_codes! {
         InstanceFactSnapshotCompleted => "request_instance_fact_snapshot_completed": success / none,
         // Workflow #389 U-2 (register W11: the success code comes with the behaviour).
         BindChannelCompleted => "request_bind_channel_completed": success / none,
+        // Workflow #390 DRILL-1: a ladder drill was admitted and queued.
+        DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
     }
 }
 

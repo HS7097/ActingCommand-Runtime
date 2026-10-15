@@ -1571,6 +1571,34 @@ impl RuntimeClient {
         }
     }
 
+    /// Asks for a drill of the registered instance `instance_alias`'s stuck-recovery ladder
+    /// (`DrillRecoveryLadder`, Workflow #390 DRILL-1) and returns the drill the Runtime admitted:
+    /// its claim waits for the instance's key and its records follow under its
+    /// `ladder_request_id`. A `plan` drill never acts on the device; a `device` drill climbs the
+    /// rungs on it. The Runtime answers at admission, so the default receipt wait applies. An
+    /// answer for another instance or mode is an unexpected result.
+    pub fn drill_recovery_ladder(
+        &self,
+        instance_alias: &str,
+        mode: actingcommand_contract::RecoveryDrillMode,
+    ) -> RuntimeClientResult<actingcommand_contract::RecoveryLadderDrill> {
+        const OPERATION: Location = ClientLocation::RuntimeRecoveryLadderDrill.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::DrillRecoveryLadder {
+                instance_alias: instance_alias.to_owned(),
+                mode,
+            },
+        )? {
+            RuntimeResult::RecoveryLadderDrillQueued { drill }
+                if drill.instance_alias == instance_alias && drill.mode == mode =>
+            {
+                Ok(drill)
+            }
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
         #[cfg(feature = "test-observation")]
         record_active(
