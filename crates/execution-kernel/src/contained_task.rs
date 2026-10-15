@@ -6030,7 +6030,7 @@ impl TaskControl {
             // declare one too; `in_page_guard` and `recognize_only` may not.
             if !matches!(
                 self.execution_mode.as_str(),
-                linear::LINEAR_STEPS | "navigable_route"
+                linear::LINEAR_STEPS | "navigable_route" | "in_page_guard" | "recognize_only"
             ) {
                 return Err(invalid("prerequisite_execution_mode"));
             }
