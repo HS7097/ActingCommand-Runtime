@@ -4134,9 +4134,11 @@ fn labobs_observe_and_do_state_the_frame_coordinates_and_do_attaches_its_result(
             .unwrap_or_default()
     };
     let assert_coordinates = |statement: &Value, what: &str| {
-        assert_eq!(statement["unit"], "device_pixel", "{what}: {statement}");
-        assert_eq!(statement["width"], 16, "{what}: {statement}");
-        assert_eq!(statement["height"], 9, "{what}: {statement}");
+        assert_eq!(
+            statement["device_pixels"],
+            json!([16, 9]),
+            "{what}: {statement}"
+        );
         assert_eq!(statement["orientation"], "landscape", "{what}: {statement}");
         for input in ["tap", "tap_rect"] {
             assert!(

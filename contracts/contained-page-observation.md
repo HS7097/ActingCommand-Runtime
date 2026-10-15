@@ -63,9 +63,9 @@ recognition and capture failures remain visible. Raw `ObserveReadonly` consumers
 and offline observation retain their existing entry points.
 
 Workflow #410 item 1: every `observe` answer, offline and with `--capture`,
-states the frame's coordinate system as `frame_coordinates {unit:
-"device_pixel", width, height, orientation, origin: "top_left", applies_to:
-["tap", "tap_rect", "swipe"]}` (`do`'s coordinates are these frame pixels;
+states the frame's coordinate system as `frame_coordinates {device_pixels:
+[width, height], orientation, applies_to: ["tap", "tap_rect", "swipe"]}`
+(`do`'s coordinates are these frame pixels, from the top-left pixel;
 [contained-lab-operation.md](contained-lab-operation.md)). With `--preview` it
 also writes a JPEG preview of the frame, long edge at most 1024 pixels, into the
 Lab frame directory and answers `preview {path, width, height, scale}`, or
