@@ -205,7 +205,8 @@ impl PreparedPageObservation {
                 return Err(invalid("action input missing"));
             };
             match &input {
-                DriveSemanticInput::TargetCenter { target_id } => {
+                DriveSemanticInput::TargetCenter { target_id }
+                | DriveSemanticInput::TargetOffset { target_id, .. } => {
                     if !metadata.catalog().targets.contains(target_id) {
                         return Err(invalid("action target is not declared"));
                     }
@@ -563,7 +564,8 @@ impl PreparedPageObservation {
                 continue;
             }
             let resolution = match &element.input {
-                DriveSemanticInput::TargetCenter { target_id } => {
+                DriveSemanticInput::TargetCenter { target_id }
+                | DriveSemanticInput::TargetOffset { target_id, .. } => {
                     let values = actual
                         .iter()
                         .filter(|(page, value)| {
@@ -574,10 +576,16 @@ impl PreparedPageObservation {
                         .collect::<Vec<_>>();
                     match values.as_slice() {
                         [value] if element.action.role != ElementRole::ControlPoint => {
+                            let geometry = match &element.input {
+                                DriveSemanticInput::TargetOffset { offset, .. } => {
+                                    offset_target_geometry(value, *offset)
+                                }
+                                _ => target_geometry(value, evaluator),
+                            };
                             ElementResolution::Target {
                                 target_id: target_id.clone(),
                                 passed: value.passed,
-                                geometry: target_geometry(value, evaluator).map_err(|error| {
+                                geometry: geometry.map_err(|error| {
                                     error.with_ppocr_diagnostics(ppocr_diagnostics.clone())
                                 })?,
                             }
@@ -737,8 +745,38 @@ fn geometry(input: &DriveSemanticInput) -> Result<Geometry, OnlineObservationErr
             to: point(*to)?,
             duration_ms: *duration_ms,
         }),
-        DriveSemanticInput::TargetCenter { .. } => Err(fact_error("target geometry unresolved")),
+        DriveSemanticInput::TargetCenter { .. } | DriveSemanticInput::TargetOffset { .. } => {
+            Err(fact_error("target geometry unresolved"))
+        }
     }
+}
+
+/// Workflow #390 LAB-2 item 7: an `offset` click's box on this frame, from the box its template
+/// matched ([`crate::drive_offset_rect`]); a target that did not pass, or matched no template
+/// box, gives none.
+fn offset_target_geometry(
+    value: &TargetEvaluation,
+    offset: PackRect,
+) -> Result<Option<Geometry>, OnlineObservationError> {
+    let Some(template) = value.template.filter(|_| value.passed) else {
+        return Ok(None);
+    };
+    let rect = crate::drive_offset_rect(
+        PackRect {
+            x: template.x,
+            y: template.y,
+            width: template.width,
+            height: template.height,
+        },
+        template.scale_milli,
+        offset,
+    )
+    .map_err(fact_error)?;
+    geometry(&DriveSemanticInput::Tap {
+        rect,
+        point: drive_rect_center(rect).map_err(fact_error)?,
+    })
+    .map(Some)
 }
 fn target_geometry(
     value: &TargetEvaluation,

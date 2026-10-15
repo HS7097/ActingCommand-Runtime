@@ -156,10 +156,13 @@ pub(super) fn build(
             purpose: control.name.clone(),
             source: "control_points".to_string(),
             resolution: match &control.input {
-                SemanticInput::TargetCenter { target_id } => ElementResolution::NotEvaluated {
-                    target_id: target_id.clone(),
-                    reason: NotEvaluatedReason::Unscoped,
-                },
+                SemanticInput::TargetCenter { target_id }
+                | SemanticInput::TargetOffset { target_id, .. } => {
+                    ElementResolution::NotEvaluated {
+                        target_id: target_id.clone(),
+                        reason: NotEvaluatedReason::Unscoped,
+                    }
+                }
                 input => ElementResolution::Declared(geometry(input)?),
             },
         });
@@ -228,16 +231,24 @@ pub(super) fn build(
     Ok((projection, ocr_not_evaluated))
 }
 
+/// One action target's resolution on this frame, kept by `resolve` per target.
+struct ResolvedTarget {
+    resolution: ElementResolution,
+    /// Workflow #390 LAB-2 item 7: the evaluation when it passed with a matched template box,
+    /// from which an `offset` click takes its box.
+    matched: Option<TargetEvaluation>,
+}
+
 /// The OCR targets of actions resolved as not evaluated: those `resolve` left without a model.
 fn not_evaluated_ocr_targets(
     evaluator: &RecognitionEvaluator,
-    resolved: &std::collections::BTreeMap<String, ElementResolution>,
+    resolved: &std::collections::BTreeMap<String, ResolvedTarget>,
 ) -> std::collections::BTreeSet<String> {
     resolved
         .iter()
-        .filter(|(target_id, resolution)| {
+        .filter(|(target_id, resolved)| {
             matches!(
-                resolution,
+                resolved.resolution,
                 ElementResolution::NotEvaluated {
                     reason: NotEvaluatedReason::DynamicTarget,
                     ..
@@ -260,16 +271,46 @@ fn resolve(
     input: &SemanticInput,
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
-    resolved: &mut std::collections::BTreeMap<String, ElementResolution>,
+    resolved: &mut std::collections::BTreeMap<String, ResolvedTarget>,
     ocr: &LabOcr,
 ) -> CliOutcome<ElementResolution> {
-    let SemanticInput::TargetCenter { target_id } = input else {
-        return Ok(ElementResolution::Declared(geometry(input)?));
+    let (target_id, offset) = match input {
+        SemanticInput::TargetCenter { target_id } => (target_id, None),
+        SemanticInput::TargetOffset { target_id, offset } => (target_id, Some(*offset)),
+        _ => return Ok(ElementResolution::Declared(geometry(input)?)),
     };
-    if let Some(result) = resolved.get(target_id) {
-        return Ok(result.clone());
+    if !resolved.contains_key(target_id) {
+        let target = resolve_target(target_id, evaluator, scene, ocr)?;
+        resolved.insert(target_id.clone(), target);
     }
-    let result = match evaluator
+    let target = &resolved[target_id];
+    // Workflow #390 LAB-2 item 7: an `offset` click's box is its offset from the box the
+    // template matched; a target that did not pass, or matched no template box, gives none.
+    match (offset, &target.matched) {
+        (Some(offset), Some(matched)) => {
+            let rect = target_offset_rect(matched, offset)?;
+            Ok(ElementResolution::Target {
+                target_id: target_id.clone(),
+                passed: matched.passed,
+                geometry: Some(geometry(&SemanticInput::Tap {
+                    rect,
+                    point: rect_center(rect)?,
+                })?),
+            })
+        }
+        _ => Ok(target.resolution.clone()),
+    }
+}
+
+/// The resolution of the action target `target_id` on this frame, with its matched evaluation.
+fn resolve_target(
+    target_id: &str,
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    ocr: &LabOcr,
+) -> CliOutcome<ResolvedTarget> {
+    let mut matched = None;
+    let resolution = match evaluator
         .target_kind(target_id)
         .map_err(|error| CliError::package_invalid(error.to_string()))?
     {
@@ -278,7 +319,7 @@ fn resolve(
         // REC-6: so does a value test, which reads OCR targets.
         TargetKind::Ocr | TargetKind::ValueTest if ocr.provider().is_none() => {
             ElementResolution::NotEvaluated {
-                target_id: target_id.clone(),
+                target_id: target_id.to_owned(),
                 reason: NotEvaluatedReason::DynamicTarget,
             }
         }
@@ -292,7 +333,7 @@ fn resolve(
         | TargetKind::Composite
         | TargetKind::ValueTest
         | TargetKind::Ocr => {
-            ocr.require(evaluator.pack(), [target_id.as_str()])?;
+            ocr.require(evaluator.pack(), [target_id])?;
             let evaluated = evaluator
                 .evaluate_target(scene, target_id)
                 .map_err(|error| CliError::usage(error.to_string()))?;
@@ -305,23 +346,29 @@ fn resolve(
             } else {
                 None
             };
+            let passed = evaluated.passed;
+            if geometry.is_some() {
+                matched = Some(evaluated);
+            }
             ElementResolution::Target {
-                target_id: target_id.clone(),
-                passed: evaluated.passed,
+                target_id: target_id.to_owned(),
+                passed,
                 geometry,
             }
         }
         TargetKind::Nn => ElementResolution::NotEvaluated {
-            target_id: target_id.clone(),
+            target_id: target_id.to_owned(),
             reason: NotEvaluatedReason::DynamicTarget,
         },
         TargetKind::ClickOnly => ElementResolution::NotEvaluated {
-            target_id: target_id.clone(),
+            target_id: target_id.to_owned(),
             reason: NotEvaluatedReason::ClickOnly,
         },
     };
-    resolved.insert(target_id.clone(), result.clone());
-    Ok(result)
+    Ok(ResolvedTarget {
+        resolution,
+        matched,
+    })
 }
 
 pub(super) fn project(
@@ -661,6 +708,11 @@ mod tests {
         );
     }
 }
+
+// Workflow #390 LAB-2 item 7 (exec key 77): the navigation reader and observe take a REC-4
+// `offset` click.
+#[cfg(test)]
+mod gate_390_navoffset;
 
 #[cfg(test)]
 mod lab3_tests {

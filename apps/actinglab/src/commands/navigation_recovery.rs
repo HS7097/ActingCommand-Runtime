@@ -390,6 +390,12 @@ pub(crate) enum SemanticInput {
     TargetCenter {
         target_id: String,
     },
+    /// Workflow #390 LAB-2 item 7 (REC-4 `offset`): the box at the top-left corner of the box
+    /// `target_id` matches plus `offset`, scaled as the kernel scales it ([`target_offset_rect`]).
+    TargetOffset {
+        target_id: String,
+        offset: PackRect,
+    },
     Drag {
         from_rect: PackRect,
         to_rect: PackRect,
@@ -684,6 +690,21 @@ pub(crate) fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput>
         Some("target") | Some("target_center") => Ok(SemanticInput::TargetCenter {
             target_id: required_string_field(value, "target_id")?.to_string(),
         }),
+        // Workflow #390 LAB-2 item 7: a REC-4 `offset` click (`--click` with `--click-follow`, or
+        // a source `rect_move`) presses its offset from the box its target matches.
+        Some("offset") => {
+            let offset = parse_navigation_rect(required_value_field(value, "offset")?)?;
+            if offset.width <= 0 || offset.height <= 0 {
+                return Err(CliError::usage(format!(
+                    "offset click rectangle must have positive dimensions: {}x{}",
+                    offset.width, offset.height
+                )));
+            }
+            Ok(SemanticInput::TargetOffset {
+                target_id: required_string_field(value, "target_id")?.to_string(),
+                offset,
+            })
+        }
         Some("drag") => {
             let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
             let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
@@ -905,6 +926,11 @@ pub(crate) fn semantic_input_json(input: &SemanticInput) -> Value {
             "type": "target_center",
             "target_id": target_id
         }),
+        SemanticInput::TargetOffset { target_id, offset } => json!({
+            "type": "target_offset",
+            "target_id": target_id,
+            "offset": rect_json(*offset)
+        }),
         SemanticInput::Drag {
             from_rect,
             to_rect,
@@ -1028,7 +1054,9 @@ fn reject_startup_login_destructive_overlap(
     ] {
         let at = match input {
             SemanticInput::Tap { point, .. } => format!(" at ({},{})", point.x, point.y),
-            SemanticInput::TargetCenter { .. } | SemanticInput::Drag { .. } => String::new(),
+            SemanticInput::TargetCenter { .. }
+            | SemanticInput::TargetOffset { .. }
+            | SemanticInput::Drag { .. } => String::new(),
         };
         reject_destructive_overlap_at(
             &format!("startup-login {action}{at}"),
@@ -1299,7 +1327,7 @@ fn ensure_recovery_action_limit(actions: usize, max_actions: usize) -> CliOutcom
 fn semantic_input_rects(input: &SemanticInput) -> Vec<PackRect> {
     match input {
         SemanticInput::Tap { rect, .. } => vec![*rect],
-        SemanticInput::TargetCenter { .. } => Vec::new(),
+        SemanticInput::TargetCenter { .. } | SemanticInput::TargetOffset { .. } => Vec::new(),
         SemanticInput::Drag {
             from_rect, to_rect, ..
         } => vec![*from_rect, *to_rect],
@@ -1379,6 +1407,11 @@ fn send_semantic_input(
         SemanticInput::TargetCenter { .. } => {
             return Err(CliError::usage(
                 "target_center semantic input must be resolved before device execution",
+            ));
+        }
+        SemanticInput::TargetOffset { .. } => {
+            return Err(CliError::usage(
+                "target_offset semantic input must be resolved before device execution",
             ));
         }
         SemanticInput::Drag {
@@ -1510,8 +1543,10 @@ fn resolve_navigation_edge_input(
     ctx: &NavigationExecutionContext<'_>,
     edge: &NavigationEdge,
 ) -> CliOutcome<(SemanticInput, Value)> {
-    let SemanticInput::TargetCenter { target_id } = &edge.input else {
-        return Ok((edge.input.clone(), Value::Null));
+    let (target_id, offset) = match &edge.input {
+        SemanticInput::TargetCenter { target_id } => (target_id, None),
+        SemanticInput::TargetOffset { target_id, offset } => (target_id, Some(*offset)),
+        _ => return Ok((edge.input.clone(), Value::Null)),
     };
     let scene = load_scene_from_flags(ctx.global, ctx.flags)?;
     let evaluation = ctx
@@ -1529,7 +1564,10 @@ fn resolve_navigation_edge_input(
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
+    let rect = match offset {
+        Some(offset) => target_offset_rect(&evaluation, offset)?,
+        None => target_evaluation_rect(&evaluation)?,
+    };
     let input = SemanticInput::Tap {
         rect,
         point: rect_center(rect)?,
@@ -1556,6 +1594,23 @@ pub(crate) fn target_evaluation_rect(evaluation: &TargetEvaluation) -> CliOutcom
         width: template.width,
         height: template.height,
     })
+}
+
+/// Workflow #390 LAB-2 item 7: the box an `offset` click presses on an evaluation of its target,
+/// its offset from the top-left corner of the matched template box, scaled by the factor the
+/// template matched at as the kernel scales it (`drive_offset_rect`).
+pub(crate) fn target_offset_rect(
+    evaluation: &TargetEvaluation,
+    offset: PackRect,
+) -> CliOutcome<PackRect> {
+    actingcommand_lab::drive_offset_rect(
+        target_evaluation_rect(evaluation)?,
+        evaluation
+            .template
+            .and_then(|template| template.scale_milli),
+        offset,
+    )
+    .map_err(|error| CliError::package_invalid(error.message()))
 }
 
 fn poll_for_page(
