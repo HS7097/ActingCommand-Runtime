@@ -62,7 +62,6 @@ const MAIN_ACCUMULATING: &[&str] = &[
     actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed.as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved
         .as_str(),
-    actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str(),
     actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskGuardRefused.as_str(),
 ];
 /// Preparation refusals of the prerequisite chain: reproducible configuration problems (R21).
