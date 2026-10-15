@@ -104,6 +104,48 @@
       "description": "The --facts file of actinglab replay is not one complete instance fact answer of a Runtime: the result of actingctl facts --instance or of MCP ac_facts with scope instance (scope, read_at_unix_ms, snapshot, records_total, records_kept), read without key_prefix so that it holds every record, with a valid snapshot, within 4 MiB.",
       "common_causes": "The answer was read with --key-prefix, is of another scope, or was edited.",
       "handling": "Read the instance's facts again without a key prefix and save the answer unchanged."
+    },
+    "replay_scan_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay --frames --select --scan replayed the scan of the select step over the frame sequence through the kernel's scan path, and the scan did not cover its list. Either the selection evaluator ended it before its coverage (end.status aborted, end.coverage not_started or incomplete, the decision in scan.decision) or it failed (end.status failed, the outcome in end.outcome; selection_scan_replay_frame_missing when it needed a frame the sequence does not hold, such as a corrective, a rewind or a capture after the last frame). Nothing was executed; the exit code is that of a usage refusal, so a CI job fails on it.",
+      "common_causes": "The pack no longer finds or reads the recorded list; the recording is not a forward run from the list's start to its end; a declared fact list is missing from the given facts.",
+      "handling": "Read end and the scan's viewports in the details; fix the pack or the scan declaration, or record a forward run that reaches the list's end."
+    },
+    "replay_scan_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab replay could not open or read the --scan file.",
+      "common_causes": "The path does not exist or is not readable.",
+      "handling": "Name a readable file."
+    },
+    "replay_scan_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The --scan file of actinglab replay is not one scan declaration of a select step (selector model S0 v2.1 section 2.1: every member, no unknown member), within 1 MiB.",
+      "common_causes": "A member is missing, misspelt or of the wrong type, or the file holds more than the declaration.",
+      "handling": "Save the step's scan declaration alone, with every member it requires."
     }
   }
 }

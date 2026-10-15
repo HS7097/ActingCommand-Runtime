@@ -443,8 +443,9 @@ impl ContainedTaskRuntime for OfflineRuntime {
     }
 }
 
-/// The empty fact snapshot of an offline select step, in the package's game and server.
-fn empty_offline_snapshot(request: SelectionStateRequest) -> InstanceFactSnapshot {
+/// The empty fact snapshot of an offline select step, in the package's game and server (also
+/// the snapshot of a replayed scan without `--facts`, Workflow #308 SEL-L6b).
+pub(crate) fn empty_offline_snapshot(request: SelectionStateRequest) -> InstanceFactSnapshot {
     InstanceFactSnapshot {
         snapshot_id: OFFLINE_SNAPSHOT_ID.to_owned(),
         ledger_position: OFFLINE_SNAPSHOT_POSITION,

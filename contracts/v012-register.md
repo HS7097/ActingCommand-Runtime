@@ -1173,6 +1173,21 @@ existing records get new rules.
 | X31 | `policy.execution_recorded` `failure.failure_identity` of a scheduled page-graph run | new rule of an existing member (shape unchanged) | EXEC-3 | EXEC-3 | the live settlement writes it for every run whose main package was admitted, `linear_steps` or page graph (format v2 unchanged); a page-graph run without a prerequisite chain that checked its required entry (an `EntryRecoveryDecision`) takes that check as its gate and its entry recovery package as its layer for the scope (`gate`, `pre:<I>`, `main`); its restart segment ends on the literal `home`; R25-2 stays a `linear_steps` rule; the startup reconciliation still writes none. So a page-graph failure scheduled for a retry is rerun at once (`failure_retry_immediate`) and its pause is lifted by its package's content hash. Wave 14 ruling 4 (fix round): `contained_task_step_unconfirmed` in the `main` scope, outside the restart segment, joins R21's failures that pause by repeating, as the graph counterpart of `contained_task_linear_intermediate_unobserved` (a coordinator reading of R21, reported to Alice) |
 | X32 | the order of a host package run's first records: `task.step_started` (from `<unrecognized>`), `application.intent`, `application.completed`, `task.effect_completed`, before the run's first `capture.completed` | new rule of existing records (shapes unchanged) | EXEC-3 | EXEC-3 | only in a startup package's and a recovery ladder rung's run, and only for a page-graph package whose `entry_page` is `any` and whose first operation is a `from: "any"` application effect (R24); every other run keeps the #316-B3 order (its initial frame first) |
 
+### 1.71 Wave 14 slice SEL-L6b (#308, forced-compromises mapping row SEL-L6b, T-01)
+
+SEL-L6b replays one select step's scan over a saved frame sequence through the kernel's own scan
+path (`dry_run_scan`, SEL-L3), with the facts SEL-L6a's whole-package replay gives a select
+step. It writes no ledger record, wire shape or configuration key; its only new shape is an
+actinglab operation output (L6B-1). [selection-graph.md](selection-graph.md), "Offline", is the
+contract. The actinglab codes `replay_scan_refused`, `replay_scan_unreadable` and
+`replay_scan_invalid` (error, ladder class `none`) are catalog entries, not rows (§7); the
+kernel's existing `selection_scan_replay_frame_missing`, `selection_state_unavailable` and
+`selection_fact_context_mismatch` are reused.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L6B-1 | `actinglab replay --package <path> --frames <directory> --select <operation> --scan <file> [--facts <file>]`: `{mode: "offline_scan_replay", executed: false, package_id, task_id, operation_id, frames_given, facts, ocr, production_global_ledger_written: false, end: {status, coverage?, outcome?}, scan?}` | operation output (no persisted record; an actinglab result, read by a person or a CI job) | SEL-L6b | SEL-L6b | `end.status` `covered` (coverage `complete` or `early_stopped`, exit 0), `aborted` (the evaluator's decision ended the scan with coverage `not_started` or `incomplete`) or `failed` (`end.outcome`, the full outcome envelope); `scan` is the kernel's `ScanDryRun` (coverage, start evidence, extent, coverage viewports, rewind viewports, positions, members, unknown and gated-out positions, decision), absent when the scan failed; every end other than `covered` is `replay_scan_refused` with the output in the details. `--scan` is the step's scan declaration (S0 §2.1), the shape SEL-L4b admits from a package (§1.58 L3B-3), taken here as given |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

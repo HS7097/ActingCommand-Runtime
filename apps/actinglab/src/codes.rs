@@ -33,5 +33,16 @@ actingcommand_contract::outcome_codes! {
         /// Error. The `--facts` file is not one complete instance fact answer of a Runtime.
         ReplayFactsInvalid => "replay_facts_invalid": error / none,
         // ---- end of SEL-L6a
+        // ---- Workflow #308 SEL-L6b (pending): `actinglab replay --frames --select --scan`.
+        /// Error. The replayed scan did not cover its list: the evaluator ended it before its
+        /// coverage (the details carry the scan with its decision), or it failed with the
+        /// outcome the details carry as `end.outcome` (`selection_scan_replay_frame_missing`
+        /// when it needed a frame the sequence does not hold).
+        ReplayScanRefused => "replay_scan_refused": error / none,
+        /// Error. The `--scan` file could not be opened or read.
+        ReplayScanUnreadable => "replay_scan_unreadable": error / none,
+        /// Error. The `--scan` file is not one scan declaration of a select step.
+        ReplayScanInvalid => "replay_scan_invalid": error / none,
+        // ---- end of SEL-L6b
     }
 }

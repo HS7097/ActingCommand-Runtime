@@ -134,7 +134,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `recognize` | no_effect | | |
 | `recognize-artifact` | no_effect | | |
 | `observe` | mixed | | `--capture --record`: refused, `record_flag_unsupported`; `--with-frame <path>` (offline and `--capture`, without `--record`): refused, `dry_run_unsupported`, flag parsing only, alternative `observe` without `--with-frame`; a bare `--with-frame` and other forms without `--record`: no_effect |
-| `replay` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads (Workflow #308 SEL-L6a) |
+| `replay` | refused | `offline_device_scope_forbidden` | positional arguments; the command only reads, the whole package (Workflow #308 SEL-L6a) and one select step's scan with `--select` and `--scan` (SEL-L6b) |
 | `do` | preview | `executed_false` | `--capture --dry-run` writes the registered debug audit events |
 | `ensure` | preview | `executed_false` | as `do` |
 | `wait` | no_effect | | |
