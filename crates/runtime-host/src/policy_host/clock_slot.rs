@@ -107,7 +107,7 @@ impl SlotRecord {
             Self::Deferred => HostCode::ClockSlotDeferred,
             Self::Owed => HostCode::ClockSlotOwed,
             Self::Expired => HostCode::ClockSlotExpired,
-            Self::Superseded => HostCode::ClockSlotSuperseded,
+            Self::Superseded => HostCode::ClockSlotExpired,
         }
     }
 
@@ -116,7 +116,7 @@ impl SlotRecord {
             Self::Refused => "refused",
             Self::Deferred => "deferred",
             Self::Owed => "owed",
-            Self::Expired => "expired",
+            Self::Expired => "expire",
             Self::Superseded => "superseded",
         }
     }
@@ -546,7 +546,10 @@ impl<'a> Preview<'a> {
         for lapse in clock_slot_lapses(task, Some(state), self.time)? {
             let occurrence = lapse.occurrence_unix_ms;
             let (kind, grace_ms) = match lapse.kind {
-                ClockSlotLapseKind::Expired { grace_ms } => (SlotRecord::Expired, Some(grace_ms)),
+                ClockSlotLapseKind::Expired { grace_ms } => (
+                    SlotRecord::Expired,
+                    Some(grace_ms).filter(|grace| *grace == 0),
+                ),
                 ClockSlotLapseKind::Superseded => (SlotRecord::Superseded, None),
             };
             if self.known(&signal_id(kind, task_id, alias, occurrence))? {
@@ -570,7 +573,7 @@ impl<'a> Preview<'a> {
                     is_live
                 }
             };
-            if !is_live {
+            if !is_live && kind == SlotRecord::Owed {
                 return Ok(());
             }
             let values = SlotValues {

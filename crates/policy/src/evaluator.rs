@@ -3544,9 +3544,10 @@ fn evaluate_predicate(
                 return Ok(PredicateEvaluation::known(unserved.is_some(), next));
             };
             let MissedSlotRule::SkipAfter { grace_ms } = *missed;
-            let expiry = occurrence_expiry(occurrence, grace_ms)?;
+            let expiry =
+                occurrence_expiry(occurrence, grace_ms)?.max(time.unix_ms.saturating_add(1));
             if time.unix_ms < expiry {
-                let mut result = PredicateEvaluation::known(true, min_wake(next, Some(expiry)));
+                let mut result = PredicateEvaluation::known(true, next);
                 result.fresh_until_unix_ms = Some(expiry);
                 return Ok(result);
             }
@@ -4230,9 +4231,9 @@ fn timeline_window(
 /// Interval clocks shorter than this come due too often to be traced one slot at a time.
 const CLOCK_SLOT_MIN_INTERVAL_MS: u64 = 3_600_000;
 /// Workflow #372 K4: the lapse pass reads occurrences at most this long before the evaluation.
-const CLOCK_SLOT_LAPSE_LOOKBACK_MS: u64 = 48 * 3_600_000;
+const CLOCK_SLOT_LAPSE_LOOKBACK_MS: u64 = 60 * 3_600_000;
 /// Workflow #372 K4: the lapse pass reads at most this many occurrences of one pair.
-const CLOCK_SLOT_LAPSE_LIMIT: usize = 32;
+const CLOCK_SLOT_LAPSE_LIMIT: usize = 33;
 
 /// The clock slots of one (task, instance) pair at one evaluation time. In memory only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4272,7 +4273,7 @@ pub fn clock_slot_view(
             (due, clock.missed)
             && occurrence_expiry(occurrence, *grace_ms)? <= time.unix_ms
         {
-            due = None;
+            due = Some(occurrence);
         }
         view.due_occurrence = view.due_occurrence.max(due);
         view.next_occurrence = min_wake(view.next_occurrence, next);

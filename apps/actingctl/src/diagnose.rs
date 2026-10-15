@@ -1109,7 +1109,7 @@ fn clock_slot_rank(row: &Value) -> u8 {
         .map(Outcome::relayed)
         .filter(|outcome| !outcome.is(ContractCode::OutcomeRelayUnregistered))
         .map(|outcome| outcome.category());
-    if category == Some(Category::Warning) {
+    if category == Some(Category::Error) {
         0
     } else if row.get("gate_code").is_some() || row.get("grace_ms").is_some() {
         1

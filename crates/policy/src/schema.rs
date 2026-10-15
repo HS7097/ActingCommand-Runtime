@@ -423,7 +423,7 @@ pub enum PredicateSpec {
         /// Workflow #361 R7 (`actingcommand.scheduling.v2` only): what becomes of an occurrence
         /// that is not served in time. Absent, an occurrence stays due until the pair is next
         /// dispatched, and the member serializes as nothing at all.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         missed: Option<MissedSlotRule>,
     },
     TimelineActive {

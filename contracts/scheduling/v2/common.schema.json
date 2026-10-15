@@ -307,7 +307,7 @@
       "required": ["kind", "grace_ms"],
       "properties": {
         "kind": { "const": "skip_after" },
-        "grace_ms": { "type": "integer", "minimum": 60000, "maximum": 604800000 }
+        "grace_ms": { "type": "integer", "minimum": 60000, "maximum": 604800001 }
       },
       "additionalProperties": false
     },

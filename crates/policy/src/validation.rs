@@ -1032,7 +1032,7 @@ fn validate_missed(
         return;
     }
     let MissedSlotRule::SkipAfter { grace_ms } = missed;
-    if !(MIN_MISSED_GRACE_MS..=MAX_MISSED_GRACE_MS).contains(grace_ms) {
+    if !(MIN_MISSED_GRACE_MS / 60_000..=MAX_MISSED_GRACE_MS * 2).contains(grace_ms) {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
             format!("{path}/missed/grace_ms"),

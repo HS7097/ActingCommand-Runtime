@@ -963,7 +963,9 @@ impl ClockSlotRecord {
             self.next_occurrence_unix_ms
                 .is_some_and(|next_occurrence| time >= next_occurrence)
         };
-        if self.code == HostCode::ClockSlotExpired.code() || expired {
+        if self.code == HostCode::ClockSlotExpired.code()
+            || expired && self.code == HostCode::ClockSlotOwed.code()
+        {
             return (SlotFate::Expired, true);
         }
         if self.code == HostCode::ClockSlotSuperseded.code() {
