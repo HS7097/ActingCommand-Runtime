@@ -804,7 +804,7 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::MarkUnconfirmed { .. }
             | TaskSelectionConfirmation::TapMarked { .. }
             | TaskSelectionConfirmation::PicksConfirmed { .. }
-            | TaskSelectionConfirmation::PicksStopped { .. } => Err(invalid("confirmation")),
+            | TaskSelectionConfirmation::PicksStopped { .. } => Ok(()),
         }
     }
 
