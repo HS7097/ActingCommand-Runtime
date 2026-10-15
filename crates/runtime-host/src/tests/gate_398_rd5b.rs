@@ -130,7 +130,7 @@ impl HandsetHost {
                     RuntimeOperation::run_contained_task(
                         alias,
                         ids.mint_holder_id().expect("holder"),
-                        ContainedTaskRequest::new(package.0, package.1).expect("task request"),
+                        ContainedTaskRequest::new(package).expect("task request"),
                     ),
                 ),
                 ConnectionId::new(398).expect("connection"),

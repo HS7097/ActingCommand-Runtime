@@ -5,12 +5,13 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Workflow #336 PKG-S4 (option 丙): a procedure binding names no package content; its package
+/// is found by `scheduled_execution.package_path`. A binding that still names `package_digest`
+/// does not decode (`deny_unknown_fields`).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcedureBindingConfigFile {
     pub procedure_ref: String,
-    #[serde(with = "crate::package::prefixed_reference")]
-    pub package_digest: crate::PackageRef,
     pub operation_id: String,
     pub yield_points: Vec<String>,
     #[serde(default)]

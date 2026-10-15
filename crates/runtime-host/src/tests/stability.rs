@@ -16,7 +16,6 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
             .join(format!("neutral-stability-{failure_kind}-failure.zip"));
         let bytes = neutral_stability_contained_task_package(true, 2, 5);
         fs::write(&package, &bytes).expect("write stability package");
-        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         let host = RuntimeHost::start(
@@ -46,8 +45,7 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
             RuntimeOperation::run_contained_task(
                 "neutral.instance",
                 client.ids.mint_holder_id().expect("holder"),
-                ContainedTaskRequest::new(package.display().to_string(), expected)
-                    .expect("task request"),
+                ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
             ),
         );
 
@@ -113,7 +111,6 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
     let package = root.path().join("neutral-stability-task.zip");
     let bytes = neutral_stability_contained_task_package(true, 2, 6);
     fs::write(&package, &bytes).expect("write stability package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -140,8 +137,7 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
-                .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
 
@@ -278,7 +274,6 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
         let package = root.path().join("neutral-stability-max-task.zip");
         let bytes = neutral_stability_contained_task_package(true, max_steps - 1, max_steps);
         fs::write(&package, &bytes).expect("write stability package");
-        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
         let state = Arc::new(FakeState::default());
         state.physical_task_geometry.store(true, Ordering::Release);
         state
@@ -305,8 +300,7 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
             RuntimeOperation::run_contained_task(
                 "neutral.instance",
                 client.ids.mint_holder_id().expect("holder"),
-                ContainedTaskRequest::new(package.display().to_string(), expected)
-                    .expect("task request"),
+                ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
             ),
         );
 

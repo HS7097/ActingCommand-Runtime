@@ -22,7 +22,6 @@ fn assert_methods_are_public<P: actingcommand_lab::LabPorts>(
 fn lab_validate_family_exposes_typed_requests_and_responses() {
     let _validate = LabValidateRequest {
         zip_path: PathBuf::from("bundle.zip"),
-        expected_input_sha256: None,
     };
     assert_serializable::<LabValidateResponse>();
     assert_serializable::<LabContainedPackageValidationResponse>();

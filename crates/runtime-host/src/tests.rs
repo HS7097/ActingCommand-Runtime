@@ -114,6 +114,8 @@ mod gate_336_pkgs2;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
 mod gate_336_pkgs3;
+// Workflow #336 PKG-S4: a configured prerequisite package is the package its `package_id` names.
+mod gate_336_pkgs4;
 mod gate_369s5;
 // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
 mod gate_369_s6c;
@@ -146,6 +148,10 @@ mod gate_383_sh1;
 mod gate_384_d2s2;
 // Workflow #384 D2-S3: resource adjustments.
 mod gate_384_d2s3;
+// Workflow #384 D2-CHAIN and D2-S4: the fact refresh end to end, and the dispatch's reader check.
+mod gate_384_d2s4;
+// Workflow #385 P-m: the shadow measurement and its status read.
+mod gate_385_pm;
 // Workflow #386 SR-2a, test row T6d: a start reads the condition endings and blackout
 // suppressions a later build wrote.
 mod gate_386_sr2a;

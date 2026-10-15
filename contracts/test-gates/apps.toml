@@ -260,7 +260,7 @@ tests = [
 ]
 incident = []
 
-# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21)
+# CLI and MCP give the same answer for the same parameters: one parity test per slice on the real binaries (MCP-0 command table v1.1 §2.3; Workflow #389 MCP-1, MCP-5a, MCP-3, MCP-7, MCP-11, MCP-4, MCP-8, MCP-14, MCP-6, MCP-13a, MCP-21; Workflow #385 P-m)
 [[gate]]
 key = "41"
 coverage = "Y"
@@ -281,8 +281,9 @@ tests = [
     "actingcommand-actingctl::gate::mcp_events_parity::gate_actingctl_events_and_ac_events_answer_the_same_summary_page_with_each_record_s_outcome",
     "actingcommand-actingctl::gate::mcp_overview_parity::gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instance_last_reported",
     "actingcommand-actingctl::gate::mcp_devices_parity::gate_actingctl_devices_and_the_ac_device_tools_answer_the_same_for_the_same_arguments",
+    "actingcommand-actingctl::gate::mcp_performance_parity::gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status",
 ]
-incident = ["#389"]
+incident = ["#389", "#385 P-m"]
 
 # actingctl config set|clear and MCP ac_config_set send the same changes, from an observer session (Workflow #387 D1b, D1-M8)
 [[gate]]
@@ -592,3 +593,22 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
+# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} and prerequisite_packages {package_id, package_path} checks, and one that still carries startup_package.expected_sha256, prerequisite_packages[].package_digest or policy.procedure_manifest[].package_digest is config_decode_failed at config_load; actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
+[[gate]]
+key = "55"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::process::s4_t1_a_package_digest_key_refuses_the_configuration_and_the_path_shape_checks",
+    "actingcommand-actingctl::bin:actingctl::tests::s4_t3_task_run_refuses_a_package_digest_flag",
+    "actingcommand-actingctl::c4_process::actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit",
+    "actingcommand-actingctl::gate::mcp_pkgs4::s4_t4_ac_run_pack_and_ac_pack_check_take_no_package_digest",
+]
+incident = ["#336 PKG-S4"]
+# actingctl perf-status prints the shadow measurement's status (PerformanceStatus) with runtime_performance_reported, and without actingd it reports the Runtime's absence (runtime_info_unavailable) and exits 1; the overview's performance block is that status (Workflow #385 P-m, PERF §4.6, test row Tm-12)
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::mcp_performance_parity::gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence",
+]
+incident = ["#385 P-m"]

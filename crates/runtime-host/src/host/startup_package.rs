@@ -2,9 +2,9 @@
 
 //! The startup package hook (Runtime slice #316-B3; Workflow #369 H-4, S6b).
 //!
-//! An instance may declare one startup package (`startup_package { package, expected_sha256 }`
-//! in the `actingd` instance configuration, the same locator + digest semantics as
-//! `actingctl task-run`). After a successful emulator `start` / `restart` the control request
+//! An instance may declare one startup package (`startup_package { package }` in the `actingd`
+//! instance configuration, the same locator semantics as `actingctl task-run`; Workflow #336
+//! PKG-S4: no digest). After a successful emulator `start` / `restart` the control request
 //! only *schedules* it: one `runtime.lifecycle_observed` (phase `startup_package_scheduled`,
 //! the package locator in the audit path, a fresh causation id) is appended under the control
 //! request's links, the receipt says `startup_package: scheduled`, and the control's key goes
@@ -22,7 +22,7 @@
 //! hands no startup claim over (a stop, a failed preparation). Once granted, the package runs
 //! on the instance's worker (`host_claims`) under the claim's key, as an ordinary contained
 //! task with a self-minted request and correlation id, the claim's holder and synthesized
-//! connection, the same causation id, hash admission and the complete `task.*` event chain
+//! connection, the same causation id, structural admission and the complete `task.*` event chain
 //! (`HostShared::run_package_on_key`). A package that cannot be admitted fails typed before its
 //! run: `startup_package_missing` (the locator does not open) or
 //! `startup_package_admission_failed` (every other admission refusal, the underlying code

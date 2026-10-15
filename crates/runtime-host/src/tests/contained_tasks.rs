@@ -8,7 +8,6 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     let package = root.path().join("neutral-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -39,13 +38,10 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         neutral_contained_task_package_with_task(true, &serde_json::to_vec(&invalid_task).unwrap());
     let invalid_path = root.path().join("unconsumed-task.zip");
     fs::write(&invalid_path, &invalid_bytes).unwrap();
-    let invalid_hash =
-        actingcommand_pack_containment::Sha256Hash::digest(&invalid_bytes).to_string();
     let rejected_request = client.request(RuntimeOperation::run_contained_task(
         "neutral.instance",
         client.ids.mint_holder_id().unwrap(),
-        ContainedTaskRequest::new(invalid_path.display().to_string(), invalid_hash.clone())
-            .unwrap(),
+        ContainedTaskRequest::new(invalid_path.display().to_string()).unwrap(),
     ));
     let rejected = client.send(&rejected_request);
     assert_eq!(rejected.state(), RuntimeReceiptState::Denied);
@@ -113,8 +109,7 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected.clone())
-                .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
 
@@ -562,7 +557,6 @@ fn a_package_run_on_a_held_token_takes_no_lease_and_releases_once_under_its_run(
     let package = root.path().join("held-token-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -577,8 +571,7 @@ fn a_package_run_on_a_held_token_takes_no_lease_and_releases_once_under_its_run(
         )),
     )
     .expect("runtime host");
-    let request =
-        ContainedTaskRequest::new(package.display().to_string(), expected).expect("task request");
+    let request = ContainedTaskRequest::new(package.display().to_string()).expect("task request");
 
     let (claim, result) = host
         .run_package_on_held_claim_for_test("neutral.instance", request)

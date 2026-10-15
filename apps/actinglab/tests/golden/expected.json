@@ -149,7 +149,7 @@
           "blocked_error": {
             "blocked_by": [],
             "code": "package_invalid",
-            "message": "fatal containment error: invalid sha256 hash 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg'; hash mismatch cannot be evaluated"
+            "message": "failed to open package <PATH>\\missing-semantic.zip: <OS_ERROR_TEXT> (os error 2)"
           },
           "command": "detect-page",
           "details": null,
@@ -169,7 +169,7 @@
           "state": "failed",
           "trace_record_count": 1
         },
-        "message": "fatal containment error: invalid sha256 hash 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg'; hash mismatch cannot be evaluated"
+        "message": "failed to open package <PATH>\\missing-semantic.zip: <OS_ERROR_TEXT> (os error 2)"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
@@ -546,9 +546,6 @@
         "dangerous_entries": [],
         "entries": null,
         "entry_count": 3,
-        "externally_verified": false,
-        "hash_source": "self_computed_provenance_only",
-        "input_sha256": "<INPUT_SHA256>",
         "ledger_event": {
           "entry_count": 3,
           "event_type": "package.validate.ok",
@@ -644,9 +641,6 @@
           "server": "cn"
         },
         "entry_count": 6,
-        "externally_verified": false,
-        "hash_source": "self_computed_provenance_only",
-        "input_sha256": "<INPUT_SHA256>",
         "resources": {
           "manifest": "resources/manifest.json",
           "navigation": null,

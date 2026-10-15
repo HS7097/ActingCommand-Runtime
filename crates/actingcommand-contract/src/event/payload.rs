@@ -6851,6 +6851,13 @@ struct PerformanceControlDraft {
     audit: AuditInput,
 }
 
+/// Workflow #385 P-m: a pacing transition (`perf.pacing_changed`), its code and values in the
+/// outcome.
+struct PerformancePacingDraft {
+    outcome: Outcome,
+    audit: AuditInput,
+}
+
 struct FactPublishedDraft {
     record: Box<FactRecord>,
     related_records: Vec<FactRecord>,
@@ -7080,7 +7087,8 @@ impl PerformanceSummaryDraft {
             third_party_high_load: self.data.third_party_high_load,
             ledger_commits: self.data.ledger_commits,
             capacity: self.data.capacity,
-            pacing: None,
+            // Workflow #385 P-m (register P4): validated with the rest of the summary above.
+            pacing: self.data.pacing.map(Box::new),
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -7763,9 +7771,6 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
             })
         }
         PerformancePayload::Summary(value) if value.action == EventAction::PerformanceObserve => {
-            if let Some(pacing) = &value.pacing {
-                pacing.validate()?;
-            }
             validate_performance_summary(&PerformanceSummaryEventData {
                 context: value.context.clone(),
                 foreground: value.foreground.clone(),
@@ -7773,6 +7778,7 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 third_party_high_load: value.third_party_high_load.clone(),
                 ledger_commits: value.ledger_commits.clone(),
                 capacity: value.capacity.clone(),
+                pacing: value.pacing.as_deref().cloned(),
             })
         }
         PerformancePayload::MonitorDegraded(value)
@@ -10350,6 +10356,7 @@ enum PerformanceDraftKind {
     MonitorDegraded(PerformanceMonitorStateDraft),
     MonitorRecovered(PerformanceMonitorStateDraft),
     BalanceChanged(PerformanceControlDraft),
+    PacingChanged(PerformancePacingDraft),
 }
 
 pub struct PerformancePayloadDraft(PerformanceDraftKind);
@@ -10394,6 +10401,14 @@ impl PerformancePayloadDraft {
     pub fn balance_changed(data: PerformanceControlEventData, audit: AuditInput) -> Self {
         Self(PerformanceDraftKind::BalanceChanged(
             PerformanceControlDraft { data, audit },
+        ))
+    }
+
+    /// Workflow #385 P-m (register P1): `perf.pacing_changed`, one stage transition of the
+    /// shadow measurement; `outcome` is its info code (`perf_stage_changed`) with its values.
+    pub fn pacing_changed(outcome: Outcome, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::PacingChanged(
+            PerformancePacingDraft { outcome, audit },
         ))
     }
 }
@@ -11517,6 +11532,12 @@ impl EventPayloadDraft {
                 }
                 PerformanceDraftKind::BalanceChanged(detail) => {
                     PerformancePayload::BalanceChanged(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::PacingChanged(detail) => {
+                    PerformancePayload::PacingChanged(PerformancePacingPayload::observed(
+                        detail.outcome,
+                        detail.audit.sanitize(fingerprinter)?,
+                    )?)
                 }
             }),
             Self::Fact(value) => EventPayload::Fact(match value.0 {

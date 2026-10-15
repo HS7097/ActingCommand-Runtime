@@ -9,9 +9,11 @@
 // incrementally"). The offline half is resource-tooling's `gate_e4`. Requirement basis:
 // rd-1009/tests/req-basis-el.md section E-4, row "G4b".
 
+// The one module of the shared fixture in this crate's tests; gate_336_pkgs4 uses it from here
+// (clippy `duplicate_mod`).
 #[allow(dead_code)]
 #[path = "../../../../tests/support/exec_i6.rs"]
-mod exec_i6;
+pub(super) mod exec_i6;
 
 use super::*;
 use actingcommand_contract::ContainedTaskRecoveryBinding;
@@ -19,8 +21,6 @@ use exec_i6::{I6Case, ROOT};
 use std::path::Path;
 
 const ALIAS: &str = "neutral.instance";
-// A reference of valid form; admission records it and compares it with nothing (PKG-S1).
-const RECORDED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 // A Runtime whose prerequisite packages are the packages of `case.bound`, each bound to its
 // fixture directory, as actingd installs a bundle's `prerequisite` declarations.
@@ -32,7 +32,6 @@ fn start(temp: &TempDir, state: &Arc<FakeState>, packs_root: &Path, case: &I6Cas
         .map(|package_id| {
             let binding = ContainedTaskRecoveryBinding::new(
                 packs_root.join(package_id).display().to_string(),
-                RECORDED,
             )
             .expect("prerequisite binding");
             ((*package_id).to_owned(), binding)
@@ -47,9 +46,8 @@ fn start(temp: &TempDir, state: &Arc<FakeState>, packs_root: &Path, case: &I6Cas
 
 // Runs the root package of the set from its fixture directory.
 fn run_root(host: &RuntimeHost, packs_root: &Path) -> RuntimeReceipt {
-    let task_request =
-        ContainedTaskRequest::new(packs_root.join(ROOT).display().to_string(), RECORDED)
-            .expect("task request");
+    let task_request = ContainedTaskRequest::new(packs_root.join(ROOT).display().to_string())
+        .expect("task request");
     let mut client = TestClient::connect(host);
     client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");

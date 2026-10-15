@@ -295,20 +295,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "startup_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a startup package reference is invalid. Removed by the package-digest (PKG) slices.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "startup_package_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -424,20 +410,6 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingd refused its configuration: a prerequisite package container file is not supported.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "prerequisite_package_digest_invalid": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingd",
-      "layer": "config",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingd refused its configuration: a prerequisite package reference is invalid. Removed by the package-digest (PKG) slices.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

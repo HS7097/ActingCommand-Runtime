@@ -667,6 +667,13 @@ impl CodeStr {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Workflow #384 D2-S4: the registered code this received spelling names, by the catalog
+    /// this build embeds, so a record can carry it as a `code` value again (a failure's code as
+    /// a later reason's `failure_code`). `None` for a spelling the catalog does not list.
+    pub fn registered(&self) -> Option<Code> {
+        check::registered_code(self.as_str())
+    }
 }
 
 impl From<Code> for CodeStr {

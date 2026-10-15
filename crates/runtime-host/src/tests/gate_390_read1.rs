@@ -249,11 +249,7 @@ fn read1_a_run_publishes_the_denominator_under_the_second_reading_key() {
     let request = client.request(RuntimeOperation::run_contained_task(
         READ1_ALIAS,
         client.ids.mint_holder_id().expect("holder"),
-        ContainedTaskRequest::new(
-            package.display().to_string(),
-            actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string(),
-        )
-        .expect("fraction task request"),
+        ContainedTaskRequest::new(package.display().to_string()).expect("fraction task request"),
     ));
     let receipt = client.send(&request);
     assert_eq!(

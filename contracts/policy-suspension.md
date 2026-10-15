@@ -285,7 +285,7 @@ stdout is one JSON object:
      "comparison":{"source":"recomputed","status":"similar","reason":null,
        "changed_cells_milli":0,"digest_mean_milli":0,"ccoeff":1.0,"ccoeff_error":null}},
    "lifts_when":"content_hash_changes",
-   "takeover":"actingctl task-run --state-root <root> --instance <instance> --package <package> --package-ref <package-ref>"}],
+   "takeover":"actingctl task-run --state-root <root> --instance <instance> --package <package>"}],
  "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_hash|layer:<n>|restart",
    "effective":"next_evaluation|active","paused":{},"package":{}}],
  "repeating":[{"task_id":"...","instance_id":"...","error_code":"...","failure_code":"...",

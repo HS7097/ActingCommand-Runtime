@@ -154,21 +154,15 @@ fn run_entry(state: &Arc<FakeState>, target: &[u8], recovery: Option<&[u8]>) -> 
     let root = TempDir::new().expect("tempdir");
     let target_path = root.path().join("entry-target.zip");
     fs::write(&target_path, target).expect("write target package");
-    let mut task_request = ContainedTaskRequest::new(
-        target_path.display().to_string(),
-        format!("{:x}", Sha256::digest(target)),
-    )
-    .expect("target request");
+    let mut task_request =
+        ContainedTaskRequest::new(target_path.display().to_string()).expect("target request");
     if let Some(recovery) = recovery {
         let recovery_path = root.path().join("entry-recovery.zip");
         fs::write(&recovery_path, recovery).expect("write recovery package");
         task_request = task_request
             .with_recovery(
-                ContainedTaskRecoveryBinding::new(
-                    recovery_path.display().to_string(),
-                    format!("{:x}", Sha256::digest(recovery)),
-                )
-                .expect("recovery binding"),
+                ContainedTaskRecoveryBinding::new(recovery_path.display().to_string())
+                    .expect("recovery binding"),
             )
             .expect("target request with recovery");
     }

@@ -9,25 +9,24 @@ fn lab_validate_accepts_minimal_self_contained_package() {
     let response = validate_lab_package_zip(&zip).expect("valid package");
 
     assert_eq!(response.status, "valid");
-    assert_eq!(response.hash_source, "self_computed_provenance_only");
-    assert!(!response.externally_verified);
     assert_eq!(response.control.entry_task_id, "task");
     assert_eq!(response.resources.operation_count, 1);
 }
 
+// Workflow #336 PKG-S4 (option 丙, M-PKG v1.1 §4.5): Lab validation admits the package
+// structurally and names no digest of it.
 #[test]
-fn lab_validate_reports_an_externally_supplied_hash_as_verified() {
+fn lab_validate_names_no_digest_of_the_package() {
     let temp = TempDir::new().expect("temp");
     let zip = temp.path().join("input.zip");
     write_minimal_lab_package(&zip);
-    let expected = Sha256Hash::digest(&fs::read(&zip).expect("package bytes"));
 
-    let response = validate_lab_package_zip_with_expected(&zip, Some(expected))
-        .expect("externally verified package");
+    let response = validate_lab_package_zip(&zip).expect("valid package");
+    let encoded = serde_json::to_value(&response).expect("encode the response");
 
-    assert_eq!(response.input_sha256, expected.to_string());
-    assert_eq!(response.hash_source, "externally_supplied");
-    assert!(response.externally_verified);
+    for member in ["input_sha256", "hash_source", "externally_verified"] {
+        assert!(encoded.get(member).is_none(), "{member}: {encoded}");
+    }
 }
 
 #[test]
@@ -42,10 +41,8 @@ fn production_bundle_ignores_loose_neighbor_resources() {
         br#"{"task_id":"malicious-loose-resource"}"#,
     )
     .expect("loose resource");
-    let expected = Sha256Hash::digest(&fs::read(&zip).expect("read bundle"));
 
-    let contained = load_lab_package_for_validation(&zip, "fixture", Some(expected))
-        .expect("admitted bundle");
+    let contained = load_lab_package_for_validation(&zip, "fixture").expect("admitted bundle");
 
     assert_eq!(
         contained
@@ -62,9 +59,7 @@ fn configured_recovery_task_must_exist_inside_admitted_bundle() {
     let temp = TempDir::new().expect("temp");
     let zip = temp.path().join("input.zip");
     write_minimal_lab_package(&zip);
-    let expected = Sha256Hash::digest(&fs::read(&zip).expect("read bundle"));
-    let contained = load_lab_package_for_validation(&zip, "fixture", Some(expected))
-        .expect("admitted bundle");
+    let contained = load_lab_package_for_validation(&zip, "fixture").expect("admitted bundle");
     let mut operation_bundle = test_operation_bundle(test_operation(Some("terminal"), None));
     operation_bundle.recovery = Some(TaskRecovery::Kind("return_home".to_string()));
 

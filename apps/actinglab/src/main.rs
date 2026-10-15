@@ -332,6 +332,7 @@ fn execute_invocation(
 
 fn execute(invocation: &Invocation) -> CliOutcome<Value> {
     record_flag_gate(invocation)?;
+    retired_digest_flag_gate(invocation)?;
     match invocation.command.as_slice() {
         [cmd] if cmd == "help" => Ok(help_data()),
         [cmd] if cmd == "version" => Ok(version_data()),
@@ -409,6 +410,28 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
             "unknown actinglab command: {}",
             invocation.command.join(" ")
         ))),
+    }
+}
+
+/// Workflow #336 PKG-S4 (option 丙, M-PKG §4.5): a package is named by its path only. The
+/// retired package digest flags are refused by name, never ignored (FlagArgs accepts unknown
+/// flags). `lab replay-evidence --expected-sha256` names an evidence archive's own SHA-256,
+/// not a package's (M-PKG §1.3), and stays.
+fn retired_digest_flag_gate(invocation: &Invocation) -> CliOutcome<()> {
+    const RETIRED: [&str; 4] = [
+        "--expected-sha256",
+        "--package-ref",
+        "--recovery-expected-sha256",
+        "--recovery-package-ref",
+    ];
+    let evidence_archive = invocation.command.as_slice() == ["lab", "replay-evidence"];
+    match invocation.args.iter().find(|arg| {
+        RETIRED.contains(&arg.as_str()) && !(evidence_archive && arg.as_str() == RETIRED[0])
+    }) {
+        Some(flag) => Err(CliError::usage(format!(
+            "{flag} is retired: a package is named by its path only"
+        ))),
+        None => Ok(()),
     }
 }
 

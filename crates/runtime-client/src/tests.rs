@@ -1875,8 +1875,7 @@ fn respond_with_empty_event_page(stream: &mut TcpStream) {
 }
 
 fn contained_task_request() -> ContainedTaskRequest {
-    ContainedTaskRequest::new("C:\\fixture\\contained-task.zip", "0".repeat(64))
-        .expect("contained task request")
+    ContainedTaskRequest::new("C:\\fixture\\contained-task.zip").expect("contained task request")
 }
 
 fn contained_task_success_receipt(

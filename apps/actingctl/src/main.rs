@@ -94,7 +94,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> (--expected-sha256 <hash>|--package-ref <json>) [--recovery-package <locator> (--recovery-expected-sha256 <hash>|--recovery-package-ref <json>)]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
@@ -522,6 +522,34 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             &client.monitor_status().map_err(ActingctlError::Runtime)?,
             success,
         ),
+        // Workflow #385 P-m (PERF §4.6): the shadow measurement's status, the object
+        // `ac_overview` answers as its `performance` block; `--instance` (alias, instance_id
+        // or ADB port) narrows its rows to one, resolved with one status read.
+        Command::PerformanceStatus => {
+            let selected = match optional_instance.as_deref() {
+                Some(selector) => {
+                    let status = client.status().map_err(ActingctlError::Runtime)?;
+                    let alias = instance_selector::select(status.instances(), selector)
+                        .map_err(|miss| match miss {
+                            SelectorMiss::Unknown => {
+                                ActingctlError::InstanceUnknown(selector.to_owned())
+                            }
+                            SelectorMiss::Ambiguous => {
+                                ActingctlError::InstanceAmbiguous(selector.to_owned())
+                            }
+                        })?
+                        .instance_alias()
+                        .to_owned();
+                    Some(alias)
+                }
+                None => None,
+            };
+            reported(
+                &overview::performance_block(&client, selected.as_deref())
+                    .map_err(ActingctlError::Runtime)?,
+                success,
+            )
+        }
         Command::MonitorSet { policy } => reported(
             &client
                 .configure_monitor(instance()?, policy)
@@ -653,21 +681,14 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         ),
         Command::TaskRun {
             package,
-            expected_sha256,
             recovery_package,
-            recovery_expected_sha256,
         } => {
             let package = canonical_package(package)?;
-            let recovery = match (recovery_package, recovery_expected_sha256) {
-                (Some(package), Some(expected_sha256)) => Some((
-                    canonical_package(package)?.display().to_string(),
-                    expected_sha256,
-                )),
-                (None, None) => None,
-                _ => return Err(ActingctlError::Usage),
+            let recovery = match recovery_package {
+                Some(package) => Some(canonical_package(package)?.display().to_string()),
+                None => None,
             };
-            let request =
-                task_run_request(package.display().to_string(), expected_sha256, recovery)?;
+            let request = task_run_request(package.display().to_string(), recovery)?;
             let output = match wait {
                 None => client
                     .run_contained_task(instance()?, request)
@@ -988,20 +1009,16 @@ fn pause_scope(instance: Option<String>) -> SchedulingPauseScope {
     }
 }
 
+/// Workflow #336 PKG-S4 (option 丙): the task's package, and its recovery package, by their
+/// paths only.
 fn task_run_request(
     package_path: String,
-    expected_sha256: String,
-    recovery: Option<(String, String)>,
+    recovery: Option<String>,
 ) -> Result<ContainedTaskRequest, ActingctlError> {
-    let expected = actingcommand_contract::PackageRef::parse_argument(&expected_sha256)
-        .map_err(|_| ActingctlError::Usage)?;
-    ContainedTaskRequest::new(package_path, expected)
+    ContainedTaskRequest::new(package_path)
         .and_then(|request| match recovery {
-            Some((package_path, expected_sha256)) => {
-                request.with_recovery(ContainedTaskRecoveryBinding::new(
-                    package_path,
-                    actingcommand_contract::PackageRef::parse_argument(&expected_sha256)?,
-                )?)
+            Some(package_path) => {
+                request.with_recovery(ContainedTaskRecoveryBinding::new(package_path)?)
             }
             None => Ok(request),
         })
@@ -1055,6 +1072,8 @@ enum Command {
         key_prefix: Option<String>,
     },
     MonitorStatus,
+    /// `perf-status [--instance <selector>]` (Workflow #385 P-m).
+    PerformanceStatus,
     MonitorSet {
         policy: RuntimeMonitorPolicy,
     },
@@ -1085,9 +1104,7 @@ enum Command {
     },
     TaskRun {
         package: PathBuf,
-        expected_sha256: String,
         recovery_package: Option<PathBuf>,
-        recovery_expected_sha256: Option<String>,
     },
 }
 
@@ -1129,9 +1146,7 @@ impl Invocation {
         let mut expected_page = None;
         let mut frame_count = None;
         let mut package = None;
-        let mut expected_sha256 = None;
         let mut recovery_package = None;
-        let mut recovery_expected_sha256 = None;
         let mut recovery_enabled = false;
         let mut program = false;
         let mut config = false;
@@ -1260,21 +1275,8 @@ impl Invocation {
                 "--package" => {
                     package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
                 }
-                // Two spellings of one value: the second excludes the first.
-                "--expected-sha256" | "--package-ref" => {
-                    if expected_sha256.is_some() {
-                        return Err(ActingctlError::argument(flag, ArgumentProblem::Conflicting));
-                    }
-                    expected_sha256 = Some(require_text(&arguments, &mut index)?);
-                }
                 "--recovery-package" => {
                     recovery_package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
-                }
-                "--recovery-expected-sha256" | "--recovery-package-ref" => {
-                    if recovery_expected_sha256.is_some() {
-                        return Err(ActingctlError::argument(flag, ArgumentProblem::Conflicting));
-                    }
-                    recovery_expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
                 "--device" => device = true,
@@ -1347,6 +1349,7 @@ impl Invocation {
                 (false, false) => return Err(ActingctlError::Usage),
             },
             "monitor-status" => Command::MonitorStatus,
+            "perf-status" => Command::PerformanceStatus,
             "monitor-set" => Command::MonitorSet {
                 policy: RuntimeMonitorPolicy::new(
                     interval_ms.unwrap_or(30_000),
@@ -1394,24 +1397,21 @@ impl Invocation {
                 )
                 .map_err(|_| ActingctlError::Usage)?,
             },
-            "task-run" => {
-                if recovery_package.is_some() != recovery_expected_sha256.is_some() {
-                    return Err(ActingctlError::Usage);
-                }
-                Command::TaskRun {
-                    package: package.ok_or(ActingctlError::Usage)?,
-                    expected_sha256: expected_sha256.ok_or(ActingctlError::Usage)?,
-                    recovery_package,
-                    recovery_expected_sha256,
-                }
-            }
+            "task-run" => Command::TaskRun {
+                package: package.ok_or(ActingctlError::Usage)?,
+                recovery_package,
+            },
             _ => return Err(ActingctlError::Usage),
         };
         // `task-offset` takes `--instance` optionally: without it the offset is task-level;
-        // `pause` / `resume` without it are global.
+        // `pause` / `resume` without it are global; `perf-status` without it reads every row
+        // (Workflow #385 P-m).
         if !matches!(
             command,
-            Command::TaskOffset { .. } | Command::Pause { .. } | Command::Resume
+            Command::TaskOffset { .. }
+                | Command::Pause { .. }
+                | Command::Resume
+                | Command::PerformanceStatus
         ) && command.requires_instance() != instance.is_some()
         {
             return Err(ActingctlError::Usage);
@@ -1444,6 +1444,7 @@ impl Command {
             Self::ProgramFacts { .. } => ActingctlCode::RuntimeFactsReported,
             Self::InstanceFacts { .. } => ActingctlCode::InstanceFactsReported,
             Self::MonitorStatus => ActingctlCode::MonitorStatusReported,
+            Self::PerformanceStatus => ActingctlCode::RuntimePerformanceReported,
             Self::MonitorSet { .. } => ActingctlCode::MonitorPolicySet,
             Self::MonitorClear => ActingctlCode::MonitorPolicyCleared,
             Self::EmulatorStatus => ActingctlCode::InstanceStatusReported,
@@ -1477,6 +1478,7 @@ impl Command {
                 | Self::ConfigureSettings { .. }
                 | Self::ProgramFacts { .. }
                 | Self::MonitorStatus
+                | Self::PerformanceStatus
                 | Self::EmulatorDiscover
                 | Self::RequestShutdown
                 | Self::InstallTransition { .. }
@@ -1544,6 +1546,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         "request-shutdown" => &["--state-root", "--wait"],
         "install-transition" => &["--state-root", "--action-json", "--wait"],
         "status" => &["--state-root", "--config"],
+        // Workflow #385 P-m: the shadow measurement's status, every row or one instance's.
+        "perf-status" => &["--state-root", "--instance"],
         "facts" => &["--state-root", "--program", "--instance", "--key-prefix"],
         // Workflow #390 DRILL-1: a ladder drill acts on the device only with `--device`.
         "ladder-drill" => &["--state-root", "--instance", "--device"],
@@ -1566,15 +1570,14 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
             "--max-frames",
             "--interval-ms",
         ],
+        // Workflow #336 PKG-S4 (option 丙): a package by its path only; a digest flag
+        // (`--expected-sha256`, `--package-ref` and their `--recovery-*` forms) is refused as
+        // an unknown flag.
         "task-run" => &[
             "--state-root",
             "--instance",
             "--package",
-            "--expected-sha256",
-            "--package-ref",
             "--recovery-package",
-            "--recovery-expected-sha256",
-            "--recovery-package-ref",
             // Workflow #389 MCP-21.
             "--wait",
         ],
@@ -1917,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    fn contained_task_command_requires_external_hash_and_runtime_instance_only() {
+    fn contained_task_command_takes_a_package_path_and_runtime_instance_only() {
         let args = [
             "task-run",
             "--state-root",
@@ -1926,8 +1929,6 @@ mod tests {
             "neutral.instance",
             "--package",
             "neutral-task.zip",
-            "--expected-sha256",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ]
         .into_iter()
         .map(OsString::from)
@@ -1937,8 +1938,8 @@ mod tests {
 
     #[test]
     fn task_run_request_uses_maximum_bounded_response_deadline() {
-        let request = task_run_request("neutral-task.zip".to_string(), "0".repeat(64), None)
-            .expect("task-run request");
+        let request =
+            task_run_request("neutral-task.zip".to_string(), None).expect("task-run request");
 
         assert_eq!(
             request.response_deadline_ms(),
@@ -1948,8 +1949,9 @@ mod tests {
     }
 
     // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+    // Workflow #336 PKG-S4: the recovery package is one flag, its path.
     #[test]
-    fn task_run_recovery_binding_requires_the_exact_paired_flags() {
+    fn task_run_recovery_binding_is_the_recovery_package_path() {
         let complete = [
             "task-run",
             "--state-root",
@@ -1958,36 +1960,13 @@ mod tests {
             "neutral.instance",
             "--package",
             "neutral-task.zip",
-            "--expected-sha256",
-            "0",
             "--recovery-package",
             "return-home.zip",
-            "--recovery-expected-sha256",
-            "1",
         ]
         .into_iter()
         .map(OsString::from)
         .collect();
         assert!(Invocation::parse(complete).is_ok());
-
-        for incomplete in [
-            vec!["--recovery-package", "return-home.zip"],
-            vec!["--recovery-expected-sha256", "1"],
-        ] {
-            let mut args = vec![
-                "task-run",
-                "--state-root",
-                "state",
-                "--instance",
-                "neutral.instance",
-                "--package",
-                "neutral-task.zip",
-                "--expected-sha256",
-                "0",
-            ];
-            args.extend(incomplete);
-            assert!(Invocation::parse(args.into_iter().map(OsString::from).collect()).is_err());
-        }
     }
 
     // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
@@ -1995,14 +1974,53 @@ mod tests {
     fn task_run_request_preserves_the_typed_recovery_identity() {
         let request = task_run_request(
             "neutral-task.zip".to_string(),
-            "0".repeat(64),
-            Some(("return-home.zip".to_string(), "1".repeat(64))),
+            Some("return-home.zip".to_string()),
         )
         .expect("task-run request");
         let recovery = request.recovery().expect("typed recovery binding");
 
         assert_eq!(recovery.package_path(), "return-home.zip");
-        assert_eq!(recovery.expected_sha256(), &"1".repeat(64).into());
+    }
+
+    // Workflow #336 PKG-S4 (option 丙), model M-PKG v1.1 §4.5 S4-T3: `task-run` names its
+    // package (and its recovery package) by its path only; a package digest flag is a usage
+    // error naming that flag, never ignored.
+    #[test]
+    fn s4_t3_task_run_refuses_a_package_digest_flag() {
+        let words = |extra: &[&str]| -> Vec<OsString> {
+            [
+                "task-run",
+                "--state-root",
+                "state",
+                "--instance",
+                "neutral.instance",
+                "--package",
+                "neutral-task.zip",
+                "--recovery-package",
+                "return-home.zip",
+            ]
+            .iter()
+            .chain(extra)
+            .map(|word| OsString::from(*word))
+            .collect()
+        };
+        assert!(Invocation::parse(words(&[])).is_ok());
+        let digest = "0".repeat(64);
+        for flag in [
+            "--package-ref",
+            "--expected-sha256",
+            "--recovery-package-ref",
+            "--recovery-expected-sha256",
+        ] {
+            let error = Invocation::parse(words(&[flag, digest.as_str()]))
+                .err()
+                .unwrap_or_else(|| panic!("{flag} was taken"));
+            assert_eq!(
+                error.outcome(),
+                cli_line::usage_invalid(Some(flag), ArgumentProblem::Unknown),
+                "{flag}"
+            );
+        }
     }
 
     /// Workflow #378 A5 (model §7.3): every subcommand's line has its own success code
@@ -2011,8 +2029,7 @@ mod tests {
     /// Runtime client failure is the client's outcome unchanged.
     #[test]
     fn every_command_has_its_success_code_and_every_failure_its_code() {
-        let package_ref = "0".repeat(64);
-        let commands: [(&[&str], &str); 25] = [
+        let commands: [(&[&str], &str); 26] = [
             (
                 &["agent-publish-facts", "--record-file", "observation.json"],
                 "agent_facts_published",
@@ -2062,6 +2079,7 @@ mod tests {
                 "instance_facts_reported",
             ),
             (&["monitor-status"], "monitor_status_reported"),
+            (&["perf-status"], "runtime_performance_reported"),
             (
                 &["monitor-set", "--instance", "neutral.instance"],
                 "monitor_policy_set",
@@ -2101,8 +2119,6 @@ mod tests {
                     "neutral.instance",
                     "--package",
                     "neutral-task.zip",
-                    "--expected-sha256",
-                    package_ref.as_str(),
                 ],
                 "task_run_reported",
             ),
@@ -2230,7 +2246,6 @@ mod tests {
     // non-zero.
     #[test]
     fn mcp21_wait_bounds_an_emulator_control_or_a_task_run_and_its_expiry_names_the_request() {
-        let package_ref = "0".repeat(64);
         let words_of = |words: &[&str]| -> Vec<OsString> {
             words
                 .iter()
@@ -2269,8 +2284,6 @@ mod tests {
                 "neutral.instance",
                 "--package",
                 "neutral-task.zip",
-                "--expected-sha256",
-                package_ref.as_str(),
                 "--wait",
                 "60",
             ],

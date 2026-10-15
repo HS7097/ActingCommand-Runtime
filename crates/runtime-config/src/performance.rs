@@ -181,6 +181,19 @@ impl Values<'_> {
         }
     }
 
+    /// Workflow #385 P-m: a boolean key's value.
+    fn flag(&self, key: &'static str) -> Result<bool, ConfigFailure> {
+        match (self.value)(key) {
+            Some(FactScalar::Boolean(flag)) => Ok(flag),
+            _ => Err(failure(key, ConfigValueProblem::WrongType)),
+        }
+    }
+
+    /// Workflow #385 P-m: an integer key's value that is not negative and fits `T`.
+    fn unsigned<T: TryFrom<i64>>(&self, key: &'static str) -> Result<T, ConfigFailure> {
+        T::try_from(self.integer(key)?).map_err(|_| failure(key, ConfigValueProblem::OutOfRange))
+    }
+
     /// A list or object key's value, from its canonical JSON text.
     fn json(&self, key: &'static str) -> Result<Value, ConfigFailure> {
         match (self.value)(key) {
@@ -255,4 +268,42 @@ pub(crate) fn check(value: &dyn Fn(&str) -> Option<FactScalar>) -> Result<(), Co
     responsiveness::check(&values)?;
     pacing::check(&values)?;
     calibration::check(&values)
+}
+
+/// Workflow #385 P-m (PERF §3, §4, §4.6, §10): what the shadow measurement reads, in effect.
+/// `user_curve` says whether a person wrote `performance.pacing.curve` (in the file or by an
+/// instruction): then the learning view has no cap (§4.5.3 "人工覆盖", §4.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerformanceMeasurement {
+    pub responsiveness: responsiveness::ResponsivenessSettings,
+    pub pacing: pacing::PacingSettings,
+    pub learning: calibration::LearningSettings,
+    pub user_curve: bool,
+    /// `performance.pressure.gpu_aggregate` (§3.4): how the GPU's engines make one utilisation.
+    pub gpu_aggregate: monitor::GpuAggregate,
+}
+
+impl PerformanceMeasurement {
+    /// Whether the learning view caps the normal view (§4.5.2, §4.6): not under a person's
+    /// curve and not with `calibration.apply = off`.
+    pub fn learning_cap(&self) -> bool {
+        !self.user_curve && self.learning.apply != calibration::CalibrationApply::Off
+    }
+}
+
+/// Workflow #385 P-m: reads what the shadow measurement needs from the values in effect. The
+/// section passed its whole-section check when it was assembled, so a refusal here names the
+/// key as that check would.
+pub(crate) fn measurement(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    user_curve: bool,
+) -> Result<PerformanceMeasurement, ConfigFailure> {
+    let values = Values { value };
+    Ok(PerformanceMeasurement {
+        responsiveness: responsiveness::read(&values)?,
+        pacing: pacing::read(&values)?,
+        learning: calibration::read(&values)?,
+        user_curve,
+        gpu_aggregate: monitor::gpu_aggregate(&values)?,
+    })
 }

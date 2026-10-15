@@ -14,7 +14,8 @@ use crate::{
     ActivityDocument, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode,
     CatalogDocumentSource, CatalogSources, DiagnosticSeverity, MAX_CATALOG_BYTES,
     MAX_DOCUMENT_BYTES, MAX_TEXT_BYTES, MetricRef, ObservationRef, PoolsDocument, PredicateSpec,
-    RequiredNullable, SchedulingDocumentKind, SourceLocation, TasksDocument, TimelineDocument,
+    RequiredNullable, SchedulingDocumentKind, SourceLocation, TaskSpec, TasksDocument,
+    TimelineDocument,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +84,20 @@ impl CompiledCatalog {
 
     pub fn warnings(&self) -> &[CatalogDiagnostic] {
         &self.warnings
+    }
+
+    /// Workflow #384 D2-S4: the task spec a dispatch of `task_id` is admitted, budgeted and
+    /// settled under: the catalog's task, or the Runtime-owned spec of a fact refresh
+    /// ([`crate::FACT_REFRESH_TASK_ID`]).
+    pub fn dispatch_task(&self, task_id: &str) -> Option<&TaskSpec> {
+        if task_id == crate::FACT_REFRESH_TASK_ID {
+            return Some(crate::fact_refresh_task());
+        }
+        self.catalog
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
     }
 
     pub fn referenced_outcome_keys(&self, task_id: &str) -> BTreeSet<String> {

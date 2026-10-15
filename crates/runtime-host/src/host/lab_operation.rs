@@ -62,10 +62,11 @@ impl HostShared {
                         "admission deadline overflow",
                     )
                 })?;
+            // Workflow #336 PKG-S4: the request names its package by its path only.
             let observer = PreparedPageObservation::load_path(
                 instance_alias,
                 path,
-                &input.expected_sha256,
+                &actingcommand_contract::PackageRef::default(),
                 &[],
                 self.execution()?.vision_provider(),
                 deadline,

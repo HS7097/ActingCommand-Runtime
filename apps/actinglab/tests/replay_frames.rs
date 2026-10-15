@@ -136,8 +136,6 @@ fn observe_lists_an_operation_with_several_destinations() {
             OsStr::new("observe"),
             OsStr::new("--zip"),
             package.as_os_str(),
-            OsStr::new("--expected-sha256"),
-            OsStr::new(&"0".repeat(64)),
             OsStr::new("--scene"),
             scene.as_os_str(),
             OsStr::new("--verbose"),

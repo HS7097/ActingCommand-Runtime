@@ -115,6 +115,26 @@ impl TaskPackageDescriptor {
         }
     }
 
+    /// Workflow #336 PKG-S4 (M-PKG D7): a configured return-home package is the package its
+    /// `prerequisite_packages` entry names by `package_id`, the identity its control declares
+    /// (never a digest); another package is refused as a chain layer is
+    /// (`contained_task_prerequisite_mismatch`).
+    pub fn require_configured_package_id(
+        &self,
+        package_id: &str,
+    ) -> Result<(), ContainedTaskError> {
+        if self.package_id == package_id {
+            return Ok(());
+        }
+        Err(ContainedTaskError::with_detail(
+            ExecutionKernelCode::ContainedTaskPrerequisiteMismatch.code(),
+            format!(
+                "package_id={package_id} declared_package_id={} source=return_home",
+                self.package_id
+            ),
+        ))
+    }
+
     /// The configured return-home consumers also require no prerequisite of their own.
     /// Chain layers use the same identity and prerequisite qualification without that extra
     /// restriction, preserving their existing declared-chain behavior.

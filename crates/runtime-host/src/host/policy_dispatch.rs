@@ -788,6 +788,8 @@ impl HostShared {
         // Workflow #336 L6 (§12.7): a paused pair is judged against the startup configuration;
         // PKG-S3: a due paused pair's packages are measured (at most once per interval).
         let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
+        // Workflow #384 D2-S4: the fact refresh pace in effect as this cycle starts.
+        let fact_refresh_settings = self.fact_refresh_settings()?;
         let (mut cycle, eligibility_unknown_pairs) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
@@ -805,6 +807,11 @@ impl HostShared {
                     },
                     instance_occupancy: &|instance_alias| occupancy.get(instance_alias).copied(),
                     suspension_lift: &suspension_lift,
+                    fact_refresh: FactRefreshContext {
+                        settings: fact_refresh_settings,
+                        bindings: &self.fact_refresh_bindings,
+                        instance_facts_loaded_at_unix_ms: self.instance_facts_loaded_at_unix_ms,
+                    },
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

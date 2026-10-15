@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 pub use actingcommand_execution_kernel::ExternallyVerifiedBundle;
-use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::path::PathBuf;
 
+/// Workflow #336 PKG-S4 (option 丙): the Lab package by its path; no digest.
 pub struct LabValidateRequest {
     pub zip_path: PathBuf,
-    pub expected_input_sha256: Option<Sha256Hash>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,9 +20,6 @@ pub struct LabContainedPackageValidationResponse {
 pub struct LabValidateResponse {
     pub zip: String,
     pub status: String,
-    pub input_sha256: String,
-    pub hash_source: String,
-    pub externally_verified: bool,
     pub entry_count: usize,
     pub control: LabValidateControlResponse,
     pub resources: LabValidateResourcesResponse,

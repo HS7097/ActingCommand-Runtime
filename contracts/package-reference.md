@@ -1,49 +1,16 @@
 # Package references and local source material
 
-`PackageRef` is the immutable resource identity used by containment, Runtime requests,
-policy bindings and ledger evidence. The local package path only locates the material.
-
-A ZIP reference retains its existing JSON string and SHA-256 value. Slots that already
-use `sha256:<hex>` (policy bindings/dispatch facts and `EvidencePackage.sha256`) keep
-that encoding; task requests and semantic facts retain bare lowercase hex. Existing
-field names and historical event bytes remain unchanged.
-
-A Git source-tree reference is a JSON object in that same typed slot. Its loader is
-retired (see "Git source-tree references" below); the form is still decoded, validated
-and re-encoded unchanged so that records holding it stay readable:
-
-```json
-{
-  "schema_version": "actingcommand.package.git-source-tree.v1",
-  "repository": "https://example.org/team/resources",
-  "commit": {"algorithm": "sha1", "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-  "bundle_path": "bundles/neutral",
-  "tree": {"algorithm": "sha1", "hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-}
-```
-
-The illustrative OIDs above must be replaced with real objects. SHA-1 uses 40 lowercase
-hex digits and SHA-256 uses 64; commit and tree use the same native Git object algorithm.
-The repository is a credential-free HTTPS origin with a lowercase host and without a
-trailing `.git`. `bundle_path` is a safe relative path, or `.` for the repository root.
-All four identity components participate in equality. A changed path, repository or
-commit is a different reference even when the tree is equal.
-
-A content-directory reference is the third form in the same slot. It carries only the
-digest of the directory's content; no repository, commit or path participates:
-
-```json
-{
-  "schema_version": "actingcommand.package.content-directory.v1",
-  "sha256": "<64 lowercase hex digits>"
-}
-```
-
-The untagged variants are tried in order (ZIP string, Git source tree, content
-directory), so the object forms never decode as each other and existing ZIP strings and
-Git source-tree objects decode and re-encode byte-identically. `actingctl --package-ref`
-and the Lab `--package-ref` flags parse either object form; admission refuses a Git
-source-tree reference with `source_tree_loader_retired`.
+Workflow #336 option 丙: a package is identified by the `package_id` its `control.json`
+declares (recorded as `package_label`) and found by its path. Since PKG-S4 no input surface
+takes a package digest: the Runtime requests (`ContainedTaskRequest` and its recovery
+binding, `PackageDebugRequest`, the contained Lab operation, contained observation and
+saved-artifact OCR requests), the actingd configuration (`instances[].startup_package`,
+`prerequisite_packages[]`, `policy.procedure_manifest[]`), `actingctl task-run`, the MCP
+tools and the actinglab flags name a package by its path alone, and a request or a
+configuration that still names `expected_sha256` or `package_digest` does not decode. The
+`PackageRef` type remains only inside the authoring tools and the bundle index until PKG-S5
+retires it; its content-directory form is the `content-directory.v1` digest below, which no
+admission computes or compares.
 
 ## Content-directory admission
 
@@ -64,13 +31,10 @@ so the two kinds of ZIP are never confused. The locator itself is canonicalized 
 above it are resolved); every entry inside a directory is read without following links, and
 a file is opened without following a link. Admission runs in this order under one deadline:
 
-1. The locator must be absolute. The caller's reference (a request's, a configuration's or a
-   Lab flag's) is recorded on the admitted package as the caller gave it and compared with
-   nothing: until PKG-S4 the one field that still carries a package digest,
-   `PackageDebugSummary.verified_sha256`, holds that given value, not a verified one. Since
+1. The locator must be absolute. Nothing names the package but its path (PKG-S4). Since
    PKG-S2 the ledger and the evidence name a package by its `package_id` (`package_label`:
    `PackageAdmitted`, the entry-recovery facts, the Lab and observation evidence) and carry
-   no package digest. A Git source-tree reference is refused (`source_tree_loader_retired`).
+   no package digest; since PKG-S4 neither does a package debug summary.
 2. The content is read into memory exactly once, as a table of `/`-separated relative paths
    and their bytes. A directory contributes every regular file at any depth; empty
    directories do not contribute. A regular file is read whole and treated by its extension
@@ -274,10 +238,8 @@ content container file
 (`.zip` or `.json`, "Containers"): the same content prints the same reference whichever
 container holds it. It prints `reference` (the object above), the
 `package_id`, `server` and `entry_task_id` stated by `control.json`, `file_count` and
-`byte_count` (of the expanded table). An author directory or container file with any other
-name is used with that reference through
-the explicit `--package-ref` flags; no command derives a reference from a path by itself.
-A refusal is `package_invalid` with the loader's code, plus the computed digest once the
+`byte_count` (of the expanded table). Since PKG-S4 no command takes that reference: every
+consumer names the package by its path (until PKG-S5 retires this command). A refusal is `package_invalid` with the loader's code, plus the computed digest once the
 snapshot was read.
 
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
@@ -403,31 +365,33 @@ container handling continue through their existing paths.
 
 ## Consumers
 
-`actingctl task-run` accepts `--package <directory> --package-ref <JSON>` and optional
-`--recovery-package <directory> --recovery-package-ref <JSON>` for a content-directory
-reference; a Git source-tree reference is refused with `source_tree_loader_retired`. The existing ZIP/hash
-flags remain accepted. Package-consuming Lab commands (debug/run, observe, do and
-resource restore) accept `--package <directory> --package-ref <JSON>` instead of their
-ZIP/hash flags. Wherever a content-directory reference is given, the locator may be a
-content container file instead of a directory ("Containers"), including a procedure
-binding's `scheduled_execution.package_path`. Evidence replay continues to use its
-independent evidence ZIP hash.
+Workflow #336 PKG-S4 (option 丙): `actingctl task-run --package <path>` and the optional
+`--recovery-package <path>` name the packages by their paths; `--expected-sha256`,
+`--package-ref` and their `--recovery-*` forms are refused as unknown flags. Package-consuming
+Lab commands (debug/run, observe, do, preflight, dry run and resource restore) take
+`--package <path>` (a directory, or a `.zip` or `.json` file, read as the path chooses) or
+`--zip <path>` (a published `.zip`) and refuse the retired digest flags by name. MCP
+`ac_run_pack` takes `package` and `recovery_package`, and `ac_pack_check` takes `package`.
+A procedure binding's `scheduled_execution.package_path` and a prerequisite package's
+`package_path` may equally name a directory or a container file. Evidence replay continues to
+use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).
 
-Runtime requests carry the complete reference. Workflow #336 PKG-S2 (option 丙): prepared
+Runtime requests carry the package path only. Workflow #336 PKG-S2 (option 丙): prepared
 observations, effective configuration, task/recovery facts and Lab results name the package
 by its `package_id` (`package_label`), and `EvidencePackage` by its file name; none of them
 carries a package digest, and a stored record that still carries one is not read. `scheduled_execution`
-uses its existing `package_path` locator and the procedure binding's typed
-`package_digest`, which since Workflow #336 PKG-S3 takes no part in the binding: the
-binding fingerprint hashes the tuple v3 (`actingcommand.procedure-binding.v3`, procedure
-alias, operation ID, ordered yield points) and names no package content, the run's identity
-check compares the request's path with the binding's `package_path`, and admission records
-the request's reference and compares it with nothing (PKG-S1; PKG-S4 removes it).
+uses its existing `package_path` locator; since Workflow #336 PKG-S3 the binding names no
+package content (the binding fingerprint hashes the tuple v3,
+`actingcommand.procedure-binding.v3`, procedure alias, operation ID, ordered yield points),
+the run's identity check compares the request's path with the binding's `package_path`, and
+since PKG-S4 the binding has no `package_digest` key at all. A configured prerequisite package
+is the package its `package_id` names: one whose control declares another `package_id` is
+refused with `contained_task_prerequisite_mismatch` (M-PKG D7), as a chain layer, as the
+configured return-home package of a page-graph entry and on the recovery ladder's first rung.
 The calendar driver transports the typed request/context through the existing calls.
 
-Forensics and resource restore consume the same reference and require the separately
-supplied exact material for reconstruction (the content directory; a recorded Git
-source-tree reference is refused with `source_tree_loader_retired`). Evidence ZIP export/replay
+Forensics and resource restore require the separately supplied original package for
+reconstruction, named by its path and paired with the records by its `package_id`. Evidence ZIP export/replay
 keeps its own byte SHA-256 and does not archive source material or guarantee its future
 availability. Current ZIP production and resource deployment remain available.
 

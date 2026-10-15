@@ -169,7 +169,6 @@ pub struct LabProjectionHint {
 #[serde(deny_unknown_fields)]
 pub struct ContainedLabOperationRequest {
     pub package_path: String,
-    pub expected_sha256: crate::PackageRef,
     pub selection: LabOperationSelection,
     pub projection_hint: LabProjectionHint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,7 +183,7 @@ impl fmt::Debug for ContainedLabOperationRequest {
 
 impl ContainedLabOperationRequest {
     pub fn validate(&self) -> RuntimeContractResult<()> {
-        ContainedObservationRequest::new(&self.package_path, &self.expected_sha256, Vec::new())?;
+        ContainedObservationRequest::new(&self.package_path, Vec::new())?;
         self.selection.validate()?;
         if let Some(after) = &self.after {
             after.validate()?;

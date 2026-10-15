@@ -59,7 +59,6 @@ fn s2_t6_a_replay_continues_after_an_in_place_change_and_refuses_another_package
     let package = root.path().join("neutral-task.zip");
     let bytes = neutral_contained_task_package(true);
     fs::write(&package, &bytes).expect("write package");
-    let reference = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state
@@ -72,8 +71,7 @@ fn s2_t6_a_replay_continues_after_an_in_place_change_and_refuses_another_package
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), reference)
-                .expect("task request"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
         ),
     );
     let connection = ConnectionId::new(93).expect("connection");

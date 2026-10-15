@@ -213,16 +213,16 @@ Instance configuration (`actingd`, `contracts/actingd-check-config.md`):
   "instance_id": "...",
   "application_id": "<assigned package>",
   "instance_index": 1,
-  "startup_package": { "package": "packages/neutral-startup.zip", "expected_sha256": "<64 hex>" }
+  "startup_package": { "package": "packages/neutral-startup.zip" }
 }
 ```
 
-Same semantics as `actingctl task-run --package <locator> --expected-sha256 <hex>`: a ZIP
-locator (relative paths resolve against the configuration file's directory; the assembled
-path must be absolute) and the bare lowercase hex digest; the response deadline is the
-contract maximum. A locator whose last segment equals the digest names a content directory
-(Workflow #288) and is run with that content-directory reference
-(`contracts/package-reference.md`); the configuration shape is unchanged. Nothing is opened or hashed at assembly or startup: `check-config` echoes
+Same semantics as `actingctl task-run --package <locator>`: the locator (relative paths
+resolve against the configuration file's directory; the assembled path must be absolute)
+names the package, a directory or a `.zip` or `.json` file read as its path chooses
+(`contracts/package-reference.md`); the response deadline is the contract maximum. Workflow
+#336 PKG-S4 (option 丙): the declaration is `{package}` only, and one that still names
+`expected_sha256` fails `config_decode_failed`. Nothing is opened or hashed at assembly or startup: `check-config` echoes
 the declaration per instance and counts them as `instances_startup_package_count`; host
 startup binds each alias to a registered physical instance
 (`startup_package_instance_unknown`, `startup_package_requires_physical_instance` are fatal;
@@ -296,7 +296,7 @@ an unconfirmed ADB cleanup fences the instance, `instance_resources_fenced`, and
 `emulator_control_adb_not_ready`, `startup_package_adb_not_ready`
 (`backend_operation_failed`, failed); startup-time fatal: `startup_package_instance_unknown`,
 `startup_package_requires_physical_instance`, `invalid_startup_package`; `actingd` assembly:
-`startup_package_path_invalid`, `startup_package_digest_invalid`, `startup_package_invalid`.
+`startup_package_path_invalid`, `startup_package_invalid`.
 Fact invalidation reason: `adb_unreachable`. A first capture lost to the ADB baseline keeps
 the kernel's `capture_backend_open_failed` / `capture_backend_operation_failed`
 (`capture_failed`, nonfatal); no code is added.
