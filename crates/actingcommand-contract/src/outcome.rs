@@ -672,7 +672,7 @@ impl CodeStr {
     /// this build embeds, so a record can carry it as a `code` value again (a failure's code as
     /// a later reason's `failure_code`). `None` for a spelling the catalog does not list.
     pub fn registered(&self) -> Option<Code> {
-        check::registered_code(self.as_str()).map(|(name, category)| Code { name, category })
+        check::registered_code(self.as_str())
     }
 }
 
