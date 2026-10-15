@@ -19,6 +19,9 @@ mod gate_c1;
 // #382 C-2: the scripted Runtime's gates G4, G5, G8 and G9 and the replacements of test plan
 // section 4 items 6 and 7 (test plan C-2).
 mod gate_c2;
+// #382 C-4: the input proxy's heartbeat on the manual timer, and test plan section 4 item 5's
+// replacement (test plan v2.2 section 3.10 C-4).
+mod gate_c4;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
@@ -1533,15 +1536,11 @@ fn record_host_observation(recorder: &TestObservationRecorder, event: HostTestOb
     );
 }
 
+// The client half of a trace, the same on a real Runtime and on `ScriptedRuntime`: the records
+// are numbered and timed in order, each exchange writes, waits and validates in order, the
+// lease operations name one instance, lease and holder, and it returns the tokens the trace saw.
 #[cfg(feature = "test-observation")]
-#[derive(Clone, Copy)]
-enum ExpectedObservationPath {
-    HeartbeatProxy,
-    LongInput,
-}
-
-#[cfg(feature = "test-observation")]
-fn assert_test_observation_trace(records: &[ObservationRecord], expected: ExpectedObservationPath) {
+fn assert_client_observation_trace(records: &[ObservationRecord]) -> BTreeSet<u64> {
     assert!(!records.is_empty());
     for (index, record) in records.iter().enumerate() {
         assert_eq!(
@@ -1569,6 +1568,59 @@ fn assert_test_observation_trace(records: &[ObservationRecord], expected: Expect
             ObservationStage::ReceiptBodyWait,
             ObservationStage::ReceiptBodyResult,
         ),
+    ] {
+        assert_before(records, start, result);
+    }
+    assert_before(
+        records,
+        ObservationStage::ReceiptBodyResult,
+        ObservationStage::ReceiptValidationResult,
+    );
+    assert_before(
+        records,
+        ObservationStage::ReceiptValidationResult,
+        ObservationStage::ClientTerminalResult,
+    );
+
+    for identity in [
+        |record: &ObservationRecord| record.identities.instance,
+        |record: &ObservationRecord| record.identities.lease,
+        |record: &ObservationRecord| record.identities.holder,
+    ] {
+        let ordinals = records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.operation,
+                    ObservationOperation::AcquireLease
+                        | ObservationOperation::RenewLease
+                        | ObservationOperation::Input
+                        | ObservationOperation::ReleaseLease
+                )
+            })
+            .filter_map(identity)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ordinals.len(),
+            1,
+            "lease-chain identity split: {ordinals:?}"
+        );
+    }
+
+    records
+        .iter()
+        .filter_map(|record| record.identities.token)
+        .collect::<BTreeSet<_>>()
+}
+
+// The trace of `long_input_extends_only_its_response_wait`: the client half, the host and backend
+// half, and the long input's own order. Test plan v2.2 section 4 item 5 moved the heartbeat
+// proxy's trace to C-4's wire row (`gate_c4`).
+#[cfg(feature = "test-observation")]
+fn assert_test_observation_trace(records: &[ObservationRecord]) {
+    let token_lineage = assert_client_observation_trace(records);
+
+    for (start, result) in [
         (
             ObservationStage::HostDispatchStart,
             ObservationStage::HostDispatchResult,
@@ -1593,16 +1645,6 @@ fn assert_test_observation_trace(records: &[ObservationRecord], expected: Expect
         records,
         ObservationStage::HostReceiptWriteStart,
         ObservationStage::ReceiptHeaderResult,
-    );
-    assert_before(
-        records,
-        ObservationStage::ReceiptBodyResult,
-        ObservationStage::ReceiptValidationResult,
-    );
-    assert_before(
-        records,
-        ObservationStage::ReceiptValidationResult,
-        ObservationStage::ClientTerminalResult,
     );
     assert!(records.iter().any(|record| {
         record.stage == ObservationStage::HostConnectionExit
@@ -1652,112 +1694,32 @@ fn assert_test_observation_trace(records: &[ObservationRecord], expected: Expect
         }
     }
 
-    for identity in [
-        |record: &ObservationRecord| record.identities.instance,
-        |record: &ObservationRecord| record.identities.lease,
-        |record: &ObservationRecord| record.identities.holder,
-    ] {
-        let ordinals = records
-            .iter()
-            .filter(|record| {
-                matches!(
-                    record.operation,
-                    ObservationOperation::AcquireLease
-                        | ObservationOperation::RenewLease
-                        | ObservationOperation::Input
-                        | ObservationOperation::ReleaseLease
-                )
-            })
-            .filter_map(identity)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            ordinals.len(),
-            1,
-            "lease-chain identity split: {ordinals:?}"
-        );
-    }
-
-    let token_lineage = records
-        .iter()
-        .filter_map(|record| record.identities.token)
-        .collect::<BTreeSet<_>>();
-    match expected {
-        ExpectedObservationPath::HeartbeatProxy => {
-            assert_before(
-                records,
-                ObservationStage::ProxyAcquireStart,
-                ObservationStage::ProxyAcquireResult,
-            );
-            assert!(records.iter().any(|record| {
-                record.stage == ObservationStage::HeartbeatWaitResult
-                    && record.outcome == ObservationOutcome::Timeout
-            }));
-            assert_before(
-                records,
-                ObservationStage::HeartbeatRenewStart,
-                ObservationStage::HeartbeatRenewResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::ProxyInputStart,
-                ObservationStage::ProxyInputResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::BackendInputStart,
-                ObservationStage::BackendInputResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::ProxyStopSend,
-                ObservationStage::HeartbeatJoinStart,
-            );
-            assert_before(
-                records,
-                ObservationStage::HeartbeatJoinStart,
-                ObservationStage::HeartbeatJoinResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::HeartbeatJoinResult,
-                ObservationStage::ProxyReleaseStart,
-            );
-            assert_before(
-                records,
-                ObservationStage::ProxyReleaseStart,
-                ObservationStage::ProxyReleaseResult,
-            );
-            assert!(token_lineage.len() >= 2, "renewal token lineage missing");
-        }
-        ExpectedObservationPath::LongInput => {
-            assert_before(
-                records,
-                ObservationStage::ClientAcquireStart,
-                ObservationStage::ClientAcquireResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::ClientInputStart,
-                ObservationStage::BackendLongInputStart,
-            );
-            assert_before(
-                records,
-                ObservationStage::BackendLongInputStart,
-                ObservationStage::BackendLongInputResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::BackendLongInputResult,
-                ObservationStage::ClientInputResult,
-            );
-            assert_before(
-                records,
-                ObservationStage::ClientReleaseStart,
-                ObservationStage::ClientReleaseResult,
-            );
-            assert_eq!(token_lineage.len(), 1, "unexpected token replacement");
-        }
-    }
+    assert_before(
+        records,
+        ObservationStage::ClientAcquireStart,
+        ObservationStage::ClientAcquireResult,
+    );
+    assert_before(
+        records,
+        ObservationStage::ClientInputStart,
+        ObservationStage::BackendLongInputStart,
+    );
+    assert_before(
+        records,
+        ObservationStage::BackendLongInputStart,
+        ObservationStage::BackendLongInputResult,
+    );
+    assert_before(
+        records,
+        ObservationStage::BackendLongInputResult,
+        ObservationStage::ClientInputResult,
+    );
+    assert_before(
+        records,
+        ObservationStage::ClientReleaseStart,
+        ObservationStage::ClientReleaseResult,
+    );
+    assert_eq!(token_lineage.len(), 1, "unexpected token replacement");
 }
 
 #[cfg(feature = "test-observation")]
@@ -3777,51 +3739,6 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
 }
 
 #[test]
-fn runtime_input_proxy_renews_before_short_lease_expiry() {
-    #[cfg(feature = "test-observation")]
-    let (observation, host_observation) = start_test_observation();
-    let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::for_test_observation());
-    // v0.11.4 flaky tests (review M1): the TTL also bounds the lease `host.close()` grants to
-    // itself and then uses (resource_close -> begin_resource_close); about 1.9 s passed between
-    // the two on a loaded runner, so the TTL is 5 s and the wait below still outlasts it.
-    let host = host(&root, Arc::clone(&state), 5_000);
-    let client = client(&root);
-    let mut proxy = RuntimeInputProxy::connect_with_heartbeat(
-        client.clone(),
-        "node.a",
-        Duration::from_millis(50),
-    )
-    .expect("runtime input proxy");
-
-    // Longer than the TTL, so the input after it proves renewal.
-    thread::sleep(Duration::from_millis(5_300));
-    let receipt = proxy
-        .input(InputAction::Tap { x: 30, y: 40 })
-        .expect("input after renewals");
-    receipt
-        .validate()
-        .expect("proxy retains the validated receipt");
-    assert!(receipt.terminal().is_some());
-    assert!(matches!(
-        receipt.result(),
-        Some(RuntimeResult::InputCommitted { .. })
-    ));
-    proxy.close().expect("close proxy");
-    assert_eq!(state.inputs.load(Ordering::Acquire), 1);
-    assert_eq!(state.closes.load(Ordering::Acquire), 0);
-    drop(client);
-    host.close().expect("close host");
-    assert_eq!(state.closes.load(Ordering::Acquire), 1);
-    #[cfg(feature = "test-observation")]
-    {
-        drop(host_observation);
-        let records = observation.finish().expect("seal test observation");
-        assert_test_observation_trace(&records, ExpectedObservationPath::HeartbeatProxy);
-    }
-}
-
-#[test]
 fn dropping_runtime_input_proxy_releases_authority_but_keeps_the_daemon_session() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -3874,7 +3791,7 @@ fn long_input_extends_only_its_response_wait() {
     {
         drop(host_observation);
         let records = observation.finish().expect("seal test observation");
-        assert_test_observation_trace(&records, ExpectedObservationPath::LongInput);
+        assert_test_observation_trace(&records);
     }
 }
 

@@ -408,6 +408,9 @@ coverage = "Y"
 tests = [
     "actingcommand-resource-tooling::lib::package_publish::tests::process_crash_leaves_old_visibility_and_is_recoverable",
     "actingcommand-resource-tooling::lib::authoring::tests::interrupted_candidate_move_is_rolled_back_before_the_next_publish",
+    "actingcommand-resource-tooling::lib::package_publish::tests::concurrent_stale_reclaim_has_one_winner",
+    "actingcommand-resource-tooling::lib::package_publish::tests::gate_e6::gate_e6_t1_a_reclaimer_overtaken_after_its_stale_check_is_refused_by_the_live_winner",
+    "actingcommand-resource-tooling::lib::package_publish::tests::gate_e6::gate_e6_t2_a_reclaimer_meeting_a_held_claim_retries_and_is_refused_by_the_claim_holder",
 ]
 incident = []
 

@@ -23,10 +23,82 @@ struct ProxyState {
     heartbeat_failure: Option<RuntimeClientError>,
 }
 
+/// What the heartbeat thread's channel carries: the proxy's stop and, in tests only, one beat of
+/// the manual heartbeat timer (test plan v2.2 §3.10 C-4, CON-I2).
+pub(crate) enum HeartbeatSignal {
+    Stop,
+    /// One heartbeat interval has passed on the test's manual timer.
+    #[cfg(test)]
+    Beat,
+}
+
+/// How the heartbeat thread waits out one heartbeat interval (test plan v2.2 §3.10 C-4, CON-I2).
+/// Every production constructor waits on the wall clock.
+#[derive(Clone, Copy)]
+pub(crate) enum HeartbeatTimer {
+    /// `stop.recv_timeout(heartbeat_interval)`: the interval passes on the wall clock.
+    Wall,
+    /// Tests only: no wall clock. A beat the test sends on the proxy's channel is one passed
+    /// interval; the proxy's stop and a closed channel end the wait as on the wall clock.
+    #[cfg(test)]
+    Manual,
+}
+
+/// How one heartbeat wait ended.
+enum HeartbeatWait {
+    Stop,
+    Closed,
+    Elapsed,
+}
+
+impl HeartbeatTimer {
+    fn wait(
+        self,
+        signals: &Receiver<HeartbeatSignal>,
+        heartbeat_interval: Duration,
+    ) -> HeartbeatWait {
+        let signal = match self {
+            Self::Wall => match signals.recv_timeout(heartbeat_interval) {
+                Ok(signal) => signal,
+                Err(RecvTimeoutError::Timeout) => return HeartbeatWait::Elapsed,
+                Err(RecvTimeoutError::Disconnected) => return HeartbeatWait::Closed,
+            },
+            #[cfg(test)]
+            Self::Manual => match signals.recv() {
+                Ok(signal) => signal,
+                Err(_) => return HeartbeatWait::Closed,
+            },
+        };
+        match signal {
+            HeartbeatSignal::Stop => HeartbeatWait::Stop,
+            #[cfg(test)]
+            HeartbeatSignal::Beat => HeartbeatWait::Elapsed,
+        }
+    }
+}
+
+/// Test plan v2.2 §3.10 C-4 (CON-I2): a lease authority whose answers the test scripts. Tests
+/// only; neither the `test-support` feature nor a shipped build has it.
+#[cfg(test)]
+pub(crate) trait TestInputAuthority: Send + Sync {
+    fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken>;
+    fn renew_lease(&self, token: &LeaseToken) -> RuntimeClientResult<LeaseToken>;
+    fn input(
+        &self,
+        token: &LeaseToken,
+        action: InputAction,
+        frame: Option<InputFrameReference>,
+    ) -> RuntimeClientResult<RuntimeReceipt>;
+    fn release_lease(&self, token: &LeaseToken) -> RuntimeClientResult<()>;
+}
+
 #[derive(Clone)]
-enum RuntimeInputAuthority {
+pub(crate) enum RuntimeInputAuthority {
     Client(RuntimeClient),
     Debug(RuntimeDebugSession),
+    /// Tests only: the test's scripted authority (test plan v2.2 §3.10 C-4).
+    #[cfg(test)]
+    Fake(Arc<dyn TestInputAuthority>),
 }
 
 impl RuntimeInputAuthority {
@@ -34,6 +106,8 @@ impl RuntimeInputAuthority {
         match self {
             Self::Client(client) => client.acquire_lease(instance_alias),
             Self::Debug(session) => session.acquire_lease(instance_alias),
+            #[cfg(test)]
+            Self::Fake(fake) => fake.acquire_lease(instance_alias),
         }
     }
 
@@ -41,6 +115,8 @@ impl RuntimeInputAuthority {
         match self {
             Self::Client(client) => client.renew_lease(token),
             Self::Debug(session) => session.renew_lease(token),
+            #[cfg(test)]
+            Self::Fake(fake) => fake.renew_lease(token),
         }
     }
 
@@ -53,6 +129,8 @@ impl RuntimeInputAuthority {
         match self {
             Self::Client(client) => client.input_with_frame(token, action, frame),
             Self::Debug(session) => session.input_with_frame(token, action, frame),
+            #[cfg(test)]
+            Self::Fake(fake) => fake.input(token, action, frame),
         }
     }
 
@@ -60,7 +138,23 @@ impl RuntimeInputAuthority {
         match self {
             Self::Client(client) => client.release_lease(token),
             Self::Debug(session) => session.release_lease(token),
+            #[cfg(test)]
+            Self::Fake(fake) => fake.release_lease(token),
         }
+    }
+}
+
+/// Tests only: the manual heartbeat timer's beats, sent on the proxy's own heartbeat channel
+/// (test plan v2.2 §3.10 C-4).
+#[cfg(test)]
+pub(crate) struct ManualHeartbeat(SyncSender<HeartbeatSignal>);
+
+#[cfg(test)]
+impl ManualHeartbeat {
+    /// One heartbeat interval passes. False once the heartbeat thread has ended and its channel
+    /// is closed.
+    pub(crate) fn beat(&self) -> bool {
+        self.0.send(HeartbeatSignal::Beat).is_ok()
     }
 }
 
@@ -70,7 +164,7 @@ impl RuntimeInputAuthority {
 pub struct RuntimeInputProxy {
     authority: RuntimeInputAuthority,
     state: Arc<Mutex<ProxyState>>,
-    stop: Option<SyncSender<()>>,
+    stop: Option<SyncSender<HeartbeatSignal>>,
     heartbeat: Option<JoinHandle<()>>,
     closed: bool,
 }
@@ -81,6 +175,7 @@ impl RuntimeInputProxy {
             RuntimeInputAuthority::Client(client),
             instance_alias,
             DEFAULT_RUNTIME_HEARTBEAT_INTERVAL,
+            HeartbeatTimer::Wall,
         )
     }
 
@@ -92,6 +187,7 @@ impl RuntimeInputProxy {
             RuntimeInputAuthority::Debug(session),
             instance_alias,
             DEFAULT_RUNTIME_HEARTBEAT_INTERVAL,
+            HeartbeatTimer::Wall,
         )
     }
 
@@ -104,13 +200,34 @@ impl RuntimeInputProxy {
             RuntimeInputAuthority::Client(client),
             instance_alias,
             heartbeat_interval,
+            HeartbeatTimer::Wall,
         )
+    }
+
+    /// Tests only (test plan v2.2 §3.10 C-4): a proxy on `authority` whose heartbeat waits on
+    /// `timer`.
+    #[cfg(test)]
+    pub(crate) fn connect_for_test(
+        authority: RuntimeInputAuthority,
+        instance_alias: &str,
+        heartbeat_interval: Duration,
+        timer: HeartbeatTimer,
+    ) -> RuntimeClientResult<Self> {
+        Self::connect_authority(authority, instance_alias, heartbeat_interval, timer)
+    }
+
+    /// Tests only: the beats of a proxy connected with `HeartbeatTimer::Manual`; `None` once the
+    /// proxy is closed.
+    #[cfg(test)]
+    pub(crate) fn manual_heartbeat(&self) -> Option<ManualHeartbeat> {
+        self.stop.clone().map(ManualHeartbeat)
     }
 
     fn connect_authority(
         authority: RuntimeInputAuthority,
         instance_alias: &str,
         heartbeat_interval: Duration,
+        timer: HeartbeatTimer,
     ) -> RuntimeClientResult<Self> {
         if heartbeat_interval.is_zero() || heartbeat_interval > MAX_RUNTIME_HEARTBEAT_INTERVAL {
             return Err(RuntimeClientError::fatal(
@@ -176,6 +293,7 @@ impl RuntimeInputProxy {
                         &thread_state,
                         &receiver,
                         heartbeat_interval,
+                        timer,
                     )
                 }));
                 if result.is_err() {
@@ -276,7 +394,7 @@ impl RuntimeInputProxy {
         self.closed = true;
         let mut failure = None;
         if let Some(stop) = self.stop.take() {
-            let result = stop.send(());
+            let result = stop.send(HeartbeatSignal::Stop);
             #[cfg(feature = "test-observation")]
             record_active(
                 ObservationStage::ProxyStopSend,
@@ -391,12 +509,13 @@ impl Drop for RuntimeInputProxy {
 fn heartbeat_loop(
     authority: &RuntimeInputAuthority,
     state: &Mutex<ProxyState>,
-    stop: &Receiver<()>,
+    stop: &Receiver<HeartbeatSignal>,
     heartbeat_interval: Duration,
+    timer: HeartbeatTimer,
 ) {
     loop {
-        match stop.recv_timeout(heartbeat_interval) {
-            Ok(()) => {
+        match timer.wait(stop, heartbeat_interval) {
+            HeartbeatWait::Stop => {
                 #[cfg(feature = "test-observation")]
                 record_active(
                     ObservationStage::HeartbeatWaitResult,
@@ -409,7 +528,7 @@ fn heartbeat_loop(
                 );
                 return;
             }
-            Err(RecvTimeoutError::Disconnected) => {
+            HeartbeatWait::Closed => {
                 #[cfg(feature = "test-observation")]
                 record_active(
                     ObservationStage::HeartbeatWaitResult,
@@ -422,7 +541,7 @@ fn heartbeat_loop(
                 );
                 return;
             }
-            Err(RecvTimeoutError::Timeout) => {
+            HeartbeatWait::Elapsed => {
                 #[cfg(feature = "test-observation")]
                 record_active(
                     ObservationStage::HeartbeatWaitResult,

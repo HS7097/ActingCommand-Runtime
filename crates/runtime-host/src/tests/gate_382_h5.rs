@@ -18,8 +18,10 @@
 // Denied `RuntimeUnavailable`, not fatal, and the Runtime stays healthy; `is_lifecycle_draining`
 // is true across Draining and Drained and false once the drain is aborted (INSTALL.md:166-172);
 // after the Abort the same cursor subscribes again and reads on from where it stood (m376 M5).
-// The `drain_timeout` row is not written: the drain deadline runs on the monotonic wall clock,
-// and its clock seam (H-1-rest I2) is not built yet (coordinator ruling 7 of wave 12).
+// The `drain_timeout` row (test plan v2.2 §3.10 H-1-rest, HOST-I2): on the manual clock the drain
+// passes its deadline and is aborted by the Runtime itself (INSTALL.md: a drain timeout removes
+// only this transaction's barrier); `is_lifecycle_draining` is false again and the same cursor
+// subscribes again.
 //
 // G11 (no inventory key; host key 79; req-basis-ha H-5 G11, coordinator 10-09 on
 // input-receipt-wait.md): the ledger writer stalls past a client's I/O budget, with the stall
@@ -324,6 +326,99 @@ fn gate_a_subscription_during_an_install_drain_is_refused_and_resumes_from_its_c
     };
     let [next] = batch.events() else {
         panic!("the next event after the abort: {:?}", batch.events());
+    };
+    assert!(next.sequence > first_sequence, "{next:?}");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(monitor);
+    drop(installer);
+    host.close().expect("close host");
+}
+
+// G4's `drain_timeout` row (host key 10): the drain passes its deadline on the manual clock. The
+// drain is Aborted under `drain_timeout` with admission open again, `is_lifecycle_draining` is
+// false, the same cursor subscribes again and reads on after the first event, and the Runtime is
+// not fatal.
+#[test]
+fn gate_a_subscription_resumes_from_its_cursor_after_the_drain_times_out_on_the_manual_clock() {
+    const DRAIN_TIMEOUT_MS: u64 = 60_000;
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(super::gate_382_h1::ManualMonotonicClock::new(
+        POLICY_NOW_UNIX_MS,
+    ));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host on the manual clock");
+    let mut monitor = TestClient::connect(&host);
+    let mut installer = TestClient::connect(&host);
+
+    let before = subscribe(&mut monitor, SubscriptionCursor::default(), 1);
+    let Some(RuntimeResult::EventBatch { batch }) = before.result() else {
+        panic!("an event batch before the drain: {before:?}");
+    };
+    let [first] = batch.events() else {
+        panic!("one event before the drain: {:?}", batch.events());
+    };
+    let first_sequence = first.sequence;
+    let cursor = batch.next_cursor();
+
+    installer.declare_governance_identity();
+    let target = host.runtime_info().shutdown_target();
+    let begin = installer.governance_request(RuntimeOperation::InstallTransition {
+        target,
+        action: InstallTransitionAction::BeginDrain {
+            transition_id: "h5-g4-timeout".to_owned(),
+            timeout_ms: DRAIN_TIMEOUT_MS,
+        },
+    });
+    let begun = installer.send(&begin);
+    assert!(
+        matches!(
+            transition_status(&begun).phase,
+            InstallTransitionPhase::Draining | InstallTransitionPhase::Drained
+        ),
+        "{begun:?}"
+    );
+    assert!(host.is_lifecycle_draining().expect("draining state"));
+
+    clock.advance(DRAIN_TIMEOUT_MS);
+    let query = installer.governance_request(RuntimeOperation::InstallTransition {
+        target,
+        action: InstallTransitionAction::Query {
+            transition_id: "h5-g4-timeout".to_owned(),
+        },
+    });
+    let timed_out = installer.send(&query);
+    let status = transition_status(&timed_out);
+    assert_eq!(
+        (
+            status.phase,
+            status.admission_closed,
+            status.failure_code.as_deref()
+        ),
+        (
+            InstallTransitionPhase::Aborted,
+            false,
+            Some("drain_timeout")
+        ),
+        "{timed_out:?}"
+    );
+    assert!(!host.is_lifecycle_draining().expect("draining state"));
+
+    let resumed = subscribe(&mut monitor, cursor, 1);
+    let Some(RuntimeResult::EventBatch { batch }) = resumed.result() else {
+        panic!("an event batch after the drain timed out: {resumed:?}");
+    };
+    let [next] = batch.events() else {
+        panic!(
+            "the next event after the drain timed out: {:?}",
+            batch.events()
+        );
     };
     assert!(next.sequence > first_sequence, "{next:?}");
     assert!(host.fatal_error().expect("runtime health").is_none());

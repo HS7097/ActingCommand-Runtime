@@ -13,18 +13,22 @@
 // climb ends exhausted at Warning (`recovery_ladder_interrupted` caused by the interruption) and
 // the ladder releases its key once (model-369 H-3 holding checks, ruling Q8, §5.2, §5.5). The
 // pause row is `instance_workers::`
-// `a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release`. "Within one
-// poll on the manual clock" is not asserted: R4 polls on the monotonic wall clock, and the clock
-// seam (E-3 I3) is not built yet.
+// `a_pause_during_the_readiness_wait_ends_the_climb_at_warning_with_one_release`.
+//
+// G9's manual-clock rows (test plan v2.2 §3.10 H-1-rest; host key 22): since HOST-I2 the
+// readiness window, its backoff and every poll's verdict read the Runtime clock. On a manual
+// clock that stays inside the window, a drain or a shutdown still ends rung 3 at the wait's next
+// poll, before a second boot check, with the interruption and not the window's end as the reason.
 //
 // Every wait returns as soon as the awaited emulator call or ledger record arrives; `GATE_WAIT`
 // only bounds a broken run.
 
 use super::emulator_controller::EmulatorCall;
+use super::gate_382_h1::ManualMonotonicClock;
 use super::instance_workers::{
     LadderRun, admit_ladder_run, admit_ladder_run_at, all_events, closed_ledger_events,
     emulator_ladder_fixture, ladder_end_code, ladder_finished, ladder_releases, ladder_setup,
-    rung_outcomes, wait_for_ladder_end,
+    rung_outcomes, wait_for_ladder_end, wait_until,
 };
 use super::*;
 use actingcommand_contract::{
@@ -51,8 +55,8 @@ const NEXT_DISPATCH_UNIX_MS: u64 = RE_EVALUATION_UNIX_MS + 1_000;
 /// A Runtime clock that moves 1 ms forward at every reading, from the fixture's instant. The
 /// run's records get strictly increasing times, as on a real clock (a fact observed at the same
 /// instant as the one before it, from another source, is refused `fact_observation_not_newer`),
-/// and the test places each evaluation after every record it reads. It never reads the wall
-/// clock.
+/// and the test places each evaluation after every record it reads; the test also moves it on
+/// while it waits for the climb's end (`advance`). It never reads the wall clock.
 struct SteppingClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
@@ -433,12 +437,22 @@ fn gate_a_failed_runs_ladder_holds_its_instance_and_the_next_dispatch_follows_it
 
     // Android boots, and the fake's opens pass a preparation's self-check: the readiness wait's
     // next attempt passes, rung 3 runs the startup package on the ladder's key, and the climb
-    // ends with the ladder's release.
+    // ends with the ladder's release. Since HOST-I2 (test plan v2.2 §3.10 H-1-rest) the readiness
+    // backoff runs on the Runtime clock, so the clock moves on 100 ms at each look while the
+    // test waits, and the backoff passes whenever the wait began it.
     state.android_down.store(false, Ordering::Release);
-    wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+    wait_until("the ladder's end and its release", || {
+        clock.advance(100);
+        ladder_finished(&all_events(&host)).is_some()
+            && host
+                .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+                .expect("instance claims")
+                .0
+                .is_none()
+    });
 
     // §6 step 5: after the ladder's release the next dispatch on the instance is admitted. The
-    // Runtime clock moves to it only now, so the ladder's hold never lapsed on it. A capacity
+    // Runtime clock jumps to it only now, so the ladder's hold never lapsed on it. A capacity
     // sample is fresh for twice the monitor's interval on the Runtime clock, and admission
     // refuses a stale one (contracts/capacity-admission.md "capacity freshness"). The jump of
     // an hour leaves the monitor's last sample stale, so capacity is sampled at the new time,
@@ -533,6 +547,100 @@ fn gate_a_shutdown_during_the_readiness_wait_fails_rung_three_and_releases_once(
         .expect("close the host during the readiness wait");
     let events = closed_ledger_events(root.path());
     assert_wait_interrupted(&events, run_lease, "recovery_ladder_shutdown_requested");
+    assert!(
+        events
+            .iter()
+            .all(|event| event.severity() != EventSeverity::Fatal),
+        "no fatal record"
+    );
+}
+
+// The ladder fixture of the manual-clock rows: `emulator_ladder_fixture`'s physical instance with
+// emulator control and Android held down after its Start, on `ManualMonotonicClock`. The
+// scheduled run has failed and rung 3 waits for readiness (its Start and first boot check came).
+struct ManualClockLadder {
+    root: TempDir,
+    host: RuntimeHost,
+    run_lease: LeaseId,
+    calls: mpsc::Receiver<EmulatorCall>,
+}
+
+fn manual_clock_ladder_in_readiness_wait() -> ManualClockLadder {
+    let root = TempDir::new().expect("tempdir");
+    let (host_config, request) = ladder_setup(root.path());
+    let clock = Arc::new(ManualMonotonicClock::new(POLICY_NOW_UNIX_MS));
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    state.hold_android_boot.store(true, Ordering::Release);
+    let registered = instance_id();
+    let host = RuntimeHost::start(
+        host_config.with_runtime_clock(clock),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("physical runtime host on the manual clock");
+    bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, registered, &state);
+    let context = admit_ladder_run(&host, &request);
+    state.unknown_capture.store(true, Ordering::Release);
+    let calls = state.emulator.listen();
+    let failure = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert!(!failure.is_fatal(), "{}", failure.code());
+    await_readiness_wait(&calls);
+    ManualClockLadder {
+        root,
+        host,
+        run_lease: context.lease_token().lease_id(),
+        calls,
+    }
+}
+
+// The boot checks of rung 3 after its first one: none, when the wait ended at a poll of its
+// first backoff, which the manual clock never ends.
+fn later_boot_checks(calls: &mpsc::Receiver<EmulatorCall>) -> usize {
+    calls
+        .try_iter()
+        .filter(|call| *call == EmulatorCall::ObserveForeground)
+        .count()
+}
+
+// G9 on the manual clock, drain row (host key 22): the clock stays inside the readiness window;
+// an install drain ends rung 3 at the wait's next poll with `recovery_ladder_drain_requested`,
+// before a second boot check; the climb ends exhausted at Warning and the ladder releases its
+// key once.
+#[test]
+fn gate_on_the_manual_clock_an_install_drain_ends_the_readiness_wait_at_its_next_poll() {
+    let run = manual_clock_ladder_in_readiness_wait();
+    begin_install_drain(&run.host, 224);
+    wait_for_ladder_end(&run.host, POLICY_INSTANCE_ALIAS);
+    let events = all_events(&run.host);
+    assert_wait_interrupted(&events, run.run_lease, "recovery_ladder_drain_requested");
+    assert_eq!(later_boot_checks(&run.calls), 0, "a second boot check");
+    assert!(run.host.fatal_error().expect("runtime health").is_none());
+    run.host.close().expect("close host");
+}
+
+// G9 on the manual clock, shutdown row (host key 22): the clock stays inside the readiness
+// window; a host close ends rung 3 at the wait's next poll with
+// `recovery_ladder_shutdown_requested`, before a second boot check; the climb ends exhausted at
+// Warning, the ladder releases its key once and no record is fatal.
+#[test]
+fn gate_on_the_manual_clock_a_shutdown_ends_the_readiness_wait_at_its_next_poll() {
+    let ManualClockLadder {
+        root,
+        host,
+        run_lease,
+        calls,
+    } = manual_clock_ladder_in_readiness_wait();
+    host.close()
+        .expect("close the host during the readiness wait");
+    let events = closed_ledger_events(root.path());
+    assert_wait_interrupted(&events, run_lease, "recovery_ladder_shutdown_requested");
+    assert_eq!(later_boot_checks(&calls), 0, "a second boot check");
     assert!(
         events
             .iter()

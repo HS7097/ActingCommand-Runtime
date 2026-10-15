@@ -258,7 +258,10 @@ incident = []
 key = "R8"
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-client::lib::tests::runtime_input_proxy_renews_before_short_lease_expiry",
+    "actingcommand-runtime-client::lib::tests::gate_c4::gate_each_heartbeat_beat_renews_once_with_the_token_the_previous_renewal_returned",
+    "actingcommand-runtime-client::lib::tests::gate_c4::gate_a_failed_renewal_ends_the_heartbeat_and_the_next_proxy_call_returns_it",
+    "actingcommand-runtime-client::lib::tests::gate_c4::gate_dropping_the_proxy_releases_its_lease_once_and_a_later_beat_renews_nothing",
+    "actingcommand-runtime-client::lib::tests::gate_c4::gate_one_beat_sends_one_renewal_frame_and_the_renewed_token_carries_the_next_input",
     "actingcommand-runtime-client::lib::tests::dropping_runtime_input_proxy_releases_authority_but_keeps_the_daemon_session",
     "actingcommand-runtime-client::lib::tests::long_input_extends_only_its_response_wait",
 ]
