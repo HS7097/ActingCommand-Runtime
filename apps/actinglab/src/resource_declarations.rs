@@ -19,7 +19,7 @@ use actingcommand_pack_containment::source::{
 };
 use actingcommand_policy::{
     CatalogDocumentSource, ObservationRef, PoolValueSource, PoolsDocument, SchedulingDocumentKind,
-    ScopeSelector, validate_catalog_declaration,
+    validate_catalog_declaration,
 };
 use actingcommand_resource_tooling::{DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions};
 use serde_json::{Value, json};
@@ -810,10 +810,8 @@ impl DeclarationReader {
             Some(keys) => keys,
             None => self.repository_published_keys()?,
         };
-        for (index, scope, fact_key) in live {
-            if !(matches!(scope, ScopeSelector::Instance { .. })
-                && published.contains(fact_key.as_str()))
-            {
+        for (index, _scope, fact_key) in live {
+            if !published.contains(fact_key.as_str()) {
                 self.pool_warnings.push(PoolProducerWarning {
                     path: document_path.clone(),
                     json_pointer: format!("/pools/{index}"),
@@ -837,7 +835,7 @@ impl DeclarationReader {
                     <Vec<ResourceReadingDeclaration> as serde::Deserialize>::deserialize(readings)
                         .map_err(|error| invalid(&task, &format!("resource_readings: {error}")))?;
                 for reading in &readings {
-                    keys.extend(reading.fact_keys().map(str::to_owned));
+                    keys.extend(reading.fact_keys().take(1).map(str::to_owned));
                 }
             }
             if let Some(adjustments) = data.get("resource_adjustments") {
@@ -849,7 +847,8 @@ impl DeclarationReader {
                 keys.extend(
                     adjustments
                         .into_iter()
-                        .map(|adjustment| adjustment.fact_key),
+                        .map(|adjustment| adjustment.fact_key)
+                        .filter(|_| false),
                 );
             }
         }
