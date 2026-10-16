@@ -24,6 +24,8 @@ pub const MAX_REFERENCES_PER_TASK: usize = 128;
 pub const MAX_WINDOWS_PER_PROFILE: usize = 128;
 pub const MAX_GOALS_PER_PROFILE: usize = 128;
 pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
+/// Workflow #372 K5: the most task ids one task may declare in `continues_from`.
+pub const MAX_CONTINUED_TASK_IDS: usize = 8;
 pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
 pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
 pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
@@ -306,6 +308,12 @@ pub struct TaskSpec {
     /// Declared value of one run; absent means the task carries no utility term.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_milli: Option<u32>,
+    /// Workflow #372 K5 (`actingcommand.scheduling.v2` only): the task ids of an earlier catalog
+    /// this task continues. Under this catalog the task accounts as itself and these ids
+    /// (`CompiledCatalog::accounting_ids`); absent, it accounts as itself alone, and the member
+    /// serializes as nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues_from: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1168,5 +1176,16 @@ mod tests {
         let grace = &v2["common.schema.json"]["$defs"]["missedSlotRule"]["properties"]["grace_ms"];
         assert_eq!(grace["minimum"], MIN_MISSED_GRACE_MS);
         assert_eq!(grace["maximum"], MAX_MISSED_GRACE_MS);
+
+        // Workflow #372 K5, row K5-T9: V2 alone carries a task's `continues_from`, and its bounds
+        // (minItems 1, maxItems 8) are the compiler's.
+        let task = |schemas: &BTreeMap<&str, serde_json::Value>| {
+            schemas["tasks.schema.json"]["$defs"]["task"]["properties"].clone()
+        };
+        assert!(task(&v1).get("continues_from").is_none());
+        let continues_from = &task(&v2)["continues_from"];
+        assert_eq!(continues_from["minItems"], 1);
+        assert_eq!(continues_from["maxItems"], 8);
+        assert_eq!(continues_from["maxItems"], MAX_CONTINUED_TASK_IDS);
     }
 }

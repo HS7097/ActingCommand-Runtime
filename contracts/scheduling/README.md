@@ -257,6 +257,23 @@ Task ids are global: dispatch history, last dispatch time, budgets and failure s
 per (task id, instance) across a switch, so a catalog that keeps its task ids keeps its clock
 state.
 
+Workflow #372 K5: a V2 task may declare `continues_from`, the task ids of an earlier catalog it
+continues (`v2/README.md`). Under the active catalog a task's accounting group is its own id and
+those ids, and every per-(task, instance) state the Runtime derives from its ledger is read over
+the group on that instance: the task budgets are summed (the budget receipt's
+`task_daily_used`, `task_window_used` and `task_runtime_reserved_ms` count the group, each
+entry keeping only its own id's runs); the last dispatch, terminal state and completed window
+come from the group's latest admitted dispatch, and the last duration and failure streak from
+its settlements folded in ledger order; an outcome of a continued id's run is read as the
+task's; the failure streak, a pause, a backoff and a retry round are those of the group's id
+whose failure state a settlement set or cleared last, and a new settlement of the task counts
+on from it under the task's own id; a clock-slot record of a continued id counts for the task.
+The group is read at read time only from the active catalog: nothing in the ledger or the
+control state is re-keyed, replay stays per dispatch against its own generation, and the
+declaration is not followed across generations (a task that continues a task which itself
+continued another lists both ids). The Runtime never infers a rename: an undeclared rename is a
+new task, and a task that keeps its id keeps its state as above.
+
 ## Scope And Overrides
 
 Runtime evaluation replaces task runtime snapshots with its replayed admitted and

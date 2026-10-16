@@ -1483,6 +1483,27 @@ nobody listed) is a VAL line, not part of the merge gate.
 | L4B-6 | `contained_task_prerequisite_incompatible` detail `reason=select_on_empty` | new value of an existing refusal detail | SEL-L4b | SEL-L4b | a package with an `on_empty` step serves neither as a prerequisite package nor for return-home use, because an early end on the step's page would leave the dependent package short of its entry page |
 | L4B-7 | `actingledger export --task-evidence`: the pairing of an input with its step's effect intent | new rule of an existing output (report shape unchanged) | SEL-L4b | SEL-L4b | M-357b D34 (§5.4): an input's `source_step` is the intent of its step action linked to the input's `before_frame_id`, judged unique after that narrowing, and a step row's `physical_inputs` holds only the inputs whose `before_frame_id` is its frame; it covers a scan's moves and a multi select's taps under one step action, where every input was `ambiguous` before |
 
+### 1.86 Wave 18 slice 372-K5: a same-day catalog change accounts by the new catalog's task identity (#372 K5; K372 addendum of 2026-10-17; forced-compromises mapping S-08)
+
+K5 lets a V2 task declare the task ids of an earlier catalog it continues, so a rename that
+activates during a day keeps that day's budgets, slot, outcome and failure state instead of
+running again, stalling its followers or silently lifting a pause. Under the active catalog a
+task's accounting group is its own id and the ids it declares; the host reads every
+per-(task, instance) state it derives from the ledger over that group, at read time only:
+nothing in the ledger, the projections or the control state is re-keyed, and replay stays per
+dispatch against its own generation. The Runtime never infers a rename (coordinator ruling Q6).
+[scheduling/README.md](scheduling/README.md) (the paragraph after "Task ids are global"),
+[scheduling/v2/README.md](scheduling/v2/README.md) and [policy-suspension.md](policy-suspension.md)
+(`clock_slots`, `next_dispatch`) are the contract. No ledger event type, no payload member, no
+code, key, domain, vocabulary token and no configuration key is added (the actingd-config
+revision is untouched); the catalog diagnostics reuse `duplicate_id`, `limit_exceeded`, the task
+id rule's `type_mismatch` and the unknown-member refusal (`unknown_field`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| K5-1 | `continues_from: [task id, ...]` on a task of an `actingcommand.scheduling.v2` tasks document | catalog member (resource file format, not a ledger shape) | 372-K5 | the W2 generator, after the v0.12.0 deploy (K372 Q9) | optional and skipped when absent, so a catalog without it keeps its serialization, hash and approval; 1..=8 ids (`limit_exceeded` at the member), each by the task id rule; an id that is a task of the same catalog, one listed twice in one task, and one two tasks claim (a split) are `duplicate_id` at the item; refused in a V1 document (`unknown_field`); never checked against the ledger |
+| K5-2 | `policy.dispatch_admitted`'s budget receipt: `task_daily_used`, `task_window_used`, `task_runtime_reserved_ms` | new meaning of existing values (shape unchanged) | 372-K5 | 372-K5 | for a task that declares `continues_from` they count its accounting group on the instance and day or window; the host's own count of each id keeps only that id's runs, so a replay against the dispatch's own generation rebuilds the same receipt; for any other task they are unchanged; payload validation (`used` between 1 and the limit) holds |
+
 ### 1.87 Wave 17 slice PM-CFG: the monitor reads its row (#385, PERF v1.4.2 §10.1; wave-17 ruling 10)
 
 Every key of §5's `performance.monitor.*` / `.pressure.*` / `.load.*` row, parsed, checked and
@@ -1569,6 +1590,29 @@ check, which compares keys and scopes only.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | NN6-1 | `actinglab resource validate` answer (`actinglab.resource-declarations.v1`): new member `warnings: [{code: "resource_pool_producer_missing", path, json_pointer, fact_key}]`, empty when there is none | operation output (no persisted record; an actinglab result, read by a person or a resource repository's CI job) | nine6 | nine6 | one element per `ledger_fact` pool of a valid pools document the run read that is not of instance scope or whose key no reading mark (`fact_key`, `capacity_fact_key`) or adjustment of an operation `task.json` of the repository (outside `.git` and the excluded material) writes; `path` is the document, `json_pointer` `/pools/<i>`; the document's entry stays `valid` and the command succeeds (exit 0); a `static_snapshot` pool is not checked; the same warning is a `WARN actinglab:` developer line on stderr |
+
+### 1.94 Slice SEL-L4b-T: `expect_identity` reads template identities (#308, SEL L4b-T model row of 2026-10-17; forced-compromises mapping R-07; wave-17 acceptance ruling 1)
+
+SEL-L4b-T gives `expect_identity` a second path besides the OCR `target_id` of §1.85 (row
+L4B-1): a pool of template targets of the pack in one rect, the destination's identity region.
+On every destination frame each entry passes by its own target's declaration, admitted with
+REC-7's floors; exactly one business ID among the passing entries is a reading, none is
+`absent` and two or more are `unknown`. The path reads a choice of either recognition kind, so
+a select whose identity is told by icons can now bind its destination to its choice.
+[selection-graph.md](selection-graph.md) (sections Declaration and Expected identity) and
+[business-identity-consensus.md](business-identity-consensus.md) are the contract. It adds no
+code, key, token, location or configuration key: the failures are §1.85's
+`selection_identity_mismatch` at `select_expect_identity`, and `absent` is a token the
+`identity_state` vocabulary already holds; the catalog changes the descriptions of the code and
+of that token only. The admission refusals reuse `contained_task_select_invalid` with new detail
+tokens. The resource side's VAL line (a live select pack binds its destination to the chosen
+identity through title templates it already ships; one natural selection on the device passes
+the step) is not part of the merge gate.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L4BT-1 | package format: an operation's `expect_after.expect_identity.templates`, an array of `{id, target_id}` | new optional member (resource file format, not a ledger shape; task schemas unchanged) | SEL-L4b-T | resource side | the declaration gate: `expect_identity` holds `choice_of` and optionally `target_id` and `templates`, nothing else (`UnknownField`); each entry is `{id, target_id}`, both strings (`InvalidType` at `…/templates/<j>/<member>`). Admission (`contained_task_select_invalid`): the `choice_of` step has an identity feature (`choice_of=no_identity`); exactly one of `target_id` and `templates` (`expect_identity=target_and_templates`, `=neither`); the text path as row L4B-1; the pool holds 1..=16 entries (`templates=count`), each a template target (`template=not_template`) named once (`template=duplicate`), with an `id` of the step's identity domain (`template=out_of_domain`), an effective threshold above 0 (`template=threshold_zero`) and a `rect` region (`template=region_not_rect`), one rect for all (`template=regions_differ`) |
+| L4BT-2 | `selection_identity_mismatch` with `identity_state` `absent` | new value combination of an existing record (shape unchanged) | SEL-L4b-T | SEL-L4b-T | a template `expect_identity` on whose last destination frame before `expect_after.timeout_ms` no pool entry passed; `expected_identity` the chosen ID, no `observed_identity`; `unknown` keeps its text-path meaning and also covers two or more business IDs passing |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

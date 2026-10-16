@@ -1093,27 +1093,36 @@ impl PolicyHost {
             .map(|task| task.id.as_str())
             .chain([FACT_REFRESH_TASK_ID])
             .collect::<BTreeSet<_>>();
-        let settlements = fold_settlements(self.seen_dispatches.values().filter(|dispatch| {
-            task_ids.contains(dispatch.data.task_id.as_str())
-                && dispatch
-                    .completed_sequence
-                    .is_some_and(|sequence| sequence <= ledger_position)
-        }))?;
+        // Workflow #372 K5: the dispatches of an id a task continues count as that task's, so
+        // its snapshot is that of its accounting group's latest run.
+        let accounting = accounting_tasks(&active.compiled);
+        let accounted = |task_id: &str| {
+            task_ids
+                .get(task_id)
+                .copied()
+                .or_else(|| accounting.get(task_id).copied())
+        };
+        let settlements = fold_settlements_by(
+            self.seen_dispatches.values().filter(|dispatch| {
+                accounted(dispatch.data.task_id.as_str()).is_some()
+                    && dispatch
+                        .completed_sequence
+                        .is_some_and(|sequence| sequence <= ledger_position)
+            }),
+            &accounting,
+        )?;
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
         for dispatch in self.seen_dispatches.values() {
-            if !task_ids.contains(dispatch.data.task_id.as_str()) {
+            let Some(task_id) = accounted(dispatch.data.task_id.as_str()) else {
                 continue;
-            }
+            };
             let Some(sequence) = dispatch
                 .admitted_sequence
                 .filter(|sequence| *sequence <= ledger_position)
             else {
                 continue;
             };
-            let key = (
-                dispatch.data.task_id.as_str(),
-                dispatch.data.instance_id.as_str(),
-            );
+            let key = (task_id, dispatch.data.instance_id.as_str());
             if latest
                 .get(&key)
                 .is_none_or(|(previous, _)| *previous < sequence)
@@ -1795,12 +1804,19 @@ impl PolicyHost {
 
     /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's
     /// latest failed execution, while no success has followed it.
+    /// Workflow #372 K5: under an active catalog, the failure its task's accounting group reads.
     pub(crate) fn latest_failure(
         &self,
         task_id: &str,
         instance_id: &str,
     ) -> Option<(Option<&str>, &str)> {
-        self.control.latest_failure(task_id, instance_id)
+        match &self.active {
+            Some(active) => {
+                self.control
+                    .group_latest_failure(&active.compiled, task_id, instance_id)
+            }
+            None => self.control.latest_failure(task_id, instance_id),
+        }
     }
 
     /// Workflow #336 L6 (§12.6 point 4): the execution already recorded for a dispatch, if any.
@@ -2055,17 +2071,20 @@ impl PolicyHost {
         // catalog no longer lists for the task. That key is known only from the authoritative
         // outcome, so the run stays in `completed_runs` and the projection
         // (`project_authoritative_policy_inputs_with_gaps_under_gate`) leaves the pair out.
+        // Workflow #372 K5: the completions of an id a task continues count as that task's, so
+        // a pair's entry is keyed by the task and holds its accounting group's latest completed
+        // run, whose own identity names the id it ran as.
+        let accounting = accounting_tasks(&active.compiled);
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
-        for (sequence, dispatch) in self
-            .seen_dispatches
-            .values()
-            .filter(|dispatch| keys.contains_key(&dispatch.data.task_id))
-            .filter_map(completion_of)
-        {
-            let key = (
-                dispatch.data.task_id.as_str(),
-                dispatch.data.instance_id.as_str(),
-            );
+        for (sequence, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
+            let task_id = accounting
+                .get(dispatch.data.task_id.as_str())
+                .copied()
+                .unwrap_or(dispatch.data.task_id.as_str());
+            if !keys.contains_key(task_id) {
+                continue;
+            }
+            let key = (task_id, dispatch.data.instance_id.as_str());
             if latest
                 .get(&key)
                 .is_none_or(|(current, _)| *current < sequence)
@@ -2074,16 +2093,12 @@ impl PolicyHost {
             }
         }
         let completed_runs = latest
-            .into_values()
-            .filter_map(|(_, dispatch)| dispatch.completed_run.clone())
-            .map(|completed| {
-                (
-                    (
-                        completed.catalog_task_id.clone(),
-                        completed.instance_alias.clone(),
-                    ),
-                    completed,
-                )
+            .into_iter()
+            .filter_map(|((task_id, instance_id), (_, dispatch))| {
+                dispatch
+                    .completed_run
+                    .clone()
+                    .map(|completed| ((task_id.to_owned(), instance_id.to_owned()), completed))
             })
             .collect();
         Ok(PolicyOutcomeKeySnapshot {
@@ -3497,10 +3512,35 @@ fn completed_policy_run_identity(
     })
 }
 
+/// Workflow #372 K5: each id a task of `catalog` declares it continues, with that task's id.
+fn accounting_tasks(catalog: &CompiledCatalog) -> BTreeMap<&str, &str> {
+    catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .flat_map(|task| {
+            task.continues_from
+                .iter()
+                .flatten()
+                .map(|continued| (continued.as_str(), task.id.as_str()))
+        })
+        .collect()
+}
+
 /// Folds the executed runs among `runs`, in admission order per (task, instance) pair, into
 /// each pair's latest settlement (Workflow #308 slice 5b).
 fn fold_settlements<'a>(
     runs: impl Iterator<Item = &'a SeenDispatch>,
+) -> RuntimeHostResult<BTreeMap<(String, String), PolicySettlement>> {
+    fold_settlements_by(runs, &BTreeMap::new())
+}
+
+/// `fold_settlements` with each run of an id in `accounting` (a continued id, with the task
+/// that continues it) folded as a run of that task (Workflow #372 K5).
+fn fold_settlements_by<'a>(
+    runs: impl Iterator<Item = &'a SeenDispatch>,
+    accounting: &BTreeMap<&str, &str>,
 ) -> RuntimeHostResult<BTreeMap<(String, String), PolicySettlement>> {
     let mut executed = runs
         .filter_map(|dispatch| {
@@ -3529,10 +3569,11 @@ fn fold_settlements<'a>(
                     .saturating_sub(admission.activity.admitted_at_unix_ms),
             ),
         };
-        let key = (
-            dispatch.data.task_id.clone(),
-            dispatch.data.instance_id.clone(),
-        );
+        let task_id = accounting
+            .get(dispatch.data.task_id.as_str())
+            .copied()
+            .unwrap_or(dispatch.data.task_id.as_str());
+        let key = (task_id.to_owned(), dispatch.data.instance_id.clone());
         let failure_streak = if succeeded {
             0
         } else {
@@ -3544,7 +3585,7 @@ fn fold_settlements<'a>(
         latest.insert(
             key,
             PolicySettlement {
-                catalog_task_id: dispatch.data.task_id.clone(),
+                catalog_task_id: task_id.to_owned(),
                 instance_alias: dispatch.data.instance_id.clone(),
                 duration_ms,
                 succeeded,

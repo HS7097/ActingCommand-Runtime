@@ -9,11 +9,11 @@ use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
     ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
     MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
-    MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES, MAX_EFFECTS_PER_TASK,
-    MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
-    MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
-    MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
-    MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
+    MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES,
+    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
+    MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH,
+    MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS,
+    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
     MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
     MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
     MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef,
@@ -351,6 +351,69 @@ fn validate_tasks(
             descriptor,
             diagnostics,
         );
+    }
+    validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
+}
+
+/// Workflow #372 K5: each task's `continues_from`. It is a V2 member (a V1 document that names
+/// it is refused as an unknown member) of 1..=`MAX_CONTINUED_TASK_IDS` ids, each by the rule of
+/// a task id. A continued id is never a task id of the same catalog, is listed once in its task,
+/// and is claimed by one task only (a split is refused): each is `duplicate_id` at the item.
+/// Nothing is checked against the ledger.
+fn validate_continuations(
+    bundle: &CatalogBundle,
+    map: &SourceMap,
+    task_ids: &HashSet<&str>,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let mut claimed = HashSet::new();
+    for (index, task) in bundle.tasks.tasks.iter().enumerate() {
+        let Some(continued) = &task.continues_from else {
+            continue;
+        };
+        let path = format!("/tasks/{index}/continues_from");
+        if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::UnknownField,
+                path,
+                "continues_from requires actingcommand.scheduling.v2",
+                descriptor,
+            ));
+            continue;
+        }
+        if continued.is_empty() || continued.len() > MAX_CONTINUED_TASK_IDS {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                &path,
+                format!("continues_from must list 1..={MAX_CONTINUED_TASK_IDS} task ids"),
+                descriptor,
+            ));
+        }
+        let mut listed = HashSet::new();
+        for (item, id) in continued.iter().enumerate() {
+            let item_path = format!("{path}/{item}");
+            validate_identifier(map, &item_path, id, descriptor, diagnostics);
+            let reason = if task_ids.contains(id.as_str()) {
+                Some(format!(
+                    "continued task id `{id}` is a task of this catalog"
+                ))
+            } else if !listed.insert(id.as_str()) {
+                Some(format!("continued task id `{id}` is listed twice"))
+            } else if !claimed.insert(id.as_str()) {
+                Some(format!("continued task id `{id}` is claimed by two tasks"))
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::DuplicateId,
+                    item_path,
+                    reason,
+                    descriptor,
+                ));
+            }
+        }
     }
 }
 

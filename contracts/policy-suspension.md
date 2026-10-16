@@ -372,7 +372,9 @@ stdout is one JSON object:
     out. `recorded_sequence` and `recorded_at_unix_ms` place the record in the ledger.
   - `next_dispatch` is the pair's first `policy.dispatch_admitted` after the record, as its
     `sequence` and `admitted_at_unix_ms` (D); it is left out when there is none. The reference
-    time is the ledger's latest event time.
+    time is the ledger's latest event time. Workflow #372 K5: a record of a task id that a task
+    of the configured catalog continues (`continues_from`) settles against the first admission
+    after it of that id or of that task, whichever comes first.
   - A refused or deferred record, with E its `window_end_unix_ms` and X its
     `next_occurrence_unix_ms`: `slot_fate` is `collapsed` when D ≥ X, `same_window` when D < E,
     and `next_window` otherwise, with `slot_fate_settled` true. Without D it is `collapsed` and

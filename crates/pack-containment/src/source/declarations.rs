@@ -542,19 +542,47 @@ impl Declaration<'_> {
                         }
                     }
                     // Workflow #308 SEL-L4b (S0 §1.3): `{target_id, choice_of}`, both strings;
-                    // Runtime admission checks the target and the step it names.
+                    // SEL-L4b-T adds the template path `templates`, an array of `{id,
+                    // target_id}` strings. Runtime admission checks that exactly one path is
+                    // declared, its targets and the step it names.
                     if let Some(identity) = expected
                         .get("expect_identity")
                         .filter(|value| !value.is_null())
                     {
                         let identity_pointer = child(&pointer, "expect_identity");
-                        let identity =
-                            self.object(identity, &identity_pointer, &["target_id", "choice_of"])?;
-                        for field in ["target_id", "choice_of"] {
-                            self.string(
-                                self.required(identity, &identity_pointer, field)?,
-                                &child(&identity_pointer, field),
-                            )?;
+                        let identity = self.object(
+                            identity,
+                            &identity_pointer,
+                            &["target_id", "choice_of", "templates"],
+                        )?;
+                        self.string(
+                            self.required(identity, &identity_pointer, "choice_of")?,
+                            &child(&identity_pointer, "choice_of"),
+                        )?;
+                        if let Some(target) =
+                            identity.get("target_id").filter(|value| !value.is_null())
+                        {
+                            self.string(target, &child(&identity_pointer, "target_id"))?;
+                        }
+                        if let Some(templates) =
+                            identity.get("templates").filter(|value| !value.is_null())
+                        {
+                            let templates_pointer = child(&identity_pointer, "templates");
+                            for (index, entry) in self
+                                .array(templates, &templates_pointer)?
+                                .iter()
+                                .enumerate()
+                            {
+                                let entry_pointer = child(&templates_pointer, &index.to_string());
+                                let entry =
+                                    self.object(entry, &entry_pointer, &["id", "target_id"])?;
+                                for field in ["id", "target_id"] {
+                                    self.string(
+                                        self.required(entry, &entry_pointer, field)?,
+                                        &child(&entry_pointer, field),
+                                    )?;
+                                }
+                            }
                         }
                     }
                 }
@@ -4143,6 +4171,57 @@ mod tests {
             let error = task
                 .operation(&step, "/operations/0", true)
                 .expect_err(&pointer);
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(issue["field_path"], pointer);
+            assert_eq!(issue["reason"], refusal);
+        }
+    }
+
+    // Workflow #308 SEL-L4b-T (L4b-T.3, test L4bT-T8): the declaration gate admits an
+    // `expect_identity` read through a pool of template targets, `templates`, an array of
+    // `{id, target_id}` strings beside `choice_of`; it refuses an entry with a member it does not
+    // have (`unknown_field`) and an entry member that is no string (`invalid_type`), each at that
+    // member's pointer. Whether exactly one path is declared is Runtime admission's check.
+    #[test]
+    fn l4bt_the_gate_admits_a_template_pool_and_refuses_a_bad_entry_at_its_pointer() {
+        let task = Declaration {
+            file: Path::new("tasks/task/task.json"),
+            schema: Some("0.9"),
+        };
+        let pooled = || {
+            let mut step = l4b_scan_select_step();
+            step["expect_after"]["expect_identity"] = serde_json::json!({
+                "choice_of": "choose",
+                "templates": [{"id": "member.a", "target_id": "title/member_a"},
+                              {"id": "member.b", "target_id": "title/member_b"}]
+            });
+            step
+        };
+        task.operation(&pooled(), "/operations/0", true)
+            .expect("the declaration gate admits the template pool");
+
+        let mut extra = pooled();
+        extra["expect_after"]["expect_identity"]["templates"][1]["variant"] =
+            serde_json::json!("second");
+        let mut numbered = pooled();
+        numbered["expect_after"]["expect_identity"]["templates"][0]["target_id"] =
+            serde_json::json!(7);
+        for (step, pointer, refusal) in [
+            (
+                extra,
+                "/operations/0/expect_after/expect_identity/templates/1/variant",
+                "unknown_field",
+            ),
+            (
+                numbered,
+                "/operations/0/expect_after/expect_identity/templates/0/target_id",
+                "invalid_type",
+            ),
+        ] {
+            let error = task
+                .operation(&step, "/operations/0", true)
+                .expect_err(pointer);
             assert_eq!(error.code, "resource_declaration_invalid");
             let issue = error.details.expect("declaration issue");
             assert_eq!(issue["field_path"], pointer);

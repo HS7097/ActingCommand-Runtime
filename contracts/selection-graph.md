@@ -378,7 +378,8 @@ listed is present (section Ending empty), and lets the `expect_after` of any ope
   single-frame select may declare it only when its layout is `fixed_slots`: one frame of a
   `repeated_anchor` list cannot show that the list ends, so a list that fits one screen declares
   `scan`, whose start and end checks then both pass on its first viewport.
-- The `expect_after` of any operation may add `expect_identity: {"target_id", "choice_of"}`
+- The `expect_after` of any operation may add `expect_identity: {"target_id", "choice_of"}`,
+  or from SEL-L4b-T `expect_identity: {"choice_of", "templates": [{"id", "target_id"}]}`
   (section Expected identity).
 
 A scan is declared with every member but `early_stop`; the Runtime supplies no default. The
@@ -435,7 +436,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | `select` holds `layout_id` and `policy`, and optionally `scan` and `on_empty`, of the right JSON types. | the field | `task.json` |
 | `scan` holds `identity_feature`, `axis`, `advance`, `reposition`, `settle`, `track`, `start`, `end` and `bounds` (`MissingField`), and optionally `early_stop`; any other member is `UnknownField`. Admission reads their values. | `…/select/scan/<member>` | `task.json` |
 | `on_empty` is `{outcome_key}`, a string. | `…/select/on_empty/outcome_key` | `task.json` |
-| `expect_after.expect_identity` is `{target_id, choice_of}`, both strings. | `/operations/<i>/expect_after/expect_identity/<member>` | `task.json` |
+| `expect_after.expect_identity` holds `choice_of` and optionally `target_id`, both strings, and optionally `templates`, an array of `{id, target_id}`, both strings (SEL-L4b-T); any other member is `UnknownField`. Admission requires exactly one of `target_id` and `templates`. | `/operations/<i>/expect_after/expect_identity/<member>`, `…/expect_identity/templates/<j>/<member>` | `task.json` |
 | `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
 | `policy` is `{path}`: a safe task-local `policies/<name>.json` path (an optional `sha256` is ignored). | `…/select/policy/path` | `task.json` |
 | No other effect is declared. | `/operations/<i>/select` | `task.json` |
@@ -514,9 +515,19 @@ an early end on the step's page would leave the dependent package short of its e
 
 An `expect_identity` is admitted only when `choice_of` names a select step of the same task that
 is the declaring step or precedes it (in phase order, or in operation order without phases), that
-step's identity feature is recognized by `ocr_aliases` (the read text is mapped through it), the
-declaring operation is not retryable (a retry would tap again after a mismatch), and `target_id`
-is an OCR target of the pack.
+step has an identity feature (`choice_of=no_identity` otherwise), the declaring operation is not
+retryable (a retry would tap again after a mismatch), and exactly one of `target_id` and
+`templates` is declared (`expect_identity=target_and_templates`, `=neither`). The text path
+(`target_id`) needs a step whose identity feature is recognized by `ocr_aliases` (the read text
+is mapped through it; `choice_of=identity_not_text`) and an OCR target of the pack
+(`target=not_ocr`). The template path (Workflow #308 SEL-L4b-T, `templates`) is admitted for an
+identity of either recognition kind; its pool holds 1..=16 entries (`templates=count`), and each
+entry names a template target of the pack (`template=not_template`) that no other entry names
+(`template=duplicate`), an `id` that is an entry ID of the step's identity declaration
+(`template=out_of_domain`), a target whose effective threshold is above 0
+(`template=threshold_zero`) and whose region is a `rect` (`template=region_not_rect`), the same
+rect for every entry (`template=regions_differ`). Each refusal is `contained_task_select_invalid`
+with the detail token shown.
 
 ### Derived documents
 
@@ -770,6 +781,30 @@ with `identity_state` `different`, `unknown` or `no_choice`, `expected_identity`
 `no_choice`) and `observed_identity` (for `different`); the step's `StepFinished` precedes it.
 It comes after the tap, so it appears only in the task's terminal outcome; the decision record
 is unchanged. There is no retry and no fallback.
+
+Workflow #308 SEL-L4b-T: the template path reads the identity where the destination shows it as
+an image. The neutral example below is not a value:
+
+```json
+"expect_after": {"page_id": "detail", "timeout_ms": 10000, "interval_ms": 500,
+  "expect_identity": {"choice_of": "pick",
+    "templates": [{"id": "member.a", "target_id": "page/detail_title_a"},
+                  {"id": "member.b", "target_id": "page/detail_title_b"}]}}
+```
+
+Each entry is a business ID of the `choice_of` step's identity domain and an existing template
+target of the pack; several entries may share an `id` (two images of one identity). On every
+frame of the destination page, the first and each poll, every entry's target is evaluated by its
+own declaration (threshold, metric, mask, colour check and scales); REC-7's flat-field floor and
+mask minimums already held for it at package admission. All entries search one rect, the
+destination's identity region. The business IDs of the entries that pass are the frame's
+reading: none is `absent`, exactly one is that Known ID, two or more are `unknown`. There is no
+margin setting beyond the targets' thresholds. The chosen ID passes; another Known ID fails at
+once (`different`); `absent` and `unknown` poll again, and at `expect_after.timeout_ms` the step
+fails with the state of the last frame read, `absent` or `unknown`; a `choice_of` step that chose
+nothing fails `no_choice`. The code, stage, values, poll loop and boundaries are the text path's,
+and the template path applies to a choice of either recognition kind, a single-frame select or a
+select over a scan.
 
 ### Offline
 
