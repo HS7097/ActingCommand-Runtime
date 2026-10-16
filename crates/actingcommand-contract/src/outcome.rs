@@ -28,6 +28,8 @@ use std::sync::OnceLock;
 use crate::codes::ContractCode;
 
 /// The envelope's `schema_version`.
+// Interface anchor `runtime-outcomes` revision 1 (contracts/component-interfaces.md): raise its
+// revision in distribution/windows/component-interfaces.json when older readers refuse this.
 pub const OUTCOME_SCHEMA_VERSION: &str = "actingcommand.outcome.v1";
 /// The catalog's `schema_version`.
 pub const CATALOG_SCHEMA_VERSION: &str = "actingcommand.outcome-codes.v1";

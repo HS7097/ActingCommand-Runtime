@@ -14,17 +14,19 @@ This document is the vocabulary and the rules. The Runtime's own declaration is
 
 A Runtime, Tools or UI build manifest (`BUILD-MANIFEST.json`) carries an
 additive `interfaces` object. Every existing reader of the manifest ignores it.
+Runtime v0.12.0 declares:
 
 ```json
 "interfaces": {
   "schema_version": "actingcommand.component-interfaces.v1",
   "speaks": {
-    "actingd-config": [2, 3],
+    "actingd-config": [5, 5],
     "install-selection": [1, 1],
     "install-control": [0, 1],
-    "ledger": [1, 2],
-    "runtime-client": [1, 1],
-    "package": [1, 2]
+    "ledger": [3, 3],
+    "runtime-client": [2, 2],
+    "package": [3, 3],
+    "runtime-outcomes": [1, 1]
   }
 }
 ```
@@ -33,8 +35,8 @@ Where each declaration comes from:
 
 - **Runtime.** `distribution/windows/component-interfaces.json`. The Windows
   exact-SHA build copies it unchanged into the Runtime and the Tools manifest
-  of the same commit, and stops when the file is not a valid v1 declaration. No
-  binary is run to produce it.
+  of the same commit, and stops when the file is not a valid v1 declaration or
+  lacks one of the seven interfaces above. No binary is run to produce it.
 - **UI.** `crates/acui-setup/component-interfaces.json` in the UI repository.
   The UI build copies it into the UI manifest, and acsetup compiles the same
   file in as its own declaration, so the program and its manifest cannot
@@ -100,15 +102,20 @@ writes the configuration, the console edits it, and actingd reads it.
 | | | | 2 | the same schema string; a `vision` section; `vision_provider_manifest` refused (#360) | same |
 | | | | 3 | revision 2 plus the optional `policy.catalog_transition` object `{"kind": "replace", "expected_active_catalog_hash": "sha256:<64 hex>"}` (#361 A, Runtime v0.11.3); a Runtime up to v0.11.2 refuses a file that names it, because `policy` denies unknown fields | `apps/actingd/src/config.rs`, `PolicyConfigFile::catalog_transition` |
 | | | | 4 | revision 3 plus the optional booleans `frame_retention_dedup_error` (default `true`) and `frame_retention_dedup_lab` (default `false`) (#375 R5c, Runtime v0.11.5); a Runtime up to v0.11.4 refuses a file that names either key, because the file denies unknown fields; a file that names neither keeps its revision, so deploying v0.11.5 changes no file | `apps/actingd/src/config.rs`, `ActingdConfigFile::frame_retention_dedup_error` |
-| | | | 5 | revision 4 plus the optional `policy.monitor` object `{"io_timeout_ms", "retry_limit", "retry_backoff_ms", "retry_backoff_max_ms"}`, each optional (#397, Runtime v0.12.0); an earlier Runtime refuses a file that names it, because `policy` denies unknown fields; a file that does not name it keeps its revision, so deploying the Runtime changes no file | `apps/actingd/src/config.rs`, `PolicyConfigFile::monitor` |
+| | | | 5 | the one revision Runtime v0.12.0 raises (order-v012 §3.6, R2; Workflow #378 A8), with the same schema string. Revision 4 plus every key of `contracts/v012-register.md` §5, parsed, validated and defaulted from `actingd.defaults.json`: the sections `ledger_observer`, `recovery_ladder`, `host_claims`, `performance`, `scheduling` (`recognition`, `rerun`, `cost_commit`, `blackout`, `feature_lock`, `not_run`, `random_delay`, `pack_admission`, `fact_refresh`, `suspension`), `device_link`, `device_state` and `startup_discovery`; the per-instance keys `recognition_package`, `start_emulator`, `recovery_ladder_profile` and `scheduling.random_delay`, and the `capture_backend` value `scrcpy`; the optional `policy.monitor` object (#397); and the optional booleans `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2: absent means `false`, a file names them only when `true`, and acsetup's Lab transaction is their only writer; `acsetup --commit-config` refuses a proposal that changes either). It also removes keys: `startup_package.expected_sha256`, `prerequisite_packages[].package_digest` and `policy.procedure_manifest[].package_digest` (option 丙, PKG-S4) and the top-level `prerequisite_packages` and `return_home_packages` (Workflow #373 NAV-3a). A Runtime before v0.12.0 refuses a file that names a new key, because the file and its sections deny unknown fields; Runtime v0.12.0 refuses a file that still carries a removed key (`config_decode_failed`), so it reads no earlier revision and declares [5, 5]. `governance.allowed_clients` is still accepted | `apps/actingd/src/config.rs`, `ActingdConfigFile`; `distribution/windows/actingd.defaults.json` |
 | `install-selection` | containment | acsetup writes `install/active.json`; actingd, actingctl, the Tools, acui and the fixed entries (acforward) read it | 1 | `actingcommand.install-selection.v1` | `crates/actingcommand-contract/src/installation.rs`, `INSTALL_SELECTION_SCHEMA` |
 | `install-control` | negotiation | acsetup drives a shutdown and a start; actingd answers | 0 | cold: `actingctl request-shutdown --wait`, and a start without `--install-held` | `apps/actingctl`, `request-shutdown` |
 | | | | 1 | the Host installation transition (#352): `begin_drain`, `query`, `commit_shutdown`, `--install-held`, `release` | `crates/actingcommand-contract/src/installation.rs`, `InstallTransitionAction` |
 | `ledger` | containment | actingd writes the GlobalLedger; later and earlier Runtimes, the Tools and the console read it | 1 | GlobalLedger SQLite format 1, `actingcommand.event.v2`, and every record that Runtimes v0.11.0 to v0.11.2 write and their readers accept | `crates/ledger/src/global/sqlite.rs`, `FORMAL_FORMAT_VERSION`; `crates/actingcommand-contract/src/event.rs`, `GLOBAL_EVENT_SCHEMA_VERSION` |
 | | | | 2 | revision 1 plus the cross-id catalog transitions of #361 A (Runtime v0.11.3), which a Runtime records only after a `policy.catalog_transition` `replace`: a successful `catalog.activated` that changes the catalog id (plan `switch`), and a successful `catalog.rolled_back` to a generation of another catalog id that was active before. Event types, payloads, `actingcommand.event.v2` and SQLite format 1 are unchanged. A Runtime up to v0.11.2 refuses such a ledger when it starts (`catalog_generation_source_conflict`, operation `project_policy_catalog`), and its `ledger-maintenance verify` does not detect it. Consoles and Tools read revision 2: they never replay the catalog lineage | `crates/runtime-host/src/policy_host/catalog_transaction.rs`, `CatalogStore::fold_catalog_events` |
+| | | | 3 | SQLite format 2 (`user_version` 2) and `actingcommand.event.v3` (Workflow #378 A3, Runtime v0.12.0): every result-bearing record carries its `outcome`, a record's severity is the outcome's category, and no Runtime English is persisted; with it every persisted shape that `contracts/v012-register.md` §1 registers for revision 3 (A3 §1.9, A2-P's spellings §1.15, SH-1 and SH-2, SR-2a's reads, the D1 ladder records, SEL-L4a's records §1.19, AO-1's dump import, AO-2's index table §1.38, U-2's members §1.46, the option 丙 removals of PKG-S2 and PKG-S3 (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, the OCR reason `low_confidence` §1.8 V1 and M-357b DB-3s §1.66). A v0.12 reader refuses a format-1 database with `ledger_format_unsupported` before it reads or writes a ledger row, so Runtime v0.12.0 reads only revision 3 and declares [3, 3]; a Runtime up to v0.11.x refuses format 2 (`ledger_schema_incomplete`) | `crates/ledger/src/global/sqlite.rs`, `FORMAL_FORMAT_VERSION`; `crates/actingcommand-contract/src/event.rs`, `GLOBAL_EVENT_SCHEMA_VERSION` |
 | `runtime-client` | negotiation | the console requests; actingd answers | 1 | requests `actingcommand.runtime.request.v3`, receipts `actingcommand.runtime.receipt.v1` | `crates/actingcommand-contract/src/runtime.rs` |
+| | | | 2 | requests `actingcommand.runtime.request.v4` (v3 plus the optional `detail`, `codes` or `full`) and receipts `actingcommand.runtime.receipt.v2` (`outcome` on every receipt in place of the error projection; `task_result` for the two renamed members) (Workflow #378 A4, Runtime v0.12.0); the handshake request `BindChannel{channel, via?}`, sent once on every new connection after `Health`, and the request kinds `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and `UnloadPack` with their results (Workflow #389 U-1 shapes; v0.12.0 answers the last four `not_implemented`); and the other wire shapes of `contracts/v012-register.md` §3 W1 to W4, W8 to W12, W14, W15 and W17, the status member `emulator_state` (§1.91 N1-1) and A2-P's wire spellings (§1.15). A client that speaks 2 and meets a Runtime that drops the connection on `BindChannel` reconnects once, goes on unbound and reports `client_channel_unsupported`. Requests v1 to v3 are refused, so Runtime v0.12.0 declares [2, 2]; §3 W5 to W7 and W13 are revision 3, which a later release declares | `crates/actingcommand-contract/src/runtime.rs`, `RUNTIME_REQUEST_SCHEMA_VERSION`, `RUNTIME_RECEIPT_SCHEMA_VERSION`, `RuntimeOperation` |
 | `package` | containment | a bundle writes packs; actingd runs them, and acsetup admits them before it places them | 1 | packages as the v0.11.x execution kernel admits them: `content-directory.v1` and legacy zip references; bundle index v1, v2 and v3 | `crates/actingcommand-contract/src/package.rs`, `BundleIndex` |
 | | | | 2 | revision 1 plus the OCR unsigned-integer format `times_prefixed` (#369/#371, Runtime v0.11.3), in an OCR field's `value.format` (`contracts/ocr-fields.md`) and in a resource reading's `value.format` (`contracts/resource-readings.md`); the contract crate before v0.11.3 has no such format, so a Runtime up to v0.11.2 refuses a pack that declares it at admission. A bundle whose packs use it declares `package` [2, 2] | `crates/actingcommand-contract/src/taskflow.rs`, `OcrUnsignedIntegerFormat` |
+| | | | 3 | the pack and bundle formats of Runtime v0.12.0, every resource-file-format row of `contracts/v012-register.md` §1 with its first reader in v0.12.0: bundle index v4 `actingcommand.bundle.v4` with packs named by `package_id` and the optional `tables` (PKG-S5 §1.64 P5-1, M-357a TB12 §1.65); a pack located by its path and admitted structurally, with in-package `sha256` keys optional and ignored (option 丙, PKG-S1, PKG-S2 §1.31 P2-11); the maintenance use `recognition` (D2-S2 §1.28 DS6) and no use `prerequisite` (NAV-3a follow-up §1.73 N3F-1); task `resource_adjustments` (D2-S3 §1.39 D34) and `resource_readings[].capacity_fact_key` (READ-1 §1.54 RE1), with the other task-schema `0.8` and `0.9` members the register lists. A reader before v0.12.0 refuses them; Runtime v0.12.0 reads no bundle index v1 to v3 and refuses `prerequisite`, so it declares [3, 3]. A bundle for v0.12.0 declares `package` [3, 3] in its `interfaces.json`: an undeclared bundle counts as [1, 1] | `crates/actingcommand-contract/src/package.rs`, `BundleIndex`, `MaintenanceUse` |
+| `runtime-outcomes` | containment | the Runtime writes outcomes on its outputs; acsetup, the console and the Tools read them | 0 | no outcome envelope: what Runtime v0.11.x prints (actingd's `FATAL actingd:` line and stdout `actingd ready` line, check-config v1 and the other v1 reports, actingctl's earlier output, the watchdog's report v1 and exits 10 to 23) | none |
+| | | | 1 | `actingcommand.outcome.v1` envelopes with codes from `contracts/outcome-codes.json` (Workflow #378, model-378 §10; Runtime v0.12.0): actingd's `OUTCOME actingd:` lines (A6a); the v2 reports of check-config, ledger-maintenance, unlock-owner and suspended (A6a); actingctl's one stdout line per exit, the watchdog report v2 and `state.json` v2, and the MCP tool error `{class, outcome}` (A5); every process exits by the top outcome's category, 0, 1 or 2 | `crates/actingcommand-contract/src/outcome.rs`, `OUTCOME_SCHEMA_VERSION` |
 | `tools-layout` | derived | never declared | 1, 2, 3 | the Tools manifest's `tools_payload_layout`: `platform-tools-v1` is 1, `platform-tools-v2` is 2, `platform-tools-v3` (layout 2 plus `actingwatch.exe`, #374; from Runtime v0.11.6 without the retired `actingcommand-device-test.exe`, which no reader requires) is 3 | `.github/workflows/windows-remote-build.yml` |
 
 The console reads no package, so it is not a `package` reader. What a pack's run
@@ -151,19 +158,52 @@ Each change since v0.11.2 was checked against these interfaces:
   It is derived from the Tools manifest and never declared, so neither the
   declaration nor the known table changes for it.
 
-### Revisions from Workflow #389 (unified interface)
+### What Runtime v0.12.0 moved
 
-Workflow #389 (`runtime-interface.md`) changes three interfaces. This section
-records its part of each; the declaration in
-`distribution/windows/component-interfaces.json` moves only with the slice named
-in the last column (#378 A8 declares the v0.12.0 revisions once and folds these
-rows into the vocabulary table).
+Runtime v0.12.0 declares `actingd-config` [5, 5], `install-selection` [1, 1],
+`install-control` [0, 1], `ledger` [3, 3], `runtime-client` [2, 2], `package`
+[3, 3] and the new `runtime-outcomes` [1, 1] (Workflow #378 A8; order-v012
+§3.6; `contracts/v012-register.md` §6). Each moving interface rises once for the
+whole release, whatever the number of slices behind it, and its sources are the
+register rows the vocabulary rows above name. Unlike v0.11.3, four `min`s rise,
+because v0.12.0 keeps no reader of the older revisions (no old-version
+compatibility, Alice 2026-10-11): it refuses a revision-4 configuration that
+carries a removed key, a format-1 ledger, a request v1 to v3 and a bundle index
+v1 to v3.
 
-| Interface | Rev | #389's part | Declared from | Anchor |
-|---|---|---|---|---|
-| `actingd-config` | 5 | revision 5, the one revision v0.12.0 raises, also carries the optional booleans `lab_module_authoring` and `lab_module_debugging` (absent means `false`; a file names them only when `true`). acsetup's Lab transaction is their only writer: `acsetup --commit-config` refuses a proposal that changes either. A Runtime before v0.12.0 refuses a file that names either key, because the file denies unknown fields; a file that names neither keeps its revision | v0.12.0; U-2 reads them | `apps/actingd/src/config.rs`, the two Lab option fields (U-2) |
-| `runtime-client` | 2 | the handshake request `BindChannel{channel, via?}`, sent once on every new connection after `Health`; the request kinds `UpgradeState`, `UpgradeStateStatus`, `LoadPack`, `UnloadPack` and their results (shapes U-1). A client that speaks 2 and meets a Runtime that drops the connection on `BindChannel` reconnects once, goes on unbound and reports `client_channel_unsupported`. Revision 2's other changes are listed by the slices that make them | v0.12.0 (A8) | `crates/actingcommand-contract/src/runtime.rs`, `RuntimeOperation` |
-| `install-control` | 2 | the upgrade state: `actingctl upgrade-state enter` (the Runtime drains, records its pause and accepts its own close while the requesting connection is open, and marks the close in its owner journal), `cancel`, `leave` (releases a Runtime started with `--install-held`), `status`. Revisions 0 and 1 keep working, so the Runtime declares [0, 2] | the Runtime release that carries U-4 (v0.12.x); v0.12.0 keeps [0, 1] | `crates/actingcommand-contract/src/installation.rs`, the `UpgradeState` request (U-1) |
+- `actingd-config` 5 carries every key the frozen 0.12 models designed before
+  the release, including keys whose readers come in 0.12.x (order-v012 R4). Keys
+  designed later, such as the touch keys of Workflow #406, raise the revision
+  again in their own release. `scheduling.fact_refresh.overdue_ms` has no
+  default value: unset, the fact refresh's transition recorder reports no
+  `fact_reader_overdue`. That is its declared default (coordinator's ruling 9
+  of 2026-10-16), so the key meets R4.
+- `install-control` does not move: model-378's revision 2 (`carried`) was
+  dropped from v0.12.0 with the cutover (model-378 §16 A-7), and the upgrade
+  state below raises it in 0.12.x.
+- `install-selection` does not move.
+- `runtime-outcomes` 1 is new. A component that does not declare
+  `runtime-outcomes` is taken as [0, 0] (Parse rules).
+
+What this means for an installation. The checks of "Checks per operation"
+refuse to combine Runtime v0.12.0 with anything built for v0.11.x: the `ledger`
+edge (no v0.11 Runtime's maximum lies in [3, 3]), the `actingd-config`
+negotiation with an acsetup that writes revision 4 or lower, the
+`runtime-outcomes` edge with a reader that takes only 0, and the `package` edge
+with a bundle below 3. Runtime v0.12.0 is therefore not installed by a v0.11
+acsetup: it is laid out once in a single location with an empty state root (a
+new revision-3 ledger), and going back means restoring the archived v0.11
+installation by hand (model-378 §16 A-7). The UI release that pairs with
+v0.12.0 declares ranges that contain these.
+
+### Planned: `install-control` 2 (Workflow #389 U-4)
+
+Not declared by v0.12.0, which keeps [0, 1]. The Runtime release that carries
+U-4 (0.12.x) declares [0, 2]:
+
+| Interface | Rev | Meaning | Anchor |
+|---|---|---|---|
+| `install-control` | 2 | the upgrade state: `actingctl upgrade-state enter` (the Runtime drains, records its pause and accepts its own close while the requesting connection is open, and marks the close in its owner journal), `cancel`, `leave` (releases a Runtime started with `--install-held`), `status`. Revisions 0 and 1 keep working, so the Runtime declares [0, 2] | `crates/actingcommand-contract/src/installation.rs`, the `UpgradeState` request (U-1) |
 
 The install-control check per operation is unchanged: acsetup uses the highest
 common revision, and 2 means the upgrade state. acsetup closes the old Runtime
@@ -206,6 +246,8 @@ Every v1 reader applies these rules:
 - An interface added after v1 states in this document the range a reader
   assumes for a component that does not declare it. Later readers then accept
   earlier declarations without the name. The six v1 names have no default.
+  `runtime-outcomes` (Workflow #378, Runtime v0.12.0) is the first such
+  interface: a component that does not declare it is taken as [0, 0].
 - A UI manifest's `installation_selection_schema` must agree with its
   `install-selection` range: `actingcommand.install-selection.v1` requires
   revision 1 in the range.
@@ -271,6 +313,7 @@ I and the bundles B work together. The edges:
 | `ledger` | Rp.max in R*; Rp.max and R*.max in U* |
 | `runtime-client` | U* ∩ R* |
 | `package` | B.max in R* and in I |
+| `runtime-outcomes` | R*.max in I and in U* (they read what R* prints and reports; model-378 §10) |
 | new slot | a Runtime laid into a new slot needs `tools-layout` 2 or 3, `actingd-config` containing 2 and `install-selection` containing 1: a slot is the program core only (#359, #360), and an earlier Runtime looks for its tools inside its slot |
 
 | Operation | R*, U* | Rp | Bundles | New slot |

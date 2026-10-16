@@ -146,8 +146,9 @@ and fixture instances are not gated.
   value differs from the stored one (`contracts/runtime-fact-store.md`, "Producers").
 - Mismatch: `application_not_foreground` (`invalid_request`, receipt state `denied`):
   `command.rejected` for the input's own action (diagnostic `runtime_diagnostic`, effect
-  `not_performed`, the receipt terminal) plus one `runtime.failed` (stage `operation_cleanup`)
-  whose native detail names the alias, the observed package and the assigned one. The fact
+  `not_performed`, the receipt terminal) plus one `runtime.failed` (stage
+  `runtime_lifecycle_operation_cleanup`) whose outcome names the alias, the observed package and
+  the assigned one as the `raw_text` of a `foreign_other_error` link. The fact
   is still recorded, so the ledger shows which application took the foreground. Inside a
   contained task the refusal travels the ordinary refused-input path of the run.
 - No resumed activity reported (a transition, an empty display):
@@ -163,7 +164,7 @@ and fixture instances are not gated.
   `contracts/emulator-control.md`, "Resource fence"): the input is refused as above and fails
   with `instance_resources_fenced`. Only where no fence may take it (no registered owner, a
   ledger failure, a shutdown) does the host poison under the unconfirmed device-resource rule
-  (`application_foreground_unknown`, `runtime_fatal`), with no `command.rejected` written.
+  (`application_foreground_unknown`, `runtime_halted`), with no `command.rejected` written.
 - First contained-task capture on a physical instance (#316-P4): when it fails and one ADB
   baseline probe against the task deadline fails too, the host invalidates the same three facts
   (`device.connected`, `application.foreground`, `task.page`) with `adb_unreachable` and the
@@ -264,9 +265,9 @@ run fails with `instance_resources_fenced` before it starts (Workflow #387 D1c-G
 `content_directory_missing`), `startup_package_admission_failed` (every other admission
 refusal, with the loader's code as the related failure). Workflow #336 PKG-S1: every locator
 is read by its path and no digest is compared. Both are `package_invalid`; all three are recorded
-before the run as `runtime.failed`
-(category `startup_package`, stage `operation_cleanup`) under the instance and the causation
-id. Failures after admission are the ordinary contained task failures (`task.failed`, lease
+before the run as `runtime.failed` (category `startup_package`, stage
+`runtime_lifecycle_operation_cleanup`) under the instance and the causation id. Failures after
+admission are the ordinary contained task failures (`task.failed`, lease
 release, `runtime.failed` on the cleanup path).
 
 ## Expected ledger sequence (one `emulator restart` with a startup package)
@@ -302,7 +303,7 @@ lease.released                                  under the run's links; ends the 
 
 `application_not_foreground`, `application_foreground_unknown` (`invalid_request`, denied;
 an unconfirmed ADB cleanup fences the instance, `instance_resources_fenced`, and is
-`runtime_fatal` only where no fence may take it);
+`runtime_halted` only where no fence may take it);
 `application_effect_requires_assigned_application` (`invalid_request`, denied);
 `startup_package_missing`, `startup_package_admission_failed` (`package_invalid`, denied);
 `emulator_control_adb_not_ready`, `startup_package_adb_not_ready`

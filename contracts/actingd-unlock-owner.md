@@ -27,17 +27,21 @@ and `started_at_unix_ms` (Workflow #315 B2c-2):
   takes over the old epoch's active instances as after a crash, appends one
   `runtime.lifecycle_observed` fact with phase
   `prior_epoch_owner_released_by_exit` carrying `pid`, `started_at_unix_ms` and
-  `last_disposition`, and prints
-  `actingd owner_resources_released_by_exit pid=<pid> started_at_unix_ms=<ms> last_disposition=<in_use|unconfirmed>`
-  on stdout before `actingd ready`. This command is not needed.
+  `last_disposition`, and writes the daemon lines of `owner_released` (info,
+  values `owner_pid` and `at_unix_ms`, the recorded start) on stderr after
+  `ledger_opened` and before `runtime_ready` (Workflow #378 A6a): the developer line
+  `INFO actingd: owner_released owner_resources_released_by_exit pid=<pid> started_at_unix_ms=<ms> last_disposition=<in_use|unconfirmed>`
+  and `OUTCOME actingd: <envelope>`. This command is not needed.
 - alive: the pid is running with a creation time at most 2 s after
   `started_at_unix_ms`, however much earlier (the owner writes
   `started_at_unix_ms` only after loading its configuration and resources). The
-  refusal stays and its message ends in `: pid <pid> alive`.
+  refusal stays; its outcome carries `owner_pid` and `owner_probe_state`
+  `running`, and its developer text contains `: pid <pid> alive`.
 - unknown: the probe cannot decide, for example because the query is refused
   (a protected process) or the exit status or creation time cannot be read. The
-  refusal stays and its message ends in `: probe unknown: <reason>`. A probe
-  failure is never read as dead.
+  refusal stays; its outcome carries `owner_pid`, `owner_probe_state` `unknown`
+  and the probe's reason as its `caused_by` link, and its developer text contains
+  `: probe unknown: <reason>`. A probe failure is never read as dead.
 
 The automatic release concerns the owner guard only and is not itself close
 evidence for the ledger. The same start imports the released epoch into the
@@ -61,12 +65,13 @@ Options may appear in any order. `--config` names the daemon configuration; only
 string: 1 to 256 bytes, no `/`, `\`, `:`, `..` or control character, not `.`
 and not an absolute path. `--confirm-resources-released` is the operator's
 statement that the device resources of the retained epoch are released.
-Argument errors print no result object: `unlock_owner_usage_invalid` (more than
+Argument errors print the report with their outcome alone (no `stage`, no
+`journal_appended`; see "Result"): `unlock_owner_usage_invalid` (more than
 five arguments after the subcommand), `unlock_owner_option_invalid` (an unknown
 or repeated option, a dangling flag or an empty value),
 `unlock_owner_config_missing`, `unlock_owner_actor_missing` and
-`unlock_owner_actor_invalid` follow the normal `FATAL actingd: <code>` line with
-exit code 1.
+`unlock_owner_actor_invalid`, each with its developer line
+`ERROR actingd: <code> <text>` on stderr and exit code 1.
 
 ## Order
 
@@ -110,31 +115,40 @@ directly.
 
 ## Result
 
-Exactly one JSON object is written to stdout on both outcomes.
+Exactly one JSON line is written to stdout on every exit, the v2 report
+(Workflow #378 A6a): `{schema_version, outcome, …}`. `outcome` is the full
+`actingcommand.outcome.v1` envelope; with `ACTINGCOMMAND_DETAIL=codes` in the
+environment it keeps only its registered names (`"detail":"codes"`). v1's
+`status` and `error {code, stage}` are gone.
 
 ```json
-{"schema_version":"actingcommand.actingd.unlock-owner.v1","status":"ok","owner_epoch":"epoch_<32 hex>","previous_resource_disposition":"in_use","actor":"operator-a","revision":4}
+{"schema_version":"actingcommand.actingd.unlock-owner.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"unlock_owner_completed","category":"success","values":{}},"owner_epoch":"epoch_<32 hex>","previous_resource_disposition":"in_use","actor":"operator-a","revision":4}
 ```
 
-`owner_epoch` is the unlocked epoch, `previous_resource_disposition` its
-disposition before the unlock (`in_use` or `unconfirmed`) and `revision` the
-revision of the appended journal record.
+`unlock_owner_completed` carries the receipt: `owner_epoch` is the unlocked
+epoch, `previous_resource_disposition` its disposition before the unlock
+(`in_use` or `unconfirmed`) and `revision` the revision of the appended journal
+record.
 
 ```json
-{"schema_version":"actingcommand.actingd.unlock-owner.v1","status":"failed","error":{"code":"owner_unlock_daemon_active","stage":"journal"},"journal_appended":false}
+{"schema_version":"actingcommand.actingd.unlock-owner.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"owner_unlock_daemon_active","category":"error","values":{"operation":"unlock_owner_file","stage":"unlock_owner_file"}},"journal_appended":false}
 ```
 
-`error.stage` is `load` (the configuration codes of `ledger-maintenance`, for
-example `config_decode_failed` or `maintenance_config_invalid`), `journal`
-(`owner_unlock_daemon_active`, `owner_unlock_not_required`,
-`owner_unlock_confirmation_missing`, or an owner journal read or write code
-such as `owner_record_invalid` or `owner_write_failed`) or `ledger` (the ledger,
-database or artifact store code, for example `ledger_migration_required` or
+A failed unlock is the failure's outcome, whose `stage` value is a registered
+location, and `journal_appended`. The stage is `config_load` (the configuration
+codes of `ledger-maintenance`, for example `config_decode_failed` or
+`maintenance_config_invalid`), `unlock_owner_file` (`owner_unlock_daemon_active`,
+`owner_unlock_not_required`, `owner_unlock_confirmation_missing`, or an owner
+journal read or write code such as `owner_record_invalid` or
+`owner_write_failed`) or `unlock_owner_ledger` (the ledger, database or artifact
+store code, for example `ledger_migration_required` or
 `artifact_retention_recovery_pending`). `journal_appended` is `true` only at
-stage `ledger`: the unlock record is durable and the next start takes the epoch
-over, but the `owner.unlock` fact was not recorded.
+stage `unlock_owner_ledger`: the unlock record is durable and the next start
+takes the epoch over, but the `owner.unlock` fact was not recorded.
 
 ## Exit code
 
-`0` only when `status` is `ok`. A failed unlock prints its JSON object, then the
-normal `FATAL actingd: <message>` line on stderr, and exits `1`.
+The process exits by the outcome's category (Workflow #378 A6a): `0` for
+`unlock_owner_completed`, `1` for an error, `2` for a fatal failure. A failed
+unlock also writes its developer line `<LEVEL> actingd: <code> <text>` on
+stderr.

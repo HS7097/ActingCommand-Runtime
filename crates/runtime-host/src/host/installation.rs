@@ -952,7 +952,8 @@ impl HostShared {
     /// The error that stops an install start, if anything stops it. A latched failure ends it
     /// as `install_startup_stopped` with that condition named (Workflow #381 A R3′), a halt a
     /// restart may fix. An accepted shutdown (`stopping`, or the shutdown flag) ends it as
-    /// `install_startup_shut_down`, a formal stop the watchdog holds (#672 review M1).
+    /// `install_startup_shut_down` (info), a requested stop: actingd ends `runtime_stopped` with
+    /// it as the link, and the watchdog never restarts it (#672 review M1; #378 A6a, A7-R).
     fn install_start_stopped(&self, stopping: bool) -> RuntimeHostResult<Option<RuntimeHostError>> {
         if let Some(cause) = self.fatal.current()? {
             return Ok(Some(

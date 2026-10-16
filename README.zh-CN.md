@@ -16,7 +16,7 @@
 
 # ActingCommand Runtime
 
-ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟器上执行多目标自动化。程序本体（Runtime、Tools 与 MCP 服务）保持中立：不含任何具体目标的逻辑或信息——没有名称、页面、角色、关卡、资源名、数值或规则。代码、合约、默认值与夹具都在 CI 里由守卫测试 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` 与 `r2f_product_and_authoring_paths_have_no_builtin_game_identity` 扫描。一切目标专属内容（截图素材、识别区域、点击框、任务顺序、数据表）都在声明式资源包里：任务包按目标汇成一个标准包，每个包以其 `package_id` 为身份，装载前做结构准入；支持另一个目标就是换一份包，程序不改。运行时按路径找包（`actingctl task-run --package <路径>`），不收包摘要。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v2` 才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。Runtime 只监听本机环回地址，本身没有网络代码。所有边界都 Fail Loud：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级；拒绝也是一份回执；「未知」从不当作「否」。
+ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟器上执行多目标自动化。程序本体（Runtime、Tools 与 MCP 服务）保持中立：不含任何具体目标的逻辑或信息——没有名称、页面、角色、关卡、资源名、数值或规则。代码、合约、默认值与夹具都在 CI 里由守卫测试 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral` 与 `r2f_product_and_authoring_paths_have_no_builtin_game_identity` 扫描。一切目标专属内容（截图素材、识别区域、点击框、任务顺序、数据表）都在声明式资源包里：任务包按目标汇成一个标准包，每个包以其 `package_id` 为身份，装载前做结构准入；支持另一个目标就是换一份包，程序不改。运行时按路径找包（`actingctl task-run --package <路径>`），不收包摘要。GlobalLedger 是唯一事实来源，只有 runtime-host 持有可写句柄；事实先经合约层脱敏成 `actingcommand.event.v3`（v0.12.0 起；0.11 写 v2）才能进入账本。设备访问一律经调度器发放的租约，每次写入都重新校验围栏。Runtime 只监听本机环回地址，本身没有网络代码。所有边界都 Fail Loud：非法配置、非环回绑定、过期证据、不完整导出都以显性错误或非零退出结束，而不是静默降级；拒绝也是一份回执；「未知」从不当作「否」。
 
 [CI 主线状态](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/ci.yml?query=branch%3Amain)（Windows：fmt / clippy `-D warnings` / 七个模块测试作业） · [精确 SHA 的 Windows 构建](https://github.com/HS7097/ActingCommand-Runtime/actions/workflows/windows-remote-build.yml) · [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases)（按需发版：Actions → release → Run workflow） · 许可 `AGPL-3.0-only` · [伞仓](https://github.com/HS7097/ActingCommand) · [UI 控制台](https://github.com/HS7097/ActingCommand-UI)
 
@@ -62,7 +62,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 - **安装向导（推荐）。** 伞仓的 [Releases](https://github.com/HS7097/ActingCommand/releases) 页带在线向导 `acsetup.exe`（自己取伞仓最新发布）、离线向导 `acsetup-full-<tag>.exe`（自带一整份发布）、一键脚本 `install.ps1` / `install.sh` 与各成员 zip。向导按用户安装、不要管理员（默认 `%LOCALAPPDATA%\Programs\ActingCommand`），逐个文件按 `SHA256SUMS` 与各 zip 的 `BUILD-MANIFEST.json` 核对，不符就停。它布置 A/B 安装：程序本体（`runtime\`、`ui\`）放进槽 `A\` 或 `B\`，`install\active.json` 选槽，安装根下的固定入口总是启动所选的槽；`tools\`、`vision\`、`packages\`、`state\` 留在安装根、两槽共用。升级时在另一个槽准备新版再切换；`ui\acsetup.exe --rollback` 可切回。伞仓最新发布（v0.11.4）带的是 Runtime v0.11.4；Runtime v0.11.5 与 v0.11.6 目前只在本仓 Releases 页上。
 - **手动安装。** 从本仓某个 Release 取 `actingcommand-runtime-<sha>.zip`、`actingcommand-tools-<sha>.zip` 与 `SHA256SUMS`，核对后按 [INSTALL.md](distribution/windows/INSTALL.md) 操作：私有配置、[自带 adb](distribution/windows/INSTALL.md#bundled-adb)（没写 `adb_path` 的实例用 `<install root>\tools\platform-tools\adb.exe`）、启动 / 查看 / 关闭，以及[升级边界](distribution/windows/INSTALL.md#upgrade-boundary)。
-- **看门狗。** 安装器不会自动启用。在运行 Runtime 的那个用户的普通（非提权）PowerShell 里运行一次 `<install root>\runtime\actingctl.exe watchdog install --root <install root>`：它注册一个每分钟运行一次 `<install root>\tools\actingwatch.exe` 的计划任务。Runtime 没经正式关闭就不在了（崩溃、关窗、任务管理器结束、重启）时，看门狗把它拉起；v0.11.6 起 held 启动失败、release / held 超时之后也会拉起。正式关闭过的不拉；最后一份日志以其他 `FATAL` 结尾的保持停机并报出；30 分钟内最多拉 3 次。记录写在 `<install root>\watchdog\watchdog.log`，不写账本。`watchdog status` / `run-once` / `uninstall` 用同一个 `--root`；删除安装前先 `watchdog uninstall`（[详情](distribution/windows/INSTALL.md#runtime-watchdog)、`contracts/runtime-watchdog.md`）。
+- **看门狗。** 安装器不会自动启用。在运行 Runtime 的那个用户的普通（非提权）PowerShell 里运行一次 `<install root>\runtime\actingctl.exe watchdog install --root <install root>`：它注册一个每分钟运行一次 `<install root>\tools\actingwatch.exe` 的计划任务。Runtime 没经正式关闭就不在了（崩溃、关窗、任务管理器结束、重启）时，看门狗把它拉起；v0.11.6 起 held 启动失败、release / held 超时之后也会拉起。正式关闭过的不拉；上一次启动以致命结局收场的保持停机并报出；30 分钟内最多拉 3 次。v0.12.0 起它按终态结果（该次启动日志里最后一行 `OUTCOME actingd:`）判断：致命的保持停机，错误的考虑重新拉起。记录写在 `<install root>\watchdog\watchdog.log`，不写账本；v0.12.0 起它的报告是带 `outcome` 的 `actingcommand.watchdog.report.v2`，`actingctl watchdog` 与 `actingwatch.exe` 按类别以 0、1 或 2 退出。`watchdog status` / `run-once` / `uninstall` 用同一个 `--root`；删除安装前先 `watchdog uninstall`（[详情](distribution/windows/INSTALL.md#runtime-watchdog)、`contracts/runtime-watchdog.md`）。
 - **搭配。** UI v0.11.3（控制台与安装向导）可以与 Runtime v0.11.6 搭配。Runtime 从 v0.11.3 及以后回滚到 v0.11.2 及更早不受支持（账本接口修订 2；`acsetup --rollback` 退出 1、不做改动）；v0.11.6 的清理器跑过之后，v0.11.5 及更早拒绝该状态根。
 
 ## 架构总览
@@ -87,7 +87,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 ![一次运行时请求的完整生命周期](docs/assets/readme/request-lifecycle.zh.png)
 
-1. **组装**（`runtime-client`）：调用方从 58 个类型化 `RuntimeOperation` 变体中选一个，客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v3` 请求。
+1. **组装**（`runtime-client`）：调用方从 68 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载这四种目前仍以 `not_implemented` 拒绝），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求（v0.12.0 起；0.11 发 v3），可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
 2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。
 3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
 4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
@@ -98,7 +98,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 9. **租约**（`scheduler`）：每个实例只有一个队列，持有者与等待者都在其中；在按实例的准入锁下两阶段准备并提交租约，准入的工作在该实例自己的工作线程（`actingd-instance-<alias>`）上运行。受限任务的 TTL 由请求自身的期限推导，任务期限再被夹到「租约到期减心跳预留」。
 10. **逐次围栏**（`scheduler`）：每一次触碰设备的调用都重新校验令牌——owner epoch、冷却、租约位置、实例/租约/持有者身份、拥有连接、到期时间、令牌整体相等，以及 resource_close_only 状态。
 11. **执行**（`execution-kernel`）：内核在守护进程拥有的会话下运行受限任务，按名称选择采集与输入后端，按固定 model_ref 与 model_sha256 调用视觉提供者；每次采集、输入与追踪都经 `ContainedTaskRuntime` 回调宿主，由宿主而非内核记录事实。
-12. **记录并回执**（`runtime-host` + `ledger`）：宿主取 fact_write_gate，起草并脱敏事件，交给账本的单写者线程追加，同步事实存储，再喂给性能监视。结果成为一份带状态（Admitted / Observed / Queued / Denied / Completed / Failed / Cancelled）的 `RuntimeReceipt`，按 request_id 缓存后成帧回传。拒绝也是回执，从不以沉默代替。
+12. **记录并回执**（`runtime-host` + `ledger`）：宿主取 fact_write_gate，起草并脱敏事件，交给账本的单写者线程追加，同步事实存储，再喂给性能监视。结果成为一份带状态（Admitted / Observed / Queued / Denied / Completed / Failed / Cancelled）的 `RuntimeReceipt`，v0.12.0 起（`actingcommand.runtime.receipt.v2`）每份回执都带 `outcome`，按 request_id 缓存后成帧回传。拒绝也是回执，从不以沉默代替。
 
 第 5、6 步描述的是 0.11 的行为。0.12 系列计划让三个前端（命令行、MCP、UI）走同一道门，只记录请求来自哪个前端，不再按来源设门（见[路线图](#路线图)）。
 
@@ -113,7 +113,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 ![证据面：单写者账本与只读读者](docs/assets/readme/evidence-plane.zh.png)
 
-**GlobalLedger** 是唯一的事实来源，runtime-host 是唯一写者：可写句柄只在 `RuntimeHost::start_with_provider` 中打开，并作为私有字段持有；唯一例外是离线 `actingd unlock-owner` 为它那一条 `owner.unlock` 事实自开写者。生产者提交 `EventDraft`，必须经 `sanitize()` 得到不可变更、不可反序列化的 `SanitizedEventDraft`（`actingcommand.event.v2`）才能进入账本；字段敏感度与脱敏策略由合约而非生产者决定。序列号只由账本分配，从 1 开始并跨重开继续。重复 EventId 是不致命的 `duplicate_event_id`，不消耗序列号；而追加失败不等于「事件不存在」——写者在致命错误上终止并通知订阅者。今天主机写入的介质是 SQLite：schema `actingcommand.sqlite-ledger.v1`，表与 `runtime-state.sqlite` 同库。全新状态根由 `initialize_empty` 直接写入 `ready` 标记，`open_writer` 拒绝任何非 `ready` 标记，因此新装的实例一开始就跑在 SQLite 上。段存储 `<state_root>/ledger/segments/segment-NNNNNN.jsonl` 是旧的落盘形态：生产已不再写它（段写者只留在账本 crate 自己的测试里），既有段目录由离线 `ledger-maintenance` 路径冻结并导入；`candidate` 或未认证的标记不会启用生产写者，切换在一次 Immediate 事务内完成。只读一侧不同：`open_evidence` 按状态根里实际存在的材料选择后端（有 SQLite 账本 schema 就读 SQLite，否则读段目录），并在快照里报告后端是 segment 还是 sqlite。
+**GlobalLedger** 是唯一的事实来源，runtime-host 是唯一写者：可写句柄只在 `RuntimeHost::start_with_provider` 中打开，并作为私有字段持有；唯一例外是离线 `actingd unlock-owner` 为它那一条 `owner.unlock` 事实自开写者。生产者提交 `EventDraft`，必须经 `sanitize()` 得到不可变更、不可反序列化的 `SanitizedEventDraft`（v0.12.0 起为 `actingcommand.event.v3`：每条带结果的记录都带一个 `outcome`，其类别即该记录的严重度；0.11 写 v2）才能进入账本；字段敏感度与脱敏策略由合约而非生产者决定。序列号只由账本分配，从 1 开始并跨重开继续。重复 EventId 是不致命的 `duplicate_event_id`，不消耗序列号；而追加失败不等于「事件不存在」——写者在致命错误上终止并通知订阅者。今天主机写入的介质是 SQLite：schema `actingcommand.sqlite-ledger.v1`，表与 `runtime-state.sqlite` 同库；v0.12.0 起账本为 SQLite 格式 2（`user_version` 2），存有 0.11 格式 1 账本的数据库在读写任何账本行之前就以 `ledger_format_unsupported` 拒绝。全新状态根由 `initialize_empty` 直接写入 `ready` 标记，`open_writer` 拒绝任何非 `ready` 标记，因此新装的实例一开始就跑在 SQLite 上。段存储 `<state_root>/ledger/segments/segment-NNNNNN.jsonl` 是旧的落盘形态：生产已不再写它（段写者只留在账本 crate 自己的测试里），既有段目录由离线 `ledger-maintenance` 路径冻结并导入；`candidate` 或未认证的标记不会启用生产写者，切换在一次 Immediate 事务内完成。只读一侧不同：`open_evidence` 按状态根里实际存在的材料选择后端（有 SQLite 账本 schema 就读 SQLite，否则读段目录），并在快照里报告后端是 segment 还是 sqlite。
 
 **ArtifactStore** 拥有工件字节与哈希。对象键由内容推导而非调用方指定：`artifacts/{shard}/{artifact_id}.{ext}`。发布顺序是「不覆盖的原子重命名 → ArtifactCreated → 校验 → ArtifactVerified」；发布即保留边界——两个必需事件任一失败都会追加一条失败事件并返回致命错误，但已发布的文件不会被回收，只有未发布的临时文件会被清理。流式工件在封口重算长度与 SHA-256 之前不发布任何内容。
 
@@ -123,7 +123,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 **离线读取**由 `actingledger` 提供，它只开只读证据快照，从不写入。子命令为：`open`、`events`、`chain --req <request-id>`、`tail`、`repairs`、`export`（可加 `--performance` / `--stability` / `--task-evidence`）、`views`（账本终态视图的一页，与运行时提供的页相同）、`material --request <json>`（一件已提交工件的一段已校验字节）、`signatures`、`facts --at <sequence>`（按账本位置重放程序事实库）、`replay`。除裸 `export` 输出人类可读的多行文本报告外，其余报告都是单行 JSON；证据存在缺口时先打印报告再以 `signature_replay_incomplete`、`stability_export_incomplete`、`task_evidence_export_incomplete`、`ledger_view_source_incomplete` 非零退出；`facts` 不可用时以 `runtime_facts_not_available` 或失败码非零退出。
 
-**结果码。** 目前已登记的结果码（来自 `runtime-host`、`contract`、`artifact-store`、`ledger`）放在 `contracts/outcome-codes/` 下的分片里；`outcome-guard merge` 把它们合并成码目录 `contracts/outcome-codes.json`（v0.11.5 起）。0.12 系列正在把所有程序的结果统一到这份码目录上。
+**结果码。** 已登记的结果码放在 `contracts/outcome-codes/` 下的分片里，每个所属包或程序一片（从 `contract`、`ledger`、`runtime-host` 到 `actingctl`、`actingd`、`actinglab`、`actingledger`），共用的键与词表在 `catalog.json`；`outcome-guard merge` 把它们合并成码目录 `contracts/outcome-codes.json`（v0.11.5 起）。v0.12.0 起，回执、账本记录、`actingctl`、`actingd`、看门狗与 MCP 工具错误都以 outcome 的形式携带这些码。0.12 系列正在把所有程序的结果统一到这份码目录上。
 
 ## 不变式与守卫
 
@@ -195,7 +195,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 识别目标分七类：Template、Color、ClickOnly、Ocr、Nn、ColorDigest（颜色摘要，`contracts/color-digest.md`）与 Composite（对 2–8 个其他目标的具名「全部满足 / 任一满足」检查）。模板匹配是 CPU 图像匹配，带 5 秒显式超时与粗匹配/精修两段，超时失败会报告发生在哪一段。生产 OCR 与 NN 在 `vision-ffi` 边界后的进程内引擎中运行；每个目标指明其模型文件夹与内容（`contracts/vision-model-folders.md`），宿主侧适配器强制该身份：`model_ref` 必须是不含 `/`、`\` 或 `:` 的有界逻辑标识（不接受主机路径），`model_sha256` 必须是恰好 64 位小写十六进制。模型在第一次用到时从 `<vision root>\models\<model_ref>\` 加载。页面投影是对单帧已解析事实的无副作用投影，schema `actingcommand.page-projection.v1`，上限 64 条 / 32 KiB，条目按角色（Navigate / PageOp / ControlPoint）、任务 ID、资源 ID 与页面为键，每条携带 Safety 分类且默认值为 Dangerous；操作 schema `0.8` 的 OCR 字段声明走 `post_admission_ocr.mode = fields_v1`，字段声明与旧的真值集合声明不可混用，且本合约不含任何目标专有值（`contracts/ocr-fields.md`、`contracts/page-projection.md`）。
 
-包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）；截图尺寸不同时任务以 `contained_task_frame_resolution_mismatch` 明确失败（`contracts/linear-steps.md`）。把其他 16:9 与 9:16 分辨率换算到包的基准坐标系是 0.12 系列的计划。
+包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）；截图尺寸不同时任务以 `contained_task_frame_resolution_mismatch` 明确失败（`contracts/linear-steps.md`）。v0.12.0 起，设备上受限任务的第一帧会把实例的显示记为事实（`display.frame_extent`、`display.rotation`、`display.orientation`、`display.aspect`）；不会因为帧自身的宽高比拒绝任何帧，只在帧的宽高比与采集它的显示不一致时拒绝（`contained_task_geometry_frame_display_mismatch`）。把其他 16:9 与 9:16 分辨率换算到包的基准坐标系是 0.12 系列的计划。
 
 ## MCP 服务
 
@@ -212,13 +212,15 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 <install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
 ```
 
-**档位（0.11.x）。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。未开档位的工具答 `tier_not_enabled`。0.12 系列计划取消档位（见[路线图](#路线图)）。
+**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。主线上档位仍在；0.12 系列计划取消档位（见[路线图](#路线图)）。下表列的是主线上的 35 个工具；v0.11.6 有其中 22 个，标 † 的 13 个是 v0.11.6 之后新增的。v0.12.0 起工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 
 | 档位 | 工具 |
 | --- | --- |
-| observer（读取，以及 Runtime 运行中可改的设置，10 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_get_run`、`ac_diagnose`、`ac_resources_list`、`ac_targets_get`、`ac_pack_check`、`ac_catalog_check`、`ac_config_set` |
-| operator（设备与调度，6 个） | `ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、`ac_emulator`、`ac_targets_set` |
+| observer（读取、Runtime 运行中可改的设置、手机设备绑定与本地能力缺口记录，20 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_observe`†、`ac_get_run`、`ac_diagnose`、`ac_runs`†、`ac_run_evidence`†、`ac_resources_list`、`ac_targets_get`、`ac_config_set`†、`ac_packs`†、`ac_facts`†、`ac_outcome_code`†、`ac_devices`†、`ac_device_bind`†、`ac_device_unbind`†、`ac_capability_gap`†、`ac_pack_check`、`ac_catalog_check` |
+| operator（设备、应用与调度，8 个） | `ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、`ac_emulator`、`ac_app`†、`ac_ladder_drill`†、`ac_targets_set` |
 | author（Lab 录制，7 个） | `ac_lab_observe`、`ac_lab_do`、`ac_record_start`、`ac_record_mark`、`ac_record_stop`、`ac_record_status`、`ac_binding_draft` |
+
+`ac_observe` 是 `actingctl observe --export` 在 MCP 一侧的对应：对一个实例只读取一帧，完整写进 MCP 导出目录。
 
 **智能体守则。** 从 `ac_overview` 开始。长操作立即返回句柄，用 `ac_get_run`（带 `wait_s`）轮询；运行的句柄是 Runtime 的 request_id，跨重启有效。结果不确定时先 `ac_get_run`，不换参数重发写操作。批准、`actingd` 配置文件改动与守护进程重启归人；Runtime 运行中可改的设置用 `ac_config_set`（或 `actingctl config set|clear`）改，每次改动都入账。智能体操作手册是伞仓里的 skill `skills/actingcommand/`。
 
@@ -236,6 +238,11 @@ Windows 准确 SHA 工件包含两份 Runtime exe、待填写配置模板、安�
 
 `actingd` 的正常调用接受 `--config <path>`，安装事务时可再加 `--install-held <json>`（见[宿主安装控制](distribution/windows/INSTALL.md#ab-installation-inputs-and-host-control)）；第一个参数也可以改为 `ledger-maintenance`、`check-config`、`unlock-owner` 或 `suspended` 子命令，其余一律 `usage_invalid`。配置 schema 为 `actingcommand.actingd.config.v1`，上限 1 MiB，拒绝未知字段；`bind_host` 必须能解析为 IP **且**必须是环回地址，`secret_fingerprint_salt` 必须是 16..=1024 字节。`actingd` 启动时会把驻内存的运行配置清单（所运行的子系统，以及每个生效参数及其来源；盐只记字节长度）记为程序事实 `config.subsystems`、`config.selection` 与每节一条 `config.parameters.<section>`，可用 `actingctl facts --program` 读取，`check-config` 也会打印。`actingctl` 与 `actingledger` 的 `--state-root` 都指运行时状态根，而不是 `ledger` 目录。
 
+v0.12.0 起的输出与退出码（`ACTINGCOMMAND_DETAIL=codes` 时 outcome 只保留登记过的名称；不设则为完整 outcome）：
+
+- **actingd** 把守护进程行写在 stderr：每个 outcome 一行开发者行 `<INFO|WARN|ERROR|FATAL> actingd: <code> …` 加一行 `OUTCOME actingd: <envelope>`；最后一个就是它的终态结果（启动被拒时就是那条拒绝；否则是 `runtime_stopped`，若是某个条件使它停止，后面再跟那个条件）。它按该结果的类别以 0（成功、信息或警告）、1（错误）或 2（致命）退出。四个子命令各在 stdout 打印一份带 `outcome` 的 JSON 报告：`actingcommand.actingd.check-config.v2`、`actingcommand.ledger-maintenance.v2`、`actingcommand.actingd.unlock-owner.v2` 与 `actingcommand.actingd.suspended.v2`，并按 outcome 的类别退出。
+- **actingctl**：除 `mcp-serve` 与 `mcp-config` 外，每个子命令每次退出都在 stdout 恰好打印一行 JSON，成功为 `{…result, "outcome": …}`，失败为 `{"outcome": …}`；Runtime 拒绝的请求把回执放在 outcome 旁边一并打印。stderr 只有开发者行。`actingctl` 与 `actingwatch` 按同样的类别以 0、1 或 2 退出，被拒或失败的回执至少退出 1。
+
 ```bash
 # 本地构建与门禁；fmt 与 clippy 与 CI 相同，CI 的测试则按上文七个模块作业分开执行（CI 的发布构建另带 --locked 与显式 MSVC 目标）
 cargo build --release
@@ -243,7 +250,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --keep-going -- -D warnings
 cargo test --workspace --no-fail-fast
 
-# 启动常驻守护进程；成功时 stdout 打印 actingd ready pid=<pid> host=<host> port=<port>
+# 启动常驻守护进程；就绪后 stderr 打印 INFO actingd: runtime_ready pid=<pid> host=<host> port=<port> 及其 OUTCOME actingd: 行（v0.12.0 起；0.11 在 stdout 打印 actingd ready pid=<pid> host=<host> port=<port>）
 actingcommand-actingd --config runtime.json
 
 # 客户端（子命令必须是第一个参数，之后才是标志；每条命令都需要 --state-root）
@@ -253,6 +260,7 @@ actingctl facts --program --state-root <state-root>
 actingctl facts --instance <alias|instance_id|ADB port> --state-root <state-root> [--key-prefix <prefix>]   # 一个实例的事实
 actingctl monitor-status --state-root <state-root>
 actingctl observe --state-root <state-root> --instance <alias>
+actingctl observe --state-root <state-root> --instance <alias|instance_id|ADB port> --export <dir>     # 只读取一帧，读回校验后完整写成 <dir>\<sha256>.png（MCP 对应 ac_observe）
 actingctl reset --state-root <state-root> --instance <alias>
 actingctl stream --state-root <state-root> --instance <alias> --max-frames 8 --interval-ms 250
 actingctl monitor-set --state-root <state-root> --instance <alias> --interval-ms 30000 --expect home --recover
@@ -270,13 +278,13 @@ actingctl request-shutdown --state-root <state-root>
 actingctl request-shutdown --state-root <state-root> --wait 60     # 随后等待（1..=3600 秒）直到 owner 记录关闭且进程退出；只读
 actingctl install-transition --state-root <state-root> --action-json '<action-json>'     # 安装向导使用的安装控制（INSTALL.md，"A/B installation inputs and Host control"）
 actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter 来源：发布一份有界事实观测
-actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter 来源：应用一份实例资源目标策略（contracts/resource-targets.md）；成功打印 {"applied": ...}，被拒时打印带字段位置的回执并以非零退出
+actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter 来源：应用一份实例资源目标策略（contracts/resource-targets.md）；成功打印 {"applied": ..., "outcome": ...}，被拒时把带字段位置的回执与其 outcome 一并打印并以非零退出
 
 # A/B 安装的看门狗（INSTALL.md，"Runtime watchdog"）
 actingctl watchdog install --root <install root>     # 另有 status | run-once | uninstall
 
 # MCP 服务（stdio）与客户端注册
-actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]]
+actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]] [--detail codes|full]
 actingctl mcp-serve --list-tools [--format json|markdown]
 actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]
 
@@ -316,7 +324,7 @@ actingcommand-actingd ledger-maintenance restore --config runtime.json --backup 
 # 无副作用的配置检查（与启动相同的加载/装配/校验；不触碰 state_root 下任何内容）
 actingcommand-actingd check-config --config runtime.json
 
-# 只读列出被挂起、已解除、反复失败的定时按步任务（与启动相同的配置装配；不取 owner 锁只读账本，可与运行中的守护进程并行；contracts/policy-suspension.md）
+# 只读列出被挂起、已解除、反复失败的定时按步任务，账本最近 48 小时的时钟槽记录及其去向，以及最近一次启动挂起且尚未解除的任务包（与启动相同的配置装配；不取 owner 锁只读账本，可与运行中的守护进程并行；contracts/policy-suspension.md）
 actingcommand-actingd suspended --config runtime.json
 
 # 启动因 owner_resource_unconfirmed 被拒后的离线解锁（只向 owner.lock 追加、从不删除；下次启动自动接管）

@@ -567,3 +567,13 @@ tests = [
     "actingcommand-actinglab-architecture::kernel_clock_seam::contained_task_kernel_reads_its_clock_and_waits_only_through_the_runtime_seam",
 ]
 incident = ["#382 E-3"]
+
+# Workflow #378 A8 (order-v012 §3.6; register §6; model-378 §10 with §16 A-7): the Runtime's interface declaration distribution/windows/component-interfaces.json declares each v0.12.0 revision once (actingd-config [5, 5], install-control [0, 1], install-selection [1, 1], ledger [3, 3], package [3, 3], runtime-client [2, 2], runtime-outcomes [1, 1]), and the exact-SHA build validates exactly the interfaces it names, runtime-outcomes included (contract key K27, the next free key of the file that holds the architecture guards)
+[[gate]]
+key = "K27"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-architecture::component_interfaces::the_runtime_declares_each_v0120_interface_revision_once",
+    "actingcommand-actinglab-architecture::component_interfaces::the_exact_sha_build_validates_every_declared_interface",
+]
+incident = ["#378 A8"]

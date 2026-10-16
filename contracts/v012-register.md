@@ -173,11 +173,15 @@ Follow-ups A3's acceptance (2026-10-13) leaves to later slices, beside the PR's 
   carries `vision_model_folder_invalid` only); the R25-2 verdict at the failure point
   (`contained_task.rs` terminal) against the rerun-only identity at settlement
   (`failure_settlement.rs`) when a cleanup poisons after the terminal.
-- **A8:** the PPOCR failure source (`ppocr_source`, `ppocr_message`) and the connection
-  `timing`, measured but no longer persisted; actingd's dead `client_message` argument
-  (`apps/actingd/src/main.rs`, `RuntimeLifecycleFailure::Client.message`).
-- **A6a / A8:** check-config v1's `subsystems[].reason` became `outcome` without a version
-  bump; A6a's check-config v2 and A8's declaration list it.
+- **A8 (documents done):** the PPOCR failure source (`ppocr_source`, `ppocr_message`) and the
+  connection `timing` are measured but no longer persisted;
+  [task-diagnostic-stream.md](task-diagnostic-stream.md) says so. actingd's dead
+  `client_message` argument (`RuntimeLifecycleFailure::Client.message`, matched as `message: _`
+  in `runtime-host/src/host/lifecycle.rs`) is still there: removing it is a code change, outside
+  A8's declarations and documents, and is left to the coordinator.
+- **A6a / A8 (done):** check-config v1's `subsystems[].reason` became `outcome` without a version
+  bump; [actingd-check-config.md](actingd-check-config.md) says so, and check-config v2 is part
+  of `runtime-outcomes` revision 1 (§6).
 
 ### 1.10 Real-device capture (#398 R1 §5.1, §5.3; #402 RD-3)
 
@@ -298,7 +302,7 @@ The new codes, locations, keys and vocabulary tokens are catalog entries, not ro
 
 Workflow #378 slice A5 writes the types, the readers and the writers in one PR, so it is the code
 slice and the first writer of every row below. None of them is a ledger record; they are the
-`runtime-outcomes` interface (M378 §10, declared by A8) and the watchdog's own files. No
+`runtime-outcomes` interface (M378 §10; revision 1, declared for v0.12.0, §6) and the watchdog's own files. No
 old-version reader: a v1 report, a v1 `state.json` or the v1 MCP error shape is not read. The new
 codes, keys (`argument`, `argument_problem`, `instance_selector`, `mcp_tool`, `material_state`,
 `material_limit`, `req_id`, `owner_closed`, `process_alive`, `run_state`,
@@ -528,7 +532,7 @@ persisted record; the reading facts keep their shape.
 | DS3 | `config.subsystems` row `recognition_packages` | new row of an existing fact | D2-S2 | D2-S2 | only when the configuration binds a recognition package; `enabled` when the start kept one; outcome `config_subsystem_configured` with one `note` link `fact_reader_binding_ignored` (caused by `fact_reader_binding_invalid`) per binding the start runs without |
 | DS4 | task diagnostic stream (`task-diagnostic.v2`): a reading mark that gave no reading is one `error` row (`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the mark's `target_id`) whose `outcome` is `contained_task_resource_reading_unresolved` (warning; `reading_id`, `fact_key`, `reading_problem`) | new value of an existing member | D2-S2 | D2-S2 | written on the frame the mark was read on; a joined reading's OCR rows also carry that frame's `frame_id`, not the last captured frame's; schema not bumped |
 | DS5 | `fact.published` of a reading | changed rule of an existing record (shape unchanged) | D2-S2 | D2-S2 | `observed_at_unix_ms` and the `frame:` part of `source_snapshot_id` are those of the frame the reading was taken on, on any page of the task (they were the terminal frame's); readings are published in the order of their frames' capture times |
-| DS6 | package format: bundle `maintenance[].uses` value `recognition` (at most one per server); task `resource_readings[].page_id` any page the task declares; `linear_steps` tasks may carry `resource_readings` | new value and relaxed rules (resource file format, not a ledger shape) | D2-S2 | resource side (D2-R1, D2-S6) | a reader that does not know `recognition` refuses the declaration; the `package` interface revision is declared once by A8 |
+| DS6 | package format: bundle `maintenance[].uses` value `recognition` (at most one per server); task `resource_readings[].page_id` any page the task declares; `linear_steps` tasks may carry `resource_readings` | new value and relaxed rules (resource file format, not a ledger shape) | D2-S2 | resource side (D2-R1, D2-S6) | a reader that does not know `recognition` refuses the declaration; it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 | DS7 | check-config v1: `error.code` `fact_reader_binding_invalid`, stage `config_recognition_binding`, `error.detail` `{alias, path, reader_problem, package_id, fact_key}`; `instances[].recognition_package` `{package, fact_keys}` for an instance that binds one; warning `fact_reader_missing:<instance>:<fact key>` | interface members | D2-S2 | D2-S2 | schema version stays `v1` (additive) |
 | DS8 | `actinglab package bundle` output: `warnings` (absent when empty), one `recognition_pack_undeclared` outcome per pack that qualifies as a reader but is not declared `recognition` | interface member | D2-S2 | D2-S2 | resource-tooling `PackageBundleResponse.warnings` |
 
@@ -553,7 +557,7 @@ vocabularies are catalog entries, not rows.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R6-1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTargetData.value_test` (`TaskDiagnosticValueTestData`) and `TaskDiagnosticTargetData.skipped` (`TaskDiagnosticTargetSkip`) | two new optional members, absent when unused | REC-6 (#396, REC-M v1.2.1 §2, §8.3, §8.4) | REC-6 | `value_test` = `{left: TaskDiagnosticValueOperand, op, right?, passed}` with `TaskDiagnosticValueOperand {target_id, raw_text?, value?, problem?}` (`deny_unknown_fields`), `op` one of `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `parses`, `problem` one of `empty`, `invalid`, `overflow`, `out_of_range`, `region_unresolved`, `low_confidence`, and `right` = `{"kind": "const", "const"}` or `{"kind": "operand", "operand", "mul", "add"}`, absent for `parses`; REC-1's `failure` (V3) then carries `value_test_unresolved` or `value_test_not_met`. `skipped` = `page_unmatched` on a page target row the page recognition left unevaluated (not passed, no child rows); the page detector's `PageTargetEvaluation.skipped` carries the same value |
-| R6-2 | task schema `0.9` `checks[].value_test` (`{left, op, right?}`); recognition pack schema `0.7` target type `value_test`; `OcrUnsignedIntegerFormat::ClockHms` (`clock_hms`, for fields, readings and value tests); a value test side's `trim` `whitespace_all_v1`; the page gate of a page that collects or reads OCR | new members and values, one rule relaxed (resource file format, not a ledger shape) | REC-6 | resource side | older task and pack schemas refuse the new members (`UnconsumedField`); a value test in a page rule's `forbidden`, directly or through a check, is refused at `/pages/<i>/forbidden/<j>`; a page that collects fields, collection-mode targets or readings may gate on any backend and on those targets themselves (the gate's observation is the collection's); the `package` interface revision for these is declared once by A8 |
+| R6-2 | task schema `0.9` `checks[].value_test` (`{left, op, right?}`); recognition pack schema `0.7` target type `value_test`; `OcrUnsignedIntegerFormat::ClockHms` (`clock_hms`, for fields, readings and value tests); a value test side's `trim` `whitespace_all_v1`; the page gate of a page that collects or reads OCR | new members and values, one rule relaxed (resource file format, not a ledger shape) | REC-6 | resource side | older task and pack schemas refuse the new members (`UnconsumedField`); a value test in a page rule's `forbidden`, directly or through a check, is refused at `/pages/<i>/forbidden/<j>`; a page that collects fields, collection-mode targets or readings may gate on any backend and on those targets themselves (the gate's observation is the collection's); they are part of `package` revision 3, declared once for v0.12.0 (§6) |
 
 ### 1.30 Wave 8 slice L-5b (#382: the K/T remnants L-5 left)
 
@@ -601,7 +605,7 @@ with the read's blocks. The new location `text_read_shared` is a catalog entry, 
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| R8-1 | task schema `0.9` `candidate_layouts[].shared_ocr` and recognition pack schema `0.7` `candidate_layouts[].shared_ocr`: `{region, languages, timeout_ms, model_ref, model_sha256, blocks, line_merge?}` | new member of a `fixed_slots` layout (resource file format, not a ledger shape) | REC-8 | resource side | [selection-graph.md](selection-graph.md), section Shared OCR read; the region is a rectangle or `full_frame` (the source's `rect` / `full_frame` region form, derived into the pack's), `blocks` must be `detect` with a `line_merge`; a `repeated_anchor` layout refuses it (`UnknownField`), task schemas before `0.9` too (`UnconsumedField`); a shared read no slot or feature target uses is refused; one projection counts it as one provider evaluation per frame it serves, and the targets it serves none; the `package` interface revision for it is declared once by A8 |
+| R8-1 | task schema `0.9` `candidate_layouts[].shared_ocr` and recognition pack schema `0.7` `candidate_layouts[].shared_ocr`: `{region, languages, timeout_ms, model_ref, model_sha256, blocks, line_merge?}` | new member of a `fixed_slots` layout (resource file format, not a ledger shape) | REC-8 | resource side | [selection-graph.md](selection-graph.md), section Shared OCR read; the region is a rectangle or `full_frame` (the source's `rect` / `full_frame` region form, derived into the pack's), `blocks` must be `detect` with a `line_merge`; a `repeated_anchor` layout refuses it (`UnknownField`), task schemas before `0.9` too (`UnconsumedField`); a shared read no slot or feature target uses is refused; one projection counts it as one provider evaluation per frame it serves, and the targets it serves none; it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 | R8-2 | the text read budget of a page recognition (`ocr-fields.md`, section Located text) | tightened rule (resource file format, not a ledger shape) | REC-8 | resource side | REC-6 left open how the field, reading and `0.7` collection targets a page gate names count: each such target a page names, directly or through a check, is one read of its own region (its observation is kept by target), at admission (`resource_declaration_invalid`, `InvalidValue` at `/pages/<i>` of the page that exceeds the budget) and at run time (`text_read_budget_exceeded` before the gate's provider call); a task whose gates name more than four of them, or more than one frame of their summed area with the page set's other reads, is refused where it was admitted since REC-6 |
 
 ### 1.36 Wave 9 slice S6a (#369 model v3.1 §7 row 6, H-5; ORD §3.5 item 17)
@@ -625,7 +629,7 @@ S6a; S6c reads it.
 
 A6a writes the types, the readers and the writers in one PR, so it is the code slice and the
 first writer of every row below. Rows A6-1 to A6-7 and A6-10 are the `runtime-outcomes`
-interface (M378 §10, declared by A8) or actingd's and the watchdog's own files, not ledger
+interface (M378 §10; revision 1, declared for v0.12.0, §6) or actingd's and the watchdog's own files, not ledger
 records; A6-5 and A6-8 reach persisted bytes. No old-version reader: a v1 report, a FATAL line
 or a v1 backup manifest is not read. The new codes (`runtime_ready`, `runtime_stopped`,
 `ledger_opened`, `ledger_open_measured`, `owner_released`, `scheduling_pause_restored`,
@@ -679,7 +683,7 @@ invalidations") are the contract. No new event type and no new member of a persi
 | D31 | `fact.published` of a resource adjustment write | new rule of an existing record (shape unchanged) | D2-S3 | D2-S3 | one record: the adjusted value at the confirmation frame's capture time, the adjusted record's `expires_at_unix_ms` (and a `ttl_policy` of `expires - observed`, `detector_contract`), the lower of the two confidences, `source_detector` `resource_adjustment:<entry task id>/<adjustment id>`, `source_snapshot_id` `run:<run>/frame:<frame>/<adjustment id>/base:<event id>` (the base's `fact.published`); published in a run's terminal stage 2 in capture-time order with its readings, through `publish_facts` with the `ResourceAdjustment` purpose |
 | D32 | `fact.invalidated` of an adjustment | changed rule of an existing record (shape unchanged) | D2-S3 | D2-S3 | an instance-scoped `resource.*` / `inventory.*` record may be invalidated by a `task.step_finished` it does not list in `invalidate_on` (`is_adjustment_invalidation`): a confirmed adjustment that read no new value drops the key's record from before the run; the other source rules (published before the trigger, trigger before the invalidation, trigger time, trigger instance in the record's scope, tombstone projection) are unchanged and checked by the store, its replay, the history at a position and the state projection alike |
 | D33 | task diagnostic stream (`task-diagnostic.v2`): a confirmed adjustment's outcome is one `error` row (`TaskDiagnosticErrorData::Recognition`, phase `post_admission`, the amount's `target_id` or none) on its confirmation frame: `fact_adjustment_skipped` (info), `fact_adjustment_underflow` (warning), and for an amount that gave no reading `contained_task_resource_reading_unresolved` (warning, `reading_id` = the adjustment's id) | new values of an existing member | D2-S3 | D2-S3 | as DS4; an amount's OCR evaluation rows carry the confirmation frame's `frame_id`; schema not bumped |
-| D34 | package format: task `resource_adjustments[] {id, fact_key, operation_id, amount? {target_id, direction: consume \| gain}}` (task schema `0.8`, `0.9`) | new family (resource file format, not a ledger shape) | D2-S3 | resource side (D2-S6) | an older reader refuses the family (`UnknownField`); the `package` interface revision is declared once by A8 |
+| D34 | package format: task `resource_adjustments[] {id, fact_key, operation_id, amount? {target_id, direction: consume \| gain}}` (task schema `0.8`, `0.9`) | new family (resource file format, not a ledger shape) | D2-S3 | resource side (D2-S6) | an older reader refuses the family (`UnknownField`); it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 
 The codes `fact_adjustment_skipped` (info) and `fact_adjustment_underflow` (warning)
 (runtime-host, ladder class `none`), the contract's declaration reasons `resource_adjustments_*`
@@ -698,7 +702,7 @@ projected outcomes, so it follows them.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| O1-1 | task schema `0.8` zero-input fields task (`operations: []`): `scheduling_outcome.mappings` | relaxed rule (resource file format, not a ledger shape) | OUT-1 | resource side | one `fields_recorded` mapping whose terminal pages are the fields pages, and any other mappings; every mapping `no_designated_effect`; the target pages are every mapping's terminal pages, no page in two mappings ([ocr-fields.md](ocr-fields.md)); a run that ends on another mapping's page has no OCR observation and no fields report; the `package` interface revision is declared once by A8 |
+| O1-1 | task schema `0.8` zero-input fields task (`operations: []`): `scheduling_outcome.mappings` | relaxed rule (resource file format, not a ledger shape) | OUT-1 | resource side | one `fields_recorded` mapping whose terminal pages are the fields pages, and any other mappings; every mapping `no_designated_effect`; the target pages are every mapping's terminal pages, no page in two mappings ([ocr-fields.md](ocr-fields.md)); a run that ends on another mapping's page has no OCR observation and no fields report; it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 
 ### 1.41 Wave 10 slice EXEC-2 (#390, forced-compromises mapping E-05, E-06)
 
@@ -716,7 +720,7 @@ codes
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| EX1 | task schema `0.9` operation members `observation_window` (`{until: "window_end", window_ms}` or `{until: "stable", window_ms, frames}`) and `input_recheck` (`{kind: "fresh_frame"}` or `{kind: "stable_frames", frames}`) | new members (resource file format, not a ledger shape) | EXEC-2 | resource side | `window_ms` 1..=60000, `frames` 2..=32 (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); the `package` interface revision is declared once by A8 |
+| EX1 | task schema `0.9` operation members `observation_window` (`{until: "window_end", window_ms}` or `{until: "stable", window_ms, frames}`) and `input_recheck` (`{kind: "fresh_frame"}` or `{kind: "stable_frames", frames}`) | new members (resource file format, not a ledger shape) | EXEC-2 | resource side | `window_ms` 1..=60000, `frames` 2..=32 (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 
 ### 1.42 Wave 10 slice MCP-14 (#389, MCP-0 command table v1.1 §4.15)
 
@@ -791,7 +795,7 @@ is a catalog entry, not a row (§7).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| O2-1 | package format: task `scheduling_outcome.designated_effects[] {operation_id, max_repeats?}`, `max_repeats` an integer or `{fact_key}` (task schema `0.9`) | new member (resource file format, not a ledger shape) | OUT-2 | resource side | 1 to 8 members, each operation once; a constant cap from 1 to 1,000, absent = 1; a fact cap is an unexpired integer instance fact from 0 to 1,000, read once before the run's first step; not with `designated_operation`; an older task schema refuses it (`UnconsumedField`); the `package` interface revision is declared once by A8 |
+| O2-1 | package format: task `scheduling_outcome.designated_effects[] {operation_id, max_repeats?}`, `max_repeats` an integer or `{fact_key}` (task schema `0.9`) | new member (resource file format, not a ledger shape) | OUT-2 | resource side | 1 to 8 members, each operation once; a constant cap from 1 to 1,000, absent = 1; a fact cap is an unexpired integer instance fact from 0 to 1,000, read once before the run's first step; not with `designated_operation`; an older task schema refuses it (`UnconsumedField`); it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 | O2-2 | `task.completed` `TerminalCommitted.scheduling_disposition.effect` (and the same disposition in a scheduling outcome projection's `scheduling_result`): `SchedulingEffectEvidence::DesignatedEffects` (`{"kind": "designated_effects", "effects": [DesignatedEffectTally {operation_label, count, max_repeats}]}`) | new enum value of an existing member | OUT-2 | OUT-2 | written for a run of a package that declares a set: one tally per member in declaration order, `count` the times its effect completed (0 when none), `max_repeats` the cap the run held it to; 1 to 8 tallies, each operation once, `max_repeats` at most 1,000 and `count` at most `max_repeats` (`invalid_scheduling_outcome_declaration`, field `designated_effects`); its mapping condition is `designated_effect_completed` when any count is above 0. A run of a `designated_operation` package keeps `designated_effect_completed` or `no_designated_effect` |
 
 ### 1.49 Wave 12 slice SEL-L3 (#308, frozen selector model S0 v2.1 §2.1–§2.6, §3.3, §6 row L3)
@@ -828,7 +832,7 @@ templates).
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R5-1 | task diagnostic stream (`actingcommand.runtime.task-diagnostic.v2`): `TaskDiagnosticTemplateData.scale_milli` | new optional member, absent when unused | REC-5 (#396, REC-M v1.2.1 §2, §7) | REC-5 | the factor in milli (500 to 2000) the matched template was resampled by, present exactly on the template data of a target that declares `scales`; the row's box is then the resampled template's. The recognition evaluation's `TemplateEvaluation.scale_milli` carries the same value. In base (scale-frame) pixels, as X9's correction is |
-| R5-2 | task schema `0.9` `anchors[].scales` and `verify_templates[].scales`; recognition pack schema `0.7` template target `scales` (`{"factors_milli": [...]}`) | new member (resource file format, not a ledger shape) | REC-5 | resource side | 1 to 4 distinct integers from 500 to 2000, no default; older task and pack schemas refuse it (`UnconsumedField`); a scaled template is refused as a `target_consensus` target, a `repeated_anchor` anchor and an offset feature; where a package is admitted with its bytes, each resampled template keeps at least 4 pixels a side and fits its region (`InvalidValue` at `/targets/<i>/scales/factors_milli/<k>`), and the mask minimum and threshold floor hold per factor; the `package` interface revision for it is declared once by A8 |
+| R5-2 | task schema `0.9` `anchors[].scales` and `verify_templates[].scales`; recognition pack schema `0.7` template target `scales` (`{"factors_milli": [...]}`) | new member (resource file format, not a ledger shape) | REC-5 | resource side | 1 to 4 distinct integers from 500 to 2000, no default; older task and pack schemas refuse it (`UnconsumedField`); a scaled template is refused as a `target_consensus` target, a `repeated_anchor` anchor and an offset feature; where a package is admitted with its bytes, each resampled template keeps at least 4 pixels a side and fits its region (`InvalidValue` at `/targets/<i>/scales/factors_milli/<k>`), and the mask minimum and threshold floor hold per factor; it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 
 ### 1.52 Wave 12 slice RD-2 (#398 model-398 v1.1 §4, §10.1, §12; #387 ruling A9)
 
@@ -868,7 +872,7 @@ existing shape. The contract's declaration reason `resource_reading_capacity_fac
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); the `package` interface revision is declared once by A8 |
+| RE1 | package format: task `resource_readings[].capacity_fact_key` (task schema `0.8`, `0.9`) | new optional member (resource file format, not a ledger shape) | READ-1 | resource side | only with `value.format` `current_capacity`; the key rule of `fact_key`; unique among every key the task's marks write; an older reader refuses it (`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`); it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 | RE2 | `fact.published` of a mark's capacity | new rule of an existing record (shape unchanged) | READ-1 | READ-1 | one record per capacity read, right after the mark's value record: `key` = `capacity_fact_key`, `content` the capacity (`0..=2^53-1`), `source_snapshot_id` `run:<run>/frame:<frame>/<reading id>/capacity`, an observation of its own (one per reading, as for two marks on one frame; the value record keeps `run:<run>/frame:<frame>/<reading id>`); every other field (observation and expiry, `ttl_policy`, `confidence_milli`, `source_detector` `resource_reading:<entry task id>/<reading id>`) as the mark's value record of the same frame |
 
 ### 1.55 Wave 13 slice PKG-S4 (#336 option 丙, M-PKG v1.1 §4.5)
@@ -919,7 +923,7 @@ error, `pack_logic_mismatch`; values `page_id`, `count`) is a catalog entry, not
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| EC1 | package format: task operation members `when` (`{"present": <target>}` or `{"absent": <target>}`) and `on_guard_refused` (`"next_candidate"`) (task schema `0.9`) | new members (resource file format, not a ledger shape) | EXEC-1 | resource side | `when` names a target judged on one frame (not `click_only`, not under target consensus), not on the entry application; `on_guard_refused` only on a click with a declared guard (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); the `package` interface revision is declared once by A8 |
+| EC1 | package format: task operation members `when` (`{"present": <target>}` or `{"absent": <target>}`) and `on_guard_refused` (`"next_candidate"`) (task schema `0.9`) | new members (resource file format, not a ledger shape) | EXEC-1 | resource side | `when` names a target judged on one frame (not `click_only`, not under target consensus), not on the entry application; `on_guard_refused` only on a click with a declared guard (Runtime admission, `contained_task_operation_invalid`); an older task schema refuses both (`UnconsumedField`), a `linear_steps` task refuses both (`contained_task_linear_invalid`); it is part of `package` revision 3, declared once for v0.12.0 (§6) |
 | EC2 | `task.step_finished` of a candidate passed over after its guard refused | new rule of an existing record (shape unchanged) | EXEC-1 | EXEC-1 | written right after the step's `task.step_started` and its guard evaluation, with no `task.effect_intent` or `task.effect_completed` between, `page_label` the page of the frame the guard refused on and no phase; the step stays counted in the run's executed steps, and the next candidate starts the next step index on the same frame |
 | EC3 | task diagnostic stream: the `target` and `error` rows' guard `phase` value `when` | new value of an existing member | EXEC-1 | EXEC-1 | the evaluation of a candidate's `when` target on the frame its step would start on, written before that step's `step_started` row (a withdrawn candidate starts no step) |
 
@@ -1684,7 +1688,7 @@ The capacity of the instance store is booked in
 
 ## 5 Configuration keys of `actingd-config` revision 5
 
-One revision for v0.12.0, declared by A8 (ORD §3.6). Every key designed by the frozen models is
+One revision for v0.12.0, declared [5, 5] by #378 A8 (ORD §3.6). Every key designed by the frozen models is
 parsed, validated and defaulted in v0.12.0 even when its reader comes in 0.12.x (ORD R4); the
 defaults live in `distribution/windows/actingd.defaults.json` (#387 D1b), never in the example
 configuration and never as code constants; each parsing slice brings defaults and parsing in the
@@ -1702,12 +1706,12 @@ when it takes effect.
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
-| `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | P-c | P-c |
+| `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` SR-6 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 (0.12.x) |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
-| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default: unset = not reported) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
+| `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default value: unset, no `fact_reader_overdue` is reported; that is its declared default, coordinator ruling 9 of 2026-10-16, so R4 holds) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
@@ -1747,17 +1751,23 @@ keys (SR-1, §1.23); with them it passes 256 at five instances. So D1b implement
 becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
 from D1b on, and each section fact holds at most 256 rows.
 
-## 6 Interface revisions (declared once by A8, ORD §3.6)
+## 6 Interface revisions (declared once for v0.12.0 by #378 A8, ORD §3.6)
 
-`ledger` [3, 3] (A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a, AO-1 dump import, AO-2 index
-table, U-2's G14 members, PKG-S2 and PKG-S3 removals, NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15,
-SH-2 §1.25, M-357b DB-3s §1.66);
-`runtime-client` [2, 2] (§3 W1–W4, W8–W12: A4, U-1, D1b, D2-S5, P-m, RD-3; A2-P's wire
-spellings §1.15); `runtime-client` 3 comes with its own later release, not with A8's
-declaration (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7,
-SR-6b's `not_running` in W13; re-check 10-14, §1.25); `actingd-config` 5
-(§5); `runtime-outcomes` [1, 1] (A5 §1.16); `package` (PKG-S1, PKG-S5, D2-S2/S3, the NAV-3a follow-up §1.73 N3F-1; M-357a §1.65 TB12 with PKG-S5; M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once in the 0.12.x release that carries them, once only when they share a release); `install-control` stays
-[0, 1] until U-4. AO-0 changes no declaration.
+Declared in `distribution/windows/component-interfaces.json`; the meaning of each revision and
+what v0.12.0 moved are in [component-interfaces.md](component-interfaces.md), and contract key
+K27 asserts the declaration. Every moving interface rises once for the release.
+
+| Interface | v0.12.0 | Sources in this register |
+|---|---|---|
+| `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts |
+| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66 |
+| `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25) |
+| `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release |
+| `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |
+| `install-control` | [0, 1] (unchanged) | model-378 §16 A-7 dropped revision 2 (`carried`) from v0.12.0; U-4 raises it to [0, 2] in 0.12.x |
+| `install-selection` | [1, 1] (unchanged) | — |
+
+AO-0 changes no declaration.
 
 ## 7 What AO-0 does not register, and why
 

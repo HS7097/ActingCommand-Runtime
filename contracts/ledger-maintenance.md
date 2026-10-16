@@ -39,10 +39,28 @@ validation, creation and sync. Backup paths must be disjoint from the source and
 must not already exist.
 Import and dry-run explicitly reuse a completed, frozen pre-cutover backup.
 Restore creates a new empty stopped root; `--artifact-root` optionally supplies
-the original external artifact bytes. A successful receipt reports its precise
-operation result and `activated: false`. Errors preserve their original identity,
-physical I/O/SQL detail and secondary cleanup failures, followed by the normal
-process FATAL/nonzero exit when no Ledger writer is available.
+the original external artifact bytes.
+
+Every exit prints one stdout line, the v2 report
+`actingcommand.ledger-maintenance.v2` (Workflow #378 A6a): `{schema_version,
+outcome, …}`, where `outcome` is the full `actingcommand.outcome.v1` envelope
+(only its registered names with `ACTINGCOMMAND_DETAIL=codes`). A completed pass
+is `ledger_maintenance_completed` (success) with the receipt's members: `status`,
+its precise operation result (`verified-sqlite`, `verified-segment`,
+`backed-up`, `dry-run`, `imported`, `already-imported` or `restored`), `ledger`,
+`backup_id`, `warnings` and `activated: false`. A failed pass is
+`{schema_version, outcome, activated: false}`: the outcome keeps the failure's
+original code with its `operation` when that is a registered location, an OS error of a
+maintenance step as a
+`foreign_os_error` link, each failed cleanup as a `cleanup` link and each
+maintenance warning as a `note` link. v1's `status: "failed"` and
+`error {code, operation, cause, cleanup, warnings}` are gone. An argument or
+configuration refusal (for example `maintenance_usage_invalid`,
+`maintenance_config_missing`, `maintenance_config_invalid`) prints its outcome
+alone. A failure also writes its developer line `<LEVEL> actingd: <code> <text>`
+on stderr, whose text keeps the English cause (SQL detail included), and the
+process exits by the outcome's category: `0` on success, `1` for an error, `2`
+for a fatal failure.
 
 ## Frozen source and one transaction
 
@@ -87,11 +105,13 @@ material and release blobs. A keyed manifest binds every copied file and the
 State/Ledger projection baseline. Artifact references and hashes are bound while
 the bytes remain in ArtifactStore's external namespace.
 
-The first Busy/Locked result is retained as a WARNING with its native SQLite
-code and bounded recovery choice. At most three waits occur within the original
-deadline. The formal maintenance receipt and backup metadata retain this warning;
-a later backup failure also carries it in the formal error receipt. No diagnostic
-writer is started for maintenance.
+The first Busy/Locked result is retained as a warning `{outcome}` (Workflow #378
+A6a): `sqlite_backup_busy` or `sqlite_backup_locked` (category `warning`), the
+code saying which one SQLite reported, with `operation` `step_database_backup`.
+At most three waits occur within the original deadline. The receipt's `warnings`
+and the backup manifest's (`DatabaseBackup.warnings`) retain this warning; a
+later backup failure carries it as a `note` link of its outcome. A v1 backup
+manifest does not decode. No diagnostic writer is started for maintenance.
 
 Restore first verifies the current source lineage, complete backup, State rows and
 Ledger prefix; a backup that records evictions restores too (Workflow #375 R5a). A
@@ -102,7 +122,7 @@ restoration. Each distinct referenced artifact without a recorded `Deleted` or
 verified create-new copy with its exact reference, within the operation limits;
 evicted and absent artifacts are skipped. Restore verifies the restored State and
 Ledger head before returning, and actingd then prints one stderr line,
-`INFO actingd: ledger_maintenance restore artifacts_copied=<n> artifacts_evicted=<n>
+`INFO actingd: ledger_maintenance_completed restore artifacts_copied=<n> artifacts_evicted=<n>
 artifacts_absent=<n>`; the receipt is unchanged. The source is retained and the
 result is not activated. Failed destination material is retained for explicit
 disposition.
@@ -133,16 +153,21 @@ damaged artifact never stops startup or `verify`. Row authentication, the hash c
 the keyed head and the retention replay are unchanged. A formal `verify` refuses only
 the retention state the ledger itself leaves unsettled: an eviction intent without its
 outcome, which only the next actingd start completes. It fails with
-`maintenance_artifact_material_unavailable` and the cause
-`pending_evictions=<n>` (start actingd once so that it finishes the eviction, then run
+`maintenance_artifact_material_unavailable`, whose value `count` is the number of
+distinct pending artifacts (the developer text says `pending_evictions=<n>`;
+start actingd once so that it finishes the eviction, then run
 `verify` again); `Unrecorded`, `Evicted` and
 `FailedEviction` pass. A Segment root still refuses any eviction. After the writer
-open, startup prints one stdout line, also before a failure is returned and never as
-a Ledger event: `actingd ledger_open events=<n> artifacts=<n> artifact_bytes=<b>
-workers=<w> sql_read_ms=<ms> verify_ms=<ms> material_ms=<ms> restore_ms=<ms>
-deadline_ms=<ms>`. Material is never read, so `artifacts`, `artifact_bytes`,
-`workers` and `material_ms` are always 0; they stay so that the line keeps its
-format. A failed formal `verify` appends the same fields to its failure cause.
+open, the started daemon writes the daemon lines of `ledger_opened` (info) on
+stderr, never as a Ledger event (Workflow #378 A6a; it replaced the stdout line
+`actingd ledger_open …`), with the values `event_count`, `artifact_count`,
+`artifact_bytes`, `worker_count`, `sql_read_ms`, `verify_ms`, `material_ms`,
+`restore_ms` and `timeout_ms` (the deadline). A failed open carries the same
+values as the `note` link `ledger_open_measured` of its failure. Material is never
+read, so `artifact_count`, `artifact_bytes`, `worker_count` and `material_ms` are
+always 0. A failed formal `verify` carries the same `ledger_open_measured` note
+link, and its developer text names the read's phases as `ledger_open events=<n> …
+restore_ms=<ms> deadline_ms=<ms>`.
 
 Later startup steps keep
 their own bounds: instance-fact and agent-dispatch recovery each query the full
