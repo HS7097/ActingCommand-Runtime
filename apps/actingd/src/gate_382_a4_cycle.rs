@@ -125,6 +125,19 @@ impl RuntimeClock for CycleClock {
     }
 }
 
+impl CycleClock {
+    // The wall time of the last reading, taking none: the driver's own clock reading.
+    fn now_unix_ms(&self) -> u64 {
+        self.unix_ms.load(Ordering::SeqCst)
+    }
+
+    // Moves the wall time on to `unix_ms`, never back, as the daemon's clock gets there while
+    // the driver waits. The monotonic time, and with it every lease, does not move.
+    fn advance_to(&self, unix_ms: u64) {
+        self.unix_ms.fetch_max(unix_ms, Ordering::SeqCst);
+    }
+}
+
 // What a fake device shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
@@ -540,13 +553,13 @@ fn resources(instances: &[Fixture]) -> EvaluationResources {
 // bootstrap's scheduled tasks and registry modes). The first device takes `hold`. With `ladder`
 // each instance keeps its default stuck recovery (`recovery_ladder.enabled`) and the scheduled
 // request binds the return-home package, the ladder's first rung; without it stuck recovery is
-// off for every instance.
+// off for every instance. It also hands back the Runtime's clock.
 fn start(
     root: &Path,
     screens: &[Screen],
     mut hold: Option<Hold>,
     ladder: bool,
-) -> (RuntimeHost, PolicyBootstrap) {
+) -> (RuntimeHost, PolicyBootstrap, Arc<CycleClock>) {
     let instances = &INSTANCES[..screens.len()];
     let scheduled = root.join("scheduled-task.zip");
     write_package(&scheduled, "neutral.cycle.task", true);
@@ -572,11 +585,12 @@ fn start(
         .with_package_path(request.package_path())
     }))
     .expect("procedure manifest");
+    let clock = Arc::new(CycleClock {
+        unix_ms: AtomicU64::new(POLICY_NOW_UNIX_MS),
+        monotonic_ms: AtomicU64::new(0),
+    });
     let mut config = RuntimeHostConfig::new(root, SALT)
-        .with_runtime_clock(Arc::new(CycleClock {
-            unix_ms: AtomicU64::new(POLICY_NOW_UNIX_MS),
-            monotonic_ms: AtomicU64::new(0),
-        }))
+        .with_runtime_clock(clock.clone())
         .with_policy_inputs(PolicyInputSnapshot::new(
             facts(instances),
             resources(instances),
@@ -647,7 +661,7 @@ fn start(
             .collect(),
         cadence: PolicyCadence::default(),
     };
-    (host, policy)
+    (host, policy, clock)
 }
 
 // The catalog transition and the configured approvals `initialize_policy` makes before its first
@@ -674,12 +688,16 @@ fn activate(host: &RuntimeHost, policy: &PolicyBootstrap) {
     }
 }
 
-// The ledger as a read-only reader sees it now.
+// The ledger's records as a read-only reader sees them now, each authenticated. The tests read
+// records only: the runs' frame material is not read, so the reader never asks for it.
 fn ledger_events(root: &Path) -> Vec<PersistedEvent> {
-    GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root), |_| None)
-        .expect("the ledger opens read-only")
-        .events()
-        .to_vec()
+    GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(root).sqlite_material_not_read(),
+        |_| None,
+    )
+    .expect("the ledger opens read-only")
+    .events()
+    .to_vec()
 }
 
 // The policy dispatch records (intent, admitted, rejected, completed) of one decision.
@@ -733,7 +751,7 @@ fn run_records(events: &[PersistedEvent], run_id: RunId) -> Vec<&PersistedEvent>
 #[test]
 fn gate_382_a4_g5_a_failed_run_leaves_the_other_instances_intent_to_run_in_the_same_cycle() {
     let root = TempDir::new().expect("tempdir");
-    let (host, policy) = start(root.path(), &[Screen::Stuck, Screen::Opens], None, false);
+    let (host, policy, _clock) = start(root.path(), &[Screen::Stuck, Screen::Opens], None, false);
 
     let execution = initialize_policy(&host, &policy).expect("the cycle runs");
     let pending = &execution.cycle.pending_dispatch_intents;
@@ -803,7 +821,7 @@ fn gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_l
         reached: Mutex::new(reached_sender),
         release: Mutex::new(release_receiver),
     };
-    let (host, policy) = start(root.path(), &[Screen::Stuck], Some(hold), true);
+    let (host, policy, clock) = start(root.path(), &[Screen::Stuck], Some(hold), true);
     // Declared after the host, so that a failing assertion drops it first and ends the hold.
     let release = release_sender;
     let instance = INSTANCES[0].alias;
@@ -821,16 +839,17 @@ fn gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_l
         .recv_timeout(GATE_WAIT)
         .expect("A's ladder runs its first rung on its own key");
 
+    // The driver starts on its clock's reading (`drive_policy`).
+    let started = clock.now_unix_ms();
     let control = PolicyDriverControl::default();
-    let mut schedule =
-        PolicyDriverSchedule::new(policy.cadence.clone(), &execution.cycle, POLICY_NOW_UNIX_MS)
-            .expect("the driver's schedule");
+    let mut schedule = PolicyDriverSchedule::new(policy.cadence.clone(), &execution.cycle, started)
+        .expect("the driver's schedule");
     apply_policy_cycle_result(
         &control,
         &mut schedule,
         PolicyTrigger::Recovery,
         Vec::new(),
-        POLICY_NOW_UNIX_MS,
+        started,
         Ok(execution),
     )
     .expect("the driver takes the cycle");
@@ -842,7 +861,32 @@ fn gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_l
     assert_eq!(trigger, PolicyTrigger::FactsChanged);
     assert!(recomputes.is_empty());
 
-    let again = execute_policy_cycle(&host, &policy, trigger).expect("the evaluation again");
+    // The driver runs the woken trigger at once (`handle_policy_driver_trigger`). While the
+    // cooldown after the cycle's full evaluation lasts, the Runtime's cadence defers an event
+    // trigger (PolicyCadence); the driver keeps it as deferred work and runs it once it is due
+    // (`take_due_work`). The Runtime clock moves 1 ms a reading, so the test moves it on to that
+    // instant, as the daemon's clock gets there while the driver waits.
+    let mut again = execute_policy_cycle(&host, &policy, trigger).expect("the evaluation again");
+    if again.cycle.directive.kind == PolicyRecomputeKind::Deferred {
+        let due = again.cycle.directive.eligible_at_unix_ms;
+        apply_policy_cycle_result(
+            &control,
+            &mut schedule,
+            trigger,
+            Vec::new(),
+            clock.now_unix_ms(),
+            Ok(again),
+        )
+        .expect("the driver keeps the deferred trigger");
+        clock.advance_to(due);
+        let (due_trigger, due_recomputes) = schedule
+            .take_due_work(due)
+            .expect("the driver's due work")
+            .expect("the deferred trigger is due");
+        assert_eq!(due_trigger, PolicyTrigger::FactsChanged);
+        assert!(due_recomputes.is_empty());
+        again = execute_policy_cycle(&host, &policy, due_trigger).expect("the evaluation again");
+    }
     assert!(
         again
             .cycle
@@ -899,7 +943,7 @@ fn gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_l
 #[test]
 fn gate_382_a4_g6a_a_budget_yield_reports_the_unattempted_intents_and_writes_no_fact_for_them() {
     let root = TempDir::new().expect("tempdir");
-    let (host, policy) = start(root.path(), &[Screen::Opens, Screen::Opens], None, false);
+    let (host, policy, _clock) = start(root.path(), &[Screen::Opens, Screen::Opens], None, false);
     activate(&host, &policy);
 
     let mut out: Vec<u8> = Vec::new();

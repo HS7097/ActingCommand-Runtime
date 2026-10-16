@@ -20,6 +20,12 @@
 // pack without consensus. The runs play scripted frames on the scripted clock (EXEC-I4): a
 // frame's left pixel names its page, its right pixel is the guard's (or the banner's), and a
 // frame the device is slow to deliver spends its observation's window.
+//
+// The consensus rows also hold on the `linear_steps` path (wave-17 acceptance ruling 2): a
+// consensus that does not hold at the first step's page or at the next step's page is a page that
+// did not pass, and the run ends with that path's code (contracts/linear-steps.md, "Failure
+// codes": `contained_task_linear_entry_unmatched`, `page_confirmation_failed`), class
+// `pack_logic_mismatch`.
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
@@ -57,6 +63,9 @@ const STEP_NOT_CONFIRMED: &str = ExecutionKernelCode::ContainedTaskStepUnconfirm
 const ERROR_PAGE_SHOWN: &str = ExecutionKernelCode::ContainedTaskErrorPageReached.as_str();
 const SAMPLE_DEADLINE: &str = ExecutionKernelCode::RecognitionSampleDeadlineExceeded.as_str();
 const SAMPLE_BUDGET: &str = ExecutionKernelCode::RecognitionSampleBudgetInsufficient.as_str();
+const LINEAR_ENTRY_UNMATCHED: &str =
+    ExecutionKernelCode::ContainedTaskLinearEntryUnmatched.as_str();
+const LINEAR_NOT_CONFIRMED: &str = ExecutionKernelCode::PageConfirmationFailed.as_str();
 
 const HOME: [u8; 3] = [255, 0, 0];
 const NEXT: [u8; 3] = [0, 0, 255];
@@ -231,6 +240,66 @@ fn task(sampling: Sampling) -> PreparedContainedTask {
 // The same task, whose ordinary run requires page `home` first.
 fn with_home_entry(mut task: PreparedContainedTask) -> PreparedContainedTask {
     task.entry_page = Some(RequiredEntryPages::single(HOME_PAGE.to_owned()));
+    task
+}
+
+// The same path as a `linear_steps` task (contracts/linear-steps.md): its first step's page
+// `home`, one trusted click to the next and last step's page `next`, no retry declared. Each wait
+// evaluates only the page it waits for.
+fn linear_task(sampling: Sampling) -> PreparedContainedTask {
+    let control: TaskControl = serde_json::from_value(json!({
+        "schema_version": "Lab-1y.control.v2",
+        "package_id": "neutral.screen.linear",
+        "execution_mode": "linear_steps",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": 2, "height": 1},
+        "entry_task_id": "task",
+        "capture_interval_ms": CAPTURE_INTERVAL_MS,
+        "step_timeout_ms": STEP_TIMEOUT_MS,
+        "timeout_ms": TASK_TIMEOUT_MS,
+        "max_steps": 1
+    }))
+    .expect("task control");
+    let program: TaskProgram = serde_json::from_value(json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "next",
+        "max_steps": 1,
+        "operations": [{
+            "id": "open_next",
+            "from": "home",
+            "to": "next",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }]
+    }))
+    .expect("task program");
+    let evaluator =
+        RecognitionEvaluator::new(PathBuf::new(), pack(sampling)).expect("recognition evaluator");
+    let detector = PageDetector::new(page_set()).expect("page detector");
+    detector
+        .validate(&evaluator)
+        .expect("page detector targets");
+    let task = PreparedContainedTask {
+        control,
+        program,
+        evaluator,
+        detector,
+        entry_page: None,
+        scheduling_outcome: None,
+        post_admission_ocr: None,
+        post_admission_fields: None,
+        entry_count: 1,
+        task_count: 1,
+    };
+    if let Err(error) = task.program.validate_linear(&task.control, &task.detector) {
+        panic!("the fixture is no admitted linear task: {error}");
+    }
     task
 }
 
@@ -604,4 +673,54 @@ fn gate_e3_g3_consensus_not_met_at_the_postcondition_ends_with_step_unconfirmed(
         assert_eq!(runtime.inputs().len(), 1, "{case}");
     }
     assert_starts_pack_logic(STEP_NOT_CONFIRMED);
+}
+
+// Exec key 21 on the linear path, the first step's page (wave-17 acceptance ruling 2;
+// contracts/linear-steps.md, "Failure codes": the first step's page does not pass within the
+// step timeout): its consensus does not hold, so the run does not start on its first step and
+// makes no input.
+#[test]
+fn gate_e3_g3_consensus_not_met_at_the_linear_first_page_ends_with_linear_entry_unmatched() {
+    for (case, script) in [
+        ("both frames miss", steady(Screen::Blank)),
+        (
+            "one frame of two hits",
+            alternating(Screen::Blank, Screen::Home),
+        ),
+    ] {
+        let mut runtime = ScriptedRuntime::new(vec![script]);
+        let error = failure(linear_task(Sampling::TwoFrames).run(&mut runtime));
+        assert_eq!(
+            error.code().as_str(),
+            LINEAR_ENTRY_UNMATCHED,
+            "{case}: {error:?}"
+        );
+        assert!(runtime.inputs().is_empty(), "{case}");
+    }
+    assert_starts_pack_logic(LINEAR_ENTRY_UNMATCHED);
+}
+
+// Exec key 21 on the linear path, the next step's page (wave-17 acceptance ruling 2;
+// contracts/linear-steps.md, "Failure codes": the next step's page does not pass in its budget,
+// with no attempt left): after the click the consensus of `next` does not hold (the screen stays
+// on `home`, or `next` shows on one frame of two), so the step is not confirmed.
+#[test]
+fn gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed() {
+    for (case, after_input) in [
+        ("both frames miss", steady(Screen::Home)),
+        (
+            "one frame of two hits",
+            alternating(Screen::Blank, Screen::Next),
+        ),
+    ] {
+        let mut runtime = ScriptedRuntime::new(vec![steady(Screen::Home), after_input]);
+        let error = failure(linear_task(Sampling::TwoFrames).run(&mut runtime));
+        assert_eq!(
+            error.code().as_str(),
+            LINEAR_NOT_CONFIRMED,
+            "{case}: {error:?}"
+        );
+        assert_eq!(runtime.inputs().len(), 1, "{case}");
+    }
+    assert_starts_pack_logic(LINEAR_NOT_CONFIRMED);
 }
