@@ -4875,7 +4875,12 @@ impl PreparedContainedTask {
             // Test plan E-3 G3 (exec key 21): after frames that gave no page, a window too short
             // for the next sampled frame is spent, as an elapsed one is.
             if missed
-                && self.consensus_window_spent(runtime, window_started + timeout, task_deadline)?
+                && self.consensus_window_spent(
+                    runtime,
+                    None,
+                    window_started + timeout,
+                    task_deadline,
+                )?
             {
                 break;
             }
@@ -4951,10 +4956,13 @@ impl PreparedContainedTask {
     /// that did not give what it waits for, and it ends as without consensus. A task whose
     /// remaining time cannot hold the recognition is left to the observation's own budget
     /// check, `recognition_sample_budget_insufficient` (§2.1 item 5, §2.3). Without consensus
-    /// the wait's elapsed time alone decides.
+    /// the wait's elapsed time alone decides. `pages` are the pages the wait's observation
+    /// evaluates, as its own check counts them: every page for the page-graph waits, the
+    /// awaited pages for a `linear_steps` wait (wave-17 acceptance ruling 2).
     fn consensus_window_spent<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
+        pages: Option<&[&str]>,
         window_end: Instant,
         task_deadline: Instant,
     ) -> Result<bool, ContainedTaskError> {
@@ -4962,7 +4970,7 @@ impl PreparedContainedTask {
             return Ok(false);
         }
         let required_ms =
-            selection::page_recognition_budget_ms(&self.evaluator, &self.detector, None)?;
+            selection::page_recognition_budget_ms(&self.evaluator, &self.detector, pages)?;
         let required = Duration::from_millis(required_ms);
         let now = runtime.observation_now();
         // The observation's own check: `capture_frame_scene` before its first capture.
@@ -5651,7 +5659,12 @@ impl PreparedContainedTask {
             // Test plan E-3 G3 (exec key 21): after frames that did not confirm the step, a window
             // too short for the next sampled frame is spent, as an elapsed one is.
             if missed
-                && self.consensus_window_spent(runtime, window_started + timeout, task_deadline)?
+                && self.consensus_window_spent(
+                    runtime,
+                    None,
+                    window_started + timeout,
+                    task_deadline,
+                )?
             {
                 break;
             }
