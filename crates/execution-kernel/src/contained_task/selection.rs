@@ -473,9 +473,8 @@ fn validate_expect_identities(
             }
         } else if let Some(pool) = &expect.templates
             && pool.is_empty()
-            && let Err(detail) = validate_identity_templates(pool, identity, evaluator)
         {
-            return Err(refuse(detail));
+            validate_identity_templates(pool, identity, evaluator, refuse)?;
         }
     }
     Ok(())
@@ -488,15 +487,16 @@ fn validate_expect_identities(
 /// above 0 (`template=threshold_zero`: a target that always passes, which REC-7 skips) and whose
 /// region is a `rect` (`template=region_not_rect`); every entry searches the same rect
 /// (`template=regions_differ`), the destination's one identity region. REC-7's flat-field floor
-/// and mask minimums hold for every template target at pack admission already. The error is the
-/// refusal's detail token.
+/// and mask minimums hold for every template target at pack admission already. Every refusal is
+/// `contained_task_select_invalid`, built by the caller's `refuse` from the detail token.
 fn validate_identity_templates(
     pool: &[TaskIdentityTemplate],
     identity: &CandidateIdentityDeclaration,
     evaluator: &RecognitionEvaluator,
-) -> Result<(), &'static str> {
+    refuse: impl Fn(&str) -> ContainedTaskError,
+) -> Result<(), ContainedTaskError> {
     if !(1..=MAX_IDENTITY_TEMPLATES).contains(&pool.len()) {
-        return Err("templates=count");
+        return Err(refuse("templates=count"));
     }
     let pack = evaluator.pack();
     let mut targets = BTreeSet::new();
@@ -508,24 +508,24 @@ fn validate_identity_templates(
             }
             _ => None,
         }) else {
-            return Err("template=not_template");
+            return Err(refuse("template=not_template"));
         };
         if !targets.insert(entry.target_id.as_str()) {
-            return Err("template=duplicate");
+            return Err(refuse("template=duplicate"));
         }
         if !identity.entries.iter().any(|known| known.id == entry.id) {
-            return Err("template=out_of_domain");
+            return Err(refuse("template=out_of_domain"));
         }
         if target.threshold.unwrap_or(pack.defaults.template_threshold) <= 0.0 {
-            return Err("template=threshold_zero");
+            return Err(refuse("template=threshold_zero"));
         }
         let PackRegion::Rect(rect) = target.region else {
-            return Err("template=region_not_rect");
+            return Err(refuse("template=region_not_rect"));
         };
         match region {
             None => region = Some(rect),
             Some(first) if first == rect => {}
-            Some(_) => return Err("template=regions_differ"),
+            Some(_) => return Err(refuse("template=regions_differ")),
         }
     }
     Ok(())
