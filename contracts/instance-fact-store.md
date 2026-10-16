@@ -301,6 +301,19 @@ configuration are the same as before the seeds existed: the first evaluation
 after a startup with unchanged configuration produces the same inputs and
 outputs as when `instances` came from the configuration directly.
 
+**Admission staleness per instance (Workflow #369 W-1).** A cycle admits its
+intents one after another, and an earlier intent's dispatch on another instance
+(its task state, its settlement records, its device facts) changes
+`fact_snapshot_id` before a later intent is admitted; model-369 v3.1 §3.3 has
+the other instances' intents run in the same cycle. So admission refuses an
+intent as `policy_facts_stale` only when `fact_snapshot_id` changed and so did
+the intent's instance view, which the evaluation and the admission each project:
+that instance's snapshot, the facts and catalog pools whose scope selects it
+(its instance, server or game; a pool the catalog does not declare selects every
+instance), the priority offsets for it or for every instance, its own task
+states and outcomes, and every host. A change this contract describes for the
+intent's own instance, server or game still refuses it.
+
 ## Policy input authority
 
 `validate_policy_input_authority` compares the registered alias set with the
