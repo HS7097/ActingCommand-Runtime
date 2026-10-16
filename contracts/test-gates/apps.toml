@@ -661,3 +661,13 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::clock_slots::ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed",
 ]
 incident = ["#372 K4"]
+
+# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4; register §1.91): each actingctl overview and ac_overview instance row, and each instance of actingctl status beside its status members, shows the instance's start_emulator read from the program fact config.parameters.instance: true for an instance configured true, false for one configured false and for one that does not name the key (#369 S6a: off unless named)
+[[gate]]
+key = "69"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_instance_s_start_emulator",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_status_shows_each_instance_s_start_emulator_beside_its_status",
+]
+incident = ["#390"]

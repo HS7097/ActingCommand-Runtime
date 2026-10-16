@@ -334,7 +334,8 @@ fn assert_daemon(side: &str, answer: &Value) {
 }
 
 // The one instance's row: its identity, lease_active, queued and its pause; no monitor and no
-// run were set up, so neither is there.
+// run were set up, so neither is there. Workflow #390 九处-1: and its start_emulator, false, since
+// the fake Runtime's instance names no start_emulator (#369 S6a: off unless named).
 #[track_caller]
 fn assert_rows(side: &str, answer: &Value) {
     let rows = answer["instances"].as_array().cloned().unwrap_or_default();
@@ -342,11 +343,21 @@ fn assert_rows(side: &str, answer: &Value) {
     let row = &rows[0];
     assert_eq!(
         members(row),
-        BTreeSet::from(["alias", "instance_id", "lease_active", "pause", "queued"]),
+        BTreeSet::from([
+            "alias",
+            "instance_id",
+            "lease_active",
+            "pause",
+            "queued",
+            "start_emulator"
+        ]),
         "{side}: {answer}"
     );
     assert!(
-        row["alias"] == json!(ALIAS) && row["lease_active"].is_boolean() && row["queued"].is_u64(),
+        row["alias"] == json!(ALIAS)
+            && row["lease_active"].is_boolean()
+            && row["queued"].is_u64()
+            && row["start_emulator"] == json!(false),
         "{side}: {answer}"
     );
     assert_eq!(

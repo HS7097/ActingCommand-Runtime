@@ -862,6 +862,9 @@ S6a: off unless the instance names it; discovery-bound instances only,
 `instance.<instance_id>.start_emulator`) whose emulator is stopped when the daemon starts (its
 ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
 (`ClaimKind::Autostart`). An instance already running gets the usual start preparation only.
+`actingctl status` and each `ac_overview` instance row show the instance's `start_emulator`
+(`true` or `false`, read from that manifest parameter; Workflow #390 九处-1,
+[runtime-interface.md](runtime-interface.md)).
 
 - **When.** `actingd` enqueues the claims once, after policy initialization succeeded (without
   a `policy` section, right after the host started) and before `runtime_ready`; the enqueue

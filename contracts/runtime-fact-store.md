@@ -560,7 +560,8 @@ the backend self-check facts (source `device-proxy` or `capture`).
     the 128-byte key bound. Workflow #369 S6a adds
     `instance.<instance_id>.start_emulator` (`boolean`, `explicit`, not
     settable) for an instance whose entry names `start_emulator`, and nothing
-    for one that does not (off). `allow_env_overrides` (`boolean`, default `false`)
+    for one that does not (off); `actingctl status` and `ac_overview` show it
+    per instance (Workflow #390 九处-1). `allow_env_overrides` (`boolean`, default `false`)
     reports whether the `ACTINGCOMMAND_*` environment fallbacks are read; the
     `env_overrides` subsystem's reason names every set but ignored variable as
     `env_override_ignored:<VAR>` (`contracts/actingd-check-config.md`,

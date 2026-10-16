@@ -508,7 +508,20 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 .map_err(ActingctlError::Runtime)?,
             success,
         ),
-        Command::Status => reported(&client.status().map_err(ActingctlError::Runtime)?, success),
+        // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4): the
+        // status with each instance's `start_emulator`, read from the program facts; neither read
+        // records anything.
+        Command::Status => {
+            let status = client.status().map_err(ActingctlError::Runtime)?;
+            let facts = client
+                .runtime_fact_snapshot()
+                .map_err(ActingctlError::Runtime)?;
+            reported(
+                &overview::status_with_start_emulator(&status, &facts)
+                    .map_err(ActingctlError::ProgramFact)?,
+                success,
+            )
+        }
         // Workflow #389 MCP-4 (command table §4.4): the `ac_facts` answer of each form. `status
         // --config` is the program-fact read reduced to the `config.*` records (Workflow #387
         // D1b); `facts --instance` resolves its selector with one status read.
@@ -1741,6 +1754,9 @@ enum ActingctlError {
     /// `status --config`: the snapshot carries no `config.subsystems` or no
     /// `config.parameters.<section>`.
     ConfigFactsMissing,
+    /// Workflow #390 九处-1: `status`: a program fact it shows does not read back
+    /// (`invalid_fact_snapshot_record`).
+    ProgramFact(Outcome),
     /// A result does not encode as JSON (developer line only, model §7.3).
     Output(serde_json::Error),
     /// `--wait` after an accepted shutdown: the wait's failure (`shutdown_wait_timeout`,
@@ -1784,6 +1800,7 @@ impl ActingctlError {
                 .caused_by(Outcome::new(error.code())),
             Self::Clock => Outcome::new(ActingctlCode::ClockUnavailable),
             Self::ConfigFactsMissing => Outcome::new(ActingctlCode::ConfigFactsMissing),
+            Self::ProgramFact(outcome) => outcome.clone(),
             Self::Output(_) => Outcome::new(ActingctlCode::ActingctlOutputFailed),
             Self::ShutdownWait(outcome) => outcome.clone(),
         }
@@ -1822,6 +1839,9 @@ impl fmt::Display for ActingctlError {
             Self::ConfigFactsMissing => formatter.write_str(
                 "the runtime fact snapshot holds no config.subsystems or no config.parameters.<section> record",
             ),
+            Self::ProgramFact(_) => {
+                formatter.write_str("a program fact of the runtime fact snapshot does not read back")
+            }
             Self::Output(error) => write!(formatter, "the JSON result cannot be encoded: {error}"),
             Self::ShutdownWait(_) => {
                 formatter.write_str("the accepted shutdown was not seen to complete")
