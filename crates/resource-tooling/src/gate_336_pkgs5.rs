@@ -93,6 +93,7 @@ fn inputs(packs: &[(&str, &str)]) -> (TempDir, PackageBundleRequest) {
         out: temp.path().join("bundle"),
         source: None,
         maintenance: None,
+        root_files: Default::default(),
     };
     (temp, request)
 }

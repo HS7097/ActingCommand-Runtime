@@ -74,6 +74,7 @@ impl BundleInputs {
             out: self.out(),
             source: None,
             maintenance: None,
+            root_files: Default::default(),
         }
     }
 

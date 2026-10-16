@@ -56,6 +56,7 @@ fn bundle(case: &I6Case) -> (TempDir, LabResult<crate::PackageBundleResponse>) {
         out: temp.path().join("bundle"),
         source: None,
         maintenance: Some(Vec::new()),
+        root_files: Default::default(),
     });
     (temp, result)
 }

@@ -280,6 +280,7 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("resource catalog", Mode::NoEffect),
     ("resource compile-maa", Mode::NoEffect),
     ("resource check-release", Mode::NoEffect),
+    ("standard-pack check", Mode::NoEffect),
     ("wait", Mode::NoEffect),
     ("package validate", Mode::NoEffect),
     ("package preflight", Mode::NoEffect),

@@ -84,6 +84,15 @@ actingcommand_contract::outcome_codes! {
         PackageBundleIndexInvalid => "package_bundle_index_invalid": error / none,
         PackageBundlePacksRootInvalid => "package_bundle_packs_root_invalid": error / none,
         PackageBundleWriteFailed => "package_bundle_write_failed": error / none,
+        /// Workflow #373 NAV-T (M-373 v1.1 §3.9): a package a standard-pack root file names
+        /// cannot play its part, as the Runtime would refuse it (keys `package_id`,
+        /// `navigation_role`, `navigation_problem`; the loader's refusal as the cause of
+        /// `admission_failed`). `package bundle` and `actinglab standard-pack check` report it.
+        PackageBundleNavigationPackageInvalid => "package_bundle_navigation_package_invalid": error / none,
+        /// Warning (Workflow #373 NAV-T, M-373 §4.4, §10.1 NAV-4): a pack's entry pages are
+        /// not all pages of `pages.json` (keys `package_id`, `page_ids`), so the Runtime does
+        /// not navigate to it; the report the resource CI reads.
+        PackageBundleEntryPageUnlisted => "package_bundle_entry_page_unlisted": warning / none,
         /// Warning (Workflow #384 D2-S2, transitional): a pack of a bundle with maintenance
         /// declarations only navigates and reads, but the declarations do not name it for
         /// `recognition` (key `package_id`). The resource repositories make it an error once

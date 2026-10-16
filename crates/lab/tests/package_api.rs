@@ -20,6 +20,7 @@ fn package_family_exposes_typed_requests_and_responses() {
         out: PathBuf::from("bundle"),
         source: None,
         maintenance: None,
+        root_files: Default::default(),
     };
 
     assert_serializable::<PackageValidationResponse>();

@@ -236,12 +236,16 @@ tool names a package by a digest; a pack is named by the `package_id` its `contr
 declares.
 
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
-directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]`
-lays out the resource section of a standard package:
+directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
+[--pages <file>] [--interrupts <file>] [--navigation <file>]` lays out the resource section of
+a standard package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
 bundle.json                    actingcommand.bundle.v4
+pages.json                     with --pages, copied byte for byte (Workflow #373 NAV-T)
+interrupts.json                with --interrupts, copied byte for byte
+navigation.json                with --navigation, copied byte for byte
 packs/<package_id>/control.json
 packs/<package_id>/resources/...
 ```
@@ -251,14 +255,60 @@ Every entry of `--packs-root` must be one pack source directory (anything else f
 `control.json` and `resources/**` are copied into `packs/<package_id>/`, named by the
 `package_id` that `control.json` declares, and the copy is read again and admitted in full by
 its path (structural admission; no digest is computed). A `package_id` that is not one path
-segment or is `tables` (any ASCII case: the game root's reserved directory), or that two pack
-directories both declare, fails `package_bundle_index_invalid`. Its `control.json` must state
+segment or is a name the game root reserves, or that two pack directories both declare, fails
+`package_bundle_index_invalid`. The reserved names (`reserved_package_id`, any ASCII case) are
+`tables` (the game root's tables directory), a root file's name, every one of which is
+`<kind>.json` (Workflow #373 NAV-T, M-373 §3.1), and what a replacement in place leaves,
+`<name>.part` and `<name>.old-<unix_ms>`. Its `control.json` must state
 the applications table's `game` and one of its servers (`package_bundle_pack_mismatch`), and
 every `servers.<server>.default_package_id` must name a pack of that server
 (`package_bundle_default_package_missing`). The output is written to `<out>.part` and renamed
 to `--out` only when complete; `--out` and `<out>.part` must not exist
 (`package_bundle_out_exists`). A failure leaves `<out>.part` in place and names it; nothing
 is removed.
+
+**Standard-pack root files** (Workflow #373 NAV-T, M-373 §3.9 second row). `--pages`,
+`--interrupts` and `--navigation` name the root files the standard package carries beside
+`bundle.json` (a flag without its path is refused, a file that cannot be read is
+`validation_failed` naming it). With any of them every pack is admitted for real
+(`PreparedContainedTask::describe_navigation_path`, the admission of `describe_path`), the game
+root the bundle makes is read by the one structure check every reader runs
+(`read_standard_pack_root`, "Standard package root" below: a refused file is
+`standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem` and
+`json_pointer`), and its packages are cross-checked for the parts the files name them for, as
+the Runtime checks them when a run first uses them:
+
+1. each feature package of `pages.json` is a `recognize_only` package of the game and its bundle
+   server whose pages are exactly the listed pages (its admission checks the REC-M static budget
+   of its page set);
+2. each edge's package can be a layer of a run of its server, its entry holds the edge's `from`
+   (its `entry_page`, or a `linear_steps` package's first step page), it ends on the edge's `to`,
+   and its entry is no application entry (`any`);
+3. each recovery chain, handler and `then.run` package can be a layer and declares no
+   prerequisite package of its own;
+4. each handler's entry holds its interrupt page.
+
+"Can be a layer" is the Runtime's predicate (`prerequisite_incompatibility_with`): no
+`recognize_only` package, stability termination, post-admission OCR, readings, adjustments,
+`on_empty` select step or designated operation, and the game, the package's bundle server, and
+the resolution of that server's feature package (the one every run of the server that navigates
+or handles a shared interrupt page uses; a server without one compares no resolution). A
+package that does not fit is `package_bundle_navigation_package_invalid` with `package_id` and
+the `navigation_role` and `navigation_problem` the Runtime's
+`contained_task_navigation_package_invalid` would carry; a package that cannot be admitted is
+`admission_failed` with the loader's refusal as its cause. Then the report "entry page not in
+the list" (M-373 §4.4, §10.1 NAV-4): one `package_bundle_entry_page_unlisted` warning (with
+`package_id` and `page_ids`) in `warnings` per pack whose entry pages, as the Runtime's entry
+gate reads them when its game has navigation data, are not all listed in `pages.json`. The
+root files are copied byte for byte last.
+
+`actinglab standard-pack check --root <game root>` runs the same checks on an installed game
+root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
+directories its `bundle.json` lists): the root files it holds, the cross-check and the report.
+It only reads. Its answer is `{status: "checked", root, game, root_files, pack_count,
+warnings}`, where `warnings` is the report (empty when there is nothing to report or no
+`pages.json`); a root without any root file is `standard_pack_root_invalid` `bundle_missing`, a
+listed package without its directory `admission_failed`.
 
 The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file
 format only and is never recorded in the ledger:
@@ -537,7 +587,9 @@ data files beside its package directories, one directory per game below the conf
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`,
   `validate_standard_pack_references`, `validate_standard_pack_navigation_references`,
   `StandardPackRegistry`) are shared by the Runtime's reader, check-config and
-  `actinglab resource validate` (`resource-declarations.md`). A refused file is
+  `actinglab resource validate` (`resource-declarations.md`). Workflow #373 NAV-T: a whole game
+  root is read by `read_standard_pack_root`, which the Runtime's reader, `package bundle` and
+  `actinglab standard-pack check` run alike ("Content-directory tools and the bundle index"). A refused file is
   `standard_pack_root_invalid` with `game`, `path`, `standard_pack_problem` and `json_pointer`
   (empty for the whole document); a file that cannot be read for another reason than its
   absence is `standard_pack_root_unreadable`, its OS error the cause.

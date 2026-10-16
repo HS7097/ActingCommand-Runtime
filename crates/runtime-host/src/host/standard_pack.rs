@@ -43,7 +43,8 @@ use actingcommand_contract::{
     MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
     STANDARD_PACK_PAGES_FILE, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
-    StandardPackRegistry, StandardPackRootIssue, TaskEntryRecoveryRole, TaskInterruptThen,
+    StandardPackRegistry, StandardPackRootBytes, StandardPackRootIssue, TaskEntryRecoveryRole,
+    TaskInterruptThen, read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -231,89 +232,34 @@ fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
 /// `pages.json`, `interrupts.json` or `navigation.json` without `bundle.json`, and
 /// `interrupts.json` or (Workflow #373 NAV-5) `navigation.json` without `pages.json`, are
 /// refused; every file is checked as the contract crate checks it, and the packages the page
-/// list, the interrupts and the navigation data name must be packages of the registry.
+/// list, the interrupts and the navigation data name must be packages of the registry. Workflow
+/// #373 NAV-T (§3.9): the check is the contract crate's [`read_standard_pack_root`], which the
+/// resource tools run too; the refused file is the issue's own.
 fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, RootFailure> {
     let path_of = |file: &str| directory.join(file);
-    let invalid = |file: &'static str, issue: StandardPackRootIssue| RootFailure::Invalid {
-        path: path_of(file),
-        issue,
-    };
     let bundle = read_root_file(&path_of(STANDARD_PACK_BUNDLE_FILE))?;
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
     let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
-    let Some(bundle) = bundle else {
-        if pages.is_none() && interrupts.is_none() && navigation.is_none() {
-            return Ok(None);
-        }
-        return Err(invalid(
-            STANDARD_PACK_BUNDLE_FILE,
-            StandardPackRootIssue {
-                file: STANDARD_PACK_BUNDLE_FILE,
-                problem: actingcommand_contract::StandardPackProblem::BundleMissing,
-                pointer: String::new(),
-            },
-        ));
-    };
-    let registry = StandardPackRegistry::from_bundle_bytes(&bundle, game)
-        .map_err(|issue| invalid(STANDARD_PACK_BUNDLE_FILE, issue))?;
-    let pages = pages
-        .map(|bytes| actingcommand_contract::parse_standard_pack_pages(&bytes, Some(game)))
-        .transpose()
-        .map_err(|issue| invalid(STANDARD_PACK_PAGES_FILE, issue))?;
-    let interrupts = match (interrupts, &pages) {
-        (None, _) => None,
-        (Some(_), None) => {
-            return Err(invalid(
-                STANDARD_PACK_INTERRUPTS_FILE,
-                StandardPackRootIssue {
-                    file: STANDARD_PACK_INTERRUPTS_FILE,
-                    problem: actingcommand_contract::StandardPackProblem::PagesMissing,
-                    pointer: String::new(),
-                },
-            ));
-        }
-        (Some(bytes), Some(pages)) => Some(
-            actingcommand_contract::parse_standard_pack_interrupts(&bytes, Some(game), pages)
-                .map_err(|issue| invalid(STANDARD_PACK_INTERRUPTS_FILE, issue))?,
-        ),
-    };
-    // Workflow #373 NAV-5 (§3.5): the edges and the recovery chain, against the page list.
-    let navigation = match (navigation, &pages) {
-        (None, _) => None,
-        (Some(_), None) => {
-            return Err(invalid(
-                STANDARD_PACK_NAVIGATION_FILE,
-                StandardPackRootIssue {
-                    file: STANDARD_PACK_NAVIGATION_FILE,
-                    problem: actingcommand_contract::StandardPackProblem::PagesMissing,
-                    pointer: String::new(),
-                },
-            ));
-        }
-        (Some(bytes), Some(pages)) => Some(
-            actingcommand_contract::parse_standard_pack_navigation(&bytes, Some(game), pages)
-                .map_err(|issue| invalid(STANDARD_PACK_NAVIGATION_FILE, issue))?,
-        ),
-    };
-    if let Some(pages) = &pages {
-        actingcommand_contract::validate_standard_pack_references(
-            &registry,
-            pages,
-            interrupts.as_ref(),
-        )
-        .map_err(|issue| invalid(issue.file, issue))?;
-    }
-    if let Some(navigation) = &navigation {
-        actingcommand_contract::validate_standard_pack_navigation_references(&registry, navigation)
-            .map_err(|issue| invalid(issue.file, issue))?;
-    }
-    Ok(Some(GameRoot {
+    let root = read_standard_pack_root(
+        StandardPackRootBytes {
+            bundle: bundle.as_deref(),
+            pages: pages.as_deref(),
+            interrupts: interrupts.as_deref(),
+            navigation: navigation.as_deref(),
+        },
+        game,
+    )
+    .map_err(|issue| RootFailure::Invalid {
+        path: path_of(issue.file),
+        issue,
+    })?;
+    Ok(root.map(|root| GameRoot {
         directory: directory.to_owned(),
-        registry,
-        pages,
-        interrupts,
-        navigation,
+        registry: root.registry,
+        pages: root.pages,
+        interrupts: root.interrupts,
+        navigation: root.navigation,
     }))
 }
 
