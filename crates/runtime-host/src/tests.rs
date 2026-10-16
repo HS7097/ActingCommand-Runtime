@@ -121,6 +121,9 @@ mod gate_336_pkgs4;
 mod gate_369s5;
 // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
 mod gate_369_s6c;
+// Workflow #369 S6c review low (b): a failed resume or self-check preparation with no ladder
+// releases the queued startup claim.
+mod gate_369_s6clow;
 mod gate_372k2;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;

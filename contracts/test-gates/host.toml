@@ -1185,3 +1185,13 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_390_disc1::disc1_attempts_and_interval_outside_their_bounds_are_refused",
 ]
 incident = ["#390 DISC-1"]
+
+# Workflow #369 S6c review low (b) (wave 18 coordinator ruling 6): a resume's reconnect or a self-check whose preparation fails and admits no stuck-recovery ladder (stuck recovery off for the instance) cancels the instance's queued startup claim (one scheduler.denied lease.queue_cancelled; the claim never gets the key) before its own key's release, so no startup run follows; the failure stays visible in the receipt's self-check and in instance_preparation_finished, whose outcome is the self-check's failure code
+[[gate]]
+key = "100"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_369_s6clow::s6clow_b_a_resume_whose_reconnect_fails_without_a_ladder_releases_the_queued_startup_claim",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6clow::s6clow_b_a_self_check_whose_preparation_fails_without_a_ladder_releases_the_queued_startup_claim",
+]
+incident = ["#369"]
