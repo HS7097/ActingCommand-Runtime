@@ -2925,7 +2925,7 @@
       "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b).",
       "tokens": {
         "absent": {
-          "description": "No actionable instance at the chosen position."
+          "description": "No actionable instance at the chosen position or, for a template expect_identity, no pool entry passed."
         },
         "unknown": {
           "description": "Only Unknown readings until the timeout."

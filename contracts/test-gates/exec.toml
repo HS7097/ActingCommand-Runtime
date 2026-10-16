@@ -1303,3 +1303,22 @@ tests = [
     "actingcommand-ledger::lib::global::tests::forensics_read_only::task_evidence_pairs_each_scan_drag_of_one_step_with_its_own_input",
 ]
 incident = ["#308"]
+
+# Workflow #308 SEL-L4b-T (the SEL L4b-T model row of 2026-10-17; forced-compromises mapping R-07; register §1.94): an `expect_identity` confirms the chosen business ID through a pool of template targets in one identity region, with the text path's code and states: each entry passes by its own target's threshold with REC-7 applied at admission, exactly one passing business ID is a reading, a different one fails at once, `unknown` and `absent` are reported apart at the timeout, and a choice of either recognition kind is read; admission refuses each rule of the pool with its token
+[[gate]]
+key = "82"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_an_icon_choice_is_matched_by_its_title_on_the_first_destination_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_a_late_title_is_matched_on_the_next_poll",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_another_member_s_title_fails_at_once_as_different",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_two_members_passing_until_the_timeout_fail_as_unknown",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_no_member_passing_until_the_timeout_fails_as_absent",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_a_text_choice_single_frame_or_scanned_is_matched_by_the_pool",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_an_expectation_of_a_step_that_did_not_choose_fails_no_choice",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_admission_refuses_each_rule_of_the_template_path_with_its_token",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_a_pool_template_below_its_flat_field_floor_is_refused_at_admission",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4bt::l4bt_an_absent_mismatch_round_trips_with_its_code_stage_and_values",
+    "actingcommand-pack-containment::lib::source::declarations::tests::l4bt_the_gate_admits_a_template_pool_and_refuses_a_bad_entry_at_its_pointer",
+]
+incident = ["#308 L4b-T", "R-07"]

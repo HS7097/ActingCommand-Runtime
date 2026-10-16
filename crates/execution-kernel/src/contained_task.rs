@@ -102,6 +102,9 @@ mod l4b_run_tests;
 // Workflow #308 SEL-L4b: admission of scan, on_empty and expect_identity.
 #[cfg(test)]
 mod gate_308_l4b_admission;
+// Workflow #308 SEL-L4b-T (exec key 82): expect_identity through a pool of template targets.
+#[cfg(test)]
+mod gate_308_l4bt;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
@@ -5008,12 +5011,15 @@ impl PreparedContainedTask {
 
     /// Workflow #308 SEL-L4b (S0 §1.3): an `expect_identity` of the operation's `expect_after`.
     /// The destination frame, and then every poll at `expect_after.interval_ms` until a Known
-    /// reading or `expect_after.timeout_ms`, reads `target_id` and maps the text through the
-    /// identity of the `choice_of` step. The business ID that step chose in this run passes;
-    /// another Known one fails at once, Unknown readings until the timeout fail, and a step that
-    /// has not chosen in this run fails: all `selection_identity_mismatch`, after the step's
-    /// `StepFinished`. No input occurs; only a poll of a destination page is read, and the last
-    /// one becomes the step's frame.
+    /// reading or `expect_after.timeout_ms`, is read ([`Self::read_expected_identity`]): the
+    /// text path maps `target_id`'s text through the identity of the `choice_of` step, and the
+    /// template path (SEL-L4b-T) reads which business IDs of its pool pass. The business ID that
+    /// step chose in this run passes; another Known one fails at once, readings without a Known
+    /// one until the timeout fail with the state of the last one read (`unknown`, or for the
+    /// template path `absent` when no entry passed), and a step that has not chosen in this run
+    /// fails: all `selection_identity_mismatch`, after the step's `StepFinished`. No input
+    /// occurs; only a poll of a destination page is read, and the last one becomes the step's
+    /// frame.
     fn expect_identity<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -5062,6 +5068,9 @@ impl PreparedContainedTask {
         let timeout = Duration::from_millis(effective.timeout.milliseconds);
         let interval = Duration::from_millis(effective.interval.milliseconds);
         let started = runtime.monotonic_now();
+        // The state of the last destination frame read; the text path's empty reading is
+        // Unknown, so it never reports `absent`.
+        let mut state = scan::IdentityState::Unknown;
         loop {
             let destination = observation.as_ref().filter(|frame| {
                 operation
@@ -5069,28 +5078,11 @@ impl PreparedContainedTask {
                     .is_ok_and(|count| count > 0)
             });
             if let Some(frame) = destination {
-                let reading = self
-                    .evaluator
-                    .evaluate_target(&frame.scene, &expect.target_id)
-                    .map_err(|error| {
-                        ContainedTaskError::with_detail(
-                            SharedCode::ContainedTaskRecognitionFailed.code(),
-                            error.to_string(),
-                        )
-                    })?;
-                let read = reading.ocr.as_deref().map(|ocr| {
-                    identity.map_ocr(
-                        &ocr.text,
-                        actingcommand_contract::ocr_confidence_milli(ocr.confidence),
-                    )
-                });
-                match read {
-                    Some(actingcommand_contract::CandidateFeature::Identity { value, .. })
-                        if value == *expected =>
-                    {
+                match self.read_expected_identity(&frame.scene, expect, identity)? {
+                    ExpectedIdentityReading::Known(value) if value == *expected => {
                         return Ok(());
                     }
-                    Some(actingcommand_contract::CandidateFeature::Identity { value, .. }) => {
+                    ExpectedIdentityReading::Known(value) => {
                         Self::finish_effect_attempt(
                             runtime,
                             step_index,
@@ -5104,7 +5096,7 @@ impl PreparedContainedTask {
                         )
                         .into());
                     }
-                    _ => {}
+                    ExpectedIdentityReading::Unread(unread) => state = unread,
                 }
             }
             if runtime.monotonic_now().saturating_duration_since(started) >= timeout {
@@ -5114,12 +5106,7 @@ impl PreparedContainedTask {
                     operation_label,
                     observation.as_ref(),
                 )?;
-                return Err(identity_mismatch(
-                    Some(expected.as_str()),
-                    scan::IdentityState::Unknown,
-                    None,
-                )
-                .into());
+                return Err(identity_mismatch(Some(expected.as_str()), state, None).into());
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity_boundary = runtime.task_boundary_identity(boundary);
@@ -5135,6 +5122,68 @@ impl PreparedContainedTask {
                 succeeded: true,
             });
             *observation = self.capture_frame(runtime, None, None, timing, None, None)?;
+        }
+    }
+
+    /// What one destination frame shows of an `expect_identity` (Workflow #308 SEL-L4b and
+    /// SEL-L4b-T). The text path reads `target_id` and maps its text through `identity`: a Known
+    /// identity, or Unknown. The template path evaluates every pool entry's template target,
+    /// each by its own declaration (threshold, metric, mask, colour check and scales, as
+    /// admitted with REC-7), and collects the business IDs of the entries that pass: none is
+    /// `absent`, exactly one is that Known ID (several entries of one ID still read it), and two
+    /// or more are `unknown`.
+    fn read_expected_identity(
+        &self,
+        scene: &Scene,
+        expect: &TaskExpectIdentity,
+        identity: &actingcommand_recognition_pack::CandidateIdentityDeclaration,
+    ) -> Result<ExpectedIdentityReading, ContainedTaskError> {
+        let evaluate = |target_id: &str| {
+            self.evaluator
+                .evaluate_target(scene, target_id)
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        SharedCode::ContainedTaskRecognitionFailed.code(),
+                        error.to_string(),
+                    )
+                })
+        };
+        match (&expect.target_id, &expect.templates) {
+            (Some(target_id), None) => {
+                let reading = evaluate(target_id)?;
+                let read = reading.ocr.as_deref().map(|ocr| {
+                    identity.map_ocr(
+                        &ocr.text,
+                        actingcommand_contract::ocr_confidence_milli(ocr.confidence),
+                    )
+                });
+                Ok(match read {
+                    Some(actingcommand_contract::CandidateFeature::Identity { value, .. }) => {
+                        ExpectedIdentityReading::Known(value)
+                    }
+                    _ => ExpectedIdentityReading::Unread(scan::IdentityState::Unknown),
+                })
+            }
+            (None, Some(pool)) => {
+                let mut passing = BTreeSet::new();
+                for entry in pool {
+                    if evaluate(&entry.target_id)?.passed {
+                        passing.insert(entry.id.as_str());
+                    }
+                }
+                let mut passing = passing.into_iter();
+                Ok(match (passing.next(), passing.next()) {
+                    (None, _) => ExpectedIdentityReading::Unread(scan::IdentityState::Absent),
+                    (Some(id), None) => ExpectedIdentityReading::Known(id.to_owned()),
+                    (Some(_), Some(_)) => {
+                        ExpectedIdentityReading::Unread(scan::IdentityState::Unknown)
+                    }
+                })
+            }
+            // Admission admits exactly one of the two paths.
+            _ => Err(ContainedTaskError::new(
+                ExecutionKernelCode::ContainedTaskSelectInvalid.code(),
+            )),
         }
     }
 
@@ -8285,6 +8334,14 @@ fn on_empty_coverage(
     }
 }
 
+/// What one destination frame of an `expect_identity` read (Workflow #308 SEL-L4b, SEL-L4b-T).
+enum ExpectedIdentityReading {
+    /// One Known business ID.
+    Known(String),
+    /// No Known business ID, with the `identity_state` a timeout on this frame reports.
+    Unread(scan::IdentityState),
+}
+
 /// `selection_identity_mismatch` (Workflow #308 SEL-L4b, S0 §2.7) of an `expect_identity`.
 fn identity_mismatch(
     expected: Option<&str>,
@@ -8452,19 +8509,34 @@ struct TaskOperationExpectation {
     timeout_ms: Option<u64>,
     #[serde(default)]
     interval_ms: Option<u64>,
-    /// Workflow #308 SEL-L4b (S0 §1.3): once the page matched, `target_id` must read the
-    /// business ID the select step `choice_of` chose in this run.
+    /// Workflow #308 SEL-L4b (S0 §1.3): once the page matched, `target_id` (or, SEL-L4b-T, the
+    /// template pool `templates`) must read the business ID the select step `choice_of` chose
+    /// in this run.
     #[serde(default)]
     expect_identity: Option<TaskExpectIdentity>,
 }
 
-/// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): an OCR target of the
-/// destination page and the select step whose choice it must read.
+/// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): the select step whose
+/// choice it must read, and how the destination page shows it: an OCR target (`target_id`, the
+/// text path) or, from SEL-L4b-T, a pool of template targets (`templates`, the template path).
+/// Admission requires exactly one of the two.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TaskExpectIdentity {
-    target_id: String,
+    #[serde(default)]
+    target_id: Option<String>,
     choice_of: String,
+    #[serde(default)]
+    templates: Option<Vec<TaskIdentityTemplate>>,
+}
+
+/// One entry of an `expect_identity` template pool (Workflow #308 SEL-L4b-T): a business ID of
+/// the `choice_of` step's identity domain and a template target of the pack that shows it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskIdentityTemplate {
+    id: String,
+    target_id: String,
 }
 
 impl TaskOperationExpectation {
