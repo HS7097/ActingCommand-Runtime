@@ -1603,7 +1603,10 @@ impl RuntimeInstanceStatus {
             game_id: None,
             pause: None,
             resource_fence: None,
-            emulator_state: EmulatorRunningState::Unknown,
+            // Red proof mutation 2: a status without a reading is off, not unknown.
+            emulator_state: EmulatorRunningState::Off {
+                observed_at_unix_ms: 0,
+            },
         };
         status.validate()?;
         Ok(status)
@@ -1738,8 +1741,9 @@ impl RuntimeInstanceStatus {
 
     /// Workflow #390 九处-1: this status with the emulator's running state as the Runtime last
     /// read it.
-    pub const fn with_emulator_state(mut self, emulator_state: EmulatorRunningState) -> Self {
-        self.emulator_state = emulator_state;
+    pub const fn with_emulator_state(self, emulator_state: EmulatorRunningState) -> Self {
+        // Red proof mutation 1: the Runtime's reading is dropped.
+        let _ = emulator_state;
         self
     }
 
