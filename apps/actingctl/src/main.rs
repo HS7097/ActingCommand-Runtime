@@ -2396,4 +2396,73 @@ mod tests {
             })
         );
     }
+
+    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave
+    // 18): `actingctl status` shows, beside each instance's status members, whether its emulator
+    // runs as the Runtime last read it: `on` or `off` with the reading's time, and `unknown`,
+    // never `off`, when the Runtime holds no reading.
+    #[test]
+    fn nine1_status_shows_each_emulator_as_last_read_with_the_time() {
+        use actingcommand_contract::{
+            EmulatorRunningState, IdentifierIssuer, RuntimeControlPlaneStatus,
+            RuntimeInstanceStatus,
+        };
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance = |alias: &str, emulator_state: EmulatorRunningState| {
+            RuntimeInstanceStatus::new(
+                alias,
+                *issuer.mint_instance_id().expect("instance id").transport(),
+                false,
+                0,
+                false,
+                false,
+                false,
+            )
+            .expect("instance status")
+            .with_emulator_state(emulator_state)
+        };
+        let status = RuntimeControlPlaneStatus::new(
+            *issuer.mint_owner_epoch().expect("owner epoch").transport(),
+            vec![
+                instance(
+                    "neutral.on",
+                    EmulatorRunningState::On {
+                        observed_at_unix_ms: 1_000,
+                    },
+                ),
+                instance(
+                    "neutral.off",
+                    EmulatorRunningState::Off {
+                        observed_at_unix_ms: 2_000,
+                    },
+                ),
+                instance("neutral.unread", EmulatorRunningState::Unknown),
+            ],
+        )
+        .expect("runtime status");
+        let line = reported(&status, ActingctlCode::RuntimeStatusReported).expect("status line");
+        let shown = line.members["instances"]
+            .as_array()
+            .expect("the status' instances")
+            .iter()
+            .map(|row| (row["instance_alias"].clone(), row["emulator_state"].clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shown,
+            [
+                (
+                    serde_json::json!("neutral.off"),
+                    serde_json::json!({"state": "off", "observed_at_unix_ms": 2_000}),
+                ),
+                (
+                    serde_json::json!("neutral.on"),
+                    serde_json::json!({"state": "on", "observed_at_unix_ms": 1_000}),
+                ),
+                (
+                    serde_json::json!("neutral.unread"),
+                    serde_json::json!({"state": "unknown"}),
+                ),
+            ]
+        );
+    }
 }

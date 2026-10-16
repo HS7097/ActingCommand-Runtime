@@ -85,5 +85,13 @@ actingcommand_contract::outcome_codes! {
         /// `raw_text`).
         LabFrameExportFailed => "lab_frame_export_failed": warning / none,
         // ---- end of #410 item 1
+        // ---- Workflow #390 nine6 (pending): `resource validate` reads a pools document.
+        /// Warning. A `ledger_fact` pool of a validated pools document that nothing in the
+        /// repository publishes: no reading mark (its `fact_key` or `capacity_fact_key`) and no
+        /// adjustment of an operation writes the pool's key, or the pool is not of instance
+        /// scope, which is the only scope a reading or an adjustment writes. The validation
+        /// still succeeds (keys `path`, `json_pointer`, `fact_key`).
+        ResourcePoolProducerMissing => "resource_pool_producer_missing": warning / none,
+        // ---- end of nine6
     }
 }

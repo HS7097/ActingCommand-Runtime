@@ -50,6 +50,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("package build-task", ["offline"], "retired"),
         command_cap("package build-pack", ["offline"], "retired"),
         command_cap("package bundle", ["offline"], "available"),
+        // Workflow #373 NAV-T: the bundle's cross-check of an installed game root; reads only.
+        command_cap("standard-pack check", ["offline", "read_only"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
         command_cap("ledger show", ["offline", "read_only"], "retired"),

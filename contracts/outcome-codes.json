@@ -30197,12 +30197,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config generation mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection's configuration reference does not lie under install/generations/<generation>/ of the generation the selection names. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand, for example to point at a configuration of another generation or outside the generations folder.",
+      "handling": "Reinstall or repair the installation with acsetup; change the configuration only with acsetup --commit-config."
     },
     "install_config_path_invalid": {
       "category": "error",
@@ -30257,12 +30257,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd, running under an install selection (a start, or an unlock-owner, suspended or ledger-maintenance run other than verify), cannot resolve the path of the configuration file the selection names while it checks the --config it was given. The selection's inputs were read moments before, so the file went away in between; the start or the subcommand refuses.",
+      "common_causes": "The generation folder of the selected configuration deleted or moved while the program started.",
+      "handling": "Reinstall or repair the installation with acsetup, then start again."
     },
     "install_environment_incomplete": {
       "category": "error",
@@ -30471,12 +30471,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input hash mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The bytes of an installation input (the slot's MEMBERS.json, the selected configuration or provider file) differ from the SHA-256 the selection pins for it. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The selected configuration edited by hand instead of through acsetup --commit-config, or a file changed or damaged after installation.",
+      "handling": "Undo the hand edit, or reinstall or repair the installation with acsetup; change the configuration only with acsetup --commit-config."
     },
     "install_input_outside_root": {
       "category": "error",
@@ -30491,12 +30491,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input outside root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation input the selection names resolves to a path outside the install root, through a junction, a symbolic link or another reparse point, so the program does not read it. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A folder of the installation replaced by a link to another place.",
+      "handling": "Replace the link with the real folder, or reinstall or repair the installation with acsetup; keep the whole installation under one root."
     },
     "install_input_read_failed": {
       "category": "error",
@@ -30531,12 +30531,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input size invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation input is empty or larger than its bound: 16 KiB for install\\active.json, 4 MiB for the slot's MEMBERS.json, 1 MiB for the selected configuration and the provider file. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A file cut to zero bytes, or replaced by another file.",
+      "handling": "Reinstall or repair the installation with acsetup."
     },
     "install_input_unavailable": {
       "category": "error",
@@ -30551,12 +30551,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation input the selection names (the slot's MEMBERS.json, the selected configuration or provider file) cannot be resolved or opened: it is missing, or the OS refuses to open it. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The file or its generation folder deleted, moved or quarantined by antivirus, or access to it denied.",
+      "handling": "Reinstall or repair the installation with acsetup to restore the file; check the install folder's permissions and antivirus exclusions."
     },
     "install_members_slot_mismatch": {
       "category": "error",
@@ -30571,12 +30571,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install members slot mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection's members reference is not <slot>/MEMBERS.json of the slot it selects. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand, or put together from two installations.",
+      "handling": "Reinstall or repair the installation with acsetup; do not edit install\\active.json."
     },
     "install_not_drained": {
       "category": "error",
@@ -31087,12 +31087,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install provider generation mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection names a provider file that does not lie under install/generations/<generation>/ of its generation, or that is the configuration file itself. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand.",
+      "handling": "Reinstall or repair the installation with acsetup; do not edit install\\active.json."
     },
     "install_provider_retired": {
       "category": "error",
@@ -31177,12 +31177,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install selection json invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection (install\\active.json, or the one a launcher hands through ACTINGCOMMAND_INSTALL_SELECTION) is not UTF-8 JSON of the install-selection shape: it does not parse, or a member is unknown, missing or of the wrong type. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand or damaged on disk, or a launcher that passes a mangled selection.",
+      "handling": "Do not edit install\\active.json; reinstall or repair the installation with acsetup, or start the program through the installation's launcher."
     },
     "install_selection_size_invalid": {
       "category": "error",
@@ -31197,12 +31197,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install selection size invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection a launcher hands through ACTINGCOMMAND_INSTALL_SELECTION (or one acsetup checks before it commits it) is empty or larger than 16 KiB. An install\\active.json of that size read from disk is install_input_size_invalid instead. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A launcher that passes an empty or cut variable, or the variable set by hand.",
+      "handling": "Start the program through the installation's launcher, or clear ACTINGCOMMAND_INSTALL_ROOT and ACTINGCOMMAND_INSTALL_SELECTION so that it reads install\\active.json."
     },
     "install_selection_unavailable": {
       "category": "error",
@@ -31217,12 +31217,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): install selection unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "install\\active.json cannot be opened for a reason other than its absence, or a program that needs a selection finds none: a program started from an installed slot (A or B) whose root has no install\\active.json, or actingctl and its MCP tools, which read the root's current selection at each call, when the root no longer has one. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json deleted or moved by hand, by a cleanup tool or by antivirus; access to the install folder denied; a slot folder copied without the rest of the installation.",
+      "handling": "Reinstall or repair the installation with acsetup, which writes install\\active.json; when the file is present, check the install folder's permissions; then start the program again."
     },
     "install_slot_in_use": {
       "category": "error",
@@ -31297,12 +31297,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock missing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot locator install\\slot-<A|B>.lock of the slot a program runs from, or of the slot the selection names, does not exist. Every installed program takes this permanently empty file as its slot occupancy before it reads slot material, so the installation is incomplete. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The locator deleted by hand, by a cleanup tool or by antivirus, or an installation copied without its install folder.",
+      "handling": "Reinstall or repair the installation with acsetup, which creates the locator; then start the program again."
     },
     "install_slot_lock_not_empty": {
       "category": "error",
@@ -31317,12 +31317,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock not empty.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot locator install\\slot-<A|B>.lock exists and was locked, but it is not an empty regular file. Nothing ever writes to the locator, so content in it means the installation was changed outside acsetup. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The locator written to or replaced by hand or by another program.",
+      "handling": "Reinstall or repair the installation with acsetup; never write to the locator."
     },
     "install_slot_lock_open_failed": {
       "category": "error",
@@ -31365,7 +31365,7 @@
       "handling": "None is needed beyond letting the process end; report it when it repeats."
     },
     "install_startup_shut_down": {
-      "category": "error",
+      "category": "info",
       "ladder_class": "none",
       "owner": "runtime-host",
       "layer": "host",
@@ -31377,12 +31377,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.11.6",
-      "description": "A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a formal stop: the watchdog holds it and never restarts it.",
+      "description": "A held start (actingd --install-held) ended because a shutdown request for its owner was accepted before it was released; the operation is install_transition. It is a requested stop: actingd ends with runtime_stopped and this code as its caused_by link, the transition reads failed with this failure_code, and the watchdog takes the close as formal and never restarts it.",
       "common_causes": "An installer, the console or actingctl request-shutdown stopped an owner that waited for its release.",
-      "handling": "TBD"
+      "handling": "None is needed; start the Runtime again, or let the installer start it, when it should run."
     },
     "install_startup_stopped": {
       "category": "error",
@@ -31747,6 +31747,24 @@
       "description": "Provider startup found no discovered emulator instance for an instance's binding key: alias names the configured instance and instance_index or instance_name its declared key. The start fails.",
       "common_causes": "An instance index or name that does not exist in MuMu, or an instance renamed or deleted in MuMu.",
       "handling": "Correct the instance's instance_index or instance_name to a discovered instance (actingctl emulator discover lists them). Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+    },
+    "instance_discovery_retried": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A startup discovery attempt found instance discovery unavailable (its failure is the caused_by link: instance_discovery_unavailable over the device failure), and the start tries again after retry_after_ms, startup_discovery.retry_interval_ms (Workflow #390 DISC-1). attempts is the number of the attempt that failed, limit_count is startup_discovery.attempts. Recorded as a provider startup observation (phase discovery_retried) before the wait; the start goes on. When the last attempt fails the start fails with instance_discovery_unavailable as before.",
+      "common_causes": "The Runtime started before the emulator after a boot (an autostart that runs first), or MuMuManager failing or timing out for a short while.",
+      "handling": "None while the attempts last. If the start still fails, check that MuMu is installed and starts, or raise startup_discovery.attempts or startup_discovery.retry_interval_ms in the configuration and commit it again with acsetup --commit-config."
     },
     "instance_discovery_unavailable": {
       "category": "error",
@@ -35155,12 +35173,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install file reference.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A file reference of the selection (members, config or provider) is not a portable path relative to the install root (empty, over 1024 bytes, or with a backslash, a colon, a NUL, or an empty, . or .. segment), or its sha256 is not 64 lowercase hex digits. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand, for example with a Windows path or an uppercase hash.",
+      "handling": "Reinstall or repair the installation with acsetup; do not edit install\\active.json."
     },
     "invalid_install_selection": {
       "category": "error",
@@ -35175,12 +35193,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install selection.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection parses but is not one this build reads: its schema_version is not actingcommand.install-selection.v1, or its generation is 0. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A selection written by an acsetup of another release, or edited by hand.",
+      "handling": "Reinstall or repair the installation with the acsetup of this release; do not edit install\\active.json."
     },
     "invalid_install_timeout": {
       "category": "error",
@@ -42179,12 +42197,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance failed; the maintenance failure names the cause.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The code of actingd's error for a ledger-maintenance run that failed. It is never emitted on its own: the subcommand's report, its developer line and its exit carry the maintenance failure's own outcome (its own code, with its stage and values), so this code reaches no interface and no ledger record.",
+      "common_causes": "The maintenance failure the report names.",
+      "handling": "Follow the handling of the code the report names."
     },
     "ledger_meta_mismatch": {
       "category": "error",
@@ -48077,6 +48095,23 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_bundle_entry_page_unlisted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_ids": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #373 NAV-T (M-373 v1.1 §4.4, §10.1 NAV-4): a pack's entry pages are not all pages of pages.json (page_ids lists those that are not), so the Runtime does not navigate to the pack's entry and records contained_task_navigation_entry_unlisted instead. package bundle and actinglab standard-pack check list one per such pack: the report the resource CI reads.",
+      "common_causes": "The page list does not list the pack's entry page yet, or the pack names its entry page by another id than the list's.",
+      "handling": "Add the page to pages.json and its feature package, or align the pack's entry page id with the list."
+    },
     "package_bundle_index_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -48104,6 +48139,24 @@
       "description": "A package bundle directory could not be written: maintenance invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "package_bundle_navigation_package_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "navigation_role": "required",
+        "navigation_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #373 NAV-T (M-373 v1.1 §3.9): a package that a standard-pack root file names (the feature package of pages.json, an edge or recovery chain step of navigation.json, a handler or then.run package of interrupts.json) cannot play its part, as the Runtime would refuse it with contained_task_navigation_package_invalid: same navigation_role and navigation_problem. package bundle and actinglab standard-pack check report it; admission_failed carries the loader's refusal as its cause.",
+      "common_causes": "The feature package's pages are not exactly the page list; an edge's package does not start on its from page or end on its to page, or is an application entry; a recovery chain, handler or then.run package declares a prerequisite package; a handler's entry does not hold its interrupt page; a package's declarations keep it from a layer (recognize_only, stability termination, post-admission OCR, readings, a designated operation, an on_empty select step).",
+      "handling": "Fix the root file or the named package so that it fits its part, then bundle or check again."
     },
     "package_bundle_out_exists": {
       "category": "error",
@@ -62850,6 +62903,24 @@
       "description": "An instance's resource_package path does not exist (alias names the instance, path the resolved path). check-config refuses at stage config_resource_package; a start refuses before the ledger opens.",
       "common_causes": "A relative path resolved against the wrong folder, an empty path, or a package folder that was moved or not yet placed.",
       "handling": "Place the resource package at the path, or correct instances[].resource_package. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+    },
+    "resource_pool_producer_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "json_pointer": "required",
+        "fact_key": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actinglab resource validate read a scheduling pools document whose ledger_fact pool nothing in the repository publishes (Workflow #390 nine6, item 6 of the nine additions of 2026-10-10): no reading mark (as fact_key or capacity_fact_key) and no adjustment of any operation task.json outside the excluded material writes the pool's fact key, or the pool is of server or game scope while readings and adjustments write instance facts only. Such a pool never gets a value, so a task its predicate gates waits for a fact refresh no package answers. It is a warning: the document is still valid and the command still succeeds; the answer lists it under warnings with the document's path, the pool's JSON pointer and its fact key. A static_snapshot pool takes its value from the configuration's resources and is not checked.",
+      "common_causes": "The pool was made live (ledger_fact) before a package declared a reading of its key; the reading's fact_key is spelled differently from the pool's; the package with the reading was removed or moved into archived material; the pool was declared with a server or game scope.",
+      "handling": "Add a reading mark or an adjustment of the key to a package of the repository, correct the key or the pool's scope, or keep the pool a static snapshot."
     },
     "resource_reading_capacity_fact_key_invalid": {
       "category": "error",

@@ -1488,6 +1488,41 @@ impl InstanceStuckRecovery {
     }
 }
 
+/// Workflow #390 九处-1 (board #390 comment 6095942731, item 1; coordinator's corrected ruling
+/// 4, 2026-10-16): whether an instance's emulator runs, as the Runtime last read it, with the
+/// time of that reading. The Runtime reads it from `MuMuManager info` at instance discovery (the
+/// daemon's start and an on-demand `DiscoverInstances`) and from an emulator control (a
+/// confirmed start or stop, and the state read after a failed control); it never polls for it.
+/// `unknown` while it holds no reading: an instance that is not discovery-bound, or one whose
+/// failed control left the state unsettled. It never defaults to `off`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EmulatorRunningState {
+    On {
+        observed_at_unix_ms: u64,
+    },
+    Off {
+        observed_at_unix_ms: u64,
+    },
+    #[default]
+    Unknown,
+}
+
+impl EmulatorRunningState {
+    /// A reading taken at `observed_at_unix_ms`: `on` when the emulator runs, else `off`.
+    pub const fn observed(running: bool, observed_at_unix_ms: u64) -> Self {
+        if running {
+            Self::On {
+                observed_at_unix_ms,
+            }
+        } else {
+            Self::Off {
+                observed_at_unix_ms,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeInstanceStatus {
@@ -1523,6 +1558,10 @@ pub struct RuntimeInstanceStatus {
     /// self-check proves the close.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource_fence: Option<InstanceResourceFence>,
+    /// Workflow #390 九处-1: the emulator's running state as the Runtime last read it; always
+    /// answered, `{"state": "unknown"}` without a reading.
+    #[serde(default)]
+    emulator_state: EmulatorRunningState,
 }
 
 /// Workflow #403: why and since when an instance is fenced, and whether it waits for a person.
@@ -1564,6 +1603,7 @@ impl RuntimeInstanceStatus {
             game_id: None,
             pause: None,
             resource_fence: None,
+            emulator_state: EmulatorRunningState::Unknown,
         };
         status.validate()?;
         Ok(status)
@@ -1694,6 +1734,17 @@ impl RuntimeInstanceStatus {
 
     pub const fn resource_fence(&self) -> Option<&InstanceResourceFence> {
         self.resource_fence.as_ref()
+    }
+
+    /// Workflow #390 九处-1: this status with the emulator's running state as the Runtime last
+    /// read it.
+    pub const fn with_emulator_state(mut self, emulator_state: EmulatorRunningState) -> Self {
+        self.emulator_state = emulator_state;
+        self
+    }
+
+    pub const fn emulator_state(&self) -> EmulatorRunningState {
+        self.emulator_state
     }
 }
 

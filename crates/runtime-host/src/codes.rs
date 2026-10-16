@@ -65,10 +65,11 @@ actingcommand_contract::outcome_codes! {
         /// status fact (Workflow #381 A R3′). A restart may succeed: the watchdog considers a
         /// start (R5′).
         InstallStartupStopped => "install_startup_stopped": error / none,
-        /// Error. A held start ended because a shutdown request for its owner was accepted
-        /// before it was released. Operation `install_transition`. A formal stop: the watchdog
-        /// holds it and never restarts it (Workflow #381 A, #672 review M1).
-        InstallStartupShutDown => "install_startup_shut_down": error / none,
+        /// Info (Workflow #378 A7-R). A held start ended because a shutdown request for its owner
+        /// was accepted before it was released. Operation `install_transition`. A requested
+        /// stop: actingd ends with `runtime_stopped`, and the watchdog takes the close as formal
+        /// and never restarts it (Workflow #381 A, #672 review M1).
+        InstallStartupShutDown => "install_startup_shut_down": info / none,
         /// Error. A held start received no release before its deadline; the transition fails
         /// with admission closed (Workflow #352) and the start ends with it, even when nobody
         /// polls (#381 A R5′). Operation `install_transition`.

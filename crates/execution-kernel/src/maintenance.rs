@@ -59,6 +59,76 @@ impl PreparedContainedTask {
     }
 }
 
+/// Workflow #373 NAV-T (M-373 v1.1 §3.9 second row): what the standard-pack cross-check of
+/// `package bundle` and `actinglab standard-pack check` reads of a package it admitted for real,
+/// beside its [`TaskPackageDescriptor`]: the answers the Runtime's own checks of a feature, edge,
+/// recovery chain, handler or `then.run` package read (`PreparedContainedTask::page_ids`,
+/// `entry_holds_page`, `linear_entry_page`, `terminal_holds_page`, `has_application_entry`,
+/// `navigation_entry_pages`). Every page is an id without the game prefix.
+#[derive(Debug, Clone)]
+pub struct NavigationPackageDescriptor {
+    descriptor: TaskPackageDescriptor,
+    page_ids: BTreeSet<String>,
+    entry_pages: Vec<String>,
+    linear_entry_page: Option<String>,
+    terminal_pages: Vec<String>,
+    application_entry: bool,
+    navigation_entry_pages: Option<Vec<String>>,
+}
+
+impl PreparedContainedTask {
+    /// Workflow #373 NAV-T: the package's [`NavigationPackageDescriptor`].
+    pub(crate) fn navigation_package_descriptor(&self) -> NavigationPackageDescriptor {
+        let game = self.game();
+        let anchor = |page: &str| crate::canonical_page_anchor(game, page);
+        NavigationPackageDescriptor {
+            descriptor: self.package_descriptor(),
+            page_ids: self.page_ids().into_iter().map(anchor).collect(),
+            entry_pages: self.declared_entry_page_anchors(),
+            linear_entry_page: self.linear_entry_page().map(anchor),
+            terminal_pages: self.terminal_page_anchors(),
+            application_entry: self.has_application_entry(),
+            navigation_entry_pages: self.navigation_entry_pages().map(|pages| {
+                pages
+                    .iter()
+                    .map(|page| crate::canonical_page_anchor(game, page))
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl NavigationPackageDescriptor {
+    pub fn descriptor(&self) -> &TaskPackageDescriptor {
+        &self.descriptor
+    }
+    /// The package's pages.
+    pub fn page_ids(&self) -> &BTreeSet<String> {
+        &self.page_ids
+    }
+    /// Whether its declared `entry_page` holds `page` (`any` holds none).
+    pub fn entry_holds_page(&self, page: &str) -> bool {
+        self.entry_pages.iter().any(|entry| entry == page)
+    }
+    /// A `linear_steps` package's first step page.
+    pub fn linear_entry_page(&self) -> Option<&str> {
+        self.linear_entry_page.as_deref()
+    }
+    /// Whether it ends on `page`.
+    pub fn terminal_holds_page(&self, page: &str) -> bool {
+        self.terminal_pages.iter().any(|target| target == page)
+    }
+    /// Whether its entry is `any` (an application entry package).
+    pub fn has_application_entry(&self) -> bool {
+        self.application_entry
+    }
+    /// The entry pages the Runtime's entry gate checks when the game has navigation data;
+    /// `None` without a page entry.
+    pub fn navigation_entry_pages(&self) -> Option<&[String]> {
+        self.navigation_entry_pages.as_deref()
+    }
+}
+
 impl TaskPackageDescriptor {
     pub fn package_id(&self) -> &str {
         &self.package_id

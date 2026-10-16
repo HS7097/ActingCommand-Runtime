@@ -3,7 +3,7 @@
   "source": "apps/actinglab/src/**/*.rs",
   "dispatch_function": "execute",
   "denominator_kind": "top_level_dispatch_arm",
-  "dispatch_arm_count": 49,
+  "dispatch_arm_count": 50,
   "dispatch_arms": [
     "help",
     "version",
@@ -49,13 +49,14 @@
     "scheduler <subcommand>",
     "scheduling <subcommand>",
     "resource <subcommand>",
+    "standard-pack <subcommand>",
     "runtime <subcommand>",
     "ledger <subcommand>",
     "session <subcommand>",
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 136,
+  "command_count": 137,
   "commands": [
     "help",
     "version",
@@ -145,6 +146,7 @@
     "resource import-alas",
     "resource drift-alas",
     "resource check-release",
+    "standard-pack check",
     "runtime reset",
     "runtime observe",
     "ledger show",

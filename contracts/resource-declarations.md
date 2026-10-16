@@ -70,7 +70,10 @@ The standard-pack root files are checked as the Runtime's root reader checks the
 (`package-reference.md`, "Standard package root"): shape, version, `game`, page ids, counts
 and, for `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, its pages against
 `pages.json`. The packages they name are
-checked against the packed bundle by the bundle generator, as maintenance declarations are.
+checked against the packed bundle by the bundle generator, as maintenance declarations are
+(Workflow #373 NAV-T: `package bundle --pages --interrupts --navigation` admits each and
+cross-checks it for its part, and reports the packs whose entry page the list does not hold;
+`package-reference.md`, "Standard-pack root files").
 
 Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and
@@ -178,12 +181,39 @@ reads to 64 MiB, and the Git path list to 1 MiB. Relative normal paths are requi
 links, reparse points, paths outside the root, unreadable files and exceeded
 bounds fail. The task owner's smaller dependency bounds remain effective.
 
-Success uses `actinglab.resource-declarations.v1`, with per-path results and the
-actual JSON read paths/byte count. Native parser errors retain their reason and
+Success uses `actinglab.resource-declarations.v1`, with per-path results, the warnings
+(below) and the actual JSON read paths/byte count. Native parser errors retain their reason and
 file context. Structured declaration errors retain the shared JSON-pointer details.
 Validation does not convert resources, build a package, load image/model bytes,
 create an evaluator, detect an environment or acquire a Runtime/device holder.
 Production keeps its subsequent asset, reference, admission and execution checks.
+
+### A pool nothing publishes
+
+Workflow #390 nine6 (Alice's nine additions of 2026-10-10, item 6). When the validator reads a
+scheduling `pools.json` (selected, or rechecked because a sibling catalog document was removed)
+and the document is valid, it checks each `ledger_fact` pool for a producer. A live pool takes
+its value only from a reading mark or an adjustment of its key ([resource-readings.md](resource-readings.md),
+"Live pools"), and both write an instance fact in the run's instance scope ("Host"), while the
+pool reads its key in its own scope. So the pool has a producer when it is of `instance` scope
+and some operation `task.json` of the repository declares a `resource_readings` mark whose
+`fact_key` or `capacity_fact_key` is the pool's key, or a `resource_adjustments` entry of that
+key. The operations are every `<directory>/operations/<task>/task.json` of the repository at any
+depth, outside `.git` and the excluded material above (upstream and archived material, art
+catalogs, authoring and reference files); a directory of `declaration-exclusions.json` is not
+skipped, as a mapped declaration inside it is still validated. The repository is listed and the
+operations are read once per run, only when a document has a live pool, within the read
+budgets above and at most 262,144 listed entries; a link, an unreadable operation or a mark or
+adjustment that does not decode as the contract's declaration fails the run as any declaration
+does (`resource_declaration_invalid`, naming the file).
+
+A live pool without a producer is a warning, not a refusal: the document's entry stays `valid`,
+the command succeeds, and the answer's `warnings` array (empty when there is none) holds one
+`{"code": "resource_pool_producer_missing", "path", "json_pointer", "fact_key"}` per pool, with
+the document's path, the pool's pointer (`/pools/<i>`) and its key; actinglab also writes it as
+a `WARN actinglab:` developer line on stderr. A pool of `server` or `game` scope always gets it.
+A `static_snapshot` pool takes its value from the configuration's `policy.resources` and is not
+checked.
 
 ## Pages and recognition backends in `task.json`
 

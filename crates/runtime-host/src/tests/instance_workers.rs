@@ -1611,8 +1611,9 @@ fn a_start_of_a_stopped_instance_is_granted_its_claim_without_an_error_record() 
 
 /// Workflow #369 S6b (§7 row 7; H-1, P1): an emulator start whose connection preparation fails
 /// in a way the preparation rule calls recoverable hands its key to the ladder that failure
-/// admits: the ladder claim waits for the key, and the control's release transfers the key to
-/// it, so the ladder holds the instance from the control's end on.
+/// admits: the ladder's claim is made at the control's release (its own `lease.requested` and
+/// `scheduler.queued`), and that release hands it the key by one transfer, with no grant of its
+/// own, so the ladder holds the instance from the control's end on.
 #[test]
 fn a_start_whose_preparation_fails_hands_its_key_to_the_ladder() {
     use actingcommand_contract::EmulatorInstanceAction::Start;

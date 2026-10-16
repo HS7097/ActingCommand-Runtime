@@ -121,6 +121,9 @@ mod gate_336_pkgs4;
 mod gate_369s5;
 // Workflow #369 S6c: the configured emulator start at daemon start, one claim per instance.
 mod gate_369_s6c;
+// Workflow #369 S6c review low (b): a failed resume or self-check preparation with no ladder
+// releases the queued startup claim.
+mod gate_369_s6clow;
 mod gate_372k2;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
@@ -213,6 +216,9 @@ mod gate_390_read1;
 // Workflow #390 DRILL-1 (forced compromise T-08): a person's drill of an instance's ladder is
 // recorded like a real one, tagged `drill`, and acts on the device only when it says so.
 mod gate_390_drill1;
+// Workflow #390 九处-1 (corrected ruling 4 of wave 18): the status shows each emulator as the
+// Runtime last read it, with the reading's time.
+mod gate_390_nine1;
 mod gate_392_daa;
 mod gate_398_rd1a;
 mod gate_398_rd1b;

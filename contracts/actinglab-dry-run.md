@@ -203,6 +203,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `resource` import route of the external-tool data (reserved) | no_effect | | reserved; one of the two inventory entries whose names the C2 genericity guard keeps out of `contracts/` |
 | `resource` drift route of the external-tool data (reserved) | no_effect | | reserved; the other such entry |
 | `resource check-release` | no_effect | | |
+| `standard-pack check` | no_effect | | reads an installed game root only (Workflow #373 NAV-T) |
 | `runtime reset` | refused | `dry_run_unsupported` | positional arguments, Runtime flags, `--state-root`, instance; no alternative; no capability entry |
 | `runtime observe` | no_effect | | |
 | `ledger show` | no_effect | | retired |

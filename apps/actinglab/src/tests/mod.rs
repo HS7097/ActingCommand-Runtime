@@ -9,6 +9,9 @@ mod gate_389_u2;
 // Workflow #336 PKG-S5 (apps key 64): `package digest` is retired.
 #[path = "gate_336_pkgs5.rs"]
 mod gate_336_pkgs5;
+// Workflow #390 nine6 (exec key 81): `resource validate` warns about a pool nothing publishes.
+#[path = "gate_390_nine6.rs"]
+mod gate_390_nine6;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

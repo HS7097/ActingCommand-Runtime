@@ -56,6 +56,9 @@ pub(crate) use provider_startup::device_failure_outcome;
 // Test-only: Workflow #382 A-6 (test plan v2.2 §4 #13), the start's configuration refusals.
 #[cfg(test)]
 mod gate_382_a6;
+// Test-only: Workflow #390 DISC-1 (host gate 99), the startup discovery's bounded retry.
+#[cfg(test)]
+mod gate_390_disc1;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -191,6 +194,11 @@ pub(super) struct ActingdConfigFile {
     /// member optional; the defaults file holds every default.
     #[serde(default)]
     device_state: Option<actingcommand_runtime_config::DeviceStateFile>,
+    /// Workflow #390 DISC-1: how often a start tries the instance discovery again while it is
+    /// unavailable (`startup_discovery.*`), each member optional; the defaults file holds every
+    /// default.
+    #[serde(default)]
+    startup_discovery: Option<actingcommand_runtime_config::StartupDiscoveryFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1393,6 +1401,8 @@ impl ActingdConfigFile {
             "device_link": serde_json::to_value(&self.device_link)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "device_state": serde_json::to_value(&self.device_state)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "startup_discovery": serde_json::to_value(&self.startup_discovery)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self

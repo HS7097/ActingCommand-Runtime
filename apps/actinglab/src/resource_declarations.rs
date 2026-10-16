@@ -2,11 +2,13 @@
 
 //! Read-only adapters from repository paths to the production declaration parsers.
 
+use crate::codes::ActinglabCode;
 use crate::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::{
-    BundleMaintenance, LabErrorClass, ResourceDeclarationIssue, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, page_projection::ProjectionMetadata,
-    parse_standard_pack_interrupts, parse_standard_pack_navigation, parse_standard_pack_pages,
+    BundleMaintenance, LabErrorClass, ResourceAdjustmentDeclaration, ResourceDeclarationIssue,
+    ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_PAGES_FILE, page_projection::ProjectionMetadata, parse_standard_pack_interrupts,
+    parse_standard_pack_navigation, parse_standard_pack_pages,
     resource_declaration::ProcedureBindingConfigFile, validate_bundle_maintenance_declarations,
 };
 use actingcommand_lab::{parse_environment_catalog_value, validate_control_declaration};
@@ -16,7 +18,8 @@ use actingcommand_pack_containment::source::{
     validate_resource_declarations,
 };
 use actingcommand_policy::{
-    CatalogDocumentSource, SchedulingDocumentKind, validate_catalog_declaration,
+    CatalogDocumentSource, ObservationRef, PoolValueSource, PoolsDocument, SchedulingDocumentKind,
+    ScopeSelector, validate_catalog_declaration,
 };
 use actingcommand_resource_tooling::{DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions};
 use serde_json::{Value, json};
@@ -31,6 +34,8 @@ const MAX_PATH_BYTES: usize = 4_096;
 const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PATH_LIST_BYTES: u64 = 1024 * 1024;
+/// Workflow #390 nine6: the repository entries the operation scan of a pools document lists.
+const MAX_SCAN_ENTRIES: usize = 262_144;
 
 pub(crate) fn options() -> [&'static str; 3] {
     [
@@ -127,15 +132,52 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
             entries.push(reader.validate(&path)?);
         }
     }
+    // Workflow #390 nine6: a warning leaves the validation valid; the developer line makes it
+    // visible beside the human summary as well.
+    let warnings = reader
+        .pool_warnings
+        .iter()
+        .map(PoolProducerWarning::answer)
+        .collect::<Vec<_>>();
+    for warning in &reader.pool_warnings {
+        eprintln!(
+            "WARN actinglab: {} path={} json_pointer={} fact_key={}",
+            ActinglabCode::ResourcePoolProducerMissing.as_str(),
+            warning.path,
+            warning.json_pointer,
+            warning.fact_key
+        );
+    }
     Ok(json!({
         "schema_version": "actinglab.resource-declarations.v1",
         "scope": "declarations_only",
         "repo": reader.root,
         "status": "valid",
         "entries": entries,
+        "warnings": warnings,
         "read_files": reader.read_files,
         "read_bytes": reader.read_bytes,
     }))
+}
+
+/// Workflow #390 nine6: one `resource_pool_producer_missing` warning, a `ledger_fact` pool of
+/// the pools document `path` that nothing in the repository publishes.
+struct PoolProducerWarning {
+    path: String,
+    json_pointer: String,
+    fact_key: String,
+}
+
+impl PoolProducerWarning {
+    /// `{code, path, json_pointer, fact_key}`, one element of the answer's `warnings`.
+    fn answer(&self) -> Value {
+        json!({
+            "code": ActinglabCode::ResourcePoolProducerMissing.as_str(),
+            "path": self.path,
+            "json_pointer": self.json_pointer,
+            "fact_key": self.fact_key,
+        })
+    }
 }
 
 pub(crate) fn operation(repo: &Path, operation_dir: &Path) -> CliOutcome<Value> {
@@ -167,6 +209,12 @@ struct DeclarationReader {
     /// Workflow #396 TOOL-2: the repository's `declaration-exclusions.json`, read once, when a
     /// path without a mapped parser first needs it.
     exclusions: Option<DeclarationExclusions>,
+    /// Workflow #390 nine6: the instance fact keys the repository's operations publish, read
+    /// once, when a pools document with a `ledger_fact` pool first needs them.
+    published_keys: Option<BTreeSet<String>>,
+    /// The pools documents already checked for producers in this run, by path.
+    checked_pools: BTreeSet<String>,
+    pool_warnings: Vec<PoolProducerWarning>,
 }
 
 impl DeclarationReader {
@@ -183,6 +231,9 @@ impl DeclarationReader {
             read_bytes: 0,
             read_files: BTreeSet::new(),
             exclusions: None,
+            published_keys: None,
+            checked_pools: BTreeSet::new(),
+            pool_warnings: Vec::new(),
         })
     }
 
@@ -319,6 +370,9 @@ impl DeclarationReader {
                 invalid(path, &error.reason)
                     .with_details(json!({"declaration_file": path_text(path), "diagnostic": error}))
             })?;
+            if kind == SchedulingDocumentKind::Pools {
+                self.check_pool_producers(path, &bytes)?;
+            }
             "scheduling"
         } else if name == "control.json" {
             let value = serde_json::from_slice(&bytes)
@@ -720,6 +774,141 @@ impl DeclarationReader {
         } else {
             Err(invalid(path, reason))
         }
+    }
+
+    /// Workflow #390 nine6 (Alice's nine additions of 2026-10-10, item 6): a `ledger_fact` pool
+    /// of the valid pools document `path` that nothing in the repository publishes gets a
+    /// `resource_pool_producer_missing` warning, and the document stays valid. A reading mark or
+    /// an adjustment publishes an instance fact of its key (`contracts/resource-readings.md`,
+    /// "Host"), and a live pool reads its key in its own scope, so a pool is published only when
+    /// it is of instance scope and an operation of the repository writes its key. A static
+    /// snapshot pool takes the configuration's value and is not checked.
+    fn check_pool_producers(&mut self, path: &Path, bytes: &[u8]) -> CliOutcome<()> {
+        let document_path = path_text(path);
+        if !self.checked_pools.insert(document_path.clone()) {
+            return Ok(());
+        }
+        let document: PoolsDocument = serde_json::from_slice(bytes)
+            .map_err(|error| invalid(path, &format!("pools declaration: {error}")))?;
+        let live = document
+            .pools
+            .iter()
+            .enumerate()
+            .filter_map(
+                |(index, pool)| match (&pool.value_source, &pool.observation) {
+                    (PoolValueSource::LedgerFact { .. }, ObservationRef::Fact { fact_key }) => {
+                        Some((index, &pool.scope, fact_key))
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        if live.is_empty() {
+            return Ok(());
+        }
+        let published = match self.published_keys.take() {
+            Some(keys) => keys,
+            None => self.repository_published_keys()?,
+        };
+        for (index, scope, fact_key) in live {
+            if !(matches!(scope, ScopeSelector::Instance { .. })
+                && published.contains(fact_key.as_str()))
+            {
+                self.pool_warnings.push(PoolProducerWarning {
+                    path: document_path.clone(),
+                    json_pointer: format!("/pools/{index}"),
+                    fact_key: fact_key.clone(),
+                });
+            }
+        }
+        self.published_keys = Some(published);
+        Ok(())
+    }
+
+    /// Workflow #390 nine6: every instance fact key an operation of the repository writes: each
+    /// `resource_readings` mark's keys (`fact_key`, and `capacity_fact_key` when it declares one)
+    /// and each `resource_adjustments` entry's `fact_key`, read with the contract's declarations.
+    fn repository_published_keys(&mut self) -> CliOutcome<BTreeSet<String>> {
+        let mut keys = BTreeSet::new();
+        for task in self.repository_operations()? {
+            let data = self.json(&task)?;
+            if let Some(readings) = data.get("resource_readings") {
+                let readings =
+                    <Vec<ResourceReadingDeclaration> as serde::Deserialize>::deserialize(readings)
+                        .map_err(|error| invalid(&task, &format!("resource_readings: {error}")))?;
+                for reading in &readings {
+                    keys.extend(reading.fact_keys().map(str::to_owned));
+                }
+            }
+            if let Some(adjustments) = data.get("resource_adjustments") {
+                let adjustments =
+                    <Vec<ResourceAdjustmentDeclaration> as serde::Deserialize>::deserialize(
+                        adjustments,
+                    )
+                    .map_err(|error| invalid(&task, &format!("resource_adjustments: {error}")))?;
+                keys.extend(
+                    adjustments
+                        .into_iter()
+                        .map(|adjustment| adjustment.fact_key),
+                );
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Workflow #390 nine6: every operation `task.json` of the repository, in path order: a file
+    /// `<directory>/operations/<task>/task.json` at any depth, as the validator recognizes an
+    /// operation, outside Git's own `.git` and the excluded material (`exclusion`: upstream and
+    /// archived material, art catalogs, authoring and reference files). A link is refused, as
+    /// every declaration path refuses one.
+    fn repository_operations(&self) -> CliOutcome<Vec<PathBuf>> {
+        let mut directories = vec![PathBuf::new()];
+        let mut operations = Vec::new();
+        let mut listed = 0_usize;
+        while let Some(directory) = directories.pop() {
+            let entries = fs::read_dir(self.root.join(&directory)).map_err(|error| {
+                invalid(&directory, &format!("read repository directory: {error}"))
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|error| {
+                    invalid(&directory, &format!("read repository entry: {error}"))
+                })?;
+                listed += 1;
+                if listed > MAX_SCAN_ENTRIES {
+                    return Err(invalid(
+                        &directory,
+                        "operation scan exceeds 262144 repository entries",
+                    ));
+                }
+                let name = entry.file_name();
+                if name.as_os_str() == ".git" {
+                    continue;
+                }
+                let path = directory.join(&name);
+                let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+                    invalid(&path, &format!("repository entry metadata: {error}"))
+                })?;
+                if is_link(&metadata) {
+                    return Err(invalid(&path, "operation scan must not traverse links"));
+                }
+                if metadata.is_dir() {
+                    // Every path below an excluded directory is excluded material too.
+                    if exclusion(&path.join("task.json")).is_none() {
+                        directories.push(path);
+                    }
+                } else if name.as_os_str() == "task.json"
+                    && directory
+                        .parent()
+                        .and_then(Path::file_name)
+                        .is_some_and(|parent| parent == "operations")
+                    && exclusion(&path).is_none()
+                {
+                    operations.push(path);
+                }
+            }
+        }
+        operations.sort();
+        Ok(operations)
     }
 
     fn existing_file(&self, relative: &Path) -> CliOutcome<bool> {
