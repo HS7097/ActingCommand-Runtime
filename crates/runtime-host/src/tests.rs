@@ -124,6 +124,8 @@ mod gate_369_s6c;
 mod gate_372k2;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
+// Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).
+mod gate_372k5;
 // Workflow #373 NAV-3a: page-graph prerequisite packages and the standard-pack registry.
 mod gate_373_nav3a;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.

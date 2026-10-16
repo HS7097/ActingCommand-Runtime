@@ -42,7 +42,7 @@ use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, LedgerArtifactReference,
     PersistedEvent,
 };
-use actingcommand_policy::{CatalogSources, compile_catalog};
+use actingcommand_policy::{CatalogSources, CompiledCatalog, compile_catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -623,7 +623,7 @@ pub fn suspension_report(
             "detail": detail,
         }));
     }
-    let (clock_slots, clock_slots_total) = clock_slots(&snapshot)?;
+    let (clock_slots, clock_slots_total) = clock_slots(&snapshot, &compiled)?;
     let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
     let mut report = json!({
         "schema_version": SCHEMA_VERSION,
@@ -1043,11 +1043,13 @@ pub(crate) fn clock_slot_entry(
 
 /// `clock_slots` (model-372 §4.5): the clock-slot records of the 48 h before the ledger's
 /// latest event, newest first and at most 200, and how many there are when the list is cut.
-/// A record's next dispatch is its pair's first admitted dispatch after it in the ledger; the
+/// A record's next dispatch is its pair's first admitted dispatch after it in the ledger, or
+/// (Workflow #372 K5) that of the task of `catalog` that continues the record's task; the
 /// reference time is the latest event's time. Records are selected by their kind and their
 /// `signal_id` prefix, never by their outcome.
 fn clock_slots(
     snapshot: &Snapshot<'_>,
+    catalog: &CompiledCatalog,
 ) -> Result<(Vec<Value>, Option<usize>), SuspensionReportError> {
     let Some(reference_unix_ms) = snapshot
         .ledger
@@ -1091,17 +1093,24 @@ fn clock_slots(
         {
             continue;
         }
-        let next_dispatch = payload
-            .task_id()
-            .and_then(|task_id| {
-                dispatches.get(&(task_id.to_owned(), payload.instance_id().to_owned()))
-            })
-            .and_then(|admitted| {
-                admitted
-                    .iter()
-                    .find(|dispatch| dispatch.sequence > event.sequence())
-                    .copied()
-            });
+        // Workflow #372 K5: a record of an id the configured catalog's task continues settles
+        // against the next admission of that id or of that task.
+        let next_dispatch = payload.task_id().and_then(|task_id| {
+            [Some(task_id), catalog.continued_by(task_id)]
+                .into_iter()
+                .flatten()
+                .filter_map(|id| {
+                    dispatches
+                        .get(&(id.to_owned(), payload.instance_id().to_owned()))
+                        .and_then(|admitted| {
+                            admitted
+                                .iter()
+                                .find(|dispatch| dispatch.sequence > event.sequence())
+                                .copied()
+                        })
+                })
+                .min_by_key(|dispatch| dispatch.sequence)
+        });
         let signal = SlotSignal {
             sequence: event.sequence(),
             recorded_at_unix_ms: event.timestamp_unix_ms(),

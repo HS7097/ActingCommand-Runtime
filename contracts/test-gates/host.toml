@@ -201,7 +201,7 @@ tests = [
 ]
 incident = ["#399", "#400"]
 
-# No silent skip: a due clock slot that is not dispatched, or lost to expiry or supersession, leaves one record
+# No silent skip: a due clock slot that is not dispatched, or lost to expiry or supersession, leaves one record, or under a continued task id
 [[gate]]
 key = "31"
 coverage = "Y"
@@ -222,6 +222,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t5_superseded_records_reach_back_48_hours_and_32_occurrences",
     "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t6_each_lapse_is_written_once_round_trips_and_keeps_its_golden_id",
     "actingcommand-runtime-host::lib::tests::gate_372k4::k4_t7_actingd_suspended_lists_expired_and_superseded_entries_with_their_fate",
+    "actingcommand-runtime-host::lib::tests::gate_372k5::k5_t4_clock_slot_records_of_a_continued_id_count_for_the_task",
 ]
 incident = ["#372"]
 

@@ -1483,6 +1483,27 @@ nobody listed) is a VAL line, not part of the merge gate.
 | L4B-6 | `contained_task_prerequisite_incompatible` detail `reason=select_on_empty` | new value of an existing refusal detail | SEL-L4b | SEL-L4b | a package with an `on_empty` step serves neither as a prerequisite package nor for return-home use, because an early end on the step's page would leave the dependent package short of its entry page |
 | L4B-7 | `actingledger export --task-evidence`: the pairing of an input with its step's effect intent | new rule of an existing output (report shape unchanged) | SEL-L4b | SEL-L4b | M-357b D34 (§5.4): an input's `source_step` is the intent of its step action linked to the input's `before_frame_id`, judged unique after that narrowing, and a step row's `physical_inputs` holds only the inputs whose `before_frame_id` is its frame; it covers a scan's moves and a multi select's taps under one step action, where every input was `ambiguous` before |
 
+### 1.86 Wave 18 slice 372-K5: a same-day catalog change accounts by the new catalog's task identity (#372 K5; K372 addendum of 2026-10-17; forced-compromises mapping S-08)
+
+K5 lets a V2 task declare the task ids of an earlier catalog it continues, so a rename that
+activates during a day keeps that day's budgets, slot, outcome and failure state instead of
+running again, stalling its followers or silently lifting a pause. Under the active catalog a
+task's accounting group is its own id and the ids it declares; the host reads every
+per-(task, instance) state it derives from the ledger over that group, at read time only:
+nothing in the ledger, the projections or the control state is re-keyed, and replay stays per
+dispatch against its own generation. The Runtime never infers a rename (coordinator ruling Q6).
+[scheduling/README.md](scheduling/README.md) (the paragraph after "Task ids are global"),
+[scheduling/v2/README.md](scheduling/v2/README.md) and [policy-suspension.md](policy-suspension.md)
+(`clock_slots`, `next_dispatch`) are the contract. No ledger event type, no payload member, no
+code, key, domain, vocabulary token and no configuration key is added (the actingd-config
+revision is untouched); the catalog diagnostics reuse `duplicate_id`, `limit_exceeded`, the task
+id rule's `type_mismatch` and the unknown-member refusal (`unknown_field`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| K5-1 | `continues_from: [task id, ...]` on a task of an `actingcommand.scheduling.v2` tasks document | catalog member (resource file format, not a ledger shape) | 372-K5 | the W2 generator, after the v0.12.0 deploy (K372 Q9) | optional and skipped when absent, so a catalog without it keeps its serialization, hash and approval; 1..=8 ids (`limit_exceeded` at the member), each by the task id rule; an id that is a task of the same catalog, one listed twice in one task, and one two tasks claim (a split) are `duplicate_id` at the item; refused in a V1 document (`unknown_field`); never checked against the ledger |
+| K5-2 | `policy.dispatch_admitted`'s budget receipt: `task_daily_used`, `task_window_used`, `task_runtime_reserved_ms` | new meaning of existing values (shape unchanged) | 372-K5 | 372-K5 | for a task that declares `continues_from` they count its accounting group on the instance and day or window; the host's own count of each id keeps only that id's runs, so a replay against the dispatch's own generation rebuilds the same receipt; for any other task they are unchanged; payload validation (`used` between 1 and the limit) holds |
+
 ### 1.87 Wave 17 slice PM-CFG: the monitor reads its row (#385, PERF v1.4.2 §10.1; wave-17 ruling 10)
 
 Every key of §5's `performance.monitor.*` / `.pressure.*` / `.load.*` row, parsed, checked and
