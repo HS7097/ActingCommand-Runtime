@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #389 U-2 (unified interface model v2.2.3 §3.2, §4.2, §5.1, §5.2, §8.2 TU-2, TU-3,
-// TU-4, TU-6, TU-7, TU-9; contracts/runtime-interface.md, "Channels" and "Records"): the door
-// binds each connection to one channel and marks every request, its receipt and the
+// TU-4, TU-5, TU-6, TU-7, TU-9; contracts/runtime-interface.md, "Channels" and "Records"): the
+// door binds each connection to one channel and marks every request, its receipt and the
 // `command.received` the C4 path writes with it, and refuses nothing by channel or by Lab
 // option before U-6. A connection that never sends BindChannel is bound from its first
-// request's envelope source until U-6. actingd's configured approvals are written in process
-// with the approval provenance (Governance, User, Ui).
+// request's envelope source until U-6, and its read answers stay what they were before U-2.
+// actinglab's lease, input and application requests leave their frames' retention as it was.
+// actingd's configured approvals are written in process with the approval provenance
+// (Governance, User, Ui).
 
 use super::gate_383_ao4q::ledger_head;
 use super::*;
 use actingcommand_contract::{
-    ChannelVia, CommandPayload, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
-    FactScalar, RuntimeChannel, RuntimeConfigManifest,
+    ArtifactPinReason, ArtifactRetentionFact, ChannelVia, CommandPayload, ConfigParameter,
+    ConfigParameterSource, ConfigSettingChange, FactScalar, InputFrameReference, RuntimeChannel,
+    RuntimeConfigManifest,
+};
+use actingcommand_ledger::{
+    FrameRetentionClass, FrameRetentionSwitches, GlobalLedgerEvidenceConfig,
 };
 use actingcommand_runtime_config::{OVERRIDE_CHANNEL, STUCK_RECOVERY, instance_key};
 use serde_json::{Value, json};
@@ -446,4 +452,248 @@ fn u2_a_configured_approval_is_written_in_process_with_the_approval_provenance()
     );
     drop(reader);
     host.close().expect("close host");
+}
+
+// TU-4 and TU-5, the halves U-2's acceptance left to the test batch (Workflow #382 TEST-FU;
+// v0.12 status §7.1 item 15; coordinator ledger, U-2 PR #798 follow-up).
+
+// The envelopes of a client that never sends BindChannel (model §8.2 TU-4): the console's two
+// connections, (Ui, Ui) and (User, Ui) (model §3.2, UISRC:330, 338), then (Lab, Lab),
+// (Cli, Cli) and (Agent, Adapter).
+const LEGACY_ENVELOPES: [(EventActor, EventSource); 5] = [
+    (EventActor::Ui, EventSource::Ui),
+    (EventActor::User, EventSource::Ui),
+    (EventActor::Lab, EventSource::Lab),
+    (EventActor::Cli, EventSource::Cli),
+    (EventActor::Agent, EventSource::Adapter),
+];
+
+// The console's reads on `client`, sent with the envelope `(actor, source)`: its Status and a page
+// of its ledger view (model §3.4, the UI table: UISRC:737, 330). Each answer is given as the JSON
+// it encodes to.
+fn console_reads(client: &mut TestClient, actor: EventActor, source: EventSource) -> Vec<String> {
+    [
+        RuntimeOperation::Status,
+        RuntimeOperation::QueryEvents {
+            query: EventQuery::default(),
+            profile: ProjectionProfile::Concise,
+            page: RuntimeEventQueryPageRequest::new(64, None).expect("event page"),
+        },
+    ]
+    .into_iter()
+    .map(|operation| {
+        let request = request_as(client, actor, source, operation);
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{receipt:?}"
+        );
+        serde_json::to_string(&receipt.result()).expect("the answer encodes")
+    })
+    .collect()
+}
+
+// TU-4 (the answers): until U-6 a client that never sends BindChannel reads, byte for byte, the
+// answers it read before U-2. No read depended on its connection before U-2, so on a connection
+// bound from each legacy envelope the Status and ledger answers are the bytes a connection bound
+// `cli` reads, before and after them (nothing in between appended a record: the handshake and
+// pure queries are not recorded, model §5.1). With the absence of any channel or connection
+// member in Status (`u2_an_unbound_connection_is_bound_from_its_first_request_s_envelope_until_u6`,
+// model F3) this is TU-4's answer half. TU-4's other half, that the contract crate at 484bdc14
+// decodes Status, is not written: #378 A-7 leaves the console unusable from v0.12.0 until the UI
+// major release, and the v0.12 order (§2 item 5, §6 item 4) has A-7 govern TU-4. The clock stands
+// still, so the Status answers sample the same instants.
+#[test]
+fn gate_u2_a_connection_that_never_binds_reads_the_answers_it_read_before_u2() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_frame_retention_enabled(false)
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(
+                POLICY_NOW_UNIX_MS,
+                POLICY_NOW_UNIX_MS,
+            ))),
+        Arc::new(FakeProvider::one(
+            ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    // Every connection is open before the first read.
+    let mut bound = TestClient::connect(&host);
+    let mut legacy = LEGACY_ENVELOPES.map(|_| TestClient::connect(&host));
+    assert_eq!(
+        bind(&mut bound, RuntimeChannel::Cli, None).state(),
+        RuntimeReceiptState::Completed
+    );
+    let answers = console_reads(&mut bound, EventActor::Cli, EventSource::Cli);
+
+    for ((actor, source), client) in LEGACY_ENVELOPES.into_iter().zip(&mut legacy) {
+        assert_eq!(
+            console_reads(client, actor, source),
+            answers,
+            "({actor:?}, {source:?})"
+        );
+    }
+    assert_eq!(
+        console_reads(&mut bound, EventActor::Cli, EventSource::Cli),
+        answers
+    );
+    drop(bound);
+    drop(legacy);
+    host.close().expect("close host");
+}
+
+// The retention class of the frame a Lab tap names, and every pin the ledger records, after a
+// connection sent actinglab's requests with the envelope `(actor, source)`, bound to `channel`
+// or (as actinglab was before U-2) not bound: its input proxy's lease, a tap on the frame it was
+// decided on, the lease's release and `session app restart`. The counter observes the frame with
+// its own envelope, the same in every run. The view is read 10 minutes after the capture: past
+// the 60 s a frame takes to settle, before the day a default frame is kept
+// (contracts/ledger-store.md, "Frame cleaner").
+fn lab_requests_frame_retention(
+    actor: EventActor,
+    source: EventSource,
+    channel: Option<RuntimeChannel>,
+) -> (FrameRetentionClass, Vec<ArtifactPinReason>) {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, ALIAS, Arc::new(FakeState::default()));
+    let mut counter = TestClient::connect(&host);
+    assert_eq!(
+        bind(&mut counter, RuntimeChannel::Cli, None).state(),
+        RuntimeReceiptState::Completed
+    );
+    let mut lab = TestClient::connect(&host);
+    if let Some(channel) = channel {
+        assert_eq!(
+            bind(&mut lab, channel, None).state(),
+            RuntimeReceiptState::Completed
+        );
+    }
+    let acquire = request_as(
+        &lab,
+        actor,
+        source,
+        RuntimeOperation::acquire_lease(ALIAS, lab.ids.mint_holder_id().expect("holder id")),
+    );
+    let acquired = lab.send(&acquire);
+    let Some(RuntimeResult::LeaseGranted { token }) = acquired.result() else {
+        panic!("the lease: {acquired:?}");
+    };
+    let token = token.clone();
+    let observe = counter.request(RuntimeOperation::ObserveReadonly {
+        instance_alias: ALIAS.to_owned(),
+    });
+    let observed = counter.send(&observe);
+    let Some(RuntimeResult::ReadonlyObservationCompleted { observation }) = observed.result()
+    else {
+        panic!("the observation: {observed:?}");
+    };
+    let artifact = observation.artifact().clone();
+    let frame = InputFrameReference {
+        frame_id: artifact.frame_id.expect("an observed frame has its id"),
+        width: observation.width(),
+        height: observation.height(),
+    };
+    let tap = request_as(
+        &lab,
+        actor,
+        source,
+        RuntimeOperation::Input {
+            frame: Some(frame),
+            token: token.clone(),
+            action: InputAction::Tap { x: 10, y: 20 },
+        },
+    );
+    assert_eq!(lab.send(&tap).state(), RuntimeReceiptState::Completed);
+    let release = request_as(
+        &lab,
+        actor,
+        source,
+        RuntimeOperation::ReleaseLease { token },
+    );
+    assert_eq!(lab.send(&release).state(), RuntimeReceiptState::Completed);
+    let restart = request_as(
+        &lab,
+        actor,
+        source,
+        RuntimeOperation::application_lifecycle(
+            ALIAS,
+            lab.ids.mint_holder_id().expect("holder id"),
+            ApplicationLifecycleAction::Restart,
+        ),
+    );
+    assert_eq!(lab.send(&restart).state(), RuntimeReceiptState::Completed);
+
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    // The tap names the frame as the one it was decided on: the frame is in the tap's scope.
+    assert!(
+        events.iter().any(|event| {
+            event.links().request_id() == Some(&tap.request_id())
+                && matches!(event.payload(), EventPayload::Input(InputPayload::Intent(intent))
+                    if intent.provenance().and_then(|provenance| provenance.before_frame_id)
+                        == Some(frame.frame_id))
+        }),
+        "the tap's input.intent names the observed frame as its before frame"
+    );
+    let pins = events
+        .iter()
+        .filter_map(|event| match event.payload().artifact_retention() {
+            Some(ArtifactRetentionFact::PinRecorded(pin)) => Some(pin.reason),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    drop(counter);
+    drop(lab);
+    host.close().expect("close host");
+    let artifacts = ArtifactStore::open(root.path()).expect("artifact store");
+    let view =
+        GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root.path()), |reference| {
+            artifacts.verify_recovery_reference(reference).ok()
+        })
+        .expect("read the closed ledger")
+        .frame_retention_view(
+            artifact.created_at_unix_ms + 600_000,
+            FrameRetentionSwitches::default(),
+        )
+        .expect("the frame retention view");
+    let class = view
+        .frames
+        .iter()
+        .find(|listed| listed.reference.artifact_id == artifact.artifact_id)
+        .expect("the frame is in the retention view")
+        .class;
+    (class, pins)
+}
+
+// TU-5 (the frames): actinglab's input proxy (its taps and the stream's input forwarding) and
+// `session app` send lease, Input and ApplicationLifecycle requests, which pin no frame by their
+// envelope: pinning is only at the contained-task and observation sites, and an input's records
+// take their source from its execution backend, never from its envelope (model §3.2, "Fixing
+// actinglab's Cli label"; contracts/runtime-interface.md, "Envelope"). So the frame a tap names
+// keeps the retention class it had when actinglab sent these requests unbound as (Cli, Cli)
+// before U-2, now that it binds `lab` and sends (Lab, Lab). It is no Lab frame, and the only
+// pins are the counter's observe pins, `Explicit` for its (Cli, Cli) envelope.
+#[test]
+fn gate_u2_actinglab_s_lease_input_and_application_requests_keep_their_frame_s_retention() {
+    let before = lab_requests_frame_retention(EventActor::Cli, EventSource::Cli, None);
+    let after =
+        lab_requests_frame_retention(EventActor::Lab, EventSource::Lab, Some(RuntimeChannel::Lab));
+    // The frame has settled, so its class is its retention class.
+    assert_ne!(before.0, FrameRetentionClass::Running);
+    assert_eq!(after, before);
+    assert_ne!(after.0, FrameRetentionClass::Lab);
+    assert!(
+        !after.1.is_empty()
+            && after
+                .1
+                .iter()
+                .all(|reason| *reason == ArtifactPinReason::Explicit),
+        "{:?}",
+        after.1
+    );
 }

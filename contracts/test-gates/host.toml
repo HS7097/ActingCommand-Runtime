@@ -793,7 +793,7 @@ tests = [
 ]
 incident = ["#332 G-c"]
 
-# Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-2, TU-3, TU-4, TU-6, TU-7, TU-8, TU-9): the door binds each connection to one channel and marks every request, its receipt and its command.received with it whatever the envelope; a second BindChannel is refused channel_binding_exists naming the channel kept; the handshake and a status read append nothing; until U-6 an unbound connection is bound from its first request's envelope source; via is recorded on the Lab channel only; the Lab channel takes option requests with no Lab option configured; a reconnect (the send_or_dropped fallback, the timeout recovery) binds the same channel; an actingd before U-2 leaves the client unbound and usable with no BindChannel on later reconnects; actingd's configured approvals are written in process with the provenance (Governance, User, Ui)
+# Workflow #389 U-2 (unified interface model v2.2.3 §8.2 TU-2, TU-3, TU-4, TU-5, TU-6, TU-7, TU-8, TU-9): the door binds each connection to one channel and marks every request, its receipt and its command.received with it whatever the envelope; a second BindChannel is refused channel_binding_exists naming the channel kept; the handshake and a status read append nothing; until U-6 an unbound connection is bound from its first request's envelope source; via is recorded on the Lab channel only; the Lab channel takes option requests with no Lab option configured; a reconnect (the send_or_dropped fallback, the timeout recovery) binds the same channel; an actingd before U-2 leaves the client unbound and usable with no BindChannel on later reconnects; actingd's configured approvals are written in process with the provenance (Governance, User, Ui); TEST-FU (Workflow #382, v0.12 status §7.1 item 15): a connection that never binds, from each legacy envelope, reads its Status and ledger page byte for byte as a cli-bound connection does (TU-4, partial: the half that the contract crate at 484bdc14 decodes Status is not written, since #378 A-7 leaves the console unavailable from v0.12.0 until the UI major release and the v0.12 order §6 item 4 has A-7 govern TU-4), and actinglab's lease, tap and session-app restart sent bound lab as (Lab, Lab) leave the frame the tap names in the same settled retention class as when sent unbound as (Cli, Cli), never Lab (TU-5's retention half)
 [[gate]]
 key = "74"
 coverage = "Y"
@@ -807,6 +807,8 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_a_reconnect_after_a_dropped_request_binds_the_same_channel",
     "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_the_contained_task_timeout_recovery_binds_the_same_channel",
     "actingcommand-runtime-client::lib::tests::gate_389_u2::u2_an_actingd_before_u2_leaves_the_client_unbound_and_usable",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::gate_u2_a_connection_that_never_binds_reads_the_answers_it_read_before_u2",
+    "actingcommand-runtime-host::lib::tests::gate_389_u2::gate_u2_actinglab_s_lease_input_and_application_requests_keep_their_frame_s_retention",
 ]
 incident = ["#389 U-2"]
 
@@ -921,7 +923,7 @@ tests = [
 ]
 incident = ["#369", "#361"]
 
-# A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9)
+# A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9); a recovery_ladder.triggers[] item that names the stage drill is refused stage_not_allowed naming recovery_ladder.triggers, at start and by instruction, and the configuration in effect stays (register DR2; TEST-FU, train 15 rulings DRILL-1 item 6)
 [[gate]]
 key = "88"
 coverage = "Y"
@@ -932,6 +934,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_device_drill_climbs_its_rungs_on_the_instance_like_a_real_ladder",
     "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_plan_drill_leaves_the_cool_down_and_a_device_drill_opens_it_as_a_real_ladder",
     "actingcommand-runtime-host::lib::tests::gate_390_drill1::drill1_a_drill_is_refused_when_stuck_recovery_is_off_or_it_comes_from_an_agent",
+    "actingcommand-runtime-config::lib::ladder_tests::gate_drill1_a_trigger_item_naming_the_drill_stage_is_refused_at_start_and_by_an_instruction",
 ]
 incident = ["#390 DRILL-1"]
 
@@ -943,7 +946,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_389_mcp9a::mcp9a_config_catalog_names_the_active_generation_its_record_approval_and_predecessor",
 ]
 incident = ["#389 MCP-9a"]
-# Workflow #336 PKG-S4 (option 丙): a configured prerequisite package is the package its configured package_id names; a package at its path whose control declares another package_id is refused with contained_task_prerequisite_mismatch before any input, as a layer of a linear_steps chain and as the configured return-home package of a page-graph entry (M-PKG v1.1 §4.5 S4-T6, decision D7); a startup package named by its path alone runs after an emulator start (the Runtime half of S4-T2; key after T-c's reservations host 79 and 80)
+# Workflow #336 PKG-S4 (option 丙): a configured prerequisite package is the package its configured package_id names; a package at its path whose control declares another package_id is refused with contained_task_prerequisite_mismatch before any input, as a layer of a linear_steps chain, as the configured return-home package of a page-graph entry, and as the registry's return-home package on the recovery ladder's first rung, which fails with that code before its package runs (runtime.failed, category recovery_ladder) while the climb goes on and ends exhausted at Error (M-PKG v1.1 §4.5 S4-T6, decision D7; the rung half from TEST-FU, train 16 rulings PKG-S4 item 3; M387 §4.1, §4.4); a startup package named by its path alone runs after an emulator start (the Runtime half of S4-T2; key after T-c's reservations host 79 and 80)
 [[gate]]
 key = "81"
 coverage = "Y"
@@ -951,6 +954,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs4::s4_t6_a_chain_layer_whose_control_names_another_package_id_is_refused",
     "actingcommand-runtime-host::lib::tests::gate_336_pkgs4::s4_t6_a_configured_return_home_package_whose_control_names_another_package_id_is_refused",
     "actingcommand-runtime-host::lib::tests::instance_workers::a_start_hands_its_key_to_the_startup_claim_with_no_dispatch_between",
+    "actingcommand-runtime-host::lib::tests::gate_336_pkgs4::gate_s4_t6_a_return_home_rung_whose_control_names_another_package_id_fails_and_climbs_on",
 ]
 incident = ["#336 PKG-S4"]
 # Workflow #384 D2-CHAIN and D2-S4 (D2 model v1.4.2 §3.2, §3.4, §3.5, §3.8, row T33; additions-v012 §8.2): with a fake recognition maintenance package and fake facts, an unknown instance fact dispatches the package, its reading is written to the instance fact store, the next round scores the task that reads it and dispatches it, each ring visible in the ledger; a package that no longer qualifies as a reader is refused at its dispatch before any input with fact_reader_binding_invalid
@@ -1055,7 +1059,7 @@ tests = [
 ]
 incident = ["#390 POOL-1"]
 
-# Workflow #398 RD-4 (model-398 v1.1 §6.2-§6.6, option B; §12 rows RD-4-T1 to T7; register §1.81): under the defaults a handset climbs the profile handset (return home, application restart, no emulator restart) and its recovery_ladder_started names it, while an emulator climbs the section's rungs; an instance's recovery_ladder_profile comes before the kind table; a profile changed while a ladder waits applies to the next trigger only; a profile name no profile has or a profile's rungs outside their schema refuse the section; a handset's start gate holding a rung's run skips it device_not_ready and the next rung runs; a start rung beyond a profile ends exhausted with no rung run and one release under exhaust (the default), climbs the last rung under last_rung, and is refused at start, in check-config and by instruction under refuse (start_rung_out_of_range naming the profile)
+# Workflow #398 RD-4 (model-398 v1.1 §6.2-§6.6, option B; §12 rows RD-4-T1 to T7; register §1.81): under the defaults a handset climbs the profile handset (return home, application restart, no emulator restart) and its recovery_ladder_started names it, while an emulator climbs the section's rungs; an instance's recovery_ladder_profile comes before the kind table; a profile changed while a ladder waits applies to the next trigger only; a profile name no profile has or a profile's rungs outside their schema refuse the section; a handset's start gate holding a rung's run skips it device_not_ready and the next rung runs; a start rung beyond a profile ends exhausted with no rung run and one release under exhaust (the default), climbs the last rung under last_rung, and is refused at start, in check-config and by instruction under refuse (start_rung_out_of_range naming the profile); a kind_profiles member whose key is no device kind is refused out_of_range naming recovery_ladder.kind_profiles, at start and by instruction, and the configuration in effect stays (RD-4 deviation 6, accepted 10-16; TEST-FU)
 [[gate]]
 key = "96"
 coverage = "Y"
@@ -1072,6 +1076,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_398_rd4::rd4_t7_refuse_is_refused_at_start_and_by_instruction_and_the_configuration_stays",
     "actingcommand-runtime-config::lib::rd4_tests::rd4_t7_the_rule_is_configured_and_refuse_checks_every_start_rung_against_every_profile",
     "actingcommand-actingd::process::rd4_t7_refuse_with_a_start_beyond_a_profile_refuses_check_config_and_the_start",
+    "actingcommand-runtime-config::lib::rd4_tests::gate_rd4_an_unknown_device_kind_in_kind_profiles_is_refused_out_of_range_naming_the_key",
     "actingcommand-runtime-host::lib::tests::gate_373_nav5::nav5_a_real_navigation_exhaustion_starts_the_configured_ladder_profile",
 ]
 incident = ["#398 RD-4", "#373 NAV-5"]

@@ -715,7 +715,9 @@ projects carries what earlier runs of that task on that instance settled:
   (`ProjectPolicyInputIdentity`, strategic reports) report no age.
 - `fact_snapshot_id` hashes the projected task snapshots, so each of the three
   fields is part of the snapshot identity and of the decision identity derived
-  from it.
+  from it. Admission compares it per instance (`contracts/instance-fact-store.md`,
+  "Admission staleness per instance"): a run settled on another instance earlier
+  in the same cycle leaves an intent fresh.
 - Nothing about ages reaches the ledger: evaluations are not ledger events, so
   a restarted host cannot rebuild them. It starts with no ages; the first cycle
   evaluated after a start adds `eligible_since_unknown` to every decision whose

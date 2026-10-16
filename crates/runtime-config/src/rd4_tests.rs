@@ -295,3 +295,34 @@ fn rd4_t7_the_rule_is_configured_and_refuse_checks_every_start_rung_against_ever
     .expect("every start rung fits every profile");
     assert_eq!(fitting.start_beyond_profile, StartBeyondProfile::Refuse);
 }
+
+// RD-4 deviation 6, accepted (train-19 notes, note-864, 10-16 01:1x; model-398 §6.2: each member
+// of `kind_profiles` is a device kind naming one of `profiles`): a member whose key is no device
+// kind (the kinds are `emulator` and `handset`) is refused like a name no profile has, at start
+// with `recovery_ladder_config_invalid` and by an instruction with `config_value_invalid`, both
+// `out_of_range` naming `recovery_ladder.kind_profiles`; the configuration in effect stays.
+#[test]
+fn gate_rd4_an_unknown_device_kind_in_kind_profiles_is_refused_out_of_range_naming_the_key() {
+    let unknown_kind = json!({"tablet": "handset"});
+    let refused = from_file(json!({"kind_profiles": unknown_kind}), None)
+        .check(&context())
+        .expect_err("a kind outside the device kinds");
+    assert_eq!(
+        refused.failure_code(),
+        ConfigCode::RecoveryLadderConfigInvalid
+    );
+    assert_eq!(refused.config_key(), KIND_PROFILES);
+    assert_eq!(refused.problem(), Some(ConfigValueProblem::OutOfRange));
+
+    let running = from_file(json!({}), None);
+    let before = running
+        .recovery_ladder(&context())
+        .expect("the defaults pass");
+    let refused = running
+        .apply(&[set(KIND_PROFILES, unknown_kind)], &stamp(), &context())
+        .expect_err("a kind outside the device kinds, by instruction");
+    assert_eq!(refused.failure_code(), ConfigCode::ConfigValueInvalid);
+    assert_eq!(refused.config_key(), KIND_PROFILES);
+    assert_eq!(refused.problem(), Some(ConfigValueProblem::OutOfRange));
+    assert_eq!(running.recovery_ladder(&context()), Ok(before));
+}

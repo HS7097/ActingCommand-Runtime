@@ -661,3 +661,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::clock_slots::ac_diagnose_keeps_refused_and_superseded_rows_first_then_deferred_and_expired_then_owed",
 ]
 incident = ["#372 K4"]
+
+# Policy cycle (#369, #372; test plan v2.2 A-4 G5 rows 2-3 and G6a, wave-17 ruling 11; m369 W-1; #191 A1): a failed scheduled run skips its instance for the rest of the cycle while the other instance's intent in the same cycle still runs; failed_runs makes the driver evaluate again at once, and that evaluation defers the instance its ladder holds with dispatch_instance_held; a cycle past its budget attempts its first intent and reports the rest as policy_cycle_yielded attempted=<i> remaining=<N> with no ledger fact for them. Partial: G5 row 1 cannot occur (the evaluator selects at most one intent per instance per round) and G6b, a held or contended refusal at admission inside the cycle, is not written in 0.12 (no admission hook is defined)
+[[gate]]
+key = "6"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::a_failed_run_skips_its_instance_for_the_rest_of_the_cycle",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4_cycle::gate_382_a4_g5_a_failed_run_leaves_the_other_instances_intent_to_run_in_the_same_cycle",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4_cycle::gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_ladder_holds",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4_cycle::gate_382_a4_g6a_a_budget_yield_reports_the_unattempted_intents_and_writes_no_fact_for_them",
+]
+incident = ["#369 W-1", "#382 A-4"]
