@@ -2831,7 +2831,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity): another Known identity, given as observed_identity (identity_state different), only Unknown readings until expect_after.timeout_ms (unknown), or a choice_of step that chose nothing in this run (no_choice, without expected_identity). It follows the step's input; there is no retry.",
+      "description": "An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity), through its OCR target_id or, on the template path, through its pool of template targets, of which exactly one business ID passing is a reading: another Known identity, given as observed_identity (identity_state different), readings without a Known identity until expect_after.timeout_ms, reported by the last one (unknown: Unknown text, or two or more business IDs of the pool passing; absent: no pool entry passing), or a choice_of step that chose nothing in this run (no_choice, without expected_identity). It follows the step's input; there is no retry.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

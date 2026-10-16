@@ -26,8 +26,8 @@ use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
     ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, SampleRetries,
-    TaskControl, TaskOperation, TaskProgram, safe_task_local_path, sample_budget_insufficient,
-    sampled_tap, scene_from_frame,
+    TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram, safe_task_local_path,
+    sample_budget_insufficient, sampled_tap, scene_from_frame,
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
@@ -43,7 +43,8 @@ use actingcommand_device::Frame;
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
-    CandidateFeatureValue, CandidateIdentityRecognition, CandidateLayout, RecognitionEvaluator,
+    CandidateFeatureValue, CandidateIdentityDeclaration, CandidateIdentityRecognition,
+    CandidateLayout, MAX_IDENTITY_TEMPLATES, PackRegion, RecognitionEvaluator, RecognitionTarget,
     TargetKind, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
@@ -54,6 +55,7 @@ use actingcommand_selection_policy::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 const SELECT_INVALID: Code = ExecutionKernelCode::ContainedTaskSelectInvalid.code();
@@ -387,10 +389,12 @@ fn single_identity_feature(layout: &CandidateLayout) -> Option<String> {
 
 /// Workflow #308 SEL-L4b (S0 §1.3, admission of `expect_identity`): `choice_of` names a select
 /// operation of the same task that is the declaring one or precedes it (in phase order, or in
-/// declaration order without phases); that step's identity feature is text-based, because the
-/// read text is mapped through it; the declaring operation is not retryable, because a retry
-/// would tap again after a mismatch; and `target_id` is an OCR target of the pack. Every
-/// refusal is `contained_task_select_invalid`.
+/// declaration order without phases), and that step has an identity feature; the declaring
+/// operation is not retryable, because a retry would tap again after a mismatch; and exactly
+/// one of the two paths is declared. The text path (`target_id`) needs a text-based identity,
+/// because the read text is mapped through it, and an OCR target. The template path
+/// (SEL-L4b-T, `templates`) is admitted for any identity kind and is checked by
+/// [`validate_identity_templates`]. Every refusal is `contained_task_select_invalid`.
 fn validate_expect_identities(
     program: &TaskProgram,
     control: &TaskControl,
@@ -438,18 +442,26 @@ fn validate_expect_identities(
         if !precedes {
             return Err(refuse("choice_of=after_the_step"));
         }
-        let text = evaluator
+        // SEL-L4b-T: a step without an identity feature has no identity to read back.
+        let Some(identity) = evaluator
             .candidate_layout(&prepared.layout_id)
             .zip(prepared.identity_feature())
             .and_then(|(layout, name)| layout.features.iter().find(|feature| feature.name == name))
             .and_then(|feature| feature.identity.as_ref())
-            .is_some_and(|identity| {
-                matches!(
-                    identity.recognition,
-                    CandidateIdentityRecognition::OcrAliases { .. }
-                )
-            });
-        if !text {
+        else {
+            return Err(refuse("choice_of=no_identity"));
+        };
+        match (&expect.target_id, &expect.templates) {
+            (Some(_), Some(_)) => return Err(refuse("expect_identity=target_and_templates")),
+            (None, None) => return Err(refuse("expect_identity=neither")),
+            (Some(_), None) | (None, Some(_)) => {}
+        }
+        if expect.target_id.is_some()
+            && !matches!(
+                identity.recognition,
+                CandidateIdentityRecognition::OcrAliases { .. }
+            )
+        {
             return Err(refuse("choice_of=identity_not_text"));
         }
         if operation
@@ -458,11 +470,63 @@ fn validate_expect_identities(
         {
             return Err(refuse("operation=retryable"));
         }
-        if !matches!(
-            evaluator.target_kind(&expect.target_id),
-            Ok(TargetKind::Ocr)
-        ) {
-            return Err(refuse("target=not_ocr"));
+        if let Some(target_id) = &expect.target_id {
+            if !matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr)) {
+                return Err(refuse("target=not_ocr"));
+            }
+        } else if let Some(pool) = &expect.templates {
+            validate_identity_templates(pool, identity, evaluator, refuse)?;
+        }
+    }
+    Ok(())
+}
+
+/// Workflow #308 SEL-L4b-T (L4b-T.3): the template pool of an `expect_identity`. It holds
+/// 1..=16 entries (`templates=count`). Each entry names a template target of the pack
+/// (`template=not_template`) once (`template=duplicate`), an `id` that is an entry ID of the
+/// `choice_of` identity (`template=out_of_domain`), and a target whose effective threshold is
+/// above 0 (`template=threshold_zero`: a target that always passes, which REC-7 skips) and whose
+/// region is a `rect` (`template=region_not_rect`); every entry searches the same rect
+/// (`template=regions_differ`), the destination's one identity region. REC-7's flat-field floor
+/// and mask minimums hold for every template target at pack admission already. Every refusal is
+/// `contained_task_select_invalid`, built by the caller's `refuse` from the detail token.
+fn validate_identity_templates(
+    pool: &[TaskIdentityTemplate],
+    identity: &CandidateIdentityDeclaration,
+    evaluator: &RecognitionEvaluator,
+    refuse: impl Fn(&str) -> ContainedTaskError,
+) -> Result<(), ContainedTaskError> {
+    if !(1..=MAX_IDENTITY_TEMPLATES).contains(&pool.len()) {
+        return Err(refuse("templates=count"));
+    }
+    let pack = evaluator.pack();
+    let mut targets = BTreeSet::new();
+    let mut region = None;
+    for entry in pool {
+        let Some(target) = pack.targets.iter().find_map(|target| match target {
+            RecognitionTarget::Template(template) if template.id == entry.target_id => {
+                Some(template)
+            }
+            _ => None,
+        }) else {
+            return Err(refuse("template=not_template"));
+        };
+        if !targets.insert(entry.target_id.as_str()) {
+            return Err(refuse("template=duplicate"));
+        }
+        if !identity.entries.iter().any(|known| known.id == entry.id) {
+            return Err(refuse("template=out_of_domain"));
+        }
+        if target.threshold.unwrap_or(pack.defaults.template_threshold) <= 0.0 {
+            return Err(refuse("template=threshold_zero"));
+        }
+        let PackRegion::Rect(rect) = target.region else {
+            return Err(refuse("template=region_not_rect"));
+        };
+        match region {
+            None => region = Some(rect),
+            Some(first) if first == rect => {}
+            Some(_) => return Err(refuse("template=regions_differ")),
         }
     }
     Ok(())

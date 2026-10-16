@@ -53,7 +53,7 @@ pub use candidate_consensus::{CandidateAggregation, CandidateConsensus, Candidat
 
 pub use candidate_identity::{
     CandidateIdentityDeclaration, CandidateIdentityEntry, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, normalize_name,
+    CandidateIdentityTemplate, MAX_IDENTITY_ENTRIES, MAX_IDENTITY_TEMPLATES, normalize_name,
 };
 
 pub use codes::{

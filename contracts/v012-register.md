@@ -1591,6 +1591,29 @@ check, which compares keys and scopes only.
 |---|---|---|---|---|---|
 | NN6-1 | `actinglab resource validate` answer (`actinglab.resource-declarations.v1`): new member `warnings: [{code: "resource_pool_producer_missing", path, json_pointer, fact_key}]`, empty when there is none | operation output (no persisted record; an actinglab result, read by a person or a resource repository's CI job) | nine6 | nine6 | one element per `ledger_fact` pool of a valid pools document the run read that is not of instance scope or whose key no reading mark (`fact_key`, `capacity_fact_key`) or adjustment of an operation `task.json` of the repository (outside `.git` and the excluded material) writes; `path` is the document, `json_pointer` `/pools/<i>`; the document's entry stays `valid` and the command succeeds (exit 0); a `static_snapshot` pool is not checked; the same warning is a `WARN actinglab:` developer line on stderr |
 
+### 1.94 Slice SEL-L4b-T: `expect_identity` reads template identities (#308, SEL L4b-T model row of 2026-10-17; forced-compromises mapping R-07; wave-17 acceptance ruling 1)
+
+SEL-L4b-T gives `expect_identity` a second path besides the OCR `target_id` of §1.85 (row
+L4B-1): a pool of template targets of the pack in one rect, the destination's identity region.
+On every destination frame each entry passes by its own target's declaration, admitted with
+REC-7's floors; exactly one business ID among the passing entries is a reading, none is
+`absent` and two or more are `unknown`. The path reads a choice of either recognition kind, so
+a select whose identity is told by icons can now bind its destination to its choice.
+[selection-graph.md](selection-graph.md) (sections Declaration and Expected identity) and
+[business-identity-consensus.md](business-identity-consensus.md) are the contract. It adds no
+code, key, token, location or configuration key: the failures are §1.85's
+`selection_identity_mismatch` at `select_expect_identity`, and `absent` is a token the
+`identity_state` vocabulary already holds; the catalog changes the descriptions of the code and
+of that token only. The admission refusals reuse `contained_task_select_invalid` with new detail
+tokens. The resource side's VAL line (a live select pack binds its destination to the chosen
+identity through title templates it already ships; one natural selection on the device passes
+the step) is not part of the merge gate.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L4BT-1 | package format: an operation's `expect_after.expect_identity.templates`, an array of `{id, target_id}` | new optional member (resource file format, not a ledger shape; task schemas unchanged) | SEL-L4b-T | resource side | the declaration gate: `expect_identity` holds `choice_of` and optionally `target_id` and `templates`, nothing else (`UnknownField`); each entry is `{id, target_id}`, both strings (`InvalidType` at `…/templates/<j>/<member>`). Admission (`contained_task_select_invalid`): the `choice_of` step has an identity feature (`choice_of=no_identity`); exactly one of `target_id` and `templates` (`expect_identity=target_and_templates`, `=neither`); the text path as row L4B-1; the pool holds 1..=16 entries (`templates=count`), each a template target (`template=not_template`) named once (`template=duplicate`), with an `id` of the step's identity domain (`template=out_of_domain`), an effective threshold above 0 (`template=threshold_zero`) and a `rect` region (`template=region_not_rect`), one rect for all (`template=regions_differ`) |
+| L4BT-2 | `selection_identity_mismatch` with `identity_state` `absent` | new value combination of an existing record (shape unchanged) | SEL-L4b-T | SEL-L4b-T | a template `expect_identity` on whose last destination frame before `expect_after.timeout_ms` no pool entry passed; `expected_identity` the chosen ID, no `observed_identity`; `unknown` keeps its text-path meaning and also covers two or more business IDs passing |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

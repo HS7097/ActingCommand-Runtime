@@ -45,6 +45,14 @@ Icon recognition instead declares `{"kind":"icon_templates","minimum_score_milli
 1..=1000, margins 1..=1000. The template score is normalized integer milli. Each pool closes
 against the feature's identity domain and contains no repeated target ID.
 
+A destination may also read a chosen identity back from images (Workflow #308 SEL-L4b-T,
+[selection-graph.md](selection-graph.md), "Expected identity"): an `expect_identity` with
+`templates`, 1..=16 `{id, target_id}` entries naming existing template targets of one shared
+rect, closes against the identity domain of its `choice_of` step, whichever recognition kind
+that identity uses. That pool is not the slot's `identity_templates`: each entry passes by its
+own target's threshold, and exactly one business ID among the passing entries is the reading,
+with no separate score or margin.
+
 Best/runner-up comparison is between different business IDs. Multiple aliases or templates
 of one ID are not competitors. An equally good unresolved variant of the winning ID is
 ambiguous. Missing, out-of-domain, low-confidence and ambiguous readings are typed `unknown`
