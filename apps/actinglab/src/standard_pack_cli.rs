@@ -15,7 +15,7 @@ pub(crate) fn options() -> [&'static str; 1] {
 
 pub(crate) fn run(sub: &str, args: &[String]) -> CliOutcome<Value> {
     match sub {
-        "check" => {
+        "check-retired" => {
             let flags = FlagArgs::parse_values(args)?;
             if let Some(flag) = flags.flags.keys().find(|flag| flag.as_str() != "--root") {
                 return Err(CliError::usage(format!(

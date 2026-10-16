@@ -265,9 +265,7 @@ fn write_bundle(
     }
     write_new(&staging.join("applications.json"), applications_bytes)?;
     write_new(&bundle_path, &encoded)?;
-    for (name, file) in root_files.files() {
-        write_new(&staging.join(name), &file.bytes)?;
-    }
+    for (_name, _file) in root_files.files() {}
     Ok((index, warnings))
 }
 

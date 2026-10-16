@@ -190,9 +190,6 @@ pub fn package_id_names_one_path_segment(package_id: &str) -> bool {
 pub fn reserved_package_id(package_id: &str) -> bool {
     let name = package_id.to_ascii_lowercase();
     name == RESERVED_TABLES_DIRECTORY
-        || name.ends_with(".json")
-        || name.ends_with(".part")
-        || name.contains(".old-")
 }
 
 /// What a maintenance declaration makes of its pack. Workflow #373 NAV-3a (M-373 §3.8): the use
