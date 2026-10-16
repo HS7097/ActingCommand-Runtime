@@ -2424,6 +2424,20 @@ impl PreparedContainedTask {
         Ok(Self::from_bundle(bundle)?.package_descriptor())
     }
 
+    /// Workflow #373 NAV-T (M-373 v1.1 §3.9): [`Self::describe_path`]'s admission, returning
+    /// also what the standard-pack cross-check reads of the package (its pages, entry, terminal
+    /// and application entry), as the Runtime's own checks of a standard-pack package read them.
+    pub fn describe_navigation_path(
+        instance_label: &str,
+        locator: &std::path::Path,
+        deadline: std::time::Instant,
+    ) -> Result<crate::NavigationPackageDescriptor, ContainedTaskError> {
+        let bundle =
+            ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
+                .map_err(contained_task_admission_error)?;
+        Ok(Self::from_bundle(bundle)?.navigation_package_descriptor())
+    }
+
     /// Workflow #336 PKG-S1: admits the package `locator` names, the loader chosen by the path
     /// (since PKG-S5 no reference is taken).
     pub fn load_path(
@@ -2888,11 +2902,23 @@ impl PreparedContainedTask {
     /// Workflow #373 NAV-5 (M-373 §5.3): whether the package ends on `page` (a page id without
     /// the game prefix): its `target_page`, or a page of its target page set.
     pub fn terminal_holds_page(&self, page: &str) -> bool {
-        self.program.target_pages().is_ok_and(|targets| {
-            targets
-                .iter()
-                .any(|target| crate::canonical_page_anchor(&self.control.game, target) == page)
-        })
+        self.terminal_page_anchors()
+            .iter()
+            .any(|target| target == page)
+    }
+
+    /// Workflow #373 NAV-T: the pages [`Self::terminal_holds_page`] holds, ids without the game
+    /// prefix.
+    pub(crate) fn terminal_page_anchors(&self) -> Vec<String> {
+        self.program
+            .target_pages()
+            .map(|targets| {
+                targets
+                    .iter()
+                    .map(|target| crate::canonical_page_anchor(&self.control.game, target))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Channels needed before an application effect can repair the connection, for a run the
@@ -3666,15 +3692,24 @@ impl PreparedContainedTask {
     /// without the game prefix): the page itself or a page of its entry page set; `any` holds
     /// none.
     pub fn entry_holds_page(&self, page: &str) -> bool {
-        let game = &self.control.game;
-        let holds = |entry: &String| {
-            crate::canonical_page_anchor(game, entry) == page && entry != linear::ANY_PAGE
+        self.declared_entry_page_anchors()
+            .iter()
+            .any(|entry| entry == page)
+    }
+
+    /// Workflow #373 NAV-T: the pages [`Self::entry_holds_page`] holds, ids without the game
+    /// prefix: the declared `entry_page`, or the pages of its set; `any` none.
+    pub(crate) fn declared_entry_page_anchors(&self) -> Vec<String> {
+        let entries = match &self.program.entry_page {
+            Some(EntryPageDeclaration::Page(entry)) => std::slice::from_ref(entry),
+            Some(EntryPageDeclaration::Set(entries)) => entries.as_slice(),
+            None => &[],
         };
-        match &self.program.entry_page {
-            Some(EntryPageDeclaration::Page(entry)) => holds(entry),
-            Some(EntryPageDeclaration::Set(entries)) => entries.iter().any(holds),
-            None => false,
-        }
+        entries
+            .iter()
+            .filter(|entry| entry.as_str() != linear::ANY_PAGE)
+            .map(|entry| crate::canonical_page_anchor(&self.control.game, entry))
+            .collect()
     }
 
     pub const fn entry_count(&self) -> usize {

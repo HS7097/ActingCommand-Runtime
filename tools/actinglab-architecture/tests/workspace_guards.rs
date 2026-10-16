@@ -6344,6 +6344,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_caller_file("apps/actinglab/src/scheduling_cli.rs"),
             glue_caller_file("apps/actinglab/src/session_management.rs"),
             glue_caller_file("apps/actinglab/src/signature_cli.rs"),
+            glue_caller_file("apps/actinglab/src/standard_pack_cli.rs"),
         ],
         required_calls: &[
             absent(ACTINGLAB_MAIN, "flags: BTreeMap<String, Vec<String>>"),

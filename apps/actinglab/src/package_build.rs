@@ -3,12 +3,15 @@
 use super::{CliError, CliOutcome, FlagArgs};
 use actingcommand_contract::BundleSource;
 use actingcommand_lab::{DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PackageBundleRequest};
+use actingcommand_resource_tooling::StandardPackRootFiles;
 use serde::Serialize;
 use serde_json::Value;
 
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out
 /// <directory>`, with `--source-repository` and `--source-commit` together or not at all; it
-/// writes bundle v4 (Workflow #336 PKG-S5).
+/// writes bundle v4 (Workflow #336 PKG-S5). Workflow #373 NAV-T: `--pages`, `--interrupts` and
+/// `--navigation` name the standard-pack root files it checks, cross-checks and lays beside
+/// `bundle.json`.
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
     let maintenance = if flags.flags.contains_key("--maintenance") {
         use std::io::Read;
@@ -47,12 +50,25 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
             ));
         }
     };
+    // Workflow #373 NAV-T: a root file flag given without its path is refused, not ignored.
+    let root_file = |flag: &str| -> CliOutcome<Option<std::path::PathBuf>> {
+        if flags.flags.contains_key(flag) {
+            flags.required_path(flag).map(Some)
+        } else {
+            Ok(None)
+        }
+    };
     let request = PackageBundleRequest {
         applications: flags.required_path("--applications")?,
         packs_root: flags.required_path("--packs-root")?,
         out: flags.required_path("--out")?,
         source,
         maintenance,
+        root_files: StandardPackRootFiles {
+            pages: root_file("--pages")?,
+            interrupts: root_file("--interrupts")?,
+            navigation: root_file("--navigation")?,
+        },
     };
     let mut lab = super::env_detection::build_readonly_lab()?;
     serialize_response(lab.package_bundle(request)?)

@@ -70,7 +70,10 @@ The standard-pack root files are checked as the Runtime's root reader checks the
 (`package-reference.md`, "Standard package root"): shape, version, `game`, page ids, counts
 and, for `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, its pages against
 `pages.json`. The packages they name are
-checked against the packed bundle by the bundle generator, as maintenance declarations are.
+checked against the packed bundle by the bundle generator, as maintenance declarations are
+(Workflow #373 NAV-T: `package bundle --pages --interrupts --navigation` admits each and
+cross-checks it for its part, and reports the packs whose entry page the list does not hold;
+`package-reference.md`, "Standard-pack root files").
 
 Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and
