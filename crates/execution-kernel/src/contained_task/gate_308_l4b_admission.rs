@@ -9,11 +9,14 @@
 // and a detail page. Each refusal changes the admitted base package in the one declaration under
 // test; the same package with that rule satisfied is admitted.
 
+use super::scan::bound_inputs;
 use super::*;
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::codes::TaskflowCode;
 use actingcommand_device::CaptureBackendName;
+use actingcommand_selection_policy::{FieldDomain, SelectionFactSnapshot, UpperBound, upper_bound};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::{Cursor, Write};
 use zip::{ZipWriter, write::FileOptions};
 
@@ -299,6 +302,38 @@ fn icon_policy() -> Value {
                                "value_type": {"type": "enum_string",
                                               "allowed": ["member-00", "member-01"]}}]);
     policy["gates"] = json!([]);
+    policy
+}
+
+// One slot of the list page whose layout declares no identity feature: the card is told only by
+// its `open` mark.
+fn open_slot_layout() -> Value {
+    json!({
+        "id": "layout/slots", "page_id": "neutral/list", "kind": "fixed_slots",
+        "features": [{"name": "open", "value": "passed"}],
+        "slots": [{"rect": {"x": 0, "y": 60, "width": 400, "height": 100},
+                   "click": {"x": 10, "y": 70, "width": 80, "height": 40},
+                   "targets": {"open": "card/open"}}]
+    })
+}
+
+// The base task whose `pick` is a single-frame select over the identity-free slot, still
+// declaring `on_empty`.
+fn open_slot_task() -> Value {
+    let mut task = task();
+    task["candidate_layouts"] = json!([open_slot_layout()]);
+    let select = &mut task["operations"][0]["select"];
+    select["layout_id"] = json!("layout/slots");
+    select.as_object_mut().expect("select").remove("scan");
+    task
+}
+
+// The base policy over the identity-free slot: the open card is a member.
+fn open_slot_policy() -> Value {
+    let mut policy = policy();
+    policy["policy_id"] = json!("slots");
+    policy["applies_to"]["candidate_layout_id"] = json!("layout/slots");
+    policy["fields"] = json!([{"name": "open", "value_type": {"type": "boolean"}}]);
     policy
 }
 
@@ -787,4 +822,168 @@ fn l4b_admission_an_on_empty_package_is_no_prerequisite_package() {
     assert_eq!(with.prerequisite_incompatibility(), Some("select_on_empty"));
     let without = admitted("without on_empty", &without_on_empty(&task()), &policy());
     assert_eq!(without.prerequisite_incompatibility(), None);
+}
+
+// The extra admission checks of this slice (PR deviation 6, wave-17 acceptance ruling 6) follow.
+
+// Extra admission check 1: every check a scan judges is a target of the pack, its `start.check`,
+// its `end.check` and each `page_order` check of a page-flip advance. A check the pack does not
+// declare is refused; the base scan and a page flip whose page checks are declared are admitted.
+#[test]
+fn l4b_admission_refuses_a_scan_check_the_pack_does_not_declare() {
+    let page_flip = |checks: Value| {
+        let mut task = task();
+        task["operations"][0]["select"]["scan"]["advance"] = json!({
+            "kind": "rect",
+            "rect": {"x": 300, "y": 540, "width": 60, "height": 30},
+            "back_rect": {"x": 40, "y": 540, "width": 60, "height": 30},
+            "page_order": {"checks": checks, "page_step_px": 300}
+        });
+        task
+    };
+    admitted("the base scan", &task(), &policy());
+    admitted(
+        "a page flip whose page checks are declared",
+        &page_flip(json!(["check/list_start", "check/list_end"])),
+        &policy(),
+    );
+    let mut start = task();
+    start["operations"][0]["select"]["scan"]["start"]["check"] = json!("check/list_top");
+    let mut end = task();
+    end["operations"][0]["select"]["scan"]["end"]["check"] = json!("check/list_bottom");
+    for (case, broken) in [
+        ("an undeclared start check", start),
+        ("an undeclared end check", end),
+        (
+            "an undeclared page check",
+            page_flip(json!(["check/list_start", "check/page_1"])),
+        ),
+    ] {
+        let error = refusal(
+            case,
+            &broken,
+            &policy(),
+            ExecutionKernelCode::ContainedTaskSelectInvalid.as_str(),
+        );
+        assert_detail(case, &error, "operation=pick scan check=undeclared");
+    }
+}
+
+// Extra admission check 2: the upper bound of S0 §3.3 needs a domain for every policy field, and
+// a position without a Known identity is bounded over the step's own identity only. A policy
+// field that reads another identity feature of the layout has no domain there, so a scan select
+// whose policy reads one is refused (`upper_bound`); the same layout under the base policy, which
+// reads only the step's identity, is admitted.
+#[test]
+fn l4b_admission_refuses_a_policy_field_of_another_identity_than_the_step_s() {
+    let mut task = task();
+    task["candidate_layouts"][0]["features"]
+        .as_array_mut()
+        .expect("features")
+        .push(json!({
+            "name": "group", "value": "identity", "target": "card/name",
+            "offset": {"x": 0, "y": 30},
+            "identity": {
+                "entries": [{"id": "group-a", "aliases": ["group a"]},
+                            {"id": "group-b", "aliases": ["group b"]}],
+                "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
+                                "minimum_confidence_milli": 800}}
+        }));
+    admitted(
+        "the policy reads the step's identity only",
+        &task,
+        &policy(),
+    );
+    let mut grouped = policy();
+    grouped["fields"]
+        .as_array_mut()
+        .expect("fields")
+        .push(json!({"name": "group",
+                     "value_type": {"type": "enum_string", "allowed": ["group-a", "group-b"]}}));
+    let case = "the policy reads another identity";
+    let error = refusal(
+        case,
+        &task,
+        &grouped,
+        ExecutionKernelCode::ContainedTaskSelectInvalid.as_str(),
+    );
+    assert_detail(
+        case,
+        &error,
+        "operation=pick upper_bound field=group identity=not_the_step_identity",
+    );
+}
+
+// Extra admission rule 3: a single-frame select that declares `on_empty` over a `fixed_slots`
+// layout with no identity feature is admitted, and an unknown slot of it is bounded with one
+// neutral hypothesis over its field domains. The open mark may still pass, so the slot may be a
+// member scoring 0: the bound is `Max(0)`, never none-eligible.
+#[test]
+fn l4b_admission_an_identity_free_on_empty_layout_is_bounded_with_one_neutral_hypothesis() {
+    let prepared = admitted(
+        "an identity-free single-frame on_empty select",
+        &open_slot_task(),
+        &open_slot_policy(),
+    );
+    let [operation] = prepared.program.operations.as_slice() else {
+        panic!("one operation");
+    };
+    let select = operation
+        .prepared_select
+        .as_deref()
+        .expect("the select step is prepared");
+    assert_eq!(select.identity_feature(), None);
+    assert_eq!(operation.on_empty_key(), Some(EMPTY_KEY));
+    let layout = prepared
+        .evaluator
+        .candidate_layout("layout/slots")
+        .expect("the slot layout");
+    let (domains, hypotheses) = bound_inputs(layout, select.policy(), select.identity_feature())
+        .expect("the bound's inputs");
+    assert_eq!(
+        domains,
+        BTreeMap::from([("open".to_owned(), FieldDomain::Boolean)])
+    );
+    assert_eq!(hypotheses.len(), 1, "{hypotheses:?}");
+    let facts = SelectionFactSnapshot {
+        snapshot_id: "snapshot-empty".into(),
+        snapshot_at_unix_ms: 0,
+        facts: BTreeMap::new(),
+    };
+    let bound = upper_bound(select.policy(), &facts, 0, &hypotheses, &domains).expect("the bound");
+    assert_eq!(bound, UpperBound::Max(0));
+}
+
+// Extra admission check 4: `expect_identity` reads `target_id` by OCR (S0 §1.3), so a target the
+// pack declares with another kind, or does not declare, is refused; the same step reading the
+// detail page's OCR name is admitted.
+#[test]
+fn l4b_admission_refuses_an_expect_identity_target_that_is_no_ocr_target() {
+    let expecting = |target: &str| {
+        let mut task = task();
+        task["operations"][0]["expect_after"]["expect_identity"] =
+            json!({"target_id": target, "choice_of": "pick"});
+        task
+    };
+    admitted(
+        "the detail page's OCR name",
+        &expecting("detail/name"),
+        &policy(),
+    );
+    for (case, target) in [
+        ("a colour target", "page/detail"),
+        ("an undeclared target", "detail/title"),
+    ] {
+        let error = refusal(
+            case,
+            &expecting(target),
+            &policy(),
+            ExecutionKernelCode::ContainedTaskSelectInvalid.as_str(),
+        );
+        assert_detail(
+            case,
+            &error,
+            "operation=pick expect_identity target=not_ocr",
+        );
+    }
 }

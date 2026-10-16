@@ -541,6 +541,13 @@ fn l4b_a_scan_select_that_finds_nobody_listed_ends_the_run_with_its_on_empty_key
     assert!(projection.candidates().is_empty());
     assert!(projection.unknown().is_empty());
     assert_eq!(projection.gated_out().count, CARDS);
+    // `identities_sha256` is the SHA-256, in lowercase hex, of the compact JSON array of the
+    // gated-out business IDs in ascending order (wave-17 acceptance ruling 4): here the bytes
+    // `["member-00","member-01","member-02","member-03","member-04","member-05"]`.
+    assert_eq!(
+        projection.gated_out().identities_sha256,
+        "642a981289421609b2c7e6b452e3e5c1075ee359364b3d864f17d9a266f831b0"
+    );
     assert_eq!(record.selection_result, TaskSelectionOutcome::Empty);
     assert_eq!(record.outcome_key, "card_empty");
     assert!(record.selected.is_empty());
