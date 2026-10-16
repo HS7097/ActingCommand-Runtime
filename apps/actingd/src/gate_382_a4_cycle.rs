@@ -674,12 +674,16 @@ fn activate(host: &RuntimeHost, policy: &PolicyBootstrap) {
     }
 }
 
-// The ledger as a read-only reader sees it now.
+// The ledger's records as a read-only reader sees them now, each authenticated. The tests read
+// records only: the runs' frame material is not read, so the reader never asks for it.
 fn ledger_events(root: &Path) -> Vec<PersistedEvent> {
-    GlobalLedger::open_evidence(GlobalLedgerEvidenceConfig::new(root), |_| None)
-        .expect("the ledger opens read-only")
-        .events()
-        .to_vec()
+    GlobalLedger::open_evidence(
+        GlobalLedgerEvidenceConfig::new(root).sqlite_material_not_read(),
+        |_| None,
+    )
+    .expect("the ledger opens read-only")
+    .events()
+    .to_vec()
 }
 
 // The policy dispatch records (intent, admitted, rejected, completed) of one decision.
