@@ -149,6 +149,12 @@ mod gate_e5_select;
 // Workflow #390 lpbox (exec key 76): a long press takes a click box.
 #[cfg(test)]
 mod gate_390_lpbox;
+// Test plan v2.2 §3.10 E-3, EXEC-I4: shared test support (the scripted-frame runtime).
+#[cfg(test)]
+mod tests;
+// Test plan v2.2 E-3 G3 (exec keys 5 and 21): the screen disagrees with the pack.
+#[cfg(test)]
+mod gate_382_e3;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -5292,6 +5298,8 @@ impl PreparedContainedTask {
         let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = runtime.monotonic_now();
         let mut window_started = runtime.observation_now();
+        // Whether the window has seen a frame that gave no page of the package.
+        let mut missed = false;
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
@@ -5308,12 +5316,25 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
+            // Test plan E-3 G3 (exec key 21): after frames that gave no page, a window too short
+            // for the next sampled frame is spent, as an elapsed one is.
+            if missed
+                && self.consensus_window_spent(
+                    runtime,
+                    None,
+                    window_started + timeout,
+                    task_deadline,
+                )?
+            {
+                break;
+            }
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
                     retries.retry(failure, timeout)?;
                     started = runtime.monotonic_now();
                     window_started = runtime.observation_now();
+                    missed = false;
                     continue;
                 }
             };
@@ -5331,6 +5352,7 @@ impl PreparedContainedTask {
                 Ok(observation) => return Ok(observation),
                 Err(scene) => scene,
             };
+            missed = true;
             // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
             // offered to the shared interrupt pages before the wait goes on, its budget paused
             // while one is handled.
@@ -5340,15 +5362,7 @@ impl PreparedContainedTask {
                 continue;
             }
             if elapsed_since(runtime, started) >= timeout {
-                return Err(ContainedTaskError::timed(
-                    SharedCode::ContainedTaskPageUnknown.code(),
-                    TaskTimingScope::PageRecognition,
-                    TaskTimingStage::PageRecognition,
-                    elapsed_since(runtime, started),
-                    timeout,
-                    None,
-                )
-                .into());
+                break;
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
@@ -5367,6 +5381,48 @@ impl PreparedContainedTask {
                 succeeded: true,
             });
         }
+        Err(ContainedTaskError::timed(
+            SharedCode::ContainedTaskPageUnknown.code(),
+            TaskTimingScope::PageRecognition,
+            TaskTimingStage::PageRecognition,
+            elapsed_since(runtime, started),
+            timeout,
+            None,
+        )
+        .into())
+    }
+
+    /// Test plan E-3 G3 (exec key 21; inventory-exec item 5): whether the window of a page wait
+    /// or of a step's postcondition, ending at `window_end`, is spent under target consensus.
+    /// Each observation of the wait samples inside that window (Workflow #386 SR-1, scheduling
+    /// model §2.1 item 2), so once the window's rest can no longer hold the next page
+    /// recognition while the task's remaining time still can, the wait has run out on frames
+    /// that did not give what it waits for, and it ends as without consensus. A task whose
+    /// remaining time cannot hold the recognition is left to the observation's own budget
+    /// check, `recognition_sample_budget_insufficient` (§2.1 item 5, §2.3). Without consensus
+    /// the wait's elapsed time alone decides. `pages` are the pages the wait's observation
+    /// evaluates, as its own check counts them: every page for the page-graph waits, the
+    /// awaited pages for a `linear_steps` wait (wave-17 acceptance ruling 2).
+    fn consensus_window_spent<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        pages: Option<&[&str]>,
+        window_end: Instant,
+        task_deadline: Instant,
+    ) -> Result<bool, ContainedTaskError> {
+        if self.evaluator.pack().target_consensus.is_empty() {
+            return Ok(false);
+        }
+        let required_ms =
+            selection::page_recognition_budget_ms(&self.evaluator, &self.detector, pages)?;
+        let required = Duration::from_millis(required_ms);
+        let now = runtime.observation_now();
+        // The observation's own check: `capture_frame_scene` before its first capture.
+        let holds = |end: Instant| {
+            let remaining = end.saturating_duration_since(now);
+            !remaining.is_zero() && required <= remaining
+        };
+        Ok(!holds(window_end) && holds(task_deadline))
     }
 
     /// Workflow #371-3: the ordinary run's home entry looks at frames, one every capture
@@ -6025,6 +6081,8 @@ impl PreparedContainedTask {
         let mut started = runtime.monotonic_now();
         let mut window_started = runtime.observation_now();
         let mut last_observation = None;
+        // Whether the window has seen a frame that did not confirm the step.
+        let mut missed = false;
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
@@ -6042,12 +6100,25 @@ impl PreparedContainedTask {
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionBeforeCapture)
                     .into());
             }
+            // Test plan E-3 G3 (exec key 21): after frames that did not confirm the step, a window
+            // too short for the next sampled frame is spent, as an elapsed one is.
+            if missed
+                && self.consensus_window_spent(
+                    runtime,
+                    None,
+                    window_started + timeout,
+                    task_deadline,
+                )?
+            {
+                break;
+            }
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
                     retries.retry(failure, timeout)?;
                     started = runtime.monotonic_now();
                     window_started = runtime.observation_now();
+                    missed = false;
                     continue;
                 }
             };
@@ -6109,23 +6180,14 @@ impl PreparedContainedTask {
                 }
                 Err(scene) => self.offer_shared_interrupt(runtime, &scene)?,
             };
+            missed = true;
             if let Some(paused) = paused {
                 started += paused;
                 window_started += paused;
                 continue;
             }
             if elapsed_since(runtime, started) >= timeout {
-                return Ok(PostconditionResolution::Failed {
-                    observation: last_observation,
-                    hit_error_page: false,
-                    timing_failure: Some(TaskTimingFailure {
-                        scope: TaskTimingScope::Postcondition,
-                        stage: TaskTimingStage::Postcondition,
-                        elapsed_ms: elapsed_since(runtime, started).as_millis() as u64,
-                        limit_ms: timeout.as_millis() as u64,
-                        required_delay_ms: None,
-                    }),
-                });
+                break;
             }
             let remaining = timeout.saturating_sub(elapsed_since(runtime, started));
             let boundary = actingcommand_contract::TaskTimingBoundary::PostconditionWait;
@@ -6146,6 +6208,17 @@ impl PreparedContainedTask {
                 succeeded: true,
             });
         }
+        Ok(PostconditionResolution::Failed {
+            observation: last_observation,
+            hit_error_page: false,
+            timing_failure: Some(TaskTimingFailure {
+                scope: TaskTimingScope::Postcondition,
+                stage: TaskTimingStage::Postcondition,
+                elapsed_ms: elapsed_since(runtime, started).as_millis() as u64,
+                limit_ms: timeout.as_millis() as u64,
+                required_delay_ms: None,
+            }),
+        })
     }
 }
 
