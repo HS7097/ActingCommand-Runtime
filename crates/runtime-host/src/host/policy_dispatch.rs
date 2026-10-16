@@ -1213,8 +1213,14 @@ impl HostShared {
                 operation,
             ));
         }
-        for (key, expected_run) in &outcome_keys.completed_runs {
-            let Some(expected_keys) = outcome_keys.keys.get(&expected_run.catalog_task_id) else {
+        for ((task_id, _), expected_run) in &outcome_keys.completed_runs {
+            // Workflow #372 K5: the entry is keyed by the active task; the run, and its
+            // authoritative outcome, by the id it ran as, which may be one the task continues.
+            let key = &(
+                expected_run.catalog_task_id.clone(),
+                expected_run.instance_alias.clone(),
+            );
+            let Some(expected_keys) = outcome_keys.keys.get(task_id) else {
                 continue;
             };
             if matches!(
@@ -1379,7 +1385,7 @@ impl HostShared {
             }
             for (outcome_key, value) in records {
                 base_facts.outcomes.push(ObservedOutcome {
-                    task_id: identity.catalog_task_id().to_owned(),
+                    task_id: task_id.clone(),
                     instance_id: identity.instance_alias().to_owned(),
                     outcome_key,
                     value,

@@ -13,6 +13,10 @@
 //! grace ran out (`clock_slot_expired`, info) and one a later occurrence absorbed with no other
 //! record of it (`clock_slot_superseded`, warning), each written only for a pair with a dispatch
 //! history that would have come due (its trigger true with its clocks counted due).
+//!
+//! Workflow #372 K5: a record of an occurrence counts for a task under any id of its accounting
+//! group (the task and the ids it continues), and a task's dispatch history is its group's (its
+//! folded snapshot); a new record is written under the task.
 
 use super::{CatalogStore, matching_activity_profile};
 use crate::RuntimeHostResult;
@@ -437,6 +441,23 @@ impl<'a> Preview<'a> {
             || self.store.load_planning_signal(signal_id)?.is_some())
     }
 
+    /// Workflow #372 K5: whether a `kind` record of the occurrence exists for the pair under any
+    /// id of the task's accounting group (the task, then the ids it continues).
+    fn known_for_group(
+        &self,
+        kind: SlotRecord,
+        task_id: &str,
+        alias: &str,
+        occurrence: u64,
+    ) -> RuntimeHostResult<bool> {
+        for id in self.catalog.accounting_ids(task_id) {
+            if self.known(&signal_id(kind, id, alias, occurrence))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn emit(&mut self, kind: SlotRecord, task_id: &str, alias: &str, values: &SlotValues) {
         let signal = clock_slot_signal(kind, task_id, alias, values, self.time.unix_ms);
         self.emitted.insert(signal.signal_id.clone());
@@ -467,7 +488,7 @@ impl<'a> Preview<'a> {
             GateClass::Persistent => SlotRecord::Refused,
             GateClass::OperatorPause | GateClass::QueueWait => SlotRecord::Deferred,
         };
-        if self.known(&signal_id(kind, task_id, alias, occurrence))? {
+        if self.known_for_group(kind, task_id, alias, occurrence)? {
             return Ok(());
         }
         // A refusal stops later deferrals of the same occurrence; a deferral stops only a later
@@ -483,7 +504,7 @@ impl<'a> Preview<'a> {
             | SlotRecord::Superseded => None,
         };
         if let Some(blocking) = blocking
-            && self.known(&signal_id(blocking, task_id, alias, occurrence))?
+            && self.known_for_group(blocking, task_id, alias, occurrence)?
         {
             return Ok(());
         }
@@ -513,7 +534,7 @@ impl<'a> Preview<'a> {
             return Ok(());
         };
         if occurrence >= window.from_unix_ms
-            || self.known(&signal_id(SlotRecord::Owed, task_id, alias, occurrence))?
+            || self.known_for_group(SlotRecord::Owed, task_id, alias, occurrence)?
         {
             return Ok(());
         }
@@ -549,7 +570,7 @@ impl<'a> Preview<'a> {
                 ClockSlotLapseKind::Expired { grace_ms } => (SlotRecord::Expired, Some(grace_ms)),
                 ClockSlotLapseKind::Superseded => (SlotRecord::Superseded, None),
             };
-            if self.known(&signal_id(kind, task_id, alias, occurrence))? {
+            if self.known_for_group(kind, task_id, alias, occurrence)? {
                 continue;
             }
             if kind == SlotRecord::Superseded && self.traced(task_id, alias, occurrence)? {
@@ -584,14 +605,15 @@ impl<'a> Preview<'a> {
         Ok(())
     }
 
-    /// Whether a refused, deferred or expired record of the pair's occurrence exists.
+    /// Whether a refused, deferred or expired record of the pair's occurrence exists (Workflow
+    /// #372 K5: under any id of the task's accounting group).
     fn traced(&self, task_id: &str, alias: &str, occurrence: u64) -> RuntimeHostResult<bool> {
         for kind in [
             SlotRecord::Refused,
             SlotRecord::Deferred,
             SlotRecord::Expired,
         ] {
-            if self.known(&signal_id(kind, task_id, alias, occurrence))? {
+            if self.known_for_group(kind, task_id, alias, occurrence)? {
                 return Ok(true);
             }
         }

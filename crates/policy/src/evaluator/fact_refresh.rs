@@ -160,6 +160,7 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         strategic_weight_milli: 0,
         instance_overrides: Vec::new(),
         value_milli: None,
+        continues_from: None,
     })
 }
 

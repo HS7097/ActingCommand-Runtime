@@ -100,6 +100,39 @@ impl CompiledCatalog {
             .find(|task| task.id == task_id)
     }
 
+    /// Workflow #372 K5: the ids `task_id` accounts as under this catalog: `task_id` itself,
+    /// then the ids its task declares in `continues_from` (none for an id that is not a task of
+    /// this catalog). Every per-(task, instance) state the Runtime derives from its ledger is
+    /// read over these ids.
+    pub fn accounting_ids<'a>(&'a self, task_id: &'a str) -> Vec<&'a str> {
+        let continued = self
+            .catalog
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .and_then(|task| task.continues_from.as_deref())
+            .unwrap_or_default();
+        std::iter::once(task_id)
+            .chain(continued.iter().map(String::as_str))
+            .collect()
+    }
+
+    /// Workflow #372 K5: the task of this catalog that declares it continues `task_id`, if one
+    /// does (the compiler admits at most one).
+    pub fn continued_by(&self, task_id: &str) -> Option<&str> {
+        self.catalog
+            .tasks
+            .tasks
+            .iter()
+            .find(|task| {
+                task.continues_from
+                    .as_deref()
+                    .is_some_and(|continued| continued.iter().any(|id| id == task_id))
+            })
+            .map(|task| task.id.as_str())
+    }
+
     pub fn referenced_outcome_keys(&self, task_id: &str) -> BTreeSet<String> {
         let mut keys = BTreeSet::new();
         for task in &self.catalog.tasks.tasks {
@@ -1335,6 +1368,124 @@ mod tests {
             serde_json::to_value(&missed.catalog().tasks.tasks[0].trigger)
                 .expect("the trigger serializes"),
             written.expect("the written trigger")
+        );
+    }
+
+    // Workflow #372 K5: the neutral example catalog declared as `version`, with a second task
+    // `fixture.second` (a copy of the first), `continues_from` set on task `index` for each
+    // `(index, ids)` of `continued`.
+    fn k5_sources(version: &str, continued: &[(usize, serde_json::Value)]) -> CatalogSources {
+        r7_sources(version, |tasks| {
+            let mut second = tasks["tasks"][0].clone();
+            second["id"] = serde_json::json!("fixture.second");
+            tasks["tasks"]
+                .as_array_mut()
+                .expect("the tasks array")
+                .push(second);
+            for (index, ids) in continued {
+                tasks["tasks"][*index]["continues_from"] = ids.clone();
+            }
+        })
+    }
+
+    // Workflow #372 K5, row K5-T7 (bounds half; K372 addendum of 2026-10-17, K5.2): `duplicate_id`
+    // at the item's pointer for an active id in `continues_from`, an id listed twice in one task
+    // and an id two tasks claim (a split); `limit_exceeded` at the member for `[]` and for 9 ids;
+    // in a V1 tasks document the member is refused as an unknown member. One id and 8 ids are
+    // admitted.
+    #[test]
+    fn compiler_enforces_continues_from_bounds_version_and_identity() {
+        let v2 = crate::SCHEDULING_SCHEMA_VERSION_V2;
+        let ids = |count: usize| {
+            serde_json::json!(
+                (0..count)
+                    .map(|index| format!("fixture.retired-{index}"))
+                    .collect::<Vec<_>>()
+            )
+        };
+        for count in [1, 8] {
+            compile_catalog(&k5_sources(v2, &[(0, ids(count))])).unwrap_or_else(|failure| {
+                panic!("{count} continued ids: {:?}", failure.diagnostics())
+            });
+        }
+        for (case, continued, json_path) in [
+            (
+                "an active id",
+                vec![(0, serde_json::json!(["fixture.second"]))],
+                "/tasks/0/continues_from/0",
+            ),
+            (
+                "an id listed twice",
+                vec![(
+                    0,
+                    serde_json::json!(["fixture.retired-0", "fixture.retired-0"]),
+                )],
+                "/tasks/0/continues_from/1",
+            ),
+            (
+                "an id claimed by two tasks",
+                vec![
+                    (0, serde_json::json!(["fixture.retired-0"])),
+                    (1, serde_json::json!(["fixture.retired-0"])),
+                ],
+                "/tasks/1/continues_from/0",
+            ),
+        ] {
+            assert!(
+                refused_at(
+                    &k5_sources(v2, &continued),
+                    CatalogDiagnosticCode::DuplicateId,
+                    Some(json_path),
+                ),
+                "{case}"
+            );
+        }
+        for count in [0, 9] {
+            assert!(
+                refused_at(
+                    &k5_sources(v2, &[(0, ids(count))]),
+                    CatalogDiagnosticCode::LimitExceeded,
+                    Some("/tasks/0/continues_from"),
+                ),
+                "{count} continued ids"
+            );
+        }
+        assert!(refused_at(
+            &k5_sources(crate::SCHEDULING_SCHEMA_VERSION, &[(0, ids(1))]),
+            CatalogDiagnosticCode::UnknownField,
+            Some("/tasks/0/continues_from"),
+        ));
+    }
+
+    // Workflow #372 K5, row K5-T7 (identity half): an absent `continues_from` serializes as
+    // nothing, so the neutral catalog declared as V2 keeps the golden hash R7-T6 computed for it
+    // apart from the code under test. The same catalog with the member on its task has another
+    // hash, the same on every compile, and its task re-serializes as it was written.
+    #[test]
+    fn v2_catalog_identity_is_unchanged_without_continues_from_and_changes_with_it() {
+        let v2 = crate::SCHEDULING_SCHEMA_VERSION_V2;
+        let plain = compile_catalog(&r7_sources(v2, |_| {})).expect("the V2 catalog compiles");
+        assert_eq!(
+            plain.catalog_hash(),
+            "sha256:baf684c3f5864fb105ed351c2553831e7af1d76b165bd0a9233db7b26a725047"
+        );
+        let mut written = None;
+        let sources = r7_sources(v2, |tasks| {
+            tasks["tasks"][0]["continues_from"] = serde_json::json!(["fixture.retired-0"]);
+            written = Some(tasks["tasks"][0].clone());
+        });
+        let continuing = compile_catalog(&sources).expect("the catalog with the member compiles");
+        assert_ne!(continuing.catalog_hash(), plain.catalog_hash());
+        assert_eq!(
+            compile_catalog(&sources)
+                .expect("the catalog with the member compiles again")
+                .catalog_hash(),
+            continuing.catalog_hash()
+        );
+        assert_eq!(
+            serde_json::to_value(&continuing.catalog().tasks.tasks[0])
+                .expect("the task serializes"),
+            written.expect("the written task")
         );
     }
 }

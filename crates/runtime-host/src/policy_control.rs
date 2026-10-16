@@ -98,6 +98,9 @@ struct RetryRound {
     admission: PolicyAdmissionRecord,
     until_unix_ms: u64,
     expected_duration_ms: u64,
+    /// Workflow #372 K5: the order in which the round was opened among all rounds, so a task
+    /// reads the latest round of its accounting group. Memory only; replay rebuilds it.
+    opened: u64,
 }
 
 #[derive(Default)]
@@ -111,6 +114,14 @@ pub(crate) struct PolicyControlState {
     next_activity_eligible: BTreeMap<(String, String), u64>,
     failure_streaks: BTreeMap<(String, String), FailureStreak>,
     retry_rounds: BTreeMap<(String, String), RetryRound>,
+    /// Workflow #372 K5: per (task, instance), the order of the latest settlement that set or
+    /// cleared the pair's failure state (a success or a failure a condition did not settle), so
+    /// a task reads the failure state of its accounting group's latest such run. Memory only;
+    /// replay rebuilds it in ledger order.
+    failure_settled: BTreeMap<(String, String), u64>,
+    /// Workflow #372 K5: the counters behind `failure_settled` and `RetryRound::opened`.
+    settlements: u64,
+    rounds_opened: u64,
 }
 
 impl PolicyControlState {
@@ -134,7 +145,7 @@ impl PolicyControlState {
         lift: Option<&SuspensionLiftView<'_>>,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
         let result = self
-            .preview_failure_disposition(intent, now_unix_ms, lift)
+            .preview_failure_disposition(catalog, intent, now_unix_ms, lift)
             .and_then(|()| self.preview_admission_at(catalog, intent, now_unix_ms));
         match result {
             Err(mut error) if is_availability_denial(&error) => {
@@ -170,14 +181,69 @@ impl PolicyControlState {
         Ok((verdict.lifted.is_some(), verdict.unmeasured))
     }
 
+    /// Workflow #372 K5: the key of the failure state `task_id` reads on `instance_id` under
+    /// `catalog`: that of the id of its accounting group whose failure state a settlement set or
+    /// cleared last, or its own when none was. A pause, a backoff or a streak of a continued id
+    /// therefore follows the task that continues it, until that task settles itself.
+    fn failure_key(
+        &self,
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
+    ) -> (String, String) {
+        catalog
+            .accounting_ids(task_id)
+            .into_iter()
+            .filter_map(|id| {
+                let key = (id.to_owned(), instance_id.to_owned());
+                self.failure_settled
+                    .get(&key)
+                    .map(|settled| (*settled, key))
+            })
+            .max_by_key(|(settled, _)| *settled)
+            .map_or_else(
+                || (task_id.to_owned(), instance_id.to_owned()),
+                |(_, key)| key,
+            )
+    }
+
+    /// Workflow #372 K5: the failure streak `task_id` reads on `instance_id` (`failure_key`).
+    fn group_failure(
+        &self,
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<&FailureStreak> {
+        self.failure_streaks
+            .get(&self.failure_key(catalog, task_id, instance_id))
+    }
+
+    /// Workflow #372 K5: the retry round `task_id` reads on `instance_id`: the latest one opened
+    /// for an id of its accounting group.
+    fn group_round(
+        &self,
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<&RetryRound> {
+        catalog
+            .accounting_ids(task_id)
+            .into_iter()
+            .filter_map(|id| {
+                self.retry_rounds
+                    .get(&(id.to_owned(), instance_id.to_owned()))
+            })
+            .max_by_key(|round| round.opened)
+    }
+
     fn preview_failure_disposition(
         &self,
+        catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         now_unix_ms: u64,
         lift: Option<&SuspensionLiftView<'_>>,
     ) -> RuntimeHostResult<()> {
-        let key = (intent.task_id.clone(), intent.instance_id.clone());
-        if let Some(failure) = self.failure_streaks.get(&key) {
+        if let Some(failure) = self.group_failure(catalog, &intent.task_id, &intent.instance_id) {
             if failure.disposition == PolicyFailureDisposition::PausedTask {
                 let (lifted, unmeasured) = Self::suspension_lifted(failure, intent, lift)?;
                 if lifted {
@@ -235,16 +301,9 @@ impl PolicyControlState {
             )
         })?;
 
-        let task_daily_key = (
-            intent.task_id.clone(),
-            intent.instance_id.clone(),
-            local_day,
-        );
-        let task_window_key = (
-            intent.task_id.clone(),
-            intent.instance_id.clone(),
-            window_id.clone(),
-        );
+        // Workflow #372 K5: the task budgets count the task's accounting group, each entry
+        // keeping its own id's runs.
+        let accounting = catalog.accounting_ids(&intent.task_id);
         let activity_daily_key = (profile.id.clone(), intent.instance_id.clone(), local_day);
         let activity_window_key = (
             profile.id.clone(),
@@ -254,22 +313,40 @@ impl PolicyControlState {
 
         let budget = PolicyBudgetReceipt {
             task_daily_used: next_count(
-                self.task_daily.get(&task_daily_key).copied().unwrap_or(0),
+                group_total(
+                    &self.task_daily,
+                    &accounting,
+                    &intent.instance_id,
+                    &local_day,
+                    u32::checked_add,
+                    HostLocation::ReservePolicyBudget,
+                )?,
                 task.loop_budget.daily_limit,
                 PolicyBudgetDimension::TaskDaily,
             )?,
             task_daily_limit: task.loop_budget.daily_limit,
             task_window_used: next_count(
-                self.task_window.get(&task_window_key).copied().unwrap_or(0),
+                group_total(
+                    &self.task_window,
+                    &accounting,
+                    &intent.instance_id,
+                    &window_id,
+                    u32::checked_add,
+                    HostLocation::ReservePolicyBudget,
+                )?,
                 task.loop_budget.window_iteration_limit,
                 PolicyBudgetDimension::TaskWindow,
             )?,
             task_window_limit: task.loop_budget.window_iteration_limit,
             task_runtime_reserved_ms: next_runtime(
-                self.task_runtime
-                    .get(&task_window_key)
-                    .copied()
-                    .unwrap_or(0),
+                group_total(
+                    &self.task_runtime,
+                    &accounting,
+                    &intent.instance_id,
+                    &window_id,
+                    u64::checked_add,
+                    HostLocation::ReservePolicyBudget,
+                )?,
                 intent.expected_duration_ms,
                 task.loop_budget.max_runtime_ms,
                 PolicyBudgetDimension::TaskRuntime,
@@ -326,9 +403,7 @@ impl PolicyControlState {
         lift: Option<&SuspensionLiftView<'_>>,
     ) -> RuntimeHostResult<Option<u64>> {
         let (_, profile) = task_and_profile(catalog, intent)?;
-        let failure = self
-            .failure_streaks
-            .get(&(intent.task_id.clone(), intent.instance_id.clone()));
+        let failure = self.group_failure(catalog, &intent.task_id, &intent.instance_id);
         if let Some(failure) = failure
             && failure.disposition == PolicyFailureDisposition::PausedTask
             && !Self::suspension_lifted(failure, intent, lift)?.0
@@ -408,12 +483,19 @@ impl PolicyControlState {
                         HostLocation::CommitPolicyBudget,
                     )
                 })?;
+            self.rounds_opened = self.rounds_opened.checked_add(1).ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyBudgetCounterOverflow,
+                    HostLocation::CommitPolicyBudget,
+                )
+            })?;
             self.retry_rounds.insert(
                 (intent.task_id.clone(), intent.instance_id.clone()),
                 RetryRound {
                     admission: admission.clone(),
                     until_unix_ms: window.until_unix_ms,
                     expected_duration_ms: intent.expected_duration_ms,
+                    opened: self.rounds_opened,
                 },
             );
         }
@@ -437,12 +519,65 @@ impl PolicyControlState {
             intent.instance_id.clone(),
             admission.activity.window_id.clone(),
         );
-        self.task_daily
-            .insert(task_daily_key, admission.budget.task_daily_used);
+        // Workflow #372 K5: the receipt counts the task's accounting group; the task's own
+        // entries keep only its own runs, so a later lookup never counts a continued id twice.
+        let accounting = catalog.accounting_ids(&intent.task_id);
+        let continued = accounting.get(1..).unwrap_or_default();
+        let own = |used: u64, others: u64| {
+            used.checked_sub(others).ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyBudgetReceiptInvalid,
+                    HostLocation::CommitPolicyBudget,
+                )
+            })
+        };
+        let own_count = |used: u32, others: u32| {
+            own(u64::from(used), u64::from(others)).and_then(|count| {
+                u32::try_from(count).map_err(|_| {
+                    fatal(
+                        HostCode::PolicyBudgetReceiptInvalid,
+                        HostLocation::CommitPolicyBudget,
+                    )
+                })
+            })
+        };
+        let task_daily_own = own_count(
+            admission.budget.task_daily_used,
+            group_total(
+                &self.task_daily,
+                continued,
+                &intent.instance_id,
+                &admission.activity.local_day,
+                u32::checked_add,
+                HostLocation::CommitPolicyBudget,
+            )?,
+        )?;
+        let task_window_own = own_count(
+            admission.budget.task_window_used,
+            group_total(
+                &self.task_window,
+                continued,
+                &intent.instance_id,
+                &admission.activity.window_id,
+                u32::checked_add,
+                HostLocation::CommitPolicyBudget,
+            )?,
+        )?;
+        let task_runtime_own = own(
+            admission.budget.task_runtime_reserved_ms,
+            group_total(
+                &self.task_runtime,
+                continued,
+                &intent.instance_id,
+                &admission.activity.window_id,
+                u64::checked_add,
+                HostLocation::CommitPolicyBudget,
+            )?,
+        )?;
+        self.task_daily.insert(task_daily_key, task_daily_own);
         self.task_window
-            .insert(task_window_key.clone(), admission.budget.task_window_used);
-        self.task_runtime
-            .insert(task_window_key, admission.budget.task_runtime_reserved_ms);
+            .insert(task_window_key.clone(), task_window_own);
+        self.task_runtime.insert(task_window_key, task_runtime_own);
         self.activity_daily
             .insert(activity_daily_key, admission.budget.activity_daily_used);
         self.activity_window.insert(
@@ -461,8 +596,7 @@ impl PolicyControlState {
             admission.activity.next_eligible_unix_ms,
         );
         // Counts are spent on admission. Runtime reservations settle to actual usage first.
-        self.end_exhausted_retry_rounds(&intent.instance_id, false);
-        Ok(())
+        self.end_exhausted_retry_rounds(catalog, &intent.instance_id, false)
     }
 
     #[cfg(test)]
@@ -546,9 +680,7 @@ impl PolicyControlState {
                 failure_identity,
                 class,
             } if condition.is_some() => {
-                let previous = self
-                    .failure_streaks
-                    .get(&(intent.task_id.clone(), intent.instance_id.clone()));
+                let previous = self.group_failure(catalog, &intent.task_id, &intent.instance_id);
                 PolicyExecutionOutcome::Failed {
                     failure: PolicyFailureRecord {
                         outcome: failure_outcome,
@@ -577,8 +709,9 @@ impl PolicyControlState {
                 failure_identity,
                 class,
             } => {
-                let key = (intent.task_id.clone(), intent.instance_id.clone());
-                let previous = self.failure_streaks.get(&key);
+                // Workflow #372 K5: a settlement counts on from the failure state of the task's
+                // accounting group.
+                let previous = self.group_failure(catalog, &intent.task_id, &intent.instance_id);
                 // The same error: the same code, failure identity and class (never the whole
                 // outcome, whose other values may differ between runs).
                 let failure_code = scheduled_failure_code_str(&failure_outcome);
@@ -737,6 +870,25 @@ impl PolicyControlState {
         let counted_runtime_ms = if condition.is_some() { 0 } else { runtime_ms };
         let (task_runtime_used_ms, activity_runtime_used_ms) =
             actual_runtime_totals(intent, admission, counted_runtime_ms)?;
+        // Workflow #372 K5: the receipt's runtime counts the task's accounting group; the task's
+        // own entry keeps only its own runtime.
+        let accounting = catalog.accounting_ids(&intent.task_id);
+        let continued_runtime_ms = group_total(
+            &self.task_runtime,
+            accounting.get(1..).unwrap_or_default(),
+            &intent.instance_id,
+            &admission.activity.window_id,
+            u64::checked_add,
+            HostLocation::CommitPolicyOutcome,
+        )?;
+        let task_runtime_own_ms = task_runtime_used_ms
+            .checked_sub(continued_runtime_ms)
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyBudgetReceiptInvalid,
+                    HostLocation::CommitPolicyOutcome,
+                )
+            })?;
         let task_window_key = (
             intent.task_id.clone(),
             intent.instance_id.clone(),
@@ -748,10 +900,21 @@ impl PolicyControlState {
             admission.activity.window_id.clone(),
         );
         self.task_runtime
-            .insert(task_window_key, task_runtime_used_ms);
+            .insert(task_window_key, task_runtime_own_ms);
         self.activity_runtime
             .insert(activity_window_key, activity_runtime_used_ms);
         let key = (intent.task_id.clone(), intent.instance_id.clone());
+        // Workflow #372 K5: a success or a failure no condition settled sets the pair's failure
+        // state, so it becomes the one its accounting group reads.
+        if condition.is_none() {
+            self.settlements = self.settlements.checked_add(1).ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyFailureCountOverflow,
+                    HostLocation::CommitPolicyOutcome,
+                )
+            })?;
+            self.failure_settled.insert(key.clone(), self.settlements);
+        }
         match &data.outcome {
             PolicyExecutionOutcome::Succeeded { .. } => {
                 self.failure_streaks.remove(&key);
@@ -790,8 +953,7 @@ impl PolicyControlState {
                 );
             }
         }
-        self.end_exhausted_retry_rounds(&intent.instance_id, true);
-        Ok(())
+        self.end_exhausted_retry_rounds(catalog, &intent.instance_id, true)
     }
 
     /// Workflow #336 L6: the failure identity (if it has one) and the dispatch of a pair's
@@ -803,6 +965,24 @@ impl PolicyControlState {
     ) -> Option<(Option<&str>, &str)> {
         self.failure_streaks
             .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .map(|failure| {
+                (
+                    failure.failure_identity.as_deref(),
+                    failure.decision_id.as_str(),
+                )
+            })
+    }
+
+    /// Workflow #372 K5: `latest_failure` of the failure state `task_id` reads on `instance_id`
+    /// under `catalog` (that of its accounting group), so a new failure's identity is compared
+    /// with the failure its streak counts on from.
+    pub(crate) fn group_latest_failure(
+        &self,
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<(Option<&str>, &str)> {
+        self.group_failure(catalog, task_id, instance_id)
             .map(|failure| {
                 (
                     failure.failure_identity.as_deref(),
@@ -846,7 +1026,13 @@ impl PolicyControlState {
             {
                 continue;
             }
-            let Some(round) = self.retry_rounds.get(pair) else {
+            // Workflow #372 K5: the entry stands for the task whose accounting group holds its
+            // id, and only while it is that task's failure state; the round is that group's.
+            let task_id = accounting_owner(catalog, &pair.0);
+            if self.failure_key(catalog, task_id, &pair.1) != *pair {
+                continue;
+            }
+            let Some(round) = self.group_round(catalog, task_id, &pair.1) else {
                 continue;
             };
             let origin = &round.admission.activity;
@@ -854,7 +1040,7 @@ impl PolicyControlState {
                 continue;
             }
             if !catalog.catalog().tasks.tasks.iter().any(|task| {
-                task.id == pair.0 && task.expected_duration_ms == round.expected_duration_ms
+                task.id == task_id && task.expected_duration_ms == round.expected_duration_ms
             }) {
                 continue;
             }
@@ -875,32 +1061,63 @@ impl PolicyControlState {
             })?;
             if window.is_some_and(|window| {
                 window.local_day == origin.local_day && window.window_id == origin.window_id
-            }) && self.retry_round_has_budget(pair, round, true)
+            }) && self.retry_round_has_budget(catalog, task_id, &pair.1, round, true)?
             {
-                pairs.insert(pair.clone());
+                pairs.insert((task_id.to_owned(), pair.1.clone()));
             }
         }
         Ok(pairs)
     }
 
+    /// Whether the round's limits leave room for one more run of `task_id` on `instance_id`.
+    /// Workflow #372 K5: the task counts are those of its accounting group.
     fn retry_round_has_budget(
         &self,
-        pair: &(String, String),
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
         round: &RetryRound,
         include_runtime: bool,
-    ) -> bool {
+    ) -> RuntimeHostResult<bool> {
         let origin = &round.admission.activity;
         let limits = &round.admission.budget;
-        let task_daily = (pair.0.clone(), pair.1.clone(), origin.local_day);
-        let task_window = (pair.0.clone(), pair.1.clone(), origin.window_id.clone());
-        let activity_daily = (origin.profile_id.clone(), pair.1.clone(), origin.local_day);
+        let accounting = catalog.accounting_ids(task_id);
+        let task_daily = group_total(
+            &self.task_daily,
+            &accounting,
+            instance_id,
+            &origin.local_day,
+            u32::checked_add,
+            HostLocation::ResolveRetryRound,
+        )?;
+        let task_window = group_total(
+            &self.task_window,
+            &accounting,
+            instance_id,
+            &origin.window_id,
+            u32::checked_add,
+            HostLocation::ResolveRetryRound,
+        )?;
+        let task_runtime = group_total(
+            &self.task_runtime,
+            &accounting,
+            instance_id,
+            &origin.window_id,
+            u64::checked_add,
+            HostLocation::ResolveRetryRound,
+        )?;
+        let activity_daily = (
+            origin.profile_id.clone(),
+            instance_id.to_owned(),
+            origin.local_day,
+        );
         let activity_window = (
             origin.profile_id.clone(),
-            pair.1.clone(),
+            instance_id.to_owned(),
             origin.window_id.clone(),
         );
-        self.task_daily.get(&task_daily).copied().unwrap_or(0) < limits.task_daily_limit
-            && self.task_window.get(&task_window).copied().unwrap_or(0) < limits.task_window_limit
+        Ok(task_daily < limits.task_daily_limit
+            && task_window < limits.task_window_limit
             && self
                 .activity_daily
                 .get(&activity_daily)
@@ -914,11 +1131,7 @@ impl PolicyControlState {
                 .unwrap_or(0)
                 < limits.activity_window_limit
             && (!include_runtime
-                || (self
-                    .task_runtime
-                    .get(&task_window)
-                    .copied()
-                    .unwrap_or(0)
+                || (task_runtime
                     .checked_add(round.expected_duration_ms)
                     .is_some_and(|next| next <= limits.task_runtime_limit_ms)
                     && self
@@ -927,7 +1140,7 @@ impl PolicyControlState {
                         .copied()
                         .unwrap_or(0)
                         .checked_add(round.expected_duration_ms)
-                        .is_some_and(|next| next <= limits.activity_runtime_limit_ms)))
+                        .is_some_and(|next| next <= limits.activity_runtime_limit_ms))))
     }
 
     pub(crate) fn validate_immediate_retry(
@@ -940,10 +1153,12 @@ impl PolicyControlState {
         if !self
             .immediate_retry_pairs(catalog, now_unix_ms)?
             .contains(&pair)
-            || self.retry_rounds.get(&pair).is_none_or(|round| {
-                round.admission.activity.profile_id != intent.prerequisites.activity_profile_id
-                    || intent.expected_duration_ms != round.expected_duration_ms
-            })
+            || self
+                .group_round(catalog, &intent.task_id, &intent.instance_id)
+                .is_none_or(|round| {
+                    round.admission.activity.profile_id != intent.prerequisites.activity_profile_id
+                        || intent.expected_duration_ms != round.expected_duration_ms
+                })
         {
             return Err(request(
                 HostCode::PolicyRetryRoundEnded,
@@ -995,19 +1210,56 @@ impl PolicyControlState {
         )
     }
 
-    fn end_exhausted_retry_rounds(&mut self, instance_id: &str, include_runtime: bool) {
-        let ended: Vec<_> = self
-            .retry_rounds
-            .iter()
-            .filter(|(pair, round)| {
-                pair.1 == instance_id && !self.retry_round_has_budget(pair, round, include_runtime)
-            })
-            .map(|(pair, _)| pair.clone())
-            .collect();
+    fn end_exhausted_retry_rounds(
+        &mut self,
+        catalog: &CompiledCatalog,
+        instance_id: &str,
+        include_runtime: bool,
+    ) -> RuntimeHostResult<()> {
+        let mut ended = Vec::new();
+        for (pair, round) in &self.retry_rounds {
+            if pair.1 == instance_id
+                && !self.retry_round_has_budget(
+                    catalog,
+                    accounting_owner(catalog, &pair.0),
+                    &pair.1,
+                    round,
+                    include_runtime,
+                )?
+            {
+                ended.push(pair.clone());
+            }
+        }
         for pair in ended {
             self.retry_rounds.remove(&pair);
         }
+        Ok(())
     }
+}
+
+/// Workflow #372 K5: the task whose accounting group holds `task_id` under `catalog`: the task
+/// that continues it, else `task_id` itself.
+fn accounting_owner<'a>(catalog: &'a CompiledCatalog, task_id: &'a str) -> &'a str {
+    catalog.continued_by(task_id).unwrap_or(task_id)
+}
+
+/// Workflow #372 K5: the sum of the entries of `ids` on `instance_id` for one day or window
+/// (`dimension`) of a task budget map. An overflow is fatal at `location`.
+fn group_total<D: Ord + Clone, V: Copy + Default>(
+    entries: &BTreeMap<(String, String, D), V>,
+    ids: &[&str],
+    instance_id: &str,
+    dimension: &D,
+    add: fn(V, V) -> Option<V>,
+    location: HostLocation,
+) -> RuntimeHostResult<V> {
+    ids.iter().try_fold(V::default(), |total, id| {
+        let entry = entries
+            .get(&((*id).to_owned(), instance_id.to_owned(), dimension.clone()))
+            .copied()
+            .unwrap_or_default();
+        add(total, entry).ok_or_else(|| fatal(HostCode::PolicyBudgetCounterOverflow, location))
+    })
 }
 
 fn task_and_profile<'a>(

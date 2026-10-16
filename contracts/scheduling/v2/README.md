@@ -63,3 +63,15 @@ for its next occurrence (`../README.md`, "Clock Sources"). `missed` under a
 `not` is refused (`predicate_uncomputable`), an unknown `kind` is a
 `type_mismatch`, and a V1 document that names it is refused as an unknown
 member. A clock without `missed` serializes, and hashes, exactly as before.
+
+A task may carry `continues_from` (Workflow #372 K5), V2 only: 1 to 8 task
+ids of an earlier catalog that this task continues, each by the rule of a task
+id. Under the active catalog the task accounts as itself and these ids
+(`../README.md`, the paragraph after "Task ids are global"), so a rename that
+activates during a day keeps that day's budgets, slot, outcome and failure
+state. A listed id that is a task of the same catalog, one listed twice in one
+task, and one that two tasks claim (a split) are each `duplicate_id` at the
+item; an empty list or more than 8 ids is `limit_exceeded` at the member; a V1
+document that names it is refused as an unknown member. Nothing is checked
+against the ledger, so an id that never ran adds nothing. A task without
+`continues_from` serializes, and hashes, exactly as before.
