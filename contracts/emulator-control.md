@@ -52,9 +52,10 @@ scheduler's default lease TTL, the request's own connection):
   keyless observe meets the changing emulator, the request is fenced on its own key: the
   instance's lease must be that key (lease id and holder id), unexpired, with no destructive
   step open; otherwise the request is denied `emulator_control_busy` (`RuntimeBusy`, receipt
-  state `denied`; the `runtime.failed` record carries `fence=<active_lease | lease_expired |
-  destructive_step_active | preemption_pending | takeover_cooldown | queued_lease_requests>` as
-  native detail, from `monitor_recovery_admission`). Other holders, waiting claims and the
+  state `denied`; the `runtime.failed` record's outcome carries `fence=<active_lease |
+  lease_expired | destructive_step_active | preemption_pending | takeover_cooldown |
+  queued_lease_requests>` as the `raw_text` of a `foreign_other_error` link, from
+  `monitor_recovery_admission`). Other holders, waiting claims and the
   takeover cooldown are met in the queue, not by the fence. A concurrent READ-ONLY observation
   such as `capture_sequence` / `observe` holds no key: it fails typed with `capture.failed` once
   the session is closed.
@@ -195,8 +196,9 @@ receipt state `denied`):
 - lease acquisition (`acquire_lease` and `queue_lease`, before the scheduler prepares or queues
   anything) and read-only observation (`observe`, `capture_sequence`, `observe_contained_page`,
   after `command.received`) record `command.rejected` (diagnostic `runtime_diagnostic`, effect
-  `not_performed`, the receipt terminal) plus one `runtime.failed` (stage `operation_cleanup`)
-  whose native detail names the alias (`instance_alias=<alias>; adb_endpoint=pending; ...`);
+  `not_performed`, the receipt terminal) plus one `runtime.failed` (stage
+  `runtime_lifecycle_operation_cleanup`) whose outcome names the alias as the `raw_text` of a
+  `foreign_other_error` link (`instance_alias=<alias>; adb_endpoint=pending; ...`);
 - the monitor probe records `monitor.failed` (diagnostic `runtime_diagnostic`, runtime code
   `invalid_request`) plus the same `runtime.failed` instead of a command event, and the probe
   is rescheduled as after any other refusal.
@@ -239,11 +241,11 @@ action with `instance_resources_fenced` ("Resource fence" below, Workflow #387 D
 the Runtime only where no fence may take it. Other callers retain their default command
 timeouts; the client receipt budgets are in "Client and CLI". A timeout fails typed with
 `emulator_control_adb_not_ready` (`backend_operation_failed`, receipt state `failed`, effect
-`indeterminate`; native detail carries the alias, the port, the milliseconds waited and the
-last ADB error): `command.validated`, the second `runtime.instance_bound`, `device.connected`
-and the startup package are all withheld, the binding keeps the reported port, and the
-  request may be repeated. After a successful `stop` the entry returns to pending
-and `status` shows `adb_port: null` again; no event beyond the existing `device.connected`
+`indeterminate`; the `raw_text` of its outcome's `foreign_other_error` link carries the alias,
+the port, the milliseconds waited and the last ADB error): `command.validated`, the second
+`runtime.instance_bound`, `device.connected` and the startup package are all withheld, the
+binding keeps the reported port, and the request may be repeated. After a successful `stop`
+the entry returns to pending and `status` shows `adb_port: null` again; no event beyond the existing `device.connected`
 invalidation records that transition.
 
 State after a failure (Workflow #381 B F4, review M3): after any failed provider control
@@ -298,28 +300,36 @@ Every request is recorded intent -> result, all linked to the instance:
 4. On denial or failure `command.rejected` (the receipt terminal; diagnostic
    `backend_operation_failed` for tool failures, `lease_fencing_denied` for the busy denial,
    `runtime_diagnostic` otherwise; effect `not_performed` before the tool ran, `indeterminate`
-   once it ran) plus one `runtime.failed` (stage `operation_cleanup`) whose record carries
-   `raw_os_error` = the tool exit code, `native_detail` = the bounded vendor output
-   (Sensitive) and a primary detail `{category, stage, backend: mumu_manager, operation:
-   control_instance}` declared Sensitive, where `stage` is the typed step
+   once it ran) plus one `runtime.failed` (stage `runtime_lifecycle_operation_cleanup`) whose
+   `outcome` is the failure (ledger revision 3, Workflow #378 A3): the host code with the
+   values `operation` (`control_emulator_instance`) and `runtime_code`. For a failed provider
+   control the outcome also carries the device failure's observations as values: `elapsed_ms`,
+   `exit_code` once the vendor command exited, `process_started`, `android_started` and
+   `adb_port_present` when a last state was observed, and a Stop's `device_process_present`.
+   Its `caused_by` link holds the bounded vendor output as `raw_text` (`raw_text_sensitivity`
+   `sensitive`, so the record is Sensitive): `foreign_mumu_manager_error` with the command's
+   exit status as `exit_code` once the command exited (0 for an errcode envelope, a launch
+   error or the wait deadline; never an OS error), otherwise `foreign_other_error` with the
+   device's text. The record's primary detail is `{category, stage, backend: mumu_manager,
+   operation: control_instance}`, typed tokens only, where `stage` is the typed step
    (`mumu_manager_control_exit`, `_control_errcode`, `_launch_error`, `_wait_timeout`, `_run`,
    `_timeout`, `_path`, an `info` reader stage, `emulator_control_binding`,
    `emulator_control_support`).
-   The primary detail's message carries `key=value` tokens: the stage, exit status, elapsed
-   time and last state of the failure, and for a stop `device_process_present`.
 5. A failed restart records one `command.rejected` (action `emulator.instance.restart`, the
    receipt terminal) and one `runtime.failed`, after its Start phase when one ran (coordinator
    answer D2); a failed phase records nothing of its own. For `emulator_restart_stop_failed` and
-   `emulator_restart_start_failed` the primary detail's stage, the exit code and the native
-   detail are the failing phase's, and the message carries the tokens `restart_phase=stop|start`,
-   `stop_result=confirmed|<the token the host's stop-result table gives the Stop's stage>`
-   (vocabulary `emulator_stop_result`, Workflow #378 A2-P), `stop_elapsed_ms`,
-   `start_dispatched`, `start_elapsed_ms` (when the Start ran), `process_started`,
-   `android_started`, `adb_port_present` (the last state, when known: the Start's success, or
-   the state read after the failing phase, or its last observation), `device_process_present`
-   (the Stop's process check) and `cause=<emulator_control_wait_timeout |
-   emulator_control_failed>`, the failing phase's control code until #378 A2 makes it a
-   `caused_by` link. A Start that succeeded after a Stop whose wait expired still prepares the
+   `emulator_restart_start_failed` the primary detail's stage and the vendor output's
+   `foreign_mumu_manager_error` (with its `exit_code`) or `foreign_other_error` link are the
+   failing phase's. The outcome's values are `restart_phase` (`stop` or `start`, vocabulary
+   `emulator_restart_phase`), `stop_result` (`confirmed`, or the token the host's stop-result
+   table gives the Stop's stage, vocabulary `emulator_stop_result`, Workflow #378 A2-P; absent
+   for a stage the table does not list), `stop_elapsed_ms`, `start_dispatched`,
+   `start_elapsed_ms` (when the Start ran), `process_started`, `android_started`,
+   `adb_port_present` (the last state, when known: the Start's success, or the state read after
+   the failing phase, or its last observation) and `device_process_present` (the Stop's process
+   check); the failing phase's control code (`emulator_control_wait_timeout` or
+   `emulator_control_failed`, operation `control_emulator_instance`) is a `caused_by` link of the
+   outcome. A Start that succeeded after a Stop whose wait expired still prepares the
    connection and schedules the startup package before that record.
 
 Host codes: `lease_queue_expired` (`queue_expired`, denied; the claim's wait, see "The operator's
@@ -419,9 +429,9 @@ that belongs to emulator control:
   `content_directory_missing`), `startup_package_admission_failed` for every other admission
   refusal (the loader's code attached as related failure, a resource declaration rejection
   carried along). Workflow #336 PKG-S1: every locator is read by its path and no digest is
-  compared. Every failure of the run is recorded as
-  `runtime.failed` (stage `operation_cleanup`, category `startup_package`) linked to the
-  instance and the causation id; a fatal one poisons the host as any other.
+  compared. Every failure of the run is recorded as `runtime.failed` (stage
+  `runtime_lifecycle_operation_cleanup`, category `startup_package`) linked to the instance and
+  the causation id; a fatal one poisons the host as any other.
 
 ## Stuck-recovery ladder (slice #316-B4; Workflow #387 D1c)
 
@@ -641,7 +651,7 @@ within `host_claims.renewal_slack_ms` of a step's bound is not renewed:
   `emulator_control_wait_timeout` also leads on to the Start and the readiness wait; its
   `command.rejected` serves as the `stop` of `recovery_environment_ready`, and no
   `recovery_instance_stopped` is written. Every other Stop failure, an ambiguous identity or an
-  unconfirmed close ends the rung without Start, with its code as the rung's reason; a Start
+  unconfirmed close ends the rung without Start, with its code as the rung's outcome; a Start
   that fails or times out fails the rung with its code, so an instance left stopped is reported,
   never left down silently. Admission/fencing is checked again before Start. Start binds its
   newly observed port and completes the existing ADB baseline. Then (Workflow #369-1) the rung
@@ -687,11 +697,13 @@ provider path. Input unavailability never establishes ADB unavailability. A rung
 most once.
 
 A rung recovers when its package run completes `success` (its target page reached); any other
-end fails it, with the failure code as `reason` (`recovery_rung_target_not_reached` for a run
-that completed without reaching its target, `recovery_ladder_shutdown_requested` when the host
-is shutting down). The first successful application rung ends the ladder `recovered`; a
-successful cold environment without a package ends it `environment_ready`. When every rung
-failed or was skipped it ends `exhausted`. No result replays an uncertain business operation.
+end fails it, with the failure code as its `outcome` (`recovery_rung_target_not_reached` for a
+run that completed without reaching its target; a holding interruption such as
+`recovery_ladder_shutdown_requested` when the host is shutting down is the `caused_by` link of
+`recovery_ladder_interrupted`). The first successful application rung ends the ladder
+`recovered`; a successful cold environment without a package ends it `environment_ready`. When
+every rung failed or was skipped it ends `exhausted`. No result replays an uncertain business
+operation.
 
 ### Ladder profiles (Workflow #398 RD-4)
 
@@ -756,9 +768,10 @@ every control step and every readiness poll checks that it still holds the key a
 scheduling pause or capacity refusal (`recovery_admission_denied`), install drain
 (`recovery_ladder_drain_requested`) or shutdown (`recovery_ladder_shutdown_requested`)
 intervenes; a key it no longer holds is `recovery_ladder_key_lost` (its continuation is
-cancelled). Such an interruption fails the current rung with that reason and ends the ladder
-`exhausted` at warning, followed by its one release. A superseded preparation trigger records
-`preparation_superseded`; these two reasons use `until_unix_ms: 0` (no inferred wake time).
+cancelled). Such an interruption fails the current rung (`recovery_ladder_interrupted`, caused
+by that reason) and ends the ladder `exhausted` at warning, followed by its one release. A
+superseded preparation trigger records `preparation_superseded`; these two reasons use
+`until_unix_ms: 0` (no inferred wake time).
 
 ### Drills (Workflow #390 DRILL-1)
 
@@ -961,7 +974,8 @@ actingctl emulator restart --state-root <state-root> --instance <alias>
 
 `status` is the existing `Status` read filtered to the alias (that instance's
 `RuntimeInstanceStatus`, or `instance_unknown`); `start` / `stop` / `restart` print the result
-JSON above. All four require `--instance`.
+JSON above with its `outcome` (`instance_emulator_controlled`, Workflow #378 A5). All four
+require `--instance`.
 `RuntimeInstanceStatus` also carries `resource_package { path, kind }` when the instance declares a
 default resource package (`contracts/actingd-check-config.md`), and omits the key otherwise.
 
@@ -1032,9 +1046,10 @@ like `Status`.
 
 A refusal appends `command.rejected` (the receipt terminal, diagnostic
 `backend_operation_failed` or `runtime_diagnostic`, effect `not_performed`) plus one
-`runtime.failed` (stage `operation_cleanup`) whose `native_detail` keeps the provider's device
-error; the primary detail `{category, stage, backend: execution_backend_provider, operation:
-discover_instances}` is a controlled template declared Sensitive. Host operation
+`runtime.failed` (stage `runtime_lifecycle_operation_cleanup`) whose outcome keeps the
+provider's device error as the `raw_text` of a `foreign_other_error` link (ledger revision 3,
+Workflow #378 A3); the primary detail `{category, stage, backend: execution_backend_provider,
+operation: discover_instances}` is a controlled template of typed tokens. Host operation
 `discover_instances`:
 
 | Provider refusal | Host code | Projection | Receipt |
@@ -1049,5 +1064,6 @@ discover_instances}` is a controlled template declared Sensitive. Host operation
 the IO margin.
 
 `actingctl emulator discover --state-root <state-root>` (no `--instance`) prints the
-`RuntimeInstanceDiscovery` above as one JSON line and exits 0; a refusal is the usual
-`FATAL actingctl:` line with a non-zero exit.
+`RuntimeInstanceDiscovery` above as one JSON line with its `outcome` (`instances_discovered`,
+`count`) and exits 0; a refusal prints `{"outcome": …}` and the developer line
+`<LEVEL> actingctl: <code> …` on stderr, and exits non-zero (Workflow #378 A5).

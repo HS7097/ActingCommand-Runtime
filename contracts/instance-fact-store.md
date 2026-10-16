@@ -543,12 +543,17 @@ instances is booked once.
 | feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
 | instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
 | instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
+| display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
 
-- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 0 + 6 + 9 = **80 + *O***, well under 256.
+- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 0 + 6 + 9 + 12 = **92 + *O***, well under
+  256.
 - **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 15
-  = **104 + *O* + *R₄* + *R₅* + *F***; the reading keys of new packages are the variable that
-  matters.
+  + 20 = **124 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances bound
+  to a device; the reading keys of new packages are the variable that matters.
+- DA-4's display keys (`display.logical_extent`, `display.safe_area.reported`,
+  `display.safe_area.declared`, `display.map`; register §1.25 X10) have no writer on main and are
+  not counted; DA-4 books them here when it adds them.
 - **Outside the Runtime**: today's deployment generator publishes one-shot request facts
   (`session.w2.manual_request`, predicates over up to 200 such keys, D2M research B §3.3); each
   published request holds one active fact until it expires. The task request of MCP-17 (a

@@ -192,16 +192,15 @@ or a cause inferred across unmeasured gaps. Already-expired entry, entry-recover
 budgets, missing endpoints and incomplete aggregates cannot establish it. The
 original four summaries retain their original endpoints and meaning.
 
-An existing `runtime_connection` failure detail may contain fixed process-instant
-`receive`, `validated_dispatch`, `policy_identity_projection` and `receipt_write`
-observations, plus the current owner epoch and Runtime PID. These describe the
-original read-frame, validated operation, projection return and write-frame
-results; dispatch excludes receipt construction. They reset for each original
-read, including idle reads, and are emitted only at that existing legal failure
-point. A cached request has no observed dispatch/projection. Existing failure
-deduplication or a Ledger failure can prevent that carrier; successful requests
-and client timeouts alone create no new server fact. No server span proves that
-the client received a receipt.
+The Runtime still times each connection's `receive`, `validated_dispatch`,
+`policy_identity_projection` and `receipt_write` (the read-frame, validated
+operation, projection return and write-frame results; dispatch excludes receipt
+construction), resetting them for each read. From ledger revision 3 (Workflow
+#378 A3, model-378 §8.1) no record carries them: a connection failure is recorded
+as the record's outcome, and the timings, like the PPOCR provider's failure
+source and message, stay in the process's memory and are not written to the
+ledger or to a log. Successful requests and client timeouts alone create no new
+server fact, and no server span proves that the client received a receipt.
 
 The existing Planning process failure output serializes only the original
 header-I/O request/correlation/expected-owner/PID and native I/O kind/code. Its

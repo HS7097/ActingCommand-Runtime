@@ -298,13 +298,18 @@ ledger read-only and without the owner lock, so it runs beside a running daemon.
 Workflow #336 PKG-S3 it reads the packages a paused pair names, read-only, to measure their
 content hashes now, each package once per report. Nothing is written.
 
-stdout is one JSON object:
+stdout is one JSON line, the v2 report (Workflow #378 A6a): `schema_version`, `outcome` and the
+report's members. `outcome` is the full `actingcommand.outcome.v1` envelope of
+`suspended_reported` (success); with `ACTINGCOMMAND_DETAIL=codes` in the environment it keeps
+only its registered names (`"detail":"codes"`).
 
 ```json
-{"schema_version":"actingcommand.actingd.suspended.v1","status":"ok",
+{"schema_version":"actingcommand.actingd.suspended.v2",
+ "outcome":{"schema_version":"actingcommand.outcome.v1","code":"suspended_reported","category":"success","values":{}},
  "config_path":"...","state_root":"...","through_sequence":0,"daemon_started_at_unix_ms":0,
  "suspended":[{"task_id":"...","instance_id":"...","procedure_ref":"...",
-   "error_code":"...","failure_code":"...","consecutive_same_error":2,
+   "failure":{"code":"...","category":"error","values":{}},"failure_identity":"...",
+   "run_failure":{"code":"...","category":"error","values":{}},"consecutive_same_error":2,
    "effective_class":"severe","severity":"error",
    "paused":{"execution_sequence":0,"observed_at_unix_ms":0,"decision_id":"...","run_id":"..."},
    "previous":{"execution_sequence":0,"disposition":"retry_scheduled","run_id":"..."},
@@ -314,16 +319,16 @@ stdout is one JSON object:
      "layers":[{"kind":"return_home","package_id":"...",
      "paused_hash_prefix":"...","current_hash_prefix":"...","changed":false}]},
    "frames":{"previous":{"frame_id":"...","artifact_sha256":"..."},"current":{},
-     "comparison":{"source":"recomputed","status":"similar","reason":null,
-       "changed_cells_milli":0,"digest_mean_milli":0,"ccoeff":1.0,"ccoeff_error":null}},
+     "comparison":{"source":"recomputed","status":"similar","outcome":null,
+       "changed_cells_milli":0,"digest_mean_milli":0,"ccoeff":1.0,"ccoeff_failure":null}},
    "lifts_when":"content_hash_changes",
    "takeover":"actingctl task-run --state-root <root> --instance <instance> --package <package>"}],
  "lifted":[{"task_id":"...","instance_id":"...","lifted_by":"main_hash|layer:<n>|restart",
    "effective":"next_evaluation|active","paused":{},"package":{}}],
- "repeating":[{"task_id":"...","instance_id":"...","error_code":"...","failure_code":"...",
-   "step":{},"latest":{"execution_sequence":0,"run_id":"..."},
+ "repeating":[{"task_id":"...","instance_id":"...","failure":{},"failure_identity":"...",
+   "run_failure":{},"step":{},"latest":{"execution_sequence":0,"run_id":"..."},
    "previous":{"execution_sequence":0,"run_id":"..."},"detail":null}],
- "warnings":[],
+ "warnings":["config_newer_than_daemon_start"],
  "clock_slots":[{"code":"clock_slot_refused","task_id":"...","instance_id":"...",
    "gate_code":"policy_budget_exhausted","budget_dimension":"task_daily",
    "occurrence_unix_ms":0,"window_end_unix_ms":0,"next_eligible_unix_ms":0,"next_occurrence_unix_ms":0,
@@ -336,12 +341,25 @@ stdout is one JSON object:
 
 - `suspended`: each pair whose latest execution paused it and is not lifted. `previous` is the
   failed execution it repeats, `null` when it paused at its first failure. `step` is re-derived
-  from the run's rows for a failure identity (`null` for another code). `error_code` is the
-  execution's `failure_identity`, else its failure's code. `detail` is the native detail of the
-  run's lifecycle failure record of the failure code, or `null`. The frames are
-  compared again (`source` `recomputed`); a recomputed `different` for an accumulating identity
-  adds the warning `comparison_disagrees_with_record:<task>/<instance>`. A missing frame or an
-  unreadable artifact gives `status` `unavailable` with its reason.
+  from the run's rows for a failure identity (`null` for another code). Workflow #378 A6a
+  replaces v1's `error_code` and `failure_code` by three members: `failure` is the failure the
+  execution recorded, an outcome in record form (`{code, category, values, causes?}`);
+  `failure_identity` is its failure identity, `null` when it has none; `run_failure` is the code
+  of the run's failure terminal as an outcome, else the failure identity's base (the whole
+  identity when it does not parse, the recorded failure's code when there is none); a spelling
+  the catalog does not list becomes `outcome_relay_unregistered`. `detail` is the native detail
+  of the run's lifecycle failure records of the terminal's code (else of the recorded failure's
+  code): since ledger revision 3 the `raw_text` of a direct link of a record's outcome, from the
+  latest record that has one, or `null`; it is text. The frames are compared again (`source`
+  `recomputed`); a recomputed
+  `different` for an accumulating identity adds the warning
+  `comparison_disagrees_with_record:<task>/<instance>`. The comparison's `outcome` (v1's
+  `reason`) says why the frames differ (`size_changed`, `digest_cells_changed`; `null` when they
+  are similar) or, with `status` `unavailable`, why they could not be compared:
+  `suspended_frame_missing` (a frame is absent), `suspended_frame_unreadable` (caused by the
+  artifact read's failure) or `png_invalid` (the decoder's text as its `foreign_data_error`
+  link). `ccoeff_failure` (v1's `ccoeff_error`) is the `png_invalid` outcome of a correlation
+  coefficient that could not be computed, else `null`.
 - `package`: the content hash prefixes the pause recorded (`paused_hash_prefix`, `x` when the
   settlement could not measure the package, `null` for a pause without a failure identity) and
   the ones measured now (`current_hash_prefix`, `null` when the package cannot be measured or
@@ -358,10 +376,16 @@ stdout is one JSON object:
   fact, recorded at every start (and only then; a `config.parameters.<section>` is also recorded
   when an instruction changes a setting, Workflow #387 D1b). Warnings: `config_newer_than_daemon_start` when the
   configuration file changed after it, `daemon_start_unknown` without it,
-  `error_code_unparsed:<task>/<instance>` for a failure identity that does not
+  `error_code_unparsed:<task>/<instance>` for a `~v2~` failure identity that does not
   parse (its pause is then judged by its main package alone),
   `lift_check_hash_unmeasured:<task>/<instance>` when a package the pause names cannot be
   measured now, `task_not_in_catalog:<task>/<instance>`.
+- `warnings` is text in v0.12.0, not outcomes: Workflow #378 A6a turned the rest of the report
+  into outcomes and left this list as v1 printed it. Each entry is a developer string, a token
+  alone or followed by `:<task>/<instance>`: first the daemon-start warning, if any, then, pair by pair
+  in (task, instance) order, `error_code_unparsed`, `task_not_in_catalog`,
+  `lift_check_hash_unmeasured` and `comparison_disagrees_with_record`. No entry is an outcome
+  envelope; a reader matches the strings.
 - `clock_slots` (Workflow #372 K3): the clock-slot records (`scheduling/README.md`, "Clock-slot
   records") whose event time is within 48 h of the ledger's latest event, newest first, at most
   200; `clock_slots_total` is added with their number when the list is cut. A record is a
@@ -386,9 +410,11 @@ stdout is one JSON object:
     `grace_ms` and `next_occurrence_unix_ms` when known) is `expired`, and a superseded record
     (`clock_slot_superseded`, with `occurrence_unix_ms` and `next_occurrence_unix_ms`) is
     `collapsed`, both settled. A refused or deferred record whose task, instance and
-    occurrence an expired record in the list also names is `expired`, settled, whatever D.
-  - An outcome that does not read back (a code that is not a clock-slot code, a value the
-    entry does not hold, a value of the wrong type, a missing required value) gives
+    occurrence an expired record among those read (before the list is cut) also names is
+    `expired`, settled, whatever D.
+  - A record whose outcome does not read back (a code that is not a clock-slot code, a value
+    the entry does not hold, a value of the wrong type, a missing required value), or that
+    names no task, gives
     `{"parse_state":"unparsed","signal_id":"...","code":"..."}`, `code` being the outcome's
     code, and no warning.
 
@@ -404,14 +430,18 @@ stdout is one JSON object:
   catalog), and `instances` the instances it was copied for and not lifted on. Each member is a
   code, an id or a hash, never a sentence.
 
-Exit 0 when the report is read, whatever it lists. Exit 1 on any error, with
-`FATAL actingd: <code>` on stderr; once the configuration is loaded, stdout also carries
-`{"schema_version":"actingcommand.actingd.suspended.v1","status":"failed","code":...,
-"operation":...,"detail":...}`. Codes: `suspended_usage_invalid`, `suspended_option_invalid`,
+Every exit, usage errors included, prints that one stdout line, and the process exits by its
+outcome's category (Workflow #378 A6a): 0 for `suspended_reported`, whatever the report lists,
+1 for an error, 2 for a fatal one. A failure is its outcome alone,
+`{"schema_version":"actingcommand.actingd.suspended.v2","outcome":{…}}` (v1's `status`, `code`,
+`operation` and `detail` are gone), and stderr carries its developer line
+`<LEVEL> actingd: <code> <text>`. Codes: `suspended_usage_invalid`, `suspended_option_invalid`,
 `suspended_config_missing`, the configuration load and assembly codes,
-`suspended_policy_unconfigured`, `policy_catalog_compile_failed`,
-`suspended_ledger_unavailable` (the ledger's code or `state_root_missing` as detail),
-`suspended_ledger_incomplete`.
+`suspended_policy_unconfigured` and `policy_catalog_compile_failed` (`operation`
+`read_suspension_config`), `suspended_ledger_unavailable` (`operation`
+`open_suspension_ledger`, `state_root`, and the ledger's code as its `caused_by` link when the
+state root is a directory whose ledger does not open), `suspended_ledger_incomplete`, and
+`runtime_state_poisoned` (`operation` `check_suspension_lift`).
 
 ## Known limitations
 
@@ -481,8 +511,9 @@ lift.
 
 **Notices.** All are registered codes, never sentences:
 
-- `actingd suspended` gains the top-level list `packs` (an addition; `schema_version` is
-  unchanged): one entry per suspended package with `package_id`, `failure_code`,
+- `actingd suspended` gains the top-level list `packs` (an addition that left v1's
+  `schema_version` unchanged; the report is v2 since Workflow #378 A6a): one entry per suspended
+  package with `package_id`, `failure_code`,
   `runtime_commit`, `paused_hash_prefix`, `current_hash_prefix` and `instances` (see
   "`actingd suspended`");
 - MCP `ac_diagnose` (and `actingctl diagnose`) carries the `packs` rows whose `instances` name

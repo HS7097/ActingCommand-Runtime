@@ -206,14 +206,18 @@ A drain timeout removes only this transaction's barrier. A held timeout stays
 closed before Provider assembly; release failure or timeout stays closed and
 preserves native preparation/cleanup failures. A held or release timeout also ends
 the start, as `held_timeout` or `release_timeout` during `install_transition`, even
-when nobody polls; the watchdog restarts such a start (Workflow #381 A R5′). A start that stops before it
-finished preparing because a Runtime failure latched meanwhile ends as
-`install_startup_stopped` during `install_transition`; a held start whose shutdown
-was accepted ends as `install_startup_shut_down`, a formal stop the watchdog holds.
-The latched failure is named as `cause=<code> cause_operation=<operation>` on the `FATAL actingd:` line,
-in the lifecycle failure's detail and in the failed transition's status fact, which
-also records `failure_code` (Workflow #381 A R3′). A missing client receipt is
-unknown: reconnect and query the original transition. The client never retries an
+when nobody polls; the watchdog restarts such a start (Workflow #381 A R5′). A start
+that stops before it finished preparing because a Runtime failure latched meanwhile
+ends as `install_startup_stopped` during `install_transition`, an error. A held start
+whose shutdown was accepted ends as `runtime_stopped` with `install_startup_shut_down`
+(info, Workflow #378 A7-R) as its link, and actingd exits 0: a requested stop, which
+the watchdog takes as a formal close and never restarts. The latched failure is named
+as `cause=<code> cause_operation=<operation>` on the developer line
+`ERROR actingd: install_startup_stopped …`, as the `caused_by` link of the
+`OUTCOME actingd:` line and of the lifecycle failure's outcome in the ledger
+(Workflow #378 A6a), and in the failed transition's status fact, which also records
+`failure_code` (Workflow #381 A R3′). A missing client receipt is unknown: reconnect
+and query the original transition. The client never retries an
 installation action automatically. Installation status and original pauses are the
 Host-owned ledger facts `host.install_transition` and
 `host.install_transition.pauses`.
@@ -327,9 +331,11 @@ An `adb_path` that names that file is the same choice. Before the ledger opens,
 startup and `check-config` read `adb.exe`, `AdbWinApi.dll` and `AdbWinUsbApi.dll`
 there and compare their SHA-256 with the values pinned at build time. A missing or
 unreadable file refuses with `adb_install_missing`, a different one with
-`adb_install_mismatch`; the `FATAL actingd:` line (and `check-config`'s
-`error.detail`) names the file, the expected and the actual value. Nothing falls
-back to another adb. Two fixes:
+`adb_install_mismatch` (both fatal); the `FATAL actingd:` developer line names the
+file, the expected and the actual value, and the refusal's outcome (the
+`OUTCOME actingd:` line, and `check-config`'s `outcome`) lists each such file under
+`files` (`path`, `state`, and for a mismatch `expected_sha256` and `actual_sha256`).
+Nothing falls back to another adb. Two fixes:
 
 - reinstall `tools\platform-tools` (for an acsetup install, run acsetup v0.10 or
   later on it again; for a hand layout, copy the Tools artifact's
@@ -383,8 +389,10 @@ From the verified Runtime directory, using your filled private configuration:
 .\actingcommand-actingd.exe --config <private-config-path>
 ```
 
-The daemon remains in that process. Its normal startup line is
-`actingd ready pid=<pid> host=<host> port=<port>`. With `"instances": []`
+The daemon remains in that process. It reports on stderr in daemon lines, per outcome
+a developer line `<INFO|WARN|ERROR|FATAL> actingd: <code> <text>` and the line
+`OUTCOME actingd: <envelope>` (Workflow #378 A6a). Its normal startup line is
+`INFO actingd: runtime_ready pid=<pid> host=<host> port=<port>`. With `"instances": []`
 the daemon starts control-plane-only: it records `runtime.started` and no
 instance binding, `actingctl status` reports no instances, and instances are
 added by editing the configuration and restarting the daemon. From a second
@@ -405,22 +413,39 @@ GlobalLedger is the Runtime's source of operational and diagnostic facts.
 `actingctl` returns the official response or error for its request. The separate
 Tools artifact supplies `actingledger.exe` for the existing read-only ledger
 commands. Preserve errors and the associated ledger facts; when startup or the
-ledger itself is unavailable, retain the daemon's original `FATAL actingd:` line
-and nonzero exit result. Do not treat a startup line as proof of device execution.
+ledger itself is unavailable, retain the daemon's last `OUTCOME actingd:` line (its
+terminal outcome) with the developer line before it, and its exit code. A requested
+stop ends with `runtime_stopped` and exit 0; any other stop ends with `runtime_stopped`
+followed by the stopping condition, and a refused start with the refusal; the process
+exits by that last outcome's category: 0 success, info or warning, 1 error, 2 fatal.
+When a start is refused and actingd's stderr is a console or absent, actingd also
+appends the refusal's lines to `%LOCALAPPDATA%\ActingCommand\logs\actingd-<ms>.log`.
+Do not treat a startup line as proof of device execution.
 
 ## Runtime watchdog
 
 `actingctl watchdog` (`contracts/runtime-watchdog.md`, Workflow #374) starts the
 Runtime of an A/B installation again when it is gone without a formal close (a
-crash, a closed console window, an end in Task Manager, a reboot), or when its
-held start stopped (`FATAL actingd:` with `install_startup_stopped`, `held_timeout`
-or `release_timeout`, also behind a later formal close that no log covers;
-Workflow #381 A R5′, R5b). It never starts a Runtime that was closed formally
-(`request-shutdown`, an acsetup transition; a held start shut down so ends as
-`install_startup_shut_down`), that is alive, while acsetup holds
-`install\writer.lock`, or whose last `actingd-*.log` ends in any other
-`FATAL actingd:` or a `FATAL acforward:` line; that last case stays down loudly. At
-most 3 starts in 30 minutes; then it stays down until a formal start.
+crash, a closed console window, an end in Task Manager, a reboot), or when its last
+start ended in an error. The start's terminal outcome is the last `OUTCOME actingd:`
+or `OUTCOME acforward:` line of its `actingd-*.log`, and only its category counts
+(Workflow #378 A6a): an error, such as a held start that stopped with
+`install_startup_stopped`, `held_timeout` or `release_timeout` (also behind a later
+formal close that no log covers; Workflow #381 A R5′, R5b), is started again. It
+never starts a Runtime that was closed formally (`request-shutdown`, an acsetup
+transition, an accepted shutdown of a held start: each ends in `runtime_stopped`),
+that is alive, while acsetup holds `install\writer.lock`, or whose terminal outcome
+is fatal; that last case stays down loudly (`watchdog_fatal_hold`). At most 3 starts
+in 30 minutes; then it stays down until a formal start (`watchdog_budget_exhausted`,
+or `panic_unrecovered` when every one of those starts ended in
+`runtime_restart_required`).
+
+The watchdog accepts only A/B installations. In v0.12.0 a single-location
+installation (one root without `install\`, whose Runtime is started with `--config`)
+is not watched: `watchdog status` and `run-once` answer `watchdog_misconfigured`
+caused by `watchdog_layout_unknown`, and `watchdog install` refuses with
+`watchdog_layout_unknown`. This is expected. Watching a single-location (`--config`)
+root is Workflow #390 WD-1, planned for v0.12.1.
 
 ```powershell
 <root>\runtime\actingctl.exe watchdog install --root <root>
@@ -438,17 +463,20 @@ of this release or later) and refuses while acsetup holds its writer lock. Run i
 again to refresh the task; `uninstall` ends a tick in flight, removes the task and
 keeps the files.
 
-`status` is read-only and exits 0 when healthy, otherwise with the attention code
-of the contract (10 FATAL hold, 11 budget exhausted, 12 a start is due or failed,
-13 misconfigured, 14 the task is missing, disabled or different, 15 a Runtime
-process without the owner lock, 16 repeated restarts, 17 a formal close no log
-covers). `run-once` is one tick; run by hand it starts the Runtime through WMI with
-a hidden window. The task runs `<root>\tools\actingwatch.exe` every minute, a GUI-subsystem launcher that opens no
+Each command prints one report, `actingcommand.watchdog.report.v2`
+(`{schema_version, outcome, attention, …data}`), and exits by its top outcome's
+category: 0 success, info or warning, 1 error, 2 fatal (Workflow #378 A5). `status`
+is read-only; its top is the decision a tick would take now, and its `attention`
+lists what else needs a look (the task missing, disabled or different, an owner lock
+held 10 minutes without an answering owner, a failed last start, repeated restarts,
+a formal close no log covers), without changing the exit. `run-once` is one tick;
+run by hand it starts the Runtime through WMI with a hidden window. The task runs
+`<root>\tools\actingwatch.exe` every minute, a GUI-subsystem launcher that opens no
 window and runs `<root>\runtime\actingctl.exe watchdog run-once --root <root>
---from-task` hidden. The launcher exits 20 when it is not at
-`<root>\tools\actingwatch.exe`, 21 when `<root>\watchdog\` is missing, 22 when the
-fixed entry cannot run and 23 when the writer lock cannot be probed; otherwise it
-returns the tick's code. While acsetup holds the writer lock it does nothing. The
+--from-task` hidden. The launcher exits 1 with its own code when it is not at
+`<root>\tools\actingwatch.exe`, when `<root>\watchdog\` is missing, when the fixed
+entry cannot run and when the writer lock cannot be probed; otherwise it returns the
+tick's code. While acsetup holds the writer lock it does nothing. The
 other way round, the launcher holds that lock shared for its tick (about a second;
 up to three minutes while a start waits for readiness): an acsetup run that begins
 then stops at once with "Installation/configuration writer is occupied" and changes
@@ -463,9 +491,12 @@ keeps the record.
 
 Every program that starts the Runtime should log its stdout and stderr into an
 `actingd-*.log` in the root (the console's own logs in
-`%LOCALAPPDATA%\ActingCommand\logs` count as well), so that a FATAL is seen; a
-Runtime started without one shows only as `formal_close_unlogged` (17) in `status`
-after it stops.
+`%LOCALAPPDATA%\ActingCommand\logs` count as well), so that its terminal outcome is
+seen. When its stderr is a console or absent, actingd itself appends a refused start,
+and only that, to that directory (above), naming its `install_root` once it resolved
+its installation, so that a refusal of one root does not count for another root's
+watchdog. A Runtime started without a log shows only as the attention
+`watchdog_formal_close_unlogged` in `status` after it stops.
 Switching back to a slot whose `actingctl.exe` predates the watchdog makes every
 tick fail with that program's usage error until a newer slot is selected; run
 `watchdog uninstall` first, or disable the task

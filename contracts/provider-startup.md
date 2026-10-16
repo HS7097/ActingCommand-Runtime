@@ -14,8 +14,10 @@ The event is `provider.startup_observed`, with origin module `provider` and
 payload schema `actingcommand.payload.provider.v1`. Each record identifies its
 backend (`configured`, `fastdeploy_ppocr`, `onnxruntime` or `mumu_manager`) and
 one observation: stage started/completed, file binding, model binding, instance
-discovery, discovery retried, capability profile, original failure, not configured, or
-ready.
+discovery, discovery retried, capability profile, original failure, not configured,
+ready, or model folder invalid (`model_folder_invalid`: a folder that breaks the folder
+rule, whose `outcome` is `vision_model_folder_invalid` with the folder's `path` and, when
+it fits the name rule, its `model_name`; startup goes on).
 Stages cover manifest read/parse, path binding, model identity, backend
 construction, registry binding, instance discovery and capability admission.
 File bindings retain the configured value,
@@ -24,8 +26,11 @@ reference and digest. Paths resolve through the existing manifest-parent
 algorithm. Absolute paths and native runtime closure ordering keep their
 existing meanings.
 
-Failures retain the original module, classification, severity and message,
-including sensitive native detail. The failure event precedes Host startup
+A failure records the module that reported it and its `outcome` (ledger
+revision 3, Workflow #378 A3): the failure's code, values and links, whose
+category replaces the former severity. Native text is kept only as the
+`raw_text` of a `foreign_*` link of that outcome; the Runtime's own text about
+the failure is not recorded. The failure event precedes Host startup
 failure cleanup. No device session has opened at this assembly boundary;
 native library caches retain their existing process lifetime, including partial
 initialization failure. A failed ledger append, ledger close or owner close is
@@ -82,21 +87,30 @@ for a stopped instance, which `info -v all` reports as a flat object without
 A stopped instance anywhere in the inventory no longer breaks discovery: a
 non-running entry is parsed with those three fields optional, while a running
 entry still requires a non-zero `adb_port`. Every refusal is recorded as a
-`failed` observation with stage `instance_discovery` whose failure message
-carries the discovery facts (source, path, version, index, name, port and the
-declared values) before Host startup fails with the same classification:
-`instance_discovery_unavailable` (tool, spawn, exit, decode or JSON failure,
-including a missing install), `mumu_manager_version_unsupported` (below the
-policy floor or unparseable), `instance_discovery_no_match` (no reported
-instance has the index or exact name), `instance_discovery_ambiguous` (more
-than one instance carries the name) and `instance_discovery_conflict` (a
-declared `host` or `port` differs from the discovered value, a declared
+`failed` observation with stage `instance_discovery` before Host startup fails
+with its classification: `instance_discovery_unavailable` (tool, spawn, exit,
+decode or JSON failure, including a missing install),
+`mumu_manager_version_unsupported` (below the policy floor or unparseable),
+`instance_discovery_no_match` (no reported instance has the index or exact
+name), `instance_discovery_ambiguous` (more than one instance carries the name)
+and `instance_discovery_conflict` (a declared `host` or `port` differs from the
+discovered value, codes `host_conflict` and `port_conflict`; a declared
 `adb_path` is neither canonically the discovered MuMu adb nor, when the daemon
-runs from an install root, that root's adb (code `adb_path_conflict`; the
-message also lists the accepted values), or a
+runs from an install root, that root's adb, code `adb_path_conflict`; or a
 `port` is declared for a matched instance that is stopped and therefore cannot
-be cross-checked, code `port_unverifiable`; the failure message carries the
-declared and the discovered values). A resolved running instance is then
+be cross-checked, code `port_unverifiable`). Ledger revision 3 (Workflow #378
+A3): a refusal of the tool itself (module `actingcommand_device::mumu_manager`)
+records the device failure as its outcome (a Nemu resolution reason with its
+context values, else `provider_native_failed` with the device failure's
+category), with the configured `mumu_root` when there is one and the device's
+text as a `foreign_other_error` link. A no-match, ambiguous or conflict
+refusal (module `actingd.config`) records its code with the instance's `alias`
+and the declared value (`instance_index` or `instance_name`, `adb_host`,
+`adb_port` or `adb_path`) as values and, except for no match, what discovery
+reported for the instance as `instances` records (the candidates of an
+ambiguous name); an adb path conflict also names the discovered adb as
+`other_path`. It follows the `instance_discovery` record, which holds the whole
+discovery. A resolved running instance is then
 registered exactly like an explicit one, with the discovered host and port, no
 serial and the discovered MuMu adb, or the install root's adb when `adb_path`
 is absent or names it and the daemon runs from an install root (Workflow #337;
@@ -153,8 +167,10 @@ grouped as `available`, `unverified` and `unavailable`; each list is sorted and
 the three lists together name every capability id exactly once, or the record
 is rejected at sanitization. A refusal is recorded as a `failed` observation
 with stage `capability_admission` (module
-`actingcommand_runtime_host::emulator_control`, the admission code, the
-provider id and version in the message) before Host startup fails with
+`actingcommand_runtime_host::emulator_control`; outcome
+`emulator_capability_admission_refused` with the reported
+`mumu_manager_version`, the configured `mumu_root` when there is one, and the host's
+admission code as its `caused_by` link) before Host startup fails with
 `emulator_capability_admission_refused`. The admitted profile is attached to
 every discovered registration and merged into the instance capability profile
 that `status` reports (see
@@ -219,13 +235,15 @@ registry is read, the `runtime.instance_bound` events are appended and the
 fact seeds, configuration manifest and settlement facts are recorded, the host
 runs the connection preparation phase (`runtime-fact-store.md`, "Connection
 preparation phase") for every registered device self-checked instance in
-registry order, before any thread is spawned and so before `actingd ready`:
+registry order, before any thread is spawned and so before actingd's
+`runtime_ready` daemon line (`OUTCOME actingd:` with its developer line,
+Workflow #378 A6a):
 the instance's availability is withdrawn, a dedicated preparation lease is
 granted, its input and capture backends are opened (a Nemu pair once) and
 recorded (`backend_open_observed`, facts, `device.self_check`), and the session
 is closed and the lease released again. An instance with a Nemu pair (touch
 backend `nemu_ipc`) therefore shows one `device.self_check` (`nemu`) before
-`ready`, one with independent backends two (`input`, `capture`). A failed preparation leaves its instance unavailable and does
+`runtime_ready`, one with independent backends two (`input`, `capture`). A failed preparation leaves its instance unavailable and does
 not stop the start; only a fatal failure (a ledger append, an unconfirmed
 close) does.
 

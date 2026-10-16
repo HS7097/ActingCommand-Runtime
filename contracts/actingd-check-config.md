@@ -25,11 +25,13 @@ hashed only when the model is first used.
 actingd check-config --config <path>
 ```
 
-`--config <path>` is the only option. Argument errors print no result object:
+`--config <path>` is the only option. Argument errors print the report with
+their outcome alone, without `stage` or `report` (see "Result"):
 `check_config_usage_invalid` (more than one option pair),
 `check_config_option_invalid` (an option other than `--config`, a repeated
 `--config`, a dangling flag or an empty path) and `check_config_config_missing`
-(no `--config`) follow the normal `FATAL actingd: <code>` line with exit code 1.
+(no `--config`), each with its developer line `ERROR actingd: <code> <text>` on
+stderr and exit code 1.
 
 Policy sections are assembled as at startup: catalog documents are read and
 resource packages are stat'ed from disk. A procedure binding names its package by its path
@@ -61,7 +63,7 @@ recorded. After the catalog compiles and `catalog_approval_ids` equals the catal
   of the first policy cycle's input check (`policy_instance_metadata_untrusted`,
   `policy_resource_metadata_untrusted`), which still runs.
 
-All four codes are stage `assemble`. Startup then plans the catalog transition and checks
+All four codes are stage `config_assemble`. Startup then plans the catalog transition and checks
 the approval history before it activates anything (`contracts/client-interactions.md`).
 
 The optional `policy.catalog_transition` (Workflow #361 A) asks for a switch to another
@@ -72,13 +74,15 @@ catalog id or a rollback to a generation that was active before:
 ```
 
 `kind` must be `replace` (`catalog_transition_kind_unknown`) and the hash a lowercase
-`sha256:` digest (`catalog_transition_invalid`), both stage `assemble`; unknown fields are
+`sha256:` digest (`catalog_transition_invalid`), both stage `config_assemble`; unknown fields are
 refused as everywhere else. Whether the transition applies is decided against the ledger
 (see "Catalog Lineage" in `contracts/scheduling/README.md`): startup refuses
 `catalog_transition_expectation_mismatch` when the expected hash is not the active generation,
 `catalog_replace_version_not_newer` for a never-active generation of a catalog id at or below
 a version of that id that was active, and `catalog_activation_not_newer` without the field
-(its detail names the `replace` transition, expecting the active hash, that would apply).
+(its values name both generations, `active_catalog_id`, `_version`, `_hash` and
+`configured_catalog_id`, `_version`, `_hash`, so the `replace` transition, expecting the
+active hash, that would apply can be written from it; Workflow #378 A6a).
 When present, the manifest carries `policy.catalog_transition.kind` and
 `policy.catalog_transition.expected_active_catalog_hash` (`explicit`).
 
@@ -108,7 +112,8 @@ reported as described, but nothing uses them until they are retired.
   count again. One failure more than `retry_limit` in a row writes
   `policy_monitor_retries_exhausted` (error, the same values without `retry_after_ms`) and
   stops the daemon with that request's failure, as before: `runtime.failed` at stage
-  `runtime_lifecycle_policy_monitor` and the `FATAL actingd: monitor:` line. `0` retries
+  `runtime_lifecycle_policy_monitor` and, as every stop since Workflow #378 A6a, the daemon
+  lines of `runtime_stopped` followed by the failure's as the last ones. `0` retries
   nothing.
 - `retry_backoff_ms` (default `1000`, range `1..=600000`) and `retry_backoff_max_ms` (default
   `30000`, range `retry_backoff_ms..=600000`; when absent, at least `retry_backoff_ms`): the
@@ -121,7 +126,7 @@ a connection that reaches a Runtime other than the one the daemon hosts (another
 or process id in the runtime info file): `policy_monitor_runtime_identity_changed`. Dropping
 the timed-out connection may make the Runtime record its own `runtime.failed` (stage
 `runtime_ipc_request_read`) when its late answer finds the connection closed. A value outside
-its range fails with `policy_monitor_config_invalid`, stage `assemble`; unknown fields are
+its range fails with `policy_monitor_config_invalid`, stage `config_assemble`; unknown fields are
 refused as everywhere else. With a `policy` section the manifest carries
 `policy.monitor.io_timeout_ms`, `policy.monitor.retry_limit`,
 `policy.monitor.retry_backoff_ms` and `policy.monitor.retry_backoff_max_ms`, each `explicit`
@@ -131,10 +136,18 @@ file without it keeps its revision.
 
 ## Result
 
-Exactly one JSON object is written to stdout on both outcomes.
+Exactly one JSON line is written to stdout on every exit, the v2 report
+(Workflow #378 A6a): `{schema_version, outcome, report?}`. `outcome` is the full
+`actingcommand.outcome.v1` envelope; with `ACTINGCOMMAND_DETAIL=codes` in the
+environment it keeps only its registered names (`"detail":"codes"`), and
+`report` is unchanged. A configuration that passes is `check_config_passed`
+(success) with `report`, which holds the members v1 printed beside `status`, less
+`warnings` and `mumu_root_unresolved`: what the check noted is a `note` link of
+the outcome instead (described after the members below). v2 is the form v0.12.0
+prints.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"ok","config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"config_selection":{"config_sha256":"sha256:<64 hex>","defaults_sha256":"sha256:<64 hex>"},"not_checked":["vision_model_content","instruction_values"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"warnings":["env_override_ignored:ACTINGCOMMAND_ADB_PATH"],"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}
+{"schema_version":"actingcommand.actingd.check-config.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"check_config_passed","category":"success","values":{},"causes":[{"code":"env_override_ignored","category":"warning","relation":"note","values":{"variable":"ACTINGCOMMAND_ADB_PATH"}}]},"report":{"config_path":"runtime.json","state_root":"D:/runtime/state","bind_host":"127.0.0.1","bind_port":0,"instance_count":3,"instances":[{"alias":"fixture.b","mode":"fixture_simulation","binding":"explicit","adb_host":null,"adb_port":null,"startup_package":null,"stuck_recovery":true,"stuck_recovery_cooldown_secs":600},{"alias":"mumu.c","mode":"device_registry","binding":"discovery_pending","instance_index":1,"instance_name":null,"startup_package":{"package":"D:/runtime/packages/neutral-startup.zip"},"stuck_recovery":true,"stuck_recovery_cooldown_secs":1800,"start_emulator":false},{"alias":"node.a","mode":"device_registry","binding":"explicit","adb_host":"127.0.0.1","adb_port":16384,"startup_package":null,"stuck_recovery":false,"stuck_recovery_cooldown_secs":600,"resource_package":{"path":"D:/runtime/packages/neutral.zip","kind":"file"}}],"policy_configured":false,"performance":{"pressure_start_samples":{"value":3,"source":"default"},"pressure_end_samples":{"value":5,"source":"explicit"}},"device_paths":{"nemu_folder":null,"nemu_ipc_dll":{"path":"D:/runtime/MuMuPlayer/nx_device/12.0/shell/sdk/external_renderer_ipc.dll","source":"explicit"},"droidcast_apk":null,"minitouch_path":null,"maatouch_path":null},"config_manifest":{"subsystems":[...],"parameters":[...]},"config_selection":{"config_sha256":"sha256:<64 hex>","defaults_sha256":"sha256:<64 hex>"},"not_checked":["vision_model_content","instruction_values"],"mumu_root":{"path":"D:/runtime/MuMuPlayer","source":"config"},"adb_default":null,"vision":null,"standard_packs":{"root":null,"root_problem":null,"games":[]},"policy_plan":{"state":"read","active":null,"driver":"off","configured":null,"plan":null,"approvals":null,"phase_ms":{"compile":0,"ledger":12,"projection":3,"approvals":1,"total":16}}}}
 ```
 
 `config_manifest` for a zero-instance configuration that names only
@@ -143,7 +156,7 @@ Exactly one JSON object is written to stdout on both outcomes.
 carries every key listed below):
 
 ```json
-{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit"},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit"},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default"},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default"},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit"},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default"},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default"},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit"},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default"},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default"},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default"},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default"},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default"},{"key":"performance.monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default"},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default"},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default"}]}
+{"subsystems":[{"name":"frame_retention","enabled":true,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}},{"name":"agent_dispatcher","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"governance","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"policy_driver","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"vision_provider","enabled":false,"outcome":{"code":"config_subsystem_section_absent","category":"info","values":{}}},{"name":"device_diagnostic","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"performance_monitor","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"mumu_discovery","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"emulator_control","enabled":false,"outcome":{"code":"config_subsystem_discovery_unbound","category":"info","values":{}}},{"name":"runtime_fact_snapshot","enabled":true,"outcome":{"code":"config_subsystem_always_on","category":"info","values":{}}},{"name":"env_overrides","enabled":false,"outcome":{"code":"config_subsystem_flag_absent","category":"info","values":{}}}],"parameters":[{"key":"bind_host","value":{"type":"string","value":"127.0.0.1"},"source":"explicit","settable":false},{"key":"bind_port","value":{"type":"integer","value":0},"source":"explicit","settable":false},{"key":"device_diagnostic_mode","value":{"type":"string","value":"shadow"},"source":"default","settable":false},{"key":"frame_retention_enabled","value":{"type":"boolean","value":true},"source":"default","settable":false},{"key":"secret_fingerprint_salt_bytes","value":{"type":"integer","value":64},"source":"explicit","settable":false},{"key":"allow_env_overrides","value":{"type":"boolean","value":false},"source":"default","settable":false},{"key":"governance.allowed_clients","value":{"type":"string","value":"any"},"source":"default","settable":false},{"key":"instances_count","value":{"type":"integer","value":0},"source":"explicit","settable":false},{"key":"instances_deferred_count","value":{"type":"integer","value":0},"source":"explicit","settable":false},{"key":"instances_startup_package_count","value":{"type":"integer","value":0},"source":"explicit","settable":false},{"key":"scheduler.lease_ttl_ms","value":{"type":"duration_ms","value":120000},"source":"default","settable":false},{"key":"policy_cadence.debounce_ms","value":{"type":"duration_ms","value":250},"source":"default","settable":false},{"key":"io_timeout_ms","value":{"type":"duration_ms","value":5000},"source":"default","settable":false},{"key":"maximum_frame_bytes","value":{"type":"integer","value":1048576},"source":"default","settable":false},{"key":"performance_control.escalation_samples","value":{"type":"integer","value":2},"source":"default","settable":false},{"key":"performance.monitor.sample_interval_ms","value":{"type":"duration_ms","value":2000},"source":"default","settable":false},{"key":"capacity_thresholds.hard_bytes","value":{"type":"integer","value":536870912},"source":"default","settable":false},{"key":"mumu_manager.control_timeout_ms","value":{"type":"duration_ms","value":60000},"source":"default","settable":false}]}
 ```
 
 `frame_retention_enabled` defaults to `true` in host construction and daemon
@@ -184,6 +197,8 @@ their `default` or `explicit` sources in the manifest. They are actingd-config
 revision 4 (`contracts/component-interfaces.md`): a Runtime up to v0.11.4
 refuses a file that names either key, and a file that names neither keeps its
 revision.
+
+The members of `report`:
 
 - `config_path` is the path as given; `state_root` is the configured value,
   neither resolved nor inspected.
@@ -256,8 +271,9 @@ revision.
   `instruction_values` ([runtime-config.md](runtime-config.md)).
   - `subsystems` (`name`, `enabled`, `outcome`): `outcome` says why the
     subsystem is on or off, as a registered code (ledger revision 3, Workflow
-    #378 A3; it replaces the former prose `reason`, and the schema version stays
-    `v1`). It is an outcome in record form, `{ code, category, values, causes }`:
+    #378 A3: it replaced the former prose `reason` inside check-config v1,
+    without a schema bump; v2, Workflow #378 A6a, is the form v0.12.0 prints and
+    keeps it). It is an outcome in record form, `{ code, category, values, causes }`:
     `category` is `info` for every code below, `values` is always present (`{}`
     when empty) and `causes` only when the outcome has links. The codes:
     - `config_subsystem_configured`: the flag is `true` or the section is
@@ -379,8 +395,9 @@ revision.
   entry is ever added here.
   `mumu_discovery` is appended when no MuMu install root could be resolved
   (`mumu_root` is `null`).
-- `mumu_root` is always present; `mumu_root_unresolved` only when `mumu_root`
-  is `null` (see "MuMu install root").
+- `mumu_root` is always present, `null` when no MuMu install root could be
+  resolved; the resolution's failure is then a `note` link of the outcome (v1's
+  `mumu_root_unresolved`; see "MuMu install root").
 - `adb_default` is always present: `null` when the daemon does not run from an
   install root, otherwise `{ path, state }` for the install root's adb, with
   `state` `ok`, `missing` or `sha256_mismatch` (see "Default ADB"). It is
@@ -390,37 +407,55 @@ revision.
 - `vision` is always present: `null` without a `vision` section, otherwise
   the listed vision root `{ root, execution_provider, onnxruntime_library,
   ocr_models, nn_models }` (see "Vision root").
-- `warnings` is always present: one `env_override_ignored:<VAR>` per
-  `ACTINGCOMMAND_*` fallback variable that is set while `allow_env_overrides`
-  is off, in the order of "Environment overrides", and empty otherwise. A
-  warning is not a failure: `status` stays `ok`. Workflow #373 NAV-6 adds one
-  `<code>:<game>` per broken standard-pack game root, and the bare code when
-  the root itself cannot be listed (see "Standard packs"). Workflow #398 RD-1b
-  adds one `device_binding_unused:<alias>` per alias the private binding file
-  binds that no handset of the configuration has, in file order (see "Devices").
-  Workflow #384 D2-S2 adds one `fact_reader_missing:<instance>:<fact key>` per
-  realistic fact a catalog task reads in an instance's scope that the
-  instance's reader does not mark, or that an instance without a reader cannot
-  refresh (see "Recognition maintenance package"). Workflow #386 SR-3: with
-  `scheduling.pack_admission.check_in_check_config` on (the default), this
-  Runtime's kernel admits every package `policy.procedure_manifest` locates,
-  each location once, and each package it refuses with a code of
-  `scheduling.pack_admission.suspend_codes` is one `pack_admission_suspended`
-  note (`package_id`, `actual_digest` its content hash measured right after the
-  refusal, `failure_code`, `runtime_commit`); any other refusal gives no note
-  (the dispatch reports it). Nothing is written ([policy-suspension.md](policy-suspension.md),
-  "Task package suspension").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
 
+What the check noted is not a member of `report`: each is one `note` link of
+`check_config_passed` (Workflow #378 A6a; v1's `warnings` strings and
+`mumu_root_unresolved`), in this order:
+
+- one `env_override_ignored` (warning, value `variable`) per `ACTINGCOMMAND_*`
+  fallback variable that is set while `allow_env_overrides` is off, in the order
+  of "Environment overrides";
+- the MuMu resolution's failure when `mumu_root` is `null` (see "MuMu install
+  root");
+- Workflow #398 RD-1b: one `device_binding_unused` (info, value `alias`) per
+  alias the private binding file binds that no handset of the configuration has,
+  in file order (see "Devices");
+- Workflow #373 NAV-6: the root's problem when the standard-pack root itself
+  cannot be listed, then the problem of each broken game root (see "Standard
+  packs");
+- Workflow #384 D2-S2: one `fact_reader_missing` (warning, values
+  `instance_id`, `fact_key`, `task_id`) per realistic fact a catalog task reads
+  in an instance's scope that the instance's reader does not mark, or that an
+  instance without a reader cannot refresh (see "Recognition maintenance
+  package");
+- Workflow #386 SR-3: with `scheduling.pack_admission.check_in_check_config` on
+  (the default), this Runtime's kernel admits every package
+  `policy.procedure_manifest` locates, each location once, and each package it
+  refuses with a code of `scheduling.pack_admission.suspend_codes` is one
+  `pack_admission_suspended` note (`package_id`, `actual_digest` its content
+  hash measured right after the refusal, `failure_code`, `runtime_commit`); any
+  other refusal gives no note (the dispatch reports it). Nothing is written
+  ([policy-suspension.md](policy-suspension.md), "Task package suspension").
+
+A note is not a failure, even one whose own category is `error` (a MuMu
+resolution failure, a standard-pack problem, `pack_admission_suspended`): the
+outcome stays `check_config_passed` and the exit code `0`.
+
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"config_decode_failed","stage":"load"}}
+{"schema_version":"actingcommand.actingd.check-config.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"config_decode_failed","category":"error","values":{"stage":"config_load"}}}
 ```
 
-`error.code` is the code startup would fail with. `error.stage` is `load`
+A refused configuration prints no `report`. Its outcome is the code startup
+would fail with; the value `stage` names the check that refused it, a
+registered location (Workflow #378 A6a: v1's `error {code, stage, detail}` and
+the stage tokens `load`, `assemble`, `vision`, `validate` and `resource_package`
+are gone), and its other values and links name what was refused. The stage is
+`config_load`
 (`config_unavailable`, `config_size_invalid`, `config_read_failed`,
-`config_decode_failed`), `assemble` (the typed configuration codes, for example
+`config_decode_failed`), `config_assemble` (the typed configuration codes, for example
 `config_invalid`, `bind_host_not_loopback`, `duplicate_instance_alias`,
 `duplicate_instance_id`, `stuck_recovery_cooldown_invalid`, `invalid_pressure_samples`,
 `device_path_invalid`,
@@ -437,38 +472,43 @@ revision.
 of "Prerequisite packages", the device codes `device_config_invalid`,
 `device_binding_file_invalid` and, after the typed assembly, `device_binding_missing`
 of "Devices", `start_emulator_requires_discovery_binding` (Workflow #369 S6a, with
-`error.detail` `{alias}`), and after the typed assembly the install root's
+the value `alias`), and after the typed assembly the install root's
 adb check `adb_install_missing` / `adb_install_mismatch`, see "Default ADB"),
-`validate` (`invalid_runtime_host_config`,
+`config_vision` (`vision_root_unavailable`,
+`vision_root_in_program_slot`, `vision_runtime_unavailable`,
+`vision_models_empty`, `vision_model_folder_invalid`, see "Vision root"),
+`config_validate` (`invalid_runtime_host_config`,
 `invalid_runtime_config_manifest`, `invalid_stuck_recovery`,
 `invalid_governance_policy` and the other
-`RuntimeHostConfig::validate` codes), `vision` (`vision_root_unavailable`,
-`vision_root_in_program_slot`, `vision_runtime_unavailable`,
-`vision_models_empty`, `vision_model_folder_invalid`, see "Vision root") or
-`resource_package` (`resource_package_missing`, `resource_package_invalid`),
+`RuntimeHostConfig::validate` codes),
+`config_resource_package` (`resource_package_missing`, `resource_package_invalid`),
 `config_recognition_binding` (`fact_reader_binding_invalid`, see "Recognition
 maintenance package") or
 `policy_state` (startup's catalog plan refused, or the state root unreadable, see
 "Catalog plan"), in
-that order. The
-secret fingerprint salt is never printed.
+that order; the execution registry's own refusals (`duplicate_instance_alias`,
+`duplicate_instance_id`, stage `config_assemble`) are met after the vision
+listing, and a refusal while the report is built (for example
+`config_manifest_incomplete`, stage `config_assemble`) after the recognition
+bindings. A refusal of a runtime-config rule names its key as the value
+`config_key`. The secret fingerprint salt is never printed.
 
-A `resource_package` failure, a `fact_reader_binding_invalid` failure
-(`{ alias, path, reader_problem, package_id, fact_key }`), an `adb_install_missing` /
-`adb_install_mismatch` failure (stage `assemble`, see "Default ADB"), a device
-failure (stage `assemble`, see "Devices"), a
-`vision` failure and a `policy_state` failure (see "Catalog plan") also carry
-`error.detail`; no other failure does:
+What a refusal names is in its values and links (v1's `error.detail`,
+`loader_code` and `loader_message` are gone): a resource package refusal names
+`alias` and `path`, with the package loader's code as its `caused_by` link when
+the loader refused the file or directory; `fact_reader_binding_invalid` names
+`instance_id` (the alias), `path` and `reader_problem`, with `package_id` once
+the package was read and `fact_key` for a claimed key (see "Recognition
+maintenance package"); the adb, device, vision and catalog plan refusals are
+described in their sections. The text a check gives beside its code (the
+loader's message, for example) is only on the developer line:
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"resource_package_invalid","stage":"resource_package","detail":{"alias":"node.a","path":"D:/runtime/packages/neutral.zip","loader_code":"contained_task_admission_failed","loader_message":"fatal containment error: missing package entry: resources/operations/task/task.json"}}}
+{"schema_version":"actingcommand.actingd.check-config.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"resource_package_invalid","category":"error","values":{"alias":"node.a","path":"D:/runtime/packages/neutral.zip","stage":"config_resource_package"},"causes":[{"code":"contained_task_admission_failed","category":"error","relation":"caused_by","values":{}}]}}
 ```
 
-`detail.alias` is the instance and `detail.path` the absolute path that was
-checked. `detail.loader_code` and `detail.loader_message` are the package
-loader's own code and message for `resource_package_invalid` on a package file
-or directory the loader refused, and `null` otherwise. Workflow #336 PKG-S1: no
-digest is compared, so a changed file is admitted as it now is.
+`alias` is the instance and `path` the absolute path that was checked. Workflow
+#336 PKG-S1: no digest is compared, so a changed file is admitted as it now is.
 
 ## Catalog plan
 
@@ -497,7 +537,7 @@ read fails with the reader's own `ledger_read_budget_exceeded` at stage
 without any state material (`runtime-state.sqlite`, `runtime-state.key`,
 `ledger`, `release-blobs`, `artifacts`) reads as a fresh one too.
 
-The result carries `policy_plan`:
+`report` carries `policy_plan`:
 
 ```json
 {"policy_plan":{"state":"read","active":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"driver":"on","configured":{"catalog_id":"...","catalog_version":12,"catalog_hash":"sha256:..."},"plan":"unchanged","approvals":{"record":[],"reapprove":[],"revoke":[]},"phase_ms":{"compile":40,"ledger":700,"projection":900,"approvals":300,"total":1940}}}
@@ -525,12 +565,14 @@ fail with (`catalog_activation_not_newer`,
 unreadable state root with the reader's own code, or
 `policy_state_ledger_incomplete`, `catalog_active_source_mismatch`,
 `catalog_legacy_pointer_pending` (a pre-migration active-pointer file that only
-startup migrates). Such a failure carries `error.detail`
-`{ "operation": ..., "message": ..., "remedy": ..., "elapsed_ms": ... }`:
-`remedy` is the plan refusal's own hint, or `null` (a
-`catalog_activation_not_newer` names the `replace` transition, expecting the
-active hash, that would switch or roll back instead), and `elapsed_ms` the time
-the preview ran before it failed. Since `acsetup --commit-config` runs the
+startup migrates). Such a failure's outcome carries the refusal's own values and
+links: a `catalog_activation_not_newer` names both generations
+(`active_catalog_id`, `_version`, `_hash` and `configured_catalog_id`,
+`_version`, `_hash`), from which the `replace` transition, expecting the active
+hash, that would switch or roll back instead can be written. v1's
+`error.detail` (`operation`, `message`, `remedy`, `elapsed_ms`) is gone
+(Workflow #378 A6a); the developer line names `elapsed_ms=<ms>`, the time the
+preview ran before it failed. Since `acsetup --commit-config` runs the
 selected slot's `check-config` before it commits, a CAS mismatch, a wrong
 approval or an approval conflict stops the commit before the installation or
 the running daemon changes.
@@ -546,7 +588,7 @@ Workflow #360 replaces `vision_provider_manifest` with the optional top-level
 
 `execution_provider` is `cpu` or `cuda`; `cuda` requires `cuda_device
 { ordinal, expected_stable_identity }` and `cpu` refuses it
-(`vision_config_invalid`, stage `assemble`). `root` is optional: without it the
+(`vision_config_invalid`, stage `config_assemble`). `root` is optional: without it the
 vision root is `<install root>\vision` when the daemon runs from an install
 root, else `vision` next to the configuration file; a relative `root` resolves
 against the configuration file's directory. A file that still names
@@ -561,10 +603,12 @@ file: the root must exist (`vision_root_unavailable`) outside the install root's
 `ort\onnxruntime_providers_cuda.dll` for `cuda` (`vision_runtime_unavailable`),
 and `models\` must hold at least one folder (`vision_models_empty`). A folder
 that breaks the folder rule fails the check with `vision_model_folder_invalid`
-and `error.detail.invalid_models`, one `{ name, path, reason }` per such folder,
-although daemon startup records such a folder and keeps running (only the
-targets naming it fail). The other `vision` failures carry
-`error.detail.message`.
+and the value `invalid_models`, one record `{ model_name, path, failure_code }`
+per such folder (Workflow #378 A6a; each folder's reason is developer text on
+the developer line), although daemon startup records such a folder and keeps
+running (only the targets naming it fail). The other `config_vision` failures
+carry their code, with the listing's cause as a `caused_by` link when it has one;
+their message is on the developer line.
 
 On success `vision` reports the canonical `root`, the `execution_provider`, the
 `onnxruntime_library` path and every model folder by name: `ocr_models`
@@ -580,9 +624,12 @@ resolves against the configuration file's directory, as
 `startup_package.package` does, and is then made absolute. The field carries no
 digest and URLs are not accepted: whoever writes the configuration downloads the
 package first. Daemon startup runs the same admission right after assembly,
-before any side effect, and fails with the same codes on the normal
-`FATAL actingd: <code>: instance "<alias>" resource_package "<path>"` line
-(followed by `; loader <code>: <message>` when the loader refused the file).
+before any side effect, and refuses the start with the same codes and values,
+written before the ledger opens as its daemon lines on stderr (Workflow #378
+A6a): the developer line `ERROR actingd: <code> <text>`, whose text names
+`instance "<alias>" resource_package "<path>"` (followed by
+`; loader <code>: <message>` when the loader refused the file), and
+`OUTCOME actingd: <envelope>`.
 
 - `resource_package_missing`: the path does not exist (or is empty).
 - `resource_package_invalid`: the path exists but is neither a file nor a
@@ -648,8 +695,9 @@ package admitted, and reports `standard_packs`:
 `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, which is checked
 against `pages.json` and the registry as a run's preparation checks it.
 A directory that holds none of the root files is not a game root and is not
-listed. A broken game root is listed with its `problem` and adds one warning;
-`status` stays `ok`, because the configuration itself is valid: the root's
+listed. A broken game root is listed with its `problem` and adds that problem as
+one `note` link of the outcome; the outcome stays `check_config_passed`, because
+the configuration itself is valid: the root's
 problem is reported by this list and by the startup record, and a run that
 needs the root is refused when it is prepared. `root_problem` is set when the
 root directory itself cannot be listed (`standard_pack_root_unreadable`).
@@ -687,7 +735,7 @@ repeating tasks (`contracts/policy-suspension.md`, "Lifting (R19)" and
 ## Performance and device paths
 
 Workflow #318 (cfg2) adds two optional top-level sections. Both are checked
-here exactly as at startup, at stage `assemble`.
+here exactly as at startup, at stage `config_assemble`.
 
 `performance { pressure_start_samples, pressure_end_samples }` sets the
 performance monitor's pressure streaks (`PerformanceMonitorConfig` in
@@ -700,7 +748,7 @@ manifest parameters `performance.pressure_start_samples` /
 `performance.pressure_end_samples` (`explicit` when named). Since Workflow #385
 P-c the `performance` section holds every key of performance pacing
 ([runtime-config.md](runtime-config.md), "The performance section"); a rule the
-section breaks fails with `perf_config_invalid` at stage `assemble`, as at
+section breaks fails with `perf_config_invalid` at stage `config_assemble`, as at
 startup.
 
 `device_paths { nemu_folder, nemu_ipc_dll, droidcast_apk, minitouch_path,
@@ -730,7 +778,7 @@ Workflow #318 (cfg4) retires the shared governance secret: governance
 connections declare an identity card instead (`contracts/client-interactions.md`,
 "Governance connections: the identity card"). The top-level
 `governance_capability` key no longer exists. A file that still contains it,
-whatever its value (including `null`), fails at stage `assemble` with
+whatever its value (including `null`), fails at stage `config_assemble` with
 `governance_capability_retired`, before any other assembly check, both here and
 at startup; delete the key. `policy_governance_capability_missing` is retired
 with it: a `policy` section needs no governance setting.
@@ -797,8 +845,9 @@ discovery or the bundled tool. `PATH`, `ProgramFiles`, `ProgramFiles(x86)`
 and `SystemRoot` stay discovery sources and are not governed by the flag.
 
 When the flag is off (absent or `false`), every variable above that is set is
-ignored and reported. This command's `warnings` array lists it as
-`env_override_ignored:<VAR>`. The `env_overrides` manifest subsystem's outcome
+ignored and reported. This command's outcome carries it as a `note` link
+`env_override_ignored` with the value `variable` (Workflow #378 A6a; v1 listed
+`env_override_ignored:<VAR>` in `warnings`). The `env_overrides` manifest subsystem's outcome
 carries it as a `note` link, here and in the manifest startup hands to the
 host:
 
@@ -813,19 +862,19 @@ under `ignored_variables`, comma-separated in the order above, for example
 `"ignored_variables":"ACTINGCOMMAND_ADB_PATH"`. The flag is never silent: an
 ignored variable is named both here and in the ledger. No
 `provider.startup_observed` kind carries a warning. The variable's value is
-never printed. When the flag is `true` nothing is ignored and `warnings` is
-empty; a bad injected value fails where it is used (for example
-`mumu_root_unresolved` below, or the backend open).
+never printed. When the flag is `true` nothing is ignored and there is no such
+note; a bad injected value fails where it is used (for example the MuMu
+resolution's failure below, or the backend open).
 
 ## Devices
 
 Workflow #398 RD-1b ([device-binding.md](device-binding.md)). An instance entry's
 optional `device { kind, transport }` names the kind of device it drives:
 `emulator` (also when `device` is absent) or `handset`, a real phone on `usb`.
-Checked here exactly as at startup, at stage `assemble`:
+Checked here exactly as at startup, at stage `config_assemble`:
 
-- the declaration (`device_config_invalid`, `error.detail` `{alias,
-  device_config_problem}`): a known `kind`; `transport` `usb` or absent on a
+- the declaration (`device_config_invalid`, values `alias` and
+  `device_config_problem`): a known `kind`; `transport` `usb` or absent on a
   handset and absent on an emulator; on a handset no `serial`, `host`, `port`,
   `connect`, `instance_index`, `instance_name` or `nemu_app_index`, only the
   input backends `adb_shell_input`, `maatouch`, `minitouch` and the capture
@@ -833,24 +882,24 @@ Checked here exactly as at startup, at stage `assemble`:
   emulator is refused the same way (#402);
 - when a handset is configured, the private binding file
   `<state root>\private\device-bindings.json`, read once and never written
-  (`device_binding_file_invalid`, `error.detail` `{path,
-  device_binding_problem}`);
+  (`device_binding_file_invalid`, values `path` and
+  `device_binding_problem`);
 - after the typed assembly, each handset's binding (`device_binding_missing`,
-  `error.detail` `{alias}` of the first handset without one). A start does not
+  the value `alias` of the first handset without one). A start does not
   refuse it: it registers that handset unbound and unavailable and runs the
   others.
 
 A handset is addressed by its bound serial: its `instances[]` entry has
 `binding` `explicit` and `adb_host` / `adb_port` `null`, and no serial is
 printed anywhere in the report. An alias the private file binds that no handset
-has is the warning `device_binding_unused:<alias>`. An emulator-only
+has is the note `device_binding_unused` with the value `alias`. An emulator-only
 configuration reads no private file and reports what it reported before.
 
 ## Discovery-bound instances
 
 An instance bound by `instance_index` or `instance_name` runs through the same
 registration function as an explicit entry, with a stand-in ADB target, so a
-refusal carries the code startup would report, at stage `assemble`.
+refusal carries the code startup would report, at stage `config_assemble`.
 
 Checked here, without discovery:
 
@@ -874,7 +923,7 @@ Checked here, without discovery:
 - Workflow #369 S6a: the optional `start_emulator` (boolean, absent is off) is
   allowed only on a discovery-bound instance; on a fixture or on an instance bound
   otherwise it fails assembly with `start_emulator_requires_discovery_binding`,
-  whose `error.detail` names the instance (`{alias}`). A discovery-bound entry of
+  whose value `alias` names the instance. A discovery-bound entry of
   the result carries `start_emulator`. The daemon starts such an instance's
   stopped emulator at its start from Workflow #369 S6c on; this command starts
   nothing.
@@ -954,19 +1003,27 @@ effect, identically here and at daemon startup:
   another SHA-256 (or the pin embedded in the build cannot be read, so no file
   can be confirmed).
 
-Both are stage `assemble` here, with `error.detail`, and the startup line
-`FATAL actingd: <code>: <message>` before the ledger is opened, so nothing is
-recorded. There is no fallback to the MuMu adb. `error.detail` names the adb,
-the instances that use it, every file that is not as pinned and the remedy:
+Both are fatal (Workflow #378 A6a: a damaged installation that only an external
+fix repairs), so this command exits `2`; they are stage `config_assemble` here.
+At startup they refuse the start before the ledger is opened, as the daemon
+lines `FATAL actingd: <code> <text>` and `OUTCOME actingd: <envelope>`, so
+nothing is recorded. There is no fallback to the MuMu adb. The outcome names
+the adb (`adb_path`), the instances that use it (`aliases`), the Tools folder
+acsetup reinstalls (`tools_dir`) and every file that is not as pinned
+(`files`); each file's OS error, or a pin the build cannot read
+(`adb_install_pin_invalid`), is a `caused_by` link. v1's `remedy` is gone: what
+to do is the code's catalog `handling`, and the developer line names it.
 
 ```json
-{"schema_version":"actingcommand.actingd.check-config.v1","status":"failed","error":{"code":"adb_install_mismatch","stage":"assemble","detail":{"adb_path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","instances":["node.a"],"files":[{"path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"<64 hex>","actual_sha256":"<64 hex>"}],"remedy":"fix: reinstall tools\\platform-tools under this install root (acsetup v0.10 or later for an acsetup install), or set the instance's adb_path to another adb (MuMu's own adb as before; an explicit instance may name any other adb)"}}}
+{"schema_version":"actingcommand.actingd.check-config.v2","outcome":{"schema_version":"actingcommand.outcome.v1","code":"adb_install_mismatch","category":"fatal","values":{"adb_path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","aliases":["node.a"],"tools_dir":"\\\\?\\D:\\AC\\tools","files":[{"path":"\\\\?\\D:\\AC\\tools\\platform-tools\\adb.exe","state":"sha256_mismatch","expected_sha256":"sha256:<64 hex>","actual_sha256":"sha256:<64 hex>"}],"stage":"config_assemble"}}}
 ```
 
-A missing file is `{"path":"...","state":"missing","error":"<OS error>"}`.
-The FATAL message carries the same facts:
+A file that cannot be read is `{"path":"...","state":"missing"}` when it is
+absent and `"state":"unreadable"` otherwise, with its OS error as a
+`foreign_os_error` `caused_by` link of the outcome. The developer line's text
+carries the same facts:
 `AC-installed adb "<path>" used by instance(s) ["node.a"]: "<file>" sha256 expected <hex>, actual <hex>; fix: ...`
-(`missing "<file>" (<OS error>)` for a missing one).
+(`missing "<file>" (<cause>)` for a file that cannot be read).
 
 `adb_default` reports the result whenever an install root is recognised, also
 when no instance uses the adb (so a zero-instance smoke check shows it);
@@ -991,7 +1048,7 @@ three shapes:
 
 - `mumu_root` configured: `{"path":"<configured path>","source":"config"}`.
   The path is echoed as configured, after the usual assembly check (a relative
-  or empty value still fails with `mumu_root_invalid` at stage `assemble`);
+  or empty value still fails with `mumu_root_invalid` at stage `config_assemble`);
   nothing is resolved.
 - `mumu_root` absent and resolved:
   `{"path":"<resolved root>","source":"<source>"}`. The command runs
@@ -1003,24 +1060,26 @@ three shapes:
   `\\?\` verbatim path), which startup accepts as `mumu_root`. `source` is
   `env` (flag on only), `running_process`, `registry_uninstall` or
   `vendor_enumeration`.
-- `mumu_root` absent and not resolved: `"mumu_root":null` plus a sibling
-  `"mumu_root_unresolved":{"reason":"<reason>","message":"<message>"}`, and
+- `mumu_root` absent and not resolved: `"mumu_root":null`, the resolution's
+  failure as a `note` link of `check_config_passed` (Workflow #378 A6a; v1
+  printed a sibling `mumu_root_unresolved {reason, message}`), and
   `mumu_discovery` is appended to `not_checked`. This is not a check failure:
-  `status` stays `ok` and the exit code `0`; startup runs this resolution only
-  when an instance is discovery-bound (`contracts/provider-startup.md`).
-  `message` is the resolver's own message. `reason` is the resolver's
-  resolution reason (`installation_absent`, `installation_ambiguous`,
-  `candidate_absent`, `candidate_outside_root`, `registry_entry_invalid`,
-  `registry_source_unavailable`), else its diagnostic `<category>.<stage>`
-  (for example `native.mumu_manager_registry`), else `device_error` (for
-  example a root path that cannot be canonicalized). Only the resolution
-  reason matches what a startup discovery refusal records. Since ledger
-  revision 3 (Workflow #378 A3) startup records `provider_native_failed` in
-  place of the other two, with the value `device_category` when the device
-  error has a category. Workflow #378 A2-R aligns this field.
+  the outcome stays `check_config_passed` and the exit code `0`; startup runs
+  this resolution only when an instance is discovery-bound
+  (`contracts/provider-startup.md`). The note is the outcome provider startup
+  records for the same device failure: the resolver's resolution reason as its
+  code (`installation_absent`, `installation_ambiguous`, `candidate_absent`,
+  `candidate_outside_root`, `registry_entry_invalid`,
+  `registry_source_unavailable`), with the context its resolving step recorded
+  as values (Workflow #378 A7: `count_kind`, `count`, `count_known`,
+  `install_source`, `configured_adb_class`, `explicit_root`, `explicit_dll`,
+  each only when recorded); else `provider_native_failed`, with the value
+  `device_category` when the device error has a category (none, for example,
+  for a root path that cannot be canonicalized). The resolver's own message is
+  its `foreign_other_error` `caused_by` link (`raw_text`).
 
 ```json
-{"mumu_root":null,"mumu_root_unresolved":{"reason":"installation_absent","message":"no MuMu installation was found: configure mumu_root, set ACTINGCOMMAND_NEMU_FOLDER, start MuMu, or install it at a registered or vendor path"}}
+{"code":"installation_absent","category":"error","relation":"note","values":{…},"causes":[{"code":"foreign_other_error","category":"error","relation":"caused_by","values":{…}}]}
 ```
 
 The resolution is read-only: it uses the injected `ACTINGCOMMAND_NEMU_FOLDER`
@@ -1032,5 +1091,8 @@ comes first), which is why a configured `mumu_root` is preferred.
 
 ## Exit code
 
-`0` only when `status` is `ok`. A failed check prints its JSON object, then the
-normal `FATAL actingd: <code>` line on stderr, and exits `1`.
+The process exits by the outcome's category (Workflow #378 A6a): `0` for
+`check_config_passed`, notes included; `1` for an error refusal; `2` for a fatal
+one (for example `adb_install_missing`, `adb_install_mismatch`). A refused check
+prints its report line, then its developer line `<LEVEL> actingd: <code> <text>`
+on stderr; a passed check writes no developer line.
