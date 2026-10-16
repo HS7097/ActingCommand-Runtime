@@ -713,7 +713,9 @@ fn n6_14_two_interrupt_pages_on_one_located_read_call_the_provider_once() {
 // pages reading the same request call it once.
 #[test]
 fn n5_13_a_full_match_reads_each_request_once_within_the_admitted_budget() {
-    let region = |index: i32| rect(10 + index * 110, 10, 100, 50);
+    // Distinct regions that all hold the one block the provider reads, so every read is a
+    // well-formed answer to its own request.
+    let region = |index: i32| rect(10 + index * 10, 10, 160, 80);
     let pack = |reads: i32| {
         let mut targets = vec![json!({"type": "color", "id": "page/home",
                                       "region": {"x": 0, "y": 0, "width": 1, "height": 1},
@@ -752,10 +754,7 @@ fn n5_13_a_full_match_reads_each_request_once_within_the_admitted_budget() {
         .expect("page detector")
     };
     let provider = Arc::new(FixedOcr {
-        blocks: list_blocks()
-            .into_iter()
-            .map(|(text, rect)| (text.to_owned(), rect))
-            .collect(),
+        blocks: vec![("ALPHA".to_owned(), rect(60, 40, 80, 20))],
         calls: AtomicUsize::new(0),
     });
     let evaluator = |reads: i32| {
