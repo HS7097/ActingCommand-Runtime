@@ -8,18 +8,22 @@
 //! pass, never a ledger handle, an artifact, a clock or a lock.
 //!
 //! Format v2 (Workflow #336 PKG-S3, M-PKG §3.4):
-//! `<base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}~f<F>`: the terminal failure code
-//! (or `h` and its hash), the failure key over code, scope, step and detail, the main package,
-//! each declared prerequisite layer and the return-home layer, each as the id hash of its
-//! `package_id` and the content hash measured when the failure was settled (`x` when it could
-//! not be measured), and the error frame (`na` without one, `u…` for a failure that never
-//! accumulates). The identity prefix is everything before `~f`. A v1 string is not read.
+//! `<base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}[~n<I><H>]{0,1}[~g<H>]{0,1}~f<F>`:
+//! the terminal failure code (or `h` and its hash), the failure key over code, scope, step and
+//! detail, the main package, each declared prerequisite layer and the return-home layer, each as
+//! the id hash of its `package_id` and the content hash measured when the failure was settled
+//! (`x` when it could not be measured), and the error frame (`na` without one, `u…` for a
+//! failure that never accumulates). Workflow #373 NAV-5 (M-373 §8.5) adds, to a navigation
+//! failure only, the navigation, recovery chain or interrupt layer the failure happened in
+//! (`n`, the same id and content hash) and the game root's data files (`g`, a hash of
+//! `pages.json`, `navigation.json` and `interrupts.json`). The identity prefix is everything
+//! before `~f`. A v1 string is not read.
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
     ApplicationPayload, ArtifactKind, EventAction, EventPayload, EventQuery, EventType, RunId,
-    TaskEntryTargetDisposition, TaskPayload, TaskSemanticFact,
+    TaskEntryRecoveryRole, TaskEntryTargetDisposition, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_execution_kernel::linear_main_interface;
 use actingcommand_ledger::{LedgerArtifactReference, PersistedEvent};
@@ -67,6 +71,11 @@ const MAIN_ACCUMULATING: &[&str] = &[
 ];
 /// Preparation refusals of the prerequisite chain: reproducible configuration problems (R21).
 const PREPARE_ACCUMULATING_PREFIX: &str = "contained_task_prerequisite_";
+/// Workflow #373 NAV-5 (M-373 §8.5, §15 ruling 4): the navigation's and the shared interrupt
+/// pages' run-ending failures; the identity names the standard pack's data with them, and they
+/// accumulate in every scope of a run.
+const NAVIGATION_FAILURE_PREFIXES: [&str; 2] =
+    ["contained_task_navigation_", "contained_task_interrupt_"];
 /// R25-2: the adb backend failures of a `linear_steps` task that are rerun only when the run
 /// was not poisoned.
 pub(crate) const RERUN_ONLY_BACKEND_FAILURES: &[&str] = &[
@@ -163,10 +172,23 @@ pub(crate) fn failure_key(
     )
 }
 
+/// Workflow #373 NAV-5 (M-373 §8.5): whether a code is a navigation or shared interrupt
+/// failure, whose identity names the standard pack's data.
+pub(crate) fn navigation_failure_code(code: &CodeStr) -> bool {
+    NAVIGATION_FAILURE_PREFIXES
+        .iter()
+        .any(|prefix| code.as_str().starts_with(prefix))
+}
+
 /// Whether a failure accumulates toward suspension (R21, R25-1): a main-scope failure of the
 /// main package's own steps outside the restart segment, or a prerequisite preparation
-/// refusal. Every other failure is rerun only.
+/// refusal. Workflow #373 NAV-5 (M-373 §8.5, §15 ruling 4): a navigation or shared interrupt
+/// failure in any scope of the run, a restart segment included (a recovery chain may restart
+/// the application). Every other failure is rerun only.
 pub(crate) fn failure_accumulates(code: &CodeStr, scope: &str, restart_segment: bool) -> bool {
+    if scope != "prepare" && navigation_failure_code(code) {
+        return true;
+    }
     let code = code.as_str();
     match scope {
         "main" => !restart_segment && MAIN_ACCUMULATING.contains(&code),
@@ -215,6 +237,14 @@ pub(crate) enum IdentityLayer {
         key_hash: String,
         package: IdentityPackage,
     },
+    /// Workflow #373 NAV-5 (M-373 §8.5): `n<I><H>`, the edge's, recovery chain step's or
+    /// interrupt layer's package a navigation failure happened in (or the one its
+    /// `contained_task_navigation_package_invalid` names).
+    Navigation(IdentityPackage),
+    /// Workflow #373 NAV-5 (M-373 §8.5): `g<H>`, the first 12 hex digits of SHA-256 over the
+    /// game root's `pages.json`, `navigation.json` and `interrupts.json`, in that order (an absent
+    /// file adds nothing), `x` when they could not be read.
+    StandardPackRoot(String),
 }
 
 impl IdentityLayer {
@@ -238,34 +268,66 @@ impl IdentityLayer {
         match self {
             Self::Declared(_) => "declared",
             Self::ReturnHome { .. } => "return_home",
+            Self::Navigation(_) => "navigation",
+            Self::StandardPackRoot(_) => "standard_pack_root",
         }
     }
 
-    pub(crate) const fn package(&self) -> &IdentityPackage {
+    /// The layer's package; none for the game root's data files.
+    pub(crate) const fn package(&self) -> Option<&IdentityPackage> {
         match self {
-            Self::Declared(package) | Self::ReturnHome { package, .. } => package,
+            Self::Declared(package)
+            | Self::ReturnHome { package, .. }
+            | Self::Navigation(package) => Some(package),
+            Self::StandardPackRoot(_) => None,
         }
     }
 
+    /// The id hash of the layer's package; empty for the game root's data files.
     pub(crate) fn id_hash(&self) -> &str {
-        &self.package().id_hash
+        self.package()
+            .map_or("", |package| package.id_hash.as_str())
     }
 
-    /// The content hash prefix recorded for the layer, or `x`.
+    /// The content hash prefix recorded for the layer (Workflow #373 NAV-5: or the game root's
+    /// data files' hash), or `x`.
     pub(crate) fn hash(&self) -> &str {
-        &self.package().hash
+        match self {
+            Self::StandardPackRoot(hash) => hash,
+            _ => self
+                .package()
+                .map_or(MISSING_HASH, |package| package.hash.as_str()),
+        }
+    }
+
+    /// The order of the layer's kind in the identity: `p` before `r` before `n` before `g`.
+    const fn rank(&self) -> usize {
+        match self {
+            Self::Declared(_) => 0,
+            Self::ReturnHome { .. } => 1,
+            Self::Navigation(_) => 2,
+            Self::StandardPackRoot(_) => 3,
+        }
     }
 
     fn encode(&self) -> String {
         match self {
             Self::Declared(package) => format!("p{}", package.encode()),
             Self::ReturnHome { key_hash, package } => format!("r{key_hash}{}", package.encode()),
+            Self::Navigation(package) => format!("n{}", package.encode()),
+            Self::StandardPackRoot(hash) => format!("g{hash}"),
         }
     }
 
     fn parse(segment: &str) -> Option<Self> {
         if let Some(rest) = segment.strip_prefix('p') {
             return IdentityPackage::parse(rest).map(Self::Declared);
+        }
+        if let Some(rest) = segment.strip_prefix('n') {
+            return IdentityPackage::parse(rest).map(Self::Navigation);
+        }
+        if let Some(rest) = segment.strip_prefix('g') {
+            return is_segment_hash(rest).then(|| Self::StandardPackRoot(rest.to_owned()));
         }
         let rest = segment.strip_prefix('r')?;
         let key_hash = rest.get(..ID_HEX)?;
@@ -373,11 +435,16 @@ impl FailureIdentity {
             .copied()
             .map(IdentityLayer::parse)
             .collect::<Option<Vec<_>>>()?;
+        // At most three `p`, then at most one each of `r`, `n` (Workflow #373 NAV-5) and `g`,
+        // in that order.
         let declared = layers
             .iter()
-            .take_while(|layer| matches!(layer, IdentityLayer::Declared(_)))
+            .filter(|layer| matches!(layer, IdentityLayer::Declared(_)))
             .count();
-        if declared > MAX_DECLARED_LAYERS || layers.len() > declared + 1 {
+        let ordered = layers.windows(2).all(|pair| {
+            pair[0].rank() < pair[1].rank() || (pair[0].rank() == 0 && pair[1].rank() == 0)
+        });
+        if declared > MAX_DECLARED_LAYERS || !ordered {
             return None;
         }
         Some(Self {
@@ -465,6 +532,27 @@ pub(crate) fn failure_step(rows: &[PersistedEvent], chain: bool) -> (String, Str
         .remove(&scope)
         .unwrap_or_else(|| "entry".to_owned());
     (scope, operation)
+}
+
+/// Workflow #373 NAV-5 (M-373 §8.5): the package of the navigation, recovery chain or interrupt
+/// layer whose failure ended the run: the last `EntryRecoveryFailed` of such a layer.
+pub(crate) fn navigation_layer_failure(rows: &[PersistedEvent]) -> Option<String> {
+    rows.iter()
+        .rev()
+        .filter_map(semantic_fact)
+        .find_map(|fact| match fact {
+            TaskSemanticFact::EntryRecoveryFailed {
+                package_label: Some(package_label),
+                role:
+                    Some(
+                        TaskEntryRecoveryRole::NavigationHop
+                        | TaskEntryRecoveryRole::RecoveryChain
+                        | TaskEntryRecoveryRole::InterruptHandler,
+                    ),
+                ..
+            } => Some(package_label.clone()),
+            _ => None,
+        })
 }
 
 /// Workflow #390 EXEC-3: whether a page-graph run checked its required entry (its

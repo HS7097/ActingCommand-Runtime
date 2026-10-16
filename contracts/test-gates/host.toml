@@ -1077,8 +1077,9 @@ tests = [
     "actingcommand-runtime-config::lib::rd4_tests::rd4_t7_the_rule_is_configured_and_refuse_checks_every_start_rung_against_every_profile",
     "actingcommand-actingd::process::rd4_t7_refuse_with_a_start_beyond_a_profile_refuses_check_config_and_the_start",
     "actingcommand-runtime-config::lib::rd4_tests::gate_rd4_an_unknown_device_kind_in_kind_profiles_is_refused_out_of_range_naming_the_key",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::nav5_a_real_navigation_exhaustion_starts_the_configured_ladder_profile",
 ]
-incident = ["#398 RD-4"]
+incident = ["#398 RD-4", "#373 NAV-5"]
 
 # Workflow #385 PM-CFG (wave-17 ruling 10; PERF v1.4.2 §10.1; register §1.87): every key of the monitor's row (performance.monitor.*, .pressure.*, .load.*) is read from the configuration in effect, its default the constant the monitor ran with before, and a value outside its range or against a rule of §10.1 is refused naming the key (config_value_invalid while the rows are rendered, perf_config_invalid from the section check, the reader and the assembly); the assembly hands the row to the monitor, its host sampler and the controller; the monitor takes its sampling period, context window, sample bounds, summary period, failures in a row, controller freshness (sampling periods), stutter gap, pressure thresholds and severity levels from it, the sampler its process thresholds and coverage, the controller its heavy-load threshold, which its resource overlay hands to the policy evaluator, so a configured threshold moves the controller's count of admitted heavy work and the evaluator's heavy candidate together
 [[gate]]
@@ -1134,3 +1135,42 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_381a::gate_a_held_start_whose_deadline_passes_ends_under_held_timeout",
 ]
 incident = ["#381 A", "#382 H-1"]
+# Workflow #373 NAV-5 (model M-373 v1.1 §4.4, §5, §8.2, §8.3, §8.5, §9; register §1.84): the entry gate's full-match routing: navigation.json read and checked with the root (N5-1), the fewest-hops route by the edges' order (N5-2), navigation in place of the return-home fallback and after a declared prerequisite (N5-3, N5-4), the recovery chain, ambiguity and its exhaustion (N5-5 to N5-7), unconfirmed hops and the locate limit (N5-8), an unlisted entry (N5-9), unfit edge packages (N5-10), an unconfirmed arrival (N5-11), the entry check's frame reused (N5-12), an interrupt page first (N5-14), task.page (N5-15), the step limit (N5-16), no navigation in host runs and layers (N5-17), the failure identity's n and g segments, their accumulation and lift (N5-18), direct and scheduled runs alike (N5-19), the run's server only (N5-20)
+[[gate]]
+key = "97"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack::navigation_tests::n5_1_a_valid_navigation_file_is_read_with_every_server_s_edges",
+    "actingcommand-contract::lib::standard_pack::navigation_tests::n5_1_each_navigation_violation_is_its_problem_at_its_pointer",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_1_a_broken_navigation_file_makes_the_game_root_invalid",
+    "actingcommand-runtime-host::lib::host::navigation::tests::n5_2_the_route_has_the_fewest_hops_and_ties_go_to_the_edge_named_first",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_3_without_a_prerequisite_the_gate_navigates_instead_of_returning_home",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_4_after_a_declared_prerequisite_the_gate_navigates_only_with_navigation_data",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_5_an_unrecognised_frame_runs_the_chain_then_locates_and_routes",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_6_a_frame_of_two_pages_is_ambiguous_and_goes_to_the_chain",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_7_a_spent_chain_ends_the_run_exhausted_by_the_last_locate",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_8_an_unconfirmed_hop_locates_again_until_sixteen_locates_are_spent",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_9_an_entry_the_page_list_does_not_hold_is_recorded_and_not_navigated",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_10_an_edge_package_unfit_for_its_edge_ends_the_run_before_any_input",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_11_an_entry_the_package_does_not_confirm_ends_the_run_unconfirmed",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_12_the_first_locate_takes_the_entry_check_s_frame_and_each_later_one_a_new_frame",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_14_an_interrupt_page_on_a_located_frame_is_handled_before_the_run_locates_again",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_15_task_page_is_the_located_page_and_unchanged_by_a_frame_not_located",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_16_a_layer_past_a_thousand_steps_is_not_run",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_17_host_started_runs_and_layers_never_navigate",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_18_a_navigation_failure_identity_names_its_layer_and_data_and_accumulates",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_18_a_navigation_pause_lifts_on_its_data_or_its_layer_not_on_a_hop_that_ran",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_18_a_scheduled_navigation_failure_records_its_layer_and_data_in_its_identity",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_19_a_direct_run_routes_as_a_scheduled_run_does",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_20_only_the_run_s_server_s_edges_and_chain_steps_are_used",
+]
+incident = ["#373 NAV-5"]
+
+# Workflow #308 SEL-L4b (frozen selector model S0 v2.1 §1.4; register §1.85): a package whose select step declares `scan` and `on_empty` runs through the host; a scan that finds nobody listed ends the run Completed on the step's page with no input, one v2 decision record and the on_empty key as its scheduling disposition, derived by the host's existing rules
+[[gate]]
+key = "77"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_308_l4b::l4b_a_scan_select_that_finds_nobody_listed_ends_the_run_with_its_on_empty_key",
+]
+incident = ["#308"]

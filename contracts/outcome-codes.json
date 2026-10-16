@@ -678,6 +678,22 @@
       "type": "vocab:scan_bound",
       "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3)."
     },
+    "selection_kind": {
+      "type": "vocab:selection_kind",
+      "description": "The kind of a selection policy's decision, verbatim (Workflow #308)."
+    },
+    "outcome_key": {
+      "type": "token",
+      "description": "The outcome key a selection policy's decision maps to, as the pack declares it (Workflow #308 SEL-L4b)."
+    },
+    "selection_blocking": {
+      "type": "vocab:selection_blocking",
+      "description": "Why unknown instances keep a selection decision from standing (Workflow #308 SEL-L4b)."
+    },
+    "identity_state": {
+      "type": "vocab:identity_state",
+      "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b)."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -1684,6 +1700,10 @@
     "registry_problem": {
       "type": "vocab:registry_problem",
       "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a)."
+    },
+    "navigation_limit": {
+      "type": "vocab:navigation_limit",
+      "description": "Which navigation bound a run reached (Workflow #373 NAV-5)."
     },
     "event_type": {
       "type": "vocab:event_type",
@@ -2867,6 +2887,54 @@
         },
         "duration": {
           "description": "max_ms, or the task's own deadline when it comes first."
+        }
+      }
+    },
+    "selection_kind": {
+      "description": "The kind of a selection policy's decision (Workflow #308).",
+      "tokens": {
+        "selected": {
+          "description": "The policy chose its candidates."
+        },
+        "empty": {
+          "description": "No candidate survived and the mode accepts an empty answer."
+        },
+        "insufficient": {
+          "description": "Fewer candidates survived than the policy requires."
+        },
+        "ambiguous": {
+          "description": "Candidates tied at the cut after every tie-break key."
+        },
+        "unknown": {
+          "description": "The evaluation aborted on an unusable input."
+        }
+      }
+    },
+    "selection_blocking": {
+      "description": "Why unknown instances keep a selection decision from standing (Workflow #308 SEL-L4b).",
+      "tokens": {
+        "unknown_instances": {
+          "description": "An empty or insufficient decision with at least one unknown instance."
+        },
+        "outranked_possible": {
+          "description": "A selected decision that an unknown instance might outrank."
+        }
+      }
+    },
+    "identity_state": {
+      "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b).",
+      "tokens": {
+        "absent": {
+          "description": "No actionable instance at the chosen position."
+        },
+        "unknown": {
+          "description": "Only Unknown readings until the timeout."
+        },
+        "different": {
+          "description": "Another Known business identity."
+        },
+        "no_choice": {
+          "description": "The choice_of step chose nothing in this run."
         }
       }
     },
@@ -5108,10 +5176,10 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json or pages.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json or pages.json but no bundle.json."
         },
         "pages_missing": {
-          "description": "The game root holds interrupts.json but no pages.json."
+          "description": "The game root holds interrupts.json or navigation.json but no pages.json."
         },
         "page_id_invalid": {
           "description": "A page id is not 1-64 bytes of [a-z][a-z0-9_]*."
@@ -5145,6 +5213,27 @@
         },
         "max_per_run_invalid": {
           "description": "An interrupt's max_per_run is outside 1 to 8."
+        },
+        "edges_count": {
+          "description": "navigation.json holds more than 1024 edges (Workflow #373 NAV-5)."
+        },
+        "edge_page_invalid": {
+          "description": "An edge's from or to is no page id: any, a draft's @origin or another word outside [a-z][a-z0-9_]* (Workflow #373 NAV-5)."
+        },
+        "edge_page_unlisted": {
+          "description": "An edge's from or to is not a page of pages.json (Workflow #373 NAV-5)."
+        },
+        "edge_self_loop": {
+          "description": "An edge's from and to are the same page (Workflow #373 NAV-5)."
+        },
+        "edge_duplicate": {
+          "description": "Two edges have the same from, to and package_id (Workflow #373 NAV-5)."
+        },
+        "recovery_chain_count": {
+          "description": "recovery_chain names no package, or more than 8 (Workflow #373 NAV-5)."
+        },
+        "recovery_chain_duplicate": {
+          "description": "recovery_chain names a package twice (Workflow #373 NAV-5)."
         }
       }
     },
@@ -5205,6 +5294,29 @@
         },
         "page_set_mismatch": {
           "description": "The feature package's pages are not exactly the pages of pages.json."
+        },
+        "terminal_mismatch": {
+          "description": "An edge's package does not end on the edge's to page (Workflow #373 NAV-5)."
+        },
+        "application_entry": {
+          "description": "An edge's package is an application entry package (its entry is any), which no edge may be (Workflow #373 NAV-5)."
+        }
+      }
+    },
+    "navigation_limit": {
+      "description": "Which navigation bound a run reached (Workflow #373 NAV-5).",
+      "tokens": {
+        "locates": {
+          "description": "The 16 full matches of one entry gate."
+        },
+        "hops": {
+          "description": "The 16 edges one entry gate may run."
+        },
+        "steps": {
+          "description": "The 1000 steps of a run, the next layer's max_steps included."
+        },
+        "interrupts": {
+          "description": "The 16 shared interrupt handlings of a run."
         }
       }
     },
@@ -7012,7 +7124,8 @@
       "contract",
       "execution-kernel",
       "lab",
-      "pack-containment"
+      "pack-containment",
+      "runtime-host"
     ],
     "negotiate_": [
       "runtime-host"
@@ -18688,6 +18801,115 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_navigation_entry_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The navigation reached a run's entry by the standard pack's page list, and the package's own recheck did not see its entry within its step timeout (Workflow #373 NAV-5): the page list and the package declare the page differently, or a mark is outdated. The run ends.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_entry_unlisted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run's entry pages are not all pages of the standard pack's pages.json (Workflow #373 NAV-5, M-373 section 4.4): its entry gate does not navigate and behaves as without navigation data. page_ids lists the entry pages that are not listed. Carried by the navigation_warning task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_hop_unconfirmed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "After an edge's package ran, the feature package did not see the edge's to page within the package's step timeout (Workflow #373 NAV-5): the run locates again. Carried by the navigation_warning task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_limit_reached": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "navigation_limit": "required",
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run's entry gate spent its 16 locates or 16 hops, or the next layer would take the run past 1000 steps (Workflow #373 NAV-5, M-373 section 5.5): navigation_limit names the bound. The run ends with no further input.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_located": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate of a run's entry gate matched exactly one page of the standard pack's pages.json (Workflow #373 NAV-5, M-373 section 5.2): page_id is that page, count the locate's number in the gate. The run's task.page fact becomes that page. Carried by the navigation_located task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "contained_task_navigation_package_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -18707,7 +18929,49 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack package named for a part in a run (Workflow #373: the feature package, a shared interrupt page's handler or then.run package; NAV-5 adds edges and recovery chain steps) is not of the run's server, cannot be admitted (the loader's refusal is the cause) or is not eligible for the part. The run ends; data errors stop it (Fail Loud).",
+      "description": "A standard-pack package named for a part in a run (Workflow #373: the feature package, a shared interrupt page's handler or then.run package; NAV-5 adds edges and recovery chain steps) is not of the run's server, cannot be admitted (the loader's refusal is the cause) or is not eligible for the part (NAV-5: an edge's package whose entry does not hold its from page, that does not end on its to page or that is an application entry; a chain step that declares a prerequisite package of its own). The run ends; data errors stop it (Fail Loud).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_page_ambiguous": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate of a run's entry gate matched more than one page of pages.json (Workflow #373 NAV-5): none is picked, and the recovery chain's next step runs. page_ids lists the matched pages. Carried by the navigation_located task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_page_unrecognized": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate of a run's entry gate matched no page of pages.json (Workflow #373 NAV-5): nothing is guessed, and the recovery chain's next step runs. Carried by the navigation_located task record.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -18731,6 +18995,27 @@
       "description": "A run's navigation recovery chain ran out without reaching its entry page (count is the number of steps run; caused by the last locate's code; Workflow #373 M-373 sections 5 and 9). Registered with Workflow #387 D1c for its default trigger item navigation_exhausted; NAV-5 emits it.",
       "common_causes": "The game shows a page the standard pack's navigation data cannot leave, or its recovery chain is too short.",
       "handling": "The recovery ladder's trigger item navigation_exhausted starts at the emulator restart rung by default; check the standard pack's navigation data if it recurs."
+    },
+    "contained_task_navigation_route_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No edge of navigation.json for the run's server leads from the located page to the run's entry (Workflow #373 NAV-5): the recovery chain's next step runs. Carried by the navigation_warning task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     },
     "contained_task_observation_stability_unconfirmed": {
       "category": "error",
@@ -39396,6 +39681,26 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Event or record sanitization refused a value: invalid task lease deadline.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "invalid_task_navigation": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Event or record sanitization refused a value: invalid task navigation record (Workflow #373 NAV-5: navigation_located with an attempt outside 1 to 16 or matched pages that are not the first 8 of at most 256 counted, or navigation_route_planned with more than 16 hops).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -71871,6 +72176,54 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_identity_mismatch": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "identity_state": "required",
+        "expected_identity": "optional",
+        "observed_identity": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity): another Known identity, given as observed_identity (identity_state different), only Unknown readings until expect_after.timeout_ms (unknown), or a choice_of step that chose nothing in this run (no_choice, without expected_identity). It follows the step's input; there is no retry.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_identity_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "expected_identity": "required",
+        "identity_state": "required",
+        "observed_identity": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scan select's fresh confirmation frame did not show the chosen business ID at the chosen member's content position (stage select_confirm): no actionable instance there (identity_state absent), an identity that stayed Unknown until the settle timeout (unknown), or another Known identity, given as observed_identity (different). The decision is recorded and nothing is tapped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "selection_input_unknown": {
       "category": "warning",
       "ladder_class": "none",
@@ -72105,6 +72458,31 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A selection decision names the selection mode and count its document requires.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_result_blocked": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "selection_kind": "required",
+        "outcome_key": "required",
+        "selection_blocking": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's decision did not stand because positions it could not read might change it (rules 2 and 3 of the frozen selector model S0 §3.2, stage select_decide): an empty or insufficient decision with at least one unknown instance (selection_blocking unknown_instances), or a selected one that an unknown instance might outrank (outranked_possible). selection_kind and outcome_key are the evaluator's own; count is the number of unknown instances. The decision is recorded and nothing is tapped.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -84699,6 +85077,38 @@
       "since": "0.12.0",
       "description": "Device stage: the emulator control's readiness wait passed its deadline."
     },
+    "navigation_chain": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admitting and running a step of navigation.json's recovery chain as a layer of a run (Workflow #373 NAV-5)."
+    },
+    "navigation_hop": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admitting and running an edge's package of navigation.json as a layer of a run, and checking its to page (Workflow #373 NAV-5)."
+    },
+    "navigation_locate": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Locating a run's page by a full match of the standard pack's pages.json on one frame (Workflow #373 NAV-5)."
+    },
+    "navigation_route": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Finding the fewest-hops route from the located page to a run's entry over navigation.json's edges (Workflow #373 NAV-5)."
+    },
     "negotiate_project_interface": {
       "owner": "runtime-host",
       "layer": "host",
@@ -90494,6 +90904,30 @@
       "since": "0.12.0",
       "description": "Input operation: a segmented swipe; the capability check refuses it when the selected input backend does not support it."
     },
+    "select_confirm": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: a scan select confirming its chosen member on a fresh frame."
+    },
+    "select_decide": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: a select step deciding over its members and its unknown instances."
+    },
+    "select_expect_identity": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: an expect_identity reading the destination page."
+    },
     "select_policy_settlements": {
       "owner": "runtime-host",
       "layer": "host",
@@ -90501,6 +90935,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: select policy settlements."
+    },
+    "select_return": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: a scan select moving back to its chosen member."
     },
     "select_runtime_storage": {
       "owner": "runtime-host",

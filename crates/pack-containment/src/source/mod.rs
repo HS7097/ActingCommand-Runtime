@@ -3106,6 +3106,10 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
             may_be_passed_over: ["when", "on_guard_refused"]
                 .into_iter()
                 .any(|member| operation.get(member).is_some_and(|value| !value.is_null())),
+            // Workflow #308 SEL-L4b (S0 §1.4 (c)): a select step that may end the run empty.
+            on_empty_key: operation
+                .pointer("/select/on_empty/outcome_key")
+                .and_then(Value::as_str),
         });
     }
     let game = bundle.data["game"].as_str().unwrap_or_default();

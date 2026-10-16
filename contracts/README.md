@@ -228,7 +228,15 @@ the stage's next operation from the page is followed as well. So is the next
 candidate after one that declares `when` or `on_guard_refused` (Workflow #390
 EXEC-1, [resource-declarations.md](resource-declarations.md), "Task schema `0.9`
 candidate operations"); a stage page left without a candidate after such
-candidates only ends that path. Source parsing,
+candidates only ends that path. A select step that declares `on_empty` (Workflow
+#308 SEL-L4b, [selection-graph.md](selection-graph.md), "Ending empty") may end
+the run mid-stage on its own page, so the check treats the state at that step as
+a terminal as well: exactly one mapping with that state's effect condition lists
+the step's page, and its key is the step's `on_empty` key; otherwise the task is
+refused with `task_phases_outcome_incomplete`. The walk still goes on past the
+step, because the select may also succeed. An `on_empty` step reachable under
+both effect conditions would need two mappings with one key, which unique keys
+forbid, so it is refused. Source parsing,
 build and Runtime admission share this check; the operation and control phase
 declarations must match exactly.
 

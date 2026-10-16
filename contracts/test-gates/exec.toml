@@ -1246,3 +1246,60 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed",
 ]
 incident = ["#382 E-3"]
+# Workflow #373 NAV-5 (model M-373 v1.1 §5; wave-17 rulings 1 and 21; register §1.84): the kernel's half of the entry gate's full-match routing, one full match of the feature package's page set reading each distinct located request once within the budget its admission checked (N5-13), and the fix of the navigation readers' older bug, a destructive page operation read in every click form a navigation edge takes (offset, target, drag, long press, point, rect), its fixed boxes blocking a navigation tap without a frame and a target's box on the frame the route is resolved on
+[[gate]]
+key = "78"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::text_locate_tests::n5_13_a_full_match_reads_each_request_once_within_the_admitted_budget",
+    "actingcommand-execution-kernel::lib::drive::tests::nav5_a_destructive_action_takes_every_navigation_click_form",
+    "actingcommand-actinglab::bin:actinglab::commands::navigation_recovery::gate_373_nav5::nav5_a_destructive_action_takes_every_navigation_click_form",
+]
+incident = ["#373 NAV-5"]
+
+# Workflow #308 SEL-L4b (frozen selector model S0 v2.1 §6 row L4b; register §1.85): a select step declares `scan` and `on_empty` and an expect_after declares `expect_identity`, each admitted by its rules; a scan select decides over its members numbered in first-seen order, is blocked when an unknown instance might change an empty or insufficient decision or outrank the choice, ends the run normally on `on_empty` when nobody listed is present and nothing is unknown, returns to its chosen member by repositions and then one advance without bouncing, confirms it on a fresh frame by its identity at its content position, and records one decision per path with the v2 projection and unknown_check; a single-frame select with `on_empty` applies the same rules; the destination's expect_identity reads the chosen identity back; ledger-forensics pairs each of several intents of one step action with its own input by frame
+[[gate]]
+key = "79"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_on_empty_ends_a_complete_scan_with_nobody_listed_and_nothing_unknown",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_an_empty_decision_with_an_unreadable_card_is_blocked",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_choice_an_unread_card_might_outrank_is_blocked",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_ranked_list_stops_at_its_top_ranked_member_and_confirms_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_member_set_stops_at_its_first_member",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_value_tie_break_first_does_not_stop_on_a_tie",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_duplicate_identity_rows_are_members_and_the_first_seen_wins",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_f2_confirms_the_chosen_identity_and_types_each_way_it_does_not",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_confirmation_frame_that_does_not_align_records_reposition_failed_at_confirm",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_f2_settle_timeout_and_geometry_change_record_capture_failed",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_return_over_several_repositions_then_an_advance_lands_without_bouncing",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_a_return_switches_to_an_advance_once_the_distance_is_at_most_the_threshold",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_an_unreadable_list_at_pin_is_recorded_as_not_started",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::l4b_an_abort_in_a_viewport_is_recorded_as_incomplete",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_a_scan_select_with_on_empty_is_admitted",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_refuses_on_empty_where_the_step_cannot_end_the_run_normally",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_refuses_a_scan_past_the_task_timeout_or_without_the_lowest_id_last",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_a_page_graph_on_empty_step_needs_its_page_mapped_to_its_key",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_a_phased_on_empty_step_needs_one_mapping_under_one_effect_condition",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_on_empty_stays_the_run_s_one_key_beside_post_admission_ocr",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_refuses_a_keyed_fact_reader_that_does_not_abort_the_evaluation",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_expect_identity_maps_a_text_identity_on_a_step_that_never_retries",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_an_on_empty_package_is_no_prerequisite_package",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_refuses_a_scan_check_the_pack_does_not_declare",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_refuses_a_policy_field_of_another_identity_than_the_step_s",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_an_identity_free_on_empty_layout_is_bounded_with_one_neutral_hypothesis",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b_admission::l4b_admission_refuses_an_expect_identity_target_that_is_no_ocr_target",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_an_on_empty_end_completes_the_run_on_the_step_page_with_its_key",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_an_on_empty_end_completes_a_phased_route_mid_stage",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_an_unreadable_card_blocks_the_empty_end",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_expect_identity_passes_once_the_chosen_name_renders",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_expect_identity_fails_at_once_on_another_identity",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_expect_identity_fails_after_its_timeout_with_unknown_readings",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_expect_identity_of_a_step_that_did_not_choose_fails_no_choice",
+    "actingcommand-execution-kernel::lib::contained_task::l4b_run_tests::l4b_run_an_on_empty_end_publishes_the_reading_of_its_page",
+    "actingcommand-pack-containment::lib::source::declarations::tests::l4b_the_gate_admits_a_scan_an_on_empty_and_an_expected_identity",
+    "actingcommand-pack-containment::lib::source::declarations::tests::l4b_the_gate_refuses_a_scan_an_on_empty_and_an_expected_identity_at_their_pointers",
+    "actingcommand-pack-containment::lib::source::tests::l4b_a_phased_on_empty_select_step_needs_a_mapping_for_its_own_page",
+    "actingcommand-ledger::lib::global::tests::forensics_read_only::task_evidence_pairs_each_scan_drag_of_one_step_with_its_own_input",
+]
+incident = ["#308"]

@@ -186,6 +186,8 @@ mod lifecycle;
 mod material_read;
 mod monitor_control;
 mod nemu_input;
+// Workflow #373 NAV-5: the entry gate's full-match routing.
+mod navigation;
 mod observation;
 mod online_observation;
 mod package_debug;

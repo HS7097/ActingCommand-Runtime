@@ -425,7 +425,78 @@ pub(crate) struct NavigationEdge {
 #[derive(Debug, Clone)]
 pub(crate) struct DestructiveClick {
     pub(crate) page: Option<String>,
-    pub(crate) rect: PackRect,
+    pub(crate) area: DestructiveArea,
+}
+
+/// Workflow #373 NAV-5 (wave-17 ruling 21): what a destructive page operation's click covers,
+/// read in every form a navigation click takes; a `point` or `rect` click alone was read
+/// before.
+#[derive(Debug, Clone)]
+pub(crate) enum DestructiveArea {
+    /// The boxes the click presses, known without a frame: a tap's rectangle, a long press's
+    /// box, a drag's two boxes.
+    Boxes(Vec<PackRect>),
+    /// A click that follows a target: the box its target matches on the frame a route is
+    /// resolved on (plus `offset` from its top-left corner, [`target_offset_rect`]).
+    Target {
+        target_id: String,
+        offset: Option<PackRect>,
+    },
+}
+
+impl DestructiveClick {
+    /// The boxes the click presses without a frame (none for a `target` or `offset` click).
+    pub(crate) fn fixed_boxes(&self) -> &[PackRect] {
+        match &self.area {
+            DestructiveArea::Boxes(boxes) => boxes,
+            DestructiveArea::Target { .. } => &[],
+        }
+    }
+
+    /// A region without a page or with page `any` always applies; a page-bound region applies
+    /// only on `page`.
+    fn applies_on(&self, page: Option<&str>) -> bool {
+        self.page
+            .as_deref()
+            .is_none_or(|region| region == "any" || Some(region) == page)
+    }
+}
+
+/// Workflow #373 NAV-5 (wave-17 ruling 21): the boxes the destructive regions of `page` whose
+/// click follows a target cover on `scene`; a target that does not pass covers nothing there.
+pub(crate) fn destructive_frame_regions(
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    page: &str,
+    destructive: &[DestructiveClick],
+) -> CliOutcome<Vec<PackRect>> {
+    let mut regions = Vec::new();
+    for click in destructive
+        .iter()
+        .filter(|click| click.applies_on(Some(page)))
+    {
+        let DestructiveArea::Target { target_id, offset } = &click.area else {
+            continue;
+        };
+        let evaluation = evaluator
+            .evaluate_target(scene, target_id)
+            .map_err(|error| CliError::usage(error.to_string()))?;
+        if !evaluation.passed {
+            continue;
+        }
+        regions.push(match offset {
+            Some(offset) => target_offset_rect(&evaluation, *offset)?,
+            None => target_evaluation_rect(&evaluation)?,
+        });
+    }
+    Ok(regions)
+}
+
+/// Workflow #373 NAV-5: whether a destructive region of `page` follows a target.
+pub(crate) fn has_frame_destructive_regions(page: &str, destructive: &[DestructiveClick]) -> bool {
+    destructive.iter().any(|click| {
+        click.applies_on(Some(page)) && matches!(click.area, DestructiveArea::Target { .. })
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -644,7 +715,33 @@ fn parse_destructive_click(value: &Value) -> CliOutcome<DestructiveClick> {
             .get("page")
             .and_then(Value::as_str)
             .map(str::to_string),
-        rect: parse_navigation_tap_rect(click)?,
+        area: parse_destructive_area(click)?,
+    })
+}
+
+/// Workflow #373 NAV-5 (wave-17 ruling 21): a destructive click in every navigation click form.
+fn parse_destructive_area(click: &Value) -> CliOutcome<DestructiveArea> {
+    if matches!(
+        click.get("kind").and_then(Value::as_str),
+        None | Some("point") | Some("rect")
+    ) {
+        return Ok(DestructiveArea::Boxes(vec![parse_navigation_tap_rect(
+            click,
+        )?]));
+    }
+    Ok(match parse_navigation_input(click)? {
+        SemanticInput::Tap { rect, .. } => DestructiveArea::Boxes(vec![rect]),
+        SemanticInput::Drag {
+            from_rect, to_rect, ..
+        } => DestructiveArea::Boxes(vec![from_rect, to_rect]),
+        SemanticInput::TargetCenter { target_id } => DestructiveArea::Target {
+            target_id,
+            offset: None,
+        },
+        SemanticInput::TargetOffset { target_id, offset } => DestructiveArea::Target {
+            target_id,
+            offset: Some(offset),
+        },
     })
 }
 
@@ -960,8 +1057,32 @@ pub(crate) fn reject_destructive_overlap_input(
     input: &SemanticInput,
     destructive: &[DestructiveClick],
 ) -> CliOutcome<()> {
+    reject_destructive_overlap_on_frame(edge, input, destructive, &[])
+}
+
+/// [`reject_destructive_overlap_input`] with `frame_regions`, the boxes the edge's page's
+/// destructive regions that follow a target cover on the frame the input was resolved on
+/// ([`destructive_frame_regions`]).
+pub(crate) fn reject_destructive_overlap_on_frame(
+    edge: &NavigationEdge,
+    input: &SemanticInput,
+    destructive: &[DestructiveClick],
+    frame_regions: &[PackRect],
+) -> CliOutcome<()> {
+    let label = format!("navigation edge '{}'", edge.id);
+    if semantic_input_rects(input).into_iter().any(|rect| {
+        frame_regions
+            .iter()
+            .any(|region| rects_intersect(rect, *region))
+    }) {
+        return Err(CliError::safety_blocked(
+            "navigation_destructive_overlap",
+            format!("{label} overlaps a destructive action region"),
+            &["navigation_only"],
+        ));
+    }
     reject_destructive_overlap_at(
-        &format!("navigation edge '{}'", edge.id),
+        &label,
         Some(edge.from_page.as_str()),
         input,
         destructive,
@@ -979,15 +1100,17 @@ fn reject_destructive_overlap_at(
     destructive: &[DestructiveClick],
     blocked_by: &[&str],
 ) -> CliOutcome<()> {
+    let regions = destructive
+        .iter()
+        .filter(|other| other.applies_on(page))
+        .flat_map(|other| match &other.area {
+            DestructiveArea::Boxes(boxes) => boxes.clone(),
+            DestructiveArea::Target { .. } => Vec::new(),
+        })
+        .collect::<Vec<_>>();
     let rects = semantic_input_rects(input);
     for rect in rects {
-        if destructive.iter().any(|other| {
-            other
-                .page
-                .as_deref()
-                .is_none_or(|region| region == "any" || Some(region) == page)
-                && rects_intersect(rect, other.rect)
-        }) {
+        if regions.iter().any(|region| rects_intersect(rect, *region)) {
             return Err(CliError::safety_blocked(
                 "navigation_destructive_overlap",
                 format!("{label} overlaps a destructive action region"),
@@ -1506,7 +1629,21 @@ fn execute_navigation_route(
             ));
         }
         let (input, recognition) = resolve_navigation_edge_input(ctx, &edge)?;
-        reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
+        // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
+        // follows a target covers the box its target matches on the current frame.
+        let frame_regions =
+            if has_frame_destructive_regions(&edge.from_page, ctx.destructive_clicks) {
+                let scene = load_scene_from_flags(ctx.global, ctx.flags)?;
+                destructive_frame_regions(
+                    ctx.evaluator,
+                    &scene,
+                    &edge.from_page,
+                    ctx.destructive_clicks,
+                )?
+            } else {
+                Vec::new()
+            };
+        reject_destructive_overlap_on_frame(&edge, &input, ctx.destructive_clicks, &frame_regions)?;
         let device = send_semantic_input(ctx.global, ctx.config, &input)?;
         let arrived = poll_for_page(
             ctx.global,
@@ -1883,3 +2020,7 @@ mod lpbox_tests {
         assert_eq!(error.code, "validation_failed", "{}", error.message);
     }
 }
+
+// Workflow #373 NAV-5 (exec key 78): destructive page operations in every click form.
+#[cfg(test)]
+mod gate_373_nav5;

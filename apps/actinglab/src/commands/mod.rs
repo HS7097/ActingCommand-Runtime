@@ -31,14 +31,15 @@ pub(crate) use environment_report::{
 pub(crate) use navigation_recovery::stale_capture_recovery_json;
 pub(crate) use navigation_recovery::{
     ControlPoint, DestructiveClick, NavigationEdge, NavigationGraph, PageDetectionOutcome,
-    SemanticInput, canonical_navigation_page, detect_current_page, find_navigation_route,
-    navigation_edge_json, page_detection_json, parse_control_point, parse_navigation_edge,
-    parse_navigation_graph_value, parse_navigation_input, parse_navigation_tap_rect,
-    parse_point_pair, point_json, rect_center, rect_json, rects_intersect,
-    reject_dangerous_semantic_id, reject_destructive_overlap, reject_destructive_overlap_input,
-    required_string_field, required_value_field, run_current_page, run_detect_page, run_is_visible,
-    run_locate, run_navigate, run_recognize, run_session_recover, run_tap_target,
-    semantic_input_json, target_eval_json, target_evaluation_rect, target_offset_rect,
+    SemanticInput, canonical_navigation_page, destructive_frame_regions, detect_current_page,
+    find_navigation_route, navigation_edge_json, page_detection_json, parse_control_point,
+    parse_navigation_edge, parse_navigation_graph_value, parse_navigation_input,
+    parse_navigation_tap_rect, parse_point_pair, point_json, rect_center, rect_json,
+    rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
+    reject_destructive_overlap_on_frame, required_string_field, required_value_field,
+    run_current_page, run_detect_page, run_is_visible, run_locate, run_navigate, run_recognize,
+    run_session_recover, run_tap_target, semantic_input_json, target_eval_json,
+    target_evaluation_rect, target_offset_rect,
 };
 #[cfg(test)]
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};

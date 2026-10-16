@@ -20291,7 +20291,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack package named for a part in a run (Workflow #373: the feature package, a shared interrupt page's handler or then.run package; NAV-5 adds edges and recovery chain steps) is not of the run's server, cannot be admitted (the loader's refusal is the cause) or is not eligible for the part. The run ends; data errors stop it (Fail Loud).",
+      "description": "A standard-pack package named for a part in a run (Workflow #373: the feature package, a shared interrupt page's handler or then.run package; NAV-5 adds edges and recovery chain steps) is not of the run's server, cannot be admitted (the loader's refusal is the cause) or is not eligible for the part (NAV-5: an edge's package whose entry does not hold its from page, that does not end on its to page or that is an application entry; a chain step that declares a prerequisite package of its own). The run ends; data errors stop it (Fail Loud).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -20379,6 +20379,178 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A shared interrupt page whose then is end_run was handled (Workflow #373 NAV-6): the run ends after its handler, as the standard pack's data asks; the ladder configuration decides what follows a routine run.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_located": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate of a run's entry gate matched exactly one page of the standard pack's pages.json (Workflow #373 NAV-5, M-373 section 5.2): page_id is that page, count the locate's number in the gate. The run's task.page fact becomes that page. Carried by the navigation_located task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_page_unrecognized": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate of a run's entry gate matched no page of pages.json (Workflow #373 NAV-5): nothing is guessed, and the recovery chain's next step runs. Carried by the navigation_located task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_page_ambiguous": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A locate of a run's entry gate matched more than one page of pages.json (Workflow #373 NAV-5): none is picked, and the recovery chain's next step runs. page_ids lists the matched pages. Carried by the navigation_located task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_route_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "No edge of navigation.json for the run's server leads from the located page to the run's entry (Workflow #373 NAV-5): the recovery chain's next step runs. Carried by the navigation_warning task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_hop_unconfirmed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "After an edge's package ran, the feature package did not see the edge's to page within the package's step timeout (Workflow #373 NAV-5): the run locates again. Carried by the navigation_warning task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_entry_unlisted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run's entry pages are not all pages of the standard pack's pages.json (Workflow #373 NAV-5, M-373 section 4.4): its entry gate does not navigate and behaves as without navigation data. page_ids lists the entry pages that are not listed. Carried by the navigation_warning task record.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_entry_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_ids": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "The navigation reached a run's entry by the standard pack's page list, and the package's own recheck did not see its entry within its step timeout (Workflow #373 NAV-5): the page list and the package declare the page differently, or a mark is outdated. The run ends.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "contained_task_navigation_limit_reached": {
+      "category": "error",
+      "ladder_class": "budget_or_permission",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "navigation_limit": "required",
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A run's entry gate spent its 16 locates or 16 hops, or the next layer would take the run past 1000 steps (Workflow #373 NAV-5, M-373 section 5.5): navigation_limit names the bound. The run ends with no further input.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -27819,6 +27991,38 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Handling a shared interrupt page: admitting and running its handler and then.run packages (Workflow #373 NAV-6)."
+    },
+    "navigation_locate": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Locating a run's page by a full match of the standard pack's pages.json on one frame (Workflow #373 NAV-5)."
+    },
+    "navigation_route": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Finding the fewest-hops route from the located page to a run's entry over navigation.json's edges (Workflow #373 NAV-5)."
+    },
+    "navigation_hop": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admitting and running an edge's package of navigation.json as a layer of a run, and checking its to page (Workflow #373 NAV-5)."
+    },
+    "navigation_chain": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Admitting and running a step of navigation.json's recovery chain as a layer of a run (Workflow #373 NAV-5)."
     },
     "configure_settings": {
       "owner": "runtime-host",

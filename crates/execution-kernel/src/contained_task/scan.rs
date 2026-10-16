@@ -17,11 +17,12 @@
 //! once no unknown position and no position not yet seen could outrank the best member (§3.3).
 //!
 //! Every number comes from the declaration; the Runtime has no default. Every failure is a
-//! registered code (§2.7). The session stops at `Decide`'s coverage checks: the decision over
-//! the members, the return to the chosen one, its confirmation and the record belong to slice
-//! SEL-L4b, which also admits the declaration. Every drag is a real input, recorded as a
-//! `task.effect_intent` of the select step and followed by no `task.effect_completed`; the one
-//! completed effect of the step follows its selecting tap.
+//! registered code (§2.7). Slice SEL-L4b (`select`) adds what follows the coverage checks: the
+//! decision over the members, the unknown-instance rules of §3.2, the return to the chosen member,
+//! its confirmation on a fresh frame and the v2 projection of the record; it also admits the
+//! declaration from a package. Every drag is a real input, recorded as a `task.effect_intent` of
+//! the select step and followed by no `task.effect_completed`; the one completed effect of the
+//! step follows its selecting tap.
 //!
 //! Slice SEL-L3b (Workflow #308; forced compromises E-10, E-11, E-12) widens how a scan moves.
 //! The list may run along either axis: every rule reads positions along the declared axis and
@@ -32,11 +33,18 @@
 //! evidence: one declared check per page, of which exactly one passes on each viewport, and each
 //! move shows the same page or the next one.
 
+mod admission;
 mod online;
+mod select;
 
+pub(super) use online::RuntimeScanSource;
 #[cfg(test)]
 pub(super) use online::run_scan;
 pub use online::{dry_run_scan, replay_scan};
+pub(super) use select::{
+    IdentityState, ScanSelectEnd, ScanSelection, bound_inputs, decision_blocking, record_bound,
+    result_blocked,
+};
 
 use super::{ClickRect, ContainedTaskError, ContainedTaskRunError};
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
@@ -45,7 +53,7 @@ use actingcommand_contract::{
     ScanAxis, ScanCoverageState, ScanStartEvidence, ScanUnknownCause, ScanViewportMotion,
 };
 use actingcommand_recognition::color_digest::{self, ColorDigest};
-use actingcommand_recognition_pack::{CandidateFeatureValue, CandidateLayout};
+use actingcommand_recognition_pack::CandidateLayout;
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, FieldDomain, ScalarValue, SelectionDecision, SelectionFactSnapshot,
     SelectionOutcome, SelectionPolicy, SortDirection, TieBreakKey, UpperBound, evaluate,
@@ -187,8 +195,7 @@ enum DeclaredReposition {
         max_content_step_px: u32,
     },
     Rect {
-        /// The forward move, which only SEL-L4b's return toward the end takes.
-        #[allow(dead_code)]
+        /// The forward move, which only a return toward the end takes (SEL-L4b).
         rect: DeclaredRect,
         back_rect: DeclaredRect,
         max_content_step_px: u32,
@@ -320,13 +327,18 @@ pub(super) struct ScanReading {
     pub(super) frame_id: Option<FrameId>,
 }
 
-/// Why a move is made: a forward advance, the corrective reverse advance of a gap, or a reversed
-/// reposition toward the start.
+/// Why a move is made: a forward advance, the corrective reverse advance of a gap, a reversed
+/// reposition toward the start, or (SEL-L4b, S0 §2.2 `Return`) a move toward the chosen member:
+/// the declared `reposition` or `advance`, toward the start or the end of the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ScanDragMotion {
     Advance,
     Corrective,
     Rewind,
+    Return {
+        reposition: bool,
+        toward_start: bool,
+    },
 }
 
 /// A brake across the scan's axis (Workflow #308 SEL-L3b): the displacement (x, y) in frame
@@ -375,6 +387,8 @@ struct Moves<'a> {
     advance: ScanInput,
     corrective: ScanInput,
     rewind: ScanInput,
+    /// The reposition toward the end, which only a return takes (SEL-L4b).
+    reposition_forward: ScanInput,
     /// `advance`'s smallest and largest content step.
     advance_steps: (i64, i64),
     /// `reposition`'s largest content step.
@@ -493,7 +507,7 @@ impl<'a> Moves<'a> {
                 )
             }
         };
-        let (rewind, reposition_max) = match scan.reposition {
+        let (rewind, reposition_forward, reposition_max) = match scan.reposition {
             DeclaredReposition::Drag {
                 from,
                 to,
@@ -507,17 +521,19 @@ impl<'a> Moves<'a> {
                 }
                 (
                     drag_input(axis, (to, from, duration_ms), pause_ms, brake),
+                    drag_input(axis, (from, to, duration_ms), pause_ms, brake),
                     max_content_step_px,
                 )
             }
             DeclaredReposition::Rect {
+                rect,
                 back_rect,
                 max_content_step_px,
-                ..
             } => (
                 ScanInput::Tap {
                     rect: back_rect.click(),
                 },
+                ScanInput::Tap { rect: rect.click() },
                 max_content_step_px,
             ),
         };
@@ -525,6 +541,7 @@ impl<'a> Moves<'a> {
             advance,
             corrective,
             rewind,
+            reposition_forward,
             advance_steps,
             reposition_max: i64::from(reposition_max),
             page_order,
@@ -553,6 +570,13 @@ pub(super) trait ScanSource {
     /// The latest frame as a viewport: the step's guard on it, the start and end checks and the
     /// layout's projection.
     fn viewport(&mut self) -> Result<ScanReading, ContainedTaskRunError<Self::Error>>;
+
+    /// The step's guard alone on the latest frame (SEL-L4b): `Confirm` judges it before it reads
+    /// F2, so a refusal is recorded as the guard's (S0 §3.4 P8). A viewport read after it on the
+    /// same frame does not judge it again. A source whose viewports judge no guard passes.
+    fn guard(&mut self) -> Result<(), ContainedTaskRunError<Self::Error>> {
+        Ok(())
+    }
 
     /// One move, recorded as an effect intent of the step and bound to the latest frame.
     fn drag(&mut self, drag: ScanDrag) -> Result<(), ContainedTaskRunError<Self::Error>>;
@@ -593,7 +617,7 @@ pub(super) enum ScanEnd {
 /// An upper bound (S0 §3.3) as an ordered value: `None` (no eligible identity, or nothing to
 /// bound) lies below every score and `Unbounded` above every score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Bound {
+pub(in crate::contained_task) enum Bound {
     None,
     Max(i64),
     Unbounded,
@@ -962,6 +986,10 @@ pub(super) struct ScanSession<'a> {
     /// The page of the latest coverage viewport, when the pages align by page-order evidence.
     page: i64,
     layout_id: &'a str,
+    /// The layout (SEL-L4b: its page, click and features for the decision and the record).
+    layout: &'a CandidateLayout,
+    /// The dispatched frame's size.
+    frame: (u32, u32),
     policy: &'a SelectionPolicy,
     facts: &'a SelectionFactSnapshot,
     now_unix_ms: u64,
@@ -983,6 +1011,9 @@ pub(super) struct ScanSession<'a> {
     previous: Vec<TrackedInstance>,
     previous_offset: i64,
     rewind_viewports: u32,
+    /// The viewports a return to the chosen member settled (SEL-L4b); with the rewind viewports
+    /// they count toward `max_reposition_viewports`.
+    return_viewports: u32,
     drags: u32,
     start: Option<ScanStartEvidence>,
     forward_repeats: u32,
@@ -1009,60 +1040,10 @@ fn early_stop_inputs(
             format!("layout={} {detail}", layout.id),
         )
     };
-    let mut field_domains = BTreeMap::new();
-    for field in &policy.fields {
-        let feature = layout
-            .features
-            .iter()
-            .find(|feature| feature.name == field.name)
-            .ok_or_else(|| invalid(format!("scan early_stop field={} undeclared", field.name)))?;
-        let domain = match feature.value {
-            CandidateFeatureValue::Passed => FieldDomain::Boolean,
-            CandidateFeatureValue::MeasureMilli => FieldDomain::Integer { min: 0, max: 1000 },
-            CandidateFeatureValue::OcrInteger => {
-                let integer = feature.integer.ok_or_else(|| {
-                    invalid(format!("scan early_stop field={} range=absent", field.name))
-                })?;
-                let bound = |value: u64| {
-                    i64::try_from(value).map_err(|_| {
-                        invalid(format!(
-                            "scan early_stop field={} range=oversized",
-                            field.name
-                        ))
-                    })
-                };
-                FieldDomain::Integer {
-                    min: bound(integer.min)?,
-                    max: bound(integer.max)?,
-                }
-            }
-            CandidateFeatureValue::Identity if feature.name == scan.identity_feature => {
-                FieldDomain::Identity
-            }
-            CandidateFeatureValue::Identity => {
-                return Err(invalid(format!(
-                    "scan early_stop field={} identity=not_the_scan_identity",
-                    field.name
-                )));
-            }
-        };
-        field_domains.insert(field.name.clone(), domain);
-    }
-    let identities = layout
-        .features
-        .iter()
-        .find(|feature| feature.name == scan.identity_feature)
-        .and_then(|feature| feature.identity.as_ref())
-        .map(|identity| {
-            identity
-                .entries
-                .iter()
-                .map(|entry| entry.id.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
-        })
-        .ok_or_else(|| invalid("scan identity_feature=undeclared".to_owned()))?;
+    // SEL-L4b: the same inputs bound the unknown instances at `Decide` (S0 §3.2 rule 3).
+    let (field_domains, identities) =
+        select::bound_inputs(layout, policy, Some(&scan.identity_feature))
+            .map_err(|detail| invalid(format!("scan early_stop {detail}")))?;
     let unseen = upper_bound(policy, facts, now_unix_ms, &identities, &field_domains)
         .map_err(|error| invalid(format!("scan early_stop bound={error}")))?;
     Ok(EarlyStop {
@@ -1155,6 +1136,8 @@ impl<'a> ScanSession<'a> {
             moves,
             page: 0,
             layout_id: &layout.id,
+            layout,
+            frame,
             policy,
             facts,
             now_unix_ms,
@@ -1183,6 +1166,7 @@ impl<'a> ScanSession<'a> {
             previous: Vec::new(),
             previous_offset: 0,
             rewind_viewports: 0,
+            return_viewports: 0,
             drags: 0,
             start: None,
             forward_repeats: 0,
@@ -1367,6 +1351,19 @@ impl<'a> ScanSession<'a> {
         first: Option<Vec<CandidateRect>>,
         viewport_index: u32,
     ) -> Result<ScanReading, ContainedTaskRunError<S::Error>> {
+        self.settle_capture(source, first, viewport_index)?;
+        source.viewport()
+    }
+
+    /// The captures of [`Self::settle`] until two consecutive ones give the same core anchor
+    /// set; the latest frame is then the settled one, not yet read (SEL-L4b: `Confirm` judges the
+    /// guard before it reads F2).
+    fn settle_capture<S: ScanSource>(
+        &self,
+        source: &mut S,
+        first: Option<Vec<CandidateRect>>,
+        viewport_index: u32,
+    ) -> Result<(), ContainedTaskRunError<S::Error>> {
         let interval = Duration::from_millis(self.scan.settle.interval_ms);
         let timeout = Duration::from_millis(self.scan.settle.timeout_ms);
         let started = source.elapsed();
@@ -1378,7 +1375,7 @@ impl<'a> ScanSession<'a> {
                 .as_ref()
                 .is_some_and(|previous| self.same_core_anchors(previous, &anchors))
             {
-                return source.viewport();
+                return Ok(());
             }
             if source.elapsed().saturating_sub(started) >= timeout {
                 let timeout_ms = self.scan.settle.timeout_ms;
@@ -1509,7 +1506,6 @@ impl<'a> ScanSession<'a> {
 
     /// The window of a return move (S0 §2.4 step 5, `Return`): toward the start or the end by
     /// at most the largest step of the motion used, with no minimum.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn return_window(&self, last: i64, toward_start: bool, reposition: bool) -> Vec<(i64, i64)> {
         let tolerance = self.geometry.tolerance;
         let step = if reposition {
@@ -1527,7 +1523,6 @@ impl<'a> ScanSession<'a> {
     /// The content offset of a frame aligned directly against the content map within `window`
     /// (S0 §2.4 step 7): the reference of SEL-L4b's `Return` and `Confirm`. Every tracked
     /// position of the coverage takes part with its stored signature and its Known identity.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn align_to_content_map(
         &self,
         reading: &ScanReading,
@@ -1633,9 +1628,25 @@ impl<'a> ScanSession<'a> {
         motion: ScanDragMotion,
     ) -> Result<(), ContainedTaskRunError<S::Error>> {
         let input = match motion {
-            ScanDragMotion::Advance => self.moves.advance,
-            ScanDragMotion::Corrective => self.moves.corrective,
-            ScanDragMotion::Rewind => self.moves.rewind,
+            ScanDragMotion::Advance
+            | ScanDragMotion::Return {
+                reposition: false,
+                toward_start: false,
+            } => self.moves.advance,
+            ScanDragMotion::Corrective
+            | ScanDragMotion::Return {
+                reposition: false,
+                toward_start: true,
+            } => self.moves.corrective,
+            ScanDragMotion::Rewind
+            | ScanDragMotion::Return {
+                reposition: true,
+                toward_start: true,
+            } => self.moves.rewind,
+            ScanDragMotion::Return {
+                reposition: true,
+                toward_start: false,
+            } => self.moves.reposition_forward,
         };
         let index = self.drags;
         self.drags = self.drags.saturating_add(1);

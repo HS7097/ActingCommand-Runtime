@@ -15,11 +15,14 @@
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
     FailureIdentity, IdentityLayer, IdentityPackage, MISSING_HASH, content_hash_prefix,
-    package_id_hash, return_home_key_hash,
+    package_id_hash, return_home_key_hash, sha256_hex,
 };
 use crate::{ProcedureBinding, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::outcome::{Code, Outcome};
-use actingcommand_contract::{RuntimeErrorCode, StandardPackRegistry};
+use actingcommand_contract::{
+    RuntimeErrorCode, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_PAGES_FILE, StandardPackRegistry,
+};
 use actingcommand_pack_containment::{Containment, ContainmentError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -42,6 +45,26 @@ pub(crate) fn measure_package_hash(path: &str) -> Result<String, Option<Code>> {
             ContainmentError::SourceTree { code } => Some(code),
             _ => None,
         })
+}
+
+/// Workflow #373 NAV-5 (M-373 §8.5): the first 12 hex digits of SHA-256 over a game root's
+/// `pages.json`, `navigation.json` and `interrupts.json`, in that order (an absent file adds
+/// nothing); `None` when one of them cannot be read. Called only when a scheduled failure is
+/// settled and by a lift check, as a package's content hash is.
+pub(crate) fn standard_pack_root_hash(directory: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    for file in [
+        STANDARD_PACK_PAGES_FILE,
+        STANDARD_PACK_NAVIGATION_FILE,
+        STANDARD_PACK_INTERRUPTS_FILE,
+    ] {
+        match std::fs::read(directory.join(file)) {
+            Ok(content) => bytes.extend(content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    Some(content_hash_prefix(&sha256_hex(&bytes)))
 }
 
 /// What a paused pair's suspension is lifted against (§12.7): the main package and the
@@ -312,7 +335,9 @@ impl SuspensionLiftView<'_> {
 
     fn current_layer(&self, layer: &IdentityLayer) -> RuntimeHostResult<Current> {
         match layer {
-            IdentityLayer::Declared(package) => {
+            // Workflow #373 NAV-5 (M-373 §8.5): a navigation layer's package is found in the
+            // registries as a declared layer's is.
+            IdentityLayer::Declared(package) | IdentityLayer::Navigation(package) => {
                 match self.registered_with_hash(&package.id_hash).as_slice() {
                     [] => Ok(Current::Hash(MISSING_HASH.to_owned())),
                     [(_, package_id, path)] => {
@@ -333,6 +358,15 @@ impl SuspensionLiftView<'_> {
                     None => Ok(Current::Hash(MAPPING_CHANGED.to_owned())),
                 }
             }
+            // Workflow #373 NAV-5 (M-373 §8.5): the data files are unchanged while a game root
+            // read now still has the recorded hash; another hash, or none, lifts the pause.
+            IdentityLayer::StandardPackRoot(recorded) => Ok(Current::Hash(
+                self.registries()
+                    .iter()
+                    .filter_map(|(_, directory, _)| standard_pack_root_hash(directory))
+                    .find(|current| current == recorded)
+                    .unwrap_or_else(|| MAPPING_CHANGED.to_owned()),
+            )),
         }
     }
 
@@ -366,6 +400,9 @@ impl SuspensionLiftView<'_> {
     /// The package id a layer names in the current registries (Workflow #373 NAV-3a), if
     /// exactly one registry package has its hash.
     pub(crate) fn layer_package_id(&self, layer: &IdentityLayer) -> Option<String> {
+        if let IdentityLayer::StandardPackRoot(_) = layer {
+            return None;
+        }
         if let IdentityLayer::ReturnHome { key_hash, .. } = layer
             && let Some((_, package_id, _)) = self.return_home_id(key_hash)
             && package_id_hash(package_id) == layer.id_hash()

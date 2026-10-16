@@ -2762,6 +2762,79 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "selection_result_blocked": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "selection_kind": "required",
+        "outcome_key": "required",
+        "selection_blocking": "required",
+        "count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A select step's decision did not stand because positions it could not read might change it (rules 2 and 3 of the frozen selector model S0 §3.2, stage select_decide): an empty or insufficient decision with at least one unknown instance (selection_blocking unknown_instances), or a selected one that an unknown instance might outrank (outranked_possible). selection_kind and outcome_key are the evaluator's own; count is the number of unknown instances. The decision is recorded and nothing is tapped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_identity_unconfirmed": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "expected_identity": "required",
+        "identity_state": "required",
+        "observed_identity": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A scan select's fresh confirmation frame did not show the chosen business ID at the chosen member's content position (stage select_confirm): no actionable instance there (identity_state absent), an identity that stayed Unknown until the settle timeout (unknown), or another Known identity, given as observed_identity (different). The decision is recorded and nothing is tapped.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "selection_identity_mismatch": {
+      "category": "error",
+      "ladder_class": "pack_logic_mismatch",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "stage": "required",
+        "identity_state": "required",
+        "expected_identity": "optional",
+        "observed_identity": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity): another Known identity, given as observed_identity (identity_state different), only Unknown readings until expect_after.timeout_ms (unknown), or a choice_of step that chose nothing in this run (no_choice, without expected_identity). It follows the step's input; there is no retry.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "ocr_fields_missing": {
       "category": "error",
       "ladder_class": "declaration_error",
@@ -4014,6 +4087,38 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Workflow #308 SEL-L3: a select step's scan session checking its coverage before the decision."
+    },
+    "select_decide": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: a select step deciding over its members and its unknown instances."
+    },
+    "select_return": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: a scan select moving back to its chosen member."
+    },
+    "select_confirm": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: a scan select confirming its chosen member on a fresh frame."
+    },
+    "select_expect_identity": {
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #308 SEL-L4b: an expect_identity reading the destination page."
     },
     "load_observation_resources": {
       "owner": "execution-kernel",

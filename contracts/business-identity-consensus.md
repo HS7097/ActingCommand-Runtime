@@ -75,7 +75,11 @@ values, Unknown reasons, and physical geometry. Confidence, directory distance, 
 evidence and frame identity remain evidence outside the hash. H1/H2 independently construct
 their projections. A changed identity, variant, attribute or slot arrangement invalidates
 confirmation. Confirmation evidence retains the typed H2 projection when it has recognition
-evidence; the click rectangle and input frame reference come from its current final frame.
+evidence; the click rectangle and input frame reference come from its current final frame. A
+select over a scan (Workflow #308 SEL-L4b, [selection-graph.md](selection-graph.md), "Select
+over a scan") confirms differently: by the business identity at the chosen content position
+only, on a fresh frame aligned against the scan's content map. It compares no hash and no
+other instance.
 
 ## Finite consensus
 
@@ -151,9 +155,12 @@ is counted once per context, while ordinary provider references retain their act
 Capture, local computation and ledger costs use the same absolute deadline without a separate
 duration allowance. Execution also checks remaining time; bounded waits
 are recorded as page-recognition waits and actual backend time as recognition evaluation.
-No sample delay occurs after an input Intent. The final tap still uses the normal fenced input
-path. A consumer that does not sample (`sampling_supported`) explicitly refuses sampled task
-execution; the sampling checkpoint only reports a cancellation, under its own code.
+No sample delay occurs after an input Intent. For a select over a scan (Workflow #308 SEL-L4b)
+this rule applies to the selecting tap; the scan's moves, inputs that come before that tap, are
+each followed by their declared settle waits (`scan.settle`). The final tap still uses the
+normal fenced input path. A consumer that does not sample (`sampling_supported`) explicitly
+refuses sampled task execution; the sampling checkpoint only reports a cancellation, under its
+own code.
 
 **Observe-only retries (Workflow #386 SR-1).** An observation (a capture with its samples and
 recognition) whose sampling runs past its window is made again in a new window of the same
@@ -180,8 +187,11 @@ single-frame offline consumers retain them inside `sample_evaluations` instead.
 
 The select deadline is fixed at StepStarted and capped by the existing task deadline. H1/H2,
 each additional page capture, target and candidate evaluation, confirmation guard and final
-pre-input check inherit it. Entry-recognition and postcondition observation loops likewise
-retain the deadline established by their caller for that observation phase.
+pre-input check inherit it. A select over a scan (Workflow #308 SEL-L4b) has the deadline
+min(StepStarted + `scan.bounds.max_ms`, task deadline), and the step timeout does not apply to
+it; its preparation budget and every state of its scan are checked against that deadline.
+Entry-recognition and postcondition observation loops likewise retain the deadline established
+by their caller for that observation phase.
 
 `SceneEvaluation::project_candidates` is the single-frame adapter;
 `project_candidates_with_samples` consumes the exact scene set and uses the same mapping and

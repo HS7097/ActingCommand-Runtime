@@ -684,6 +684,7 @@ fn exec1_admission_follows_every_candidate_that_may_run() {
             destinations: vec![to.to_owned()],
             retryable: false,
             may_be_passed_over,
+            on_empty_key: None,
         };
         actingcommand_contract::validate_phased_route(
             "neutral",
