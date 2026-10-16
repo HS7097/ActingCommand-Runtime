@@ -1501,6 +1501,25 @@ configuration key changes;
 |---|---|---|---|---|---|
 | PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`), whose resource overlay hands the heavy threshold to the policy evaluator (`HostResourceSnapshot.heavy_threshold_milli`, in memory only: no member of the resources document or a request) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated`; the controller and the evaluator judge heavy work by the one key (was the evaluator's own 1 500) |
 
+### 1.89 Wave 18 slice DISC-1: a start retries the instance discovery while it is unavailable (#390; coordinator ruling 2 of wave 18)
+
+After the 10-16 boot the Runtime started before the emulator, its discovery answered
+`instance_discovery_unavailable` and the start ended in `fatal_hold` until a person restarted
+the machine; v0.12.0 has no watchdog (WD-1 is 0.12.1). From DISC-1 on the start tries the
+discovery again, at most `startup_discovery.attempts` times and
+`startup_discovery.retry_interval_ms` apart on the Runtime clock, records a warning for each
+failed attempt that it tries again, goes on once an attempt succeeds and ends exactly as before
+when the last attempt fails. Only the startup path retries. [provider-startup.md](provider-startup.md)
+("Discovery unavailable at start") and [runtime-config.md](runtime-config.md) ("The
+`startup_discovery` section") are the contract. The code `instance_discovery_retried` (actingd,
+warning, `ladder_class` `none`: a process start, row 7) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DI1 | `provider.startup_observed` observation `discovery_retried` (`ProviderStartupObservation::DiscoveryRetried`) | new value of an existing record's `phase` | DISC-1 | DISC-1 | payload `{outcome}` (`deny_unknown_fields`), backend `mumu_manager`, inside the `instance_discovery` bracket, written before each wait: `instance_discovery_retried` with `attempts` (the number of the attempt that failed), `limit_count` (`startup_discovery.attempts`) and `retry_after_ms` (`startup_discovery.retry_interval_ms`), all required, and the attempt's failure as its `caused_by` link (`instance_discovery_unavailable` over the device failure, `provider_native_failed` or a MuMu resolution reason); the record's severity is the code's category, `warning`; the same warning goes to actingd's stderr as its daemon lines (developer line and `OUTCOME actingd:` line; coordinator 10-16 23:0x); none is written for an attempt that succeeds, for the last attempt or for any other refusal (`failed` as before) |
+| DI2 | `startup_discovery.attempts`, `startup_discovery.retry_interval_ms` | configuration keys (§5) | DISC-1 | DISC-1 | integer `1..=100`, default 25; milliseconds `1000..=300000`, default 10 000 (24 waits of 10 s, about four minutes, cover a normal cold start of the emulator, about three minutes); default `file`, not settable (read once at assembly, before any instruction value is restored); out of range: `config_value_invalid` (`out_of_range`) for the key at start and in `check-config` |
+| DI3 | `ProviderStartup::startup_discovery()` and `ProviderStartup::pause(duration)` | new host interface, not persisted | DISC-1 | — | the section in effect (the host reads it from the manifest, or the defaults file without one) and a wait on the Runtime clock followed by the install preparation boundary |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1602,6 +1621,7 @@ when it takes effect.
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |
 | `device_state.*` | `sample_interval_ms`, `fact_ttl_ms`, `wake_settle_ms`, `keepalive_margin_ms`, `keyguard_insecure`, `battery_min_percent`, `thermal_hold_at`, `thermal_resume_below`, `in_use_gate`, `in_use_backoff_ms` | 60 000 (5 000..=3 600 000), 180 000 (at least the sampling interval), 1 000 (100..=10 000), 60 000, `dismiss` (`dismiss` / `wait`), 15 (0..=100), `severe`, `moderate` (below `thermal_hold_at`), `false` (a dedicated handset, Alice 2026-10-13), 300 000 (10 000..=3 600 000) (model-398 §7.8); every key settable | RD-5b (built, §1.59) | RD-5b (v0.12.0) |
+| `startup_discovery.*` | `attempts`, `retry_interval_ms` | 25 (`1..=100`), 10 000 (`1000..=300000`); not settable, read once at assembly (Workflow #390 DISC-1, coordinator ruling 2 of wave 18) | DISC-1 (§1.89 DI2) | DISC-1 (v0.12.0) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

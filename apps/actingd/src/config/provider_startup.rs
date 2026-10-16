@@ -35,7 +35,13 @@ impl ConfiguredProvider {
             ..
         } = self;
         if !deferred.is_empty() {
-            instances.extend(bind_discovered_instances(startup, &discovery, deferred)?);
+            instances.extend(bind_discovered_instances(
+                startup,
+                discovery.mumu_root(),
+                || discovery.discover(),
+                &mut std::io::stderr(),
+                deferred,
+            )?);
         }
         // The injected diagnostic value is carried verbatim; the provider validates it (a
         // non-UTF-8 value becomes a lossy string the provider refuses).
@@ -77,33 +83,23 @@ impl ConfiguredProvider {
     }
 }
 
-/// Runs `MuMuManager` discovery once per startup and completes every deferred instance into
-/// its registration; the registry registers them together with the explicit ones. Every
-/// refusal is recorded as a Provider startup failure before startup fails.
-fn bind_discovered_instances(
+/// Runs `MuMuManager` discovery once per startup (`discover`, tried again while it is
+/// unavailable: `discover_at_start`, whose warnings also go to `daemon_log`, actingd's stderr)
+/// and completes every deferred instance into its registration; the registry registers them
+/// together with the explicit ones. Every refusal is recorded as a Provider startup failure
+/// before startup fails.
+pub(super) fn bind_discovered_instances(
     startup: &mut ProviderStartup<'_>,
-    discovery: &DiscoverySpec,
+    mumu_root: Option<&Path>,
+    discover: impl FnMut() -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>>,
+    daemon_log: &mut dyn std::io::Write,
     deferred: Vec<DeferredInstance>,
 ) -> RuntimeHostResult<Vec<InstanceSpec>> {
     let backend = ProviderBackend::MumuManager;
     let stage = Stage::InstanceDiscovery;
     startup.record(backend, Observation::Started { stage })?;
-    let report = discovery.discover().map_err(|failure| {
-        let InstanceDiscoveryFailure {
-            code: classification,
-            error,
-        } = *failure;
-        startup.failed(
-            backend,
-            stage,
-            classification,
-            ProviderNativeFailure {
-                module: "actingcommand_device::mumu_manager".into(),
-                outcome: device_failure_outcome(&error, discovery.mumu_root()),
-            },
-        )
-    })?;
-    let profile = admit_capability_profile(startup, &report, discovery.mumu_root())?;
+    let report = discover_at_start(startup, mumu_root, discover, daemon_log)?;
+    let profile = admit_capability_profile(startup, &report, mumu_root)?;
     let mut bound = BTreeMap::new();
     let mut resolved = Vec::new();
     let mut refusal = None;
@@ -146,6 +142,66 @@ fn bind_discovered_instances(
     }
     startup.record(backend, Observation::Completed { stage })?;
     Ok(resolved)
+}
+
+/// Workflow #390 DISC-1 (coordinator ruling 2 of wave 18): the startup discovery, tried up to
+/// `startup_discovery.attempts` times while it answers `instance_discovery_unavailable` (as after
+/// a boot where the Runtime starts before the emulator), `startup_discovery.retry_interval_ms`
+/// apart on the Runtime clock. Each failed attempt but the last is recorded as the warning
+/// `instance_discovery_retried`, with the attempt's failure as its `caused_by` link, before the
+/// wait, and written to `daemon_log` as actingd's daemon lines of that warning (its developer
+/// line, then its `OUTCOME actingd:` line), so a person or a start script reading stderr sees
+/// the start wait. Any other refusal, or the last attempt's, is recorded as the Provider startup
+/// failure and ends the start as before.
+fn discover_at_start(
+    startup: &mut ProviderStartup<'_>,
+    mumu_root: Option<&Path>,
+    mut discover: impl FnMut() -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>>,
+    daemon_log: &mut dyn std::io::Write,
+) -> RuntimeHostResult<MumuDiscoveryReport> {
+    let backend = ProviderBackend::MumuManager;
+    let stage = Stage::InstanceDiscovery;
+    let retry = startup.startup_discovery();
+    let mut attempt = 1_u32;
+    loop {
+        let InstanceDiscoveryFailure {
+            code: classification,
+            error,
+        } = match discover() {
+            Ok(report) => return Ok(report),
+            Err(failure) => *failure,
+        };
+        let failure = device_failure_outcome(&error, mumu_root);
+        if classification != SharedCode::InstanceDiscoveryUnavailable.as_str()
+            || attempt >= retry.attempts
+        {
+            return Err(startup.failed(
+                backend,
+                stage,
+                classification,
+                ProviderNativeFailure {
+                    module: "actingcommand_device::mumu_manager".into(),
+                    outcome: failure,
+                },
+            ));
+        }
+        let warning = Outcome::new(ActingdCode::InstanceDiscoveryRetried)
+            .attempts(attempt)
+            .limit_count(retry.attempts)
+            .retry_after_ms(retry.retry_interval_ms)
+            .caused_by(Outcome::relayed(classification).caused_by(failure));
+        startup.record(
+            backend,
+            Observation::DiscoveryRetried {
+                outcome: warning.clone(),
+            },
+        )?;
+        // A failed write never stops the start (P3 L2): stderr is the last place actingd
+        // reports to.
+        let _unwritten = crate::write_daemon_reports(std::slice::from_ref(&warning), daemon_log);
+        startup.pause(Duration::from_millis(retry.retry_interval_ms))?;
+        attempt += 1;
+    }
 }
 
 /// The outcome of a device-layer discovery failure (ledger revision 3): a Nemu resolution's
