@@ -18,13 +18,14 @@ use super::*;
 use crate::{OfflineReplayFacts, replay_scan};
 use actingcommand_contract::{
     FactContent, FactRecord, FactScope, FactValue, InstanceFactContext, InstanceFactSnapshot,
-    ScanCoverageState, ScanUnknownCause,
+    ScanCoverageState, ScanStartEvidence, ScanUnknownCause,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
     AssetResolver, NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
     RecognitionPack, RecognitionPackResult, VisionProviderError, VisionProviderErrorCode,
 };
+use actingcommand_selection_policy::{GateUnknownHandling, SelectionOutcome, UnknownReason};
 use serde_json::json;
 
 const WIDTH: u32 = 64;
@@ -445,4 +446,58 @@ fn l6b_t2_a_recording_that_stops_before_the_list_ends_fails_typed() {
         error.code().as_str(),
         ExecutionKernelCode::SelectionScanReplayFrameMissing.as_str()
     );
+}
+
+// Wave-14 coordinator ruling SEL-L6b item 2: an `aborted` scan is never a pass (Fail Loud).
+// selection-graph.md "Offline": a scan the evaluator ended before its coverage is `aborted`, the
+// result carries the evaluator's decision, and only coverage `complete` or `early_stopped` exits
+// 0. Selector model S0 §2.6 and §3.4 path P3: an evaluator `unknown` outcome in a viewport becomes
+// the decision immediately, with coverage `incomplete`, which has its start only (§1.9); no
+// member was fixed before it. Here the policy's gate aborts the evaluation on an unknown fact, and
+// the snapshot was read after the fact's age ran out (S0 §4.3: a stale fact reads `fact_stale`
+// and the evaluation aborts): the scan reads the six cards of its first viewport and the
+// evaluator aborts there. actinglab's exit for this result is not reachable in CI: a scan's
+// identity feature reads an OCR target, and actinglab without an OCR model refuses such a
+// package before any frame.
+#[test]
+fn gate_l6b_a_scan_the_evaluator_aborts_in_a_viewport_replays_aborted_never_covered() {
+    let mut task = scan_task();
+    let mut policy = task.program.operations[0]
+        .prepared_select
+        .as_deref()
+        .expect("the select step")
+        .policy()
+        .clone();
+    policy.gates[0].on_unknown = GateUnknownHandling::AbortEvaluation;
+    policy.validate().expect("valid selection policy");
+    task.program.operations[0].prepared_select = Some(Box::new(
+        selection::PreparedSelect::for_test("layout/cards", policy),
+    ));
+
+    let aborted = replay_scan(
+        &task,
+        "pick",
+        &card_scan(),
+        forward_run(),
+        &snapshot_facts(PUBLISHED_AT + MAX_AGE_MS + 1),
+    )
+    .expect("the evaluator's abort is the replayed scan's result, not a failure");
+
+    assert_eq!(aborted.coverage, ScanCoverageState::Incomplete);
+    assert_eq!(aborted.start, Some(ScanStartEvidence::StartCheck));
+    assert_eq!(aborted.viewports.len(), 1);
+    assert!(aborted.members.is_empty(), "{:?}", aborted.members);
+    let decision = aborted.decision.expect("the evaluator's decision");
+    assert!(
+        matches!(
+            decision.outcome,
+            SelectionOutcome::Unknown {
+                reason: UnknownReason::FactStale,
+                ..
+            }
+        ),
+        "{:?}",
+        decision.outcome
+    );
+    assert_eq!(decision.outcome_key, "card_unknown");
 }

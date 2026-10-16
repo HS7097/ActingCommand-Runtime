@@ -140,7 +140,12 @@ impl AssetResolver for ZoomAsset {
     }
 }
 
-// The icon `ui/zoom`, a template with scales 1000 and 750.
+// The icon `ui/zoom`, a template with scales 1000 and 750, admitted as a package's pack is: pack
+// containment, which loads every package actinglab observes, parses the pack, builds its
+// evaluator and runs the admission rules that read the template bytes (`admit_template_assets`:
+// REC-7's threshold floor and masks, REC-5's scaled sizes). It scores `ccoeff_normed`, as the
+// kernel's fixture of this slice does: under `ccorr_normed` the noise icon's flat-field floor
+// (REC-7) is above the threshold 0.9 (0.924 at 1000), and admission refuses the pack.
 fn evaluator() -> RecognitionEvaluator {
     let pack = load_pack_from_json_str(
         &json!({
@@ -148,6 +153,7 @@ fn evaluator() -> RecognitionEvaluator {
             "game": "neutral",
             "server": "test",
             "coordinate_space": {"width": WIDTH, "height": HEIGHT},
+            "defaults": {"match_metric": "ccoeff_normed"},
             "targets": [
                 {"type": "template", "id": "ui/zoom", "template_path": "zoom.png",
                  "region": "full_frame", "threshold": 0.9,
@@ -157,8 +163,13 @@ fn evaluator() -> RecognitionEvaluator {
         .to_string(),
     )
     .expect("the neutral pack");
-    RecognitionEvaluator::with_asset_resolver(pack, Arc::new(ZoomAsset(Gray::icon().png())))
-        .expect("evaluator")
+    let evaluator =
+        RecognitionEvaluator::with_asset_resolver(pack, Arc::new(ZoomAsset(Gray::icon().png())))
+            .expect("evaluator");
+    evaluator
+        .admit_template_assets()
+        .expect("the pack's template admission");
+    evaluator
 }
 
 fn tap(x: u32, y: u32, width: u32, height: u32) -> Option<Geometry> {
