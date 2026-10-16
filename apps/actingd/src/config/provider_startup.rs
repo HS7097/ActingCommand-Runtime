@@ -39,6 +39,7 @@ impl ConfiguredProvider {
                 startup,
                 discovery.mumu_root(),
                 || discovery.discover(),
+                &mut std::io::stderr(),
                 deferred,
             )?);
         }
@@ -83,19 +84,21 @@ impl ConfiguredProvider {
 }
 
 /// Runs `MuMuManager` discovery once per startup (`discover`, tried again while it is
-/// unavailable: `discover_at_start`) and completes every deferred instance into its
-/// registration; the registry registers them together with the explicit ones. Every refusal is
-/// recorded as a Provider startup failure before startup fails.
+/// unavailable: `discover_at_start`, whose warnings also go to `daemon_log`, actingd's stderr)
+/// and completes every deferred instance into its registration; the registry registers them
+/// together with the explicit ones. Every refusal is recorded as a Provider startup failure
+/// before startup fails.
 pub(super) fn bind_discovered_instances(
     startup: &mut ProviderStartup<'_>,
     mumu_root: Option<&Path>,
     discover: impl FnMut() -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>>,
+    daemon_log: &mut dyn std::io::Write,
     deferred: Vec<DeferredInstance>,
 ) -> RuntimeHostResult<Vec<InstanceSpec>> {
     let backend = ProviderBackend::MumuManager;
     let stage = Stage::InstanceDiscovery;
     startup.record(backend, Observation::Started { stage })?;
-    let report = discover_at_start(startup, mumu_root, discover)?;
+    let report = discover_at_start(startup, mumu_root, discover, daemon_log)?;
     let profile = admit_capability_profile(startup, &report, mumu_root)?;
     let mut bound = BTreeMap::new();
     let mut resolved = Vec::new();
@@ -146,12 +149,15 @@ pub(super) fn bind_discovered_instances(
 /// a boot where the Runtime starts before the emulator), `startup_discovery.retry_interval_ms`
 /// apart on the Runtime clock. Each failed attempt but the last is recorded as the warning
 /// `instance_discovery_retried`, with the attempt's failure as its `caused_by` link, before the
-/// wait. Any other refusal, or the last attempt's, is recorded as the Provider startup failure
-/// and ends the start as before.
+/// wait, and written to `daemon_log` as actingd's daemon lines of that warning (its developer
+/// line, then its `OUTCOME actingd:` line), so a person or a start script reading stderr sees
+/// the start wait. Any other refusal, or the last attempt's, is recorded as the Provider startup
+/// failure and ends the start as before.
 fn discover_at_start(
     startup: &mut ProviderStartup<'_>,
     mumu_root: Option<&Path>,
     mut discover: impl FnMut() -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>>,
+    daemon_log: &mut dyn std::io::Write,
 ) -> RuntimeHostResult<MumuDiscoveryReport> {
     let backend = ProviderBackend::MumuManager;
     let stage = Stage::InstanceDiscovery;
@@ -180,16 +186,20 @@ fn discover_at_start(
                 },
             ));
         }
+        let warning = Outcome::new(ActingdCode::InstanceDiscoveryRetried)
+            .attempts(attempt)
+            .limit_count(retry.attempts)
+            .retry_after_ms(retry.retry_interval_ms)
+            .caused_by(Outcome::relayed(classification).caused_by(failure));
         startup.record(
             backend,
             Observation::DiscoveryRetried {
-                outcome: Outcome::new(ActingdCode::InstanceDiscoveryRetried)
-                    .attempts(attempt)
-                    .limit_count(retry.attempts)
-                    .retry_after_ms(retry.retry_interval_ms)
-                    .caused_by(Outcome::relayed(classification).caused_by(failure)),
+                outcome: warning.clone(),
             },
         )?;
+        // A failed write never stops the start (P3 L2): stderr is the last place actingd
+        // reports to.
+        let _unwritten = crate::write_daemon_reports(std::slice::from_ref(&warning), daemon_log);
         startup.pause(Duration::from_millis(retry.retry_interval_ms))?;
         attempt += 1;
     }

@@ -1170,7 +1170,7 @@ tests = [
 ]
 incident = ["#308"]
 
-# Workflow #390 DISC-1 (coordinator ruling 2 of wave 18; register §1.89): at start, an instance discovery that answers instance_discovery_unavailable is tried again, at most startup_discovery.attempts times and startup_discovery.retry_interval_ms apart on the Runtime clock; each failed attempt that is tried again is recorded as the warning instance_discovery_retried (attempt, configured attempts, wait; the attempt's failure as its cause); an attempt that succeeds lets the start go on to runtime.started; the last failed attempt ends the start as before (the provider startup failure of the discovery stage, then the fatal instance_discovery_unavailable); both values come from runtime-config and a value outside its bounds is refused as config_value_invalid naming the key
+# Workflow #390 DISC-1 (coordinator ruling 2 of wave 18; register §1.89): at start, an instance discovery that answers instance_discovery_unavailable is tried again, at most startup_discovery.attempts times and startup_discovery.retry_interval_ms apart on the Runtime clock; each failed attempt that is tried again is recorded as the warning instance_discovery_retried (attempt, configured attempts, wait; the attempt's failure as its cause) and written to actingd's stderr as its developer line and OUTCOME line; an attempt that succeeds lets the start go on to runtime.started; the last failed attempt ends the start as before (the provider startup failure of the discovery stage, then the fatal instance_discovery_unavailable); both values come from runtime-config and a value outside its bounds is refused as config_value_invalid naming the key
 [[gate]]
 key = "99"
 coverage = "Y"

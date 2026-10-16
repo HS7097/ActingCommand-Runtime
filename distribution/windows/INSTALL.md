@@ -255,7 +255,8 @@ Fill the copy according to `apps/actingd/src/config.rs` at the manifest commit:
   while discovery is unavailable, as when the daemon starts before MuMu after a
   boot, it tries again up to `startup_discovery.attempts` times
   `startup_discovery.retry_interval_ms` apart, by default 25 times 10 s apart,
-  recording the warning `instance_discovery_retried` for each try),
+  recording the warning `instance_discovery_retried` for each try in the ledger
+  and as a `WARN` and an `OUTCOME actingd:` line on stderr),
   resolving `MuMuManager.exe` in this order: `mumu_root`,
   `ACTINGCOMMAND_NEMU_FOLDER` (only when the top-level `allow_env_overrides` is
   `true`; otherwise a set variable is ignored and reported as
