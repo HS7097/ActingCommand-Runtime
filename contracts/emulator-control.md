@@ -401,7 +401,9 @@ that belongs to emulator control:
   no startup claim over (a `stop`, a `start` / `restart` whose preparation failed, and since
   Workflow #369 S6c a failed control, one whose provider step failed included): a startup run
   against a stopped or unprepared emulator is meaningless, so a start under a pause followed
-  by a stop leaves no startup run at the resume.
+  by a stop leaves no startup run at the resume. For the same reason a resume's reconnect or a
+  self-check whose preparation failed and admitted no ladder cancels it before its claim's
+  release (Workflow #369 S6c review low (b); `contracts/scheduling-pause.md`).
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -492,7 +494,10 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   startup claim held back by a pause, takes the instance first (H-1, P1). With no hand-off (a
   pause closed the gate since the admission, a destructive step is open, or the ladder waits for
   performance release or behind another ladder) the ladder waits as a claim and the key is
-  released. A connection preparation is the one after emulator `start` / `restart` (including
+  released. A failed preparation on a claim's key that admits no ladder (stuck recovery off, a
+  ladder the cool-down suppresses, a failure no item matches) first cancels the instance's
+  queued startup claim, then releases the key ("Startup package hook"; Workflow #369 S6c
+  review low (b)). A connection preparation is the one after emulator `start` / `restart` (including
   the `actingctl emulator start` of a logon script), an instance resume or `SelfCheckInstance`;
   its failure keeps starting a ladder (Workflow #369-3, coordinator ruling P1). Successful
   fallback, invalid input parameters/configuration, admission/budget denial, owner/ledger

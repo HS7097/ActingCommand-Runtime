@@ -240,7 +240,8 @@ impl HostShared {
     /// H-6: one startup claim per instance: a still-queued one is cancelled
     /// (`scheduler.denied lease.queue_cancelled`, its request links only, Warning). An emulator
     /// control whose hold hands no startup claim over (a stop, a failed preparation) cancels it
-    /// too (coordinator ruling on review #716).
+    /// too (coordinator ruling on review #716), and so does a resume's reconnect or a self-check
+    /// whose preparation failed and admitted no ladder (Workflow #369 S6c review low (b)).
     pub(super) fn cancel_queued_startup_claims(
         &self,
         instance_id: InstanceId,
