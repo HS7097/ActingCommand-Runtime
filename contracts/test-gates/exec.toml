@@ -1234,7 +1234,7 @@ tests = [
 ]
 incident = ["#382 E-3"]
 
-# Test plan v2.2 §3.10 E-3 G3, the consensus rows (inventory-exec item 21): target consensus not met, both of two frames missing or one of two matching, is an unrecognised page and ends the run as without consensus: contained_task_page_unknown at a step's page wait, contained_task_home_entry_not_matched at the home entry and contained_task_step_unconfirmed at the postcondition, each class pack_logic_mismatch, which the shipped defaults' pack_logic item names; a wait whose window can no longer hold the next sampled recognition, while the task's remaining time still can, has run out (TEST-FU, with the kernel fix it found)
+# Test plan v2.2 §3.10 E-3 G3, the consensus rows (inventory-exec item 21): target consensus not met, both of two frames missing or one of two matching, is an unrecognised page and ends the run as without consensus: contained_task_page_unknown at a step's page wait, contained_task_home_entry_not_matched at the home entry and contained_task_step_unconfirmed at the postcondition, each class pack_logic_mismatch, which the shipped defaults' pack_logic item names; a wait whose window can no longer hold the next sampled recognition, while the task's remaining time still can, has run out (TEST-FU, with the kernel fix it found); on the linear_steps path the same consensus not met at the first step's page ends with contained_task_linear_entry_unmatched and at the next step's page, with no attempt left, with page_confirmation_failed, both class pack_logic_mismatch (wave-17 acceptance ruling 2; contracts/linear-steps.md, "Failure codes")
 [[gate]]
 key = "21"
 coverage = "Y"
@@ -1242,5 +1242,7 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_382_e3::gate_e3_g3_consensus_not_met_at_the_step_page_wait_ends_with_page_unknown",
     "actingcommand-execution-kernel::lib::contained_task::gate_382_e3::gate_e3_g3_consensus_not_met_at_the_home_entry_ends_with_home_entry_not_matched",
     "actingcommand-execution-kernel::lib::contained_task::gate_382_e3::gate_e3_g3_consensus_not_met_at_the_postcondition_ends_with_step_unconfirmed",
+    "actingcommand-execution-kernel::lib::contained_task::gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_first_page_ends_with_linear_entry_unmatched",
+    "actingcommand-execution-kernel::lib::contained_task::gate_382_e3::gate_e3_g3_consensus_not_met_at_the_linear_next_page_ends_with_page_confirmation_failed",
 ]
 incident = ["#382 E-3"]
