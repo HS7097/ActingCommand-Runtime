@@ -268,7 +268,9 @@ pub struct ColorMatch {
     pub mean: [u8; 3],
 }
 
-#[derive(Debug)]
+// Workflow #373 NAV-5: a Runtime may keep a frame's scene for a later evaluation of another
+// package (M-373 §5.2 item 1).
+#[derive(Debug, Clone)]
 pub struct Scene {
     rgb: RgbImage,
     gray: GrayImage,

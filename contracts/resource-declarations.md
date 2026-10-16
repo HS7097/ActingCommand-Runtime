@@ -34,6 +34,7 @@ and `operation explain` keep their existing behavior.
 | `pages.json` (repository root only) | The standard-pack page list (`actingcommand.pages.v1`, Workflow #373 NAV-6): the contract crate's `parse_standard_pack_pages`, the Runtime reader's own check; reported with family `standard_pack_pages` |
 | `declaration-exclusions.json` (repository root only) | Resource tooling's `DeclarationExclusions::parse` (`actingcommand.declaration-exclusions.v1`, Workflow #396 TOOL-2); reported with family `declaration_exclusions` |
 | `interrupts.json` (repository root only) | The shared interrupt pages (`actingcommand.interrupts.v1`, Workflow #373 NAV-6): `parse_standard_pack_interrupts` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_interrupts` |
+| `navigation.json` (repository root only) | The edges and the recovery chain (`actingcommand.navigation.v1`, Workflow #373 NAV-5): `parse_standard_pack_navigation` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_navigation` |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
@@ -67,12 +68,21 @@ before generation, as specified in [package-reference.md](package-reference.md).
 
 The standard-pack root files are checked as the Runtime's root reader checks them
 (`package-reference.md`, "Standard package root"): shape, version, `game`, page ids, counts
-and, for `interrupts.json`, its pages against `pages.json`. The packages they name are
+and, for `interrupts.json` and (Workflow #373 NAV-5) `navigation.json`, its pages against
+`pages.json`. The packages they name are
 checked against the packed bundle by the bundle generator, as maintenance declarations are.
 
 Navigation declarations share the source validator's required fields, coordinate
 representations and click grammar. Drive navigation applies its static-region and
-overlap checks when compiling and consuming its execution graph.
+overlap checks when compiling and consuming its execution graph. Workflow #373 NAV-5
+(wave-17 ruling 21): a destructive page operation (`destructive_actions`) is read in every
+click form a navigation edge takes (`point`, `rect`, `target`, `offset`, `drag`, `long_press`;
+before, any but `point` and `rect` made the graph unreadable, so `navigate` could not route
+such a package). Its rectangle, long press box and drag boxes are its region without a frame;
+a `target` or `offset` click covers the box its target matches (plus the offset) on the frame
+a route resolves its edge on, and covers nothing there when its target does not pass. A
+route's plan checks the regions known without a frame; its execution also checks those of the
+frame.
 
 Workflow #390 LAB-2 (forced-compromises mapping T-03): the generated navigation, the
 projection of a task's click operations, also collects an operation whose `to` is a page set,

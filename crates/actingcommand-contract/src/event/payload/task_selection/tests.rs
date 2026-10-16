@@ -25,8 +25,9 @@ use std::io::Write as _;
 
 const LAYOUT: &str = "list/rows";
 const PAGE: &str = "list_page";
-// SHA-256 of no identities.
-const NO_IDENTITIES: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+// SHA-256 of no identities: the compact JSON array `[]` (`gated_out.identities_sha256`,
+// selection-graph.md "Record per path").
+const NO_IDENTITIES: &str = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
 
 fn frame_id(digit: char) -> crate::FrameId {
     serde_json::from_value(Value::String(format!(

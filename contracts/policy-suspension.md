@@ -84,7 +84,7 @@ The live settlement of a scheduled run whose main package was admitted, as `line
 `failure.outcome` (Workflow #378 A2-P):
 
 ```text
-<base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}~f<F>
+<base>~v2~k<K>~m<I><H>[~p<I><H>]{0,3}[~r<G><I><H>]{0,1}[~n<I><H>]{0,1}[~g<H>]{0,1}~f<F>
 ```
 
 | Segment | Content |
@@ -94,10 +94,13 @@ The live settlement of a scheduled run whose main package was admitted, as `line
 | `m<I><H>` | The main package: `I` the first 8 hex digits of SHA-256 over its `package_id` (the admitted package's `package_label`), `H` the first 12 hex digits of its content hash measured when the failure is settled, or `x` when it could not be measured (removed, being replaced, unreadable). |
 | `p<I><H>` | One per declared prerequisite layer, outermost first: `I` as above for the layer's package id, `H` the content hash of the package at the path the run's standard-pack registry gave it (Workflow #373 NAV-3a), measured at the settlement, or `x` when the registry bound none or the package could not be measured. A lift check finds the layer's package in the registries read at the check. |
 | `r<G><I><H>` | The return-home layer: `G` the first 8 hex digits of SHA-256 over game, NUL, server; `I` and `H` as above. |
+| `n<I><H>` | Workflow #373 NAV-5 (M-373 §8.5): the navigation, recovery chain or interrupt layer package a navigation failure happened in (the last `EntryRecoveryFailed` of a layer with role `navigation_hop`, `recovery_chain` or `interrupt_handler`), or the package a `contained_task_navigation_package_invalid` names; `I` and `H` as above, `H` at the path the registry of the run's game gives it. Absent when the failure happened in no such layer. |
+| `g<H>` | Workflow #373 NAV-5 (M-373 §8.5): the first 12 hex digits of SHA-256 over the run's game root's `pages.json`, `navigation.json` and `interrupts.json`, in that order (an absent file adds nothing), `x` when they could not be read. Present, after `n`, on a failure whose code starts with `contained_task_navigation_` or `contained_task_interrupt_`, or that happened in such a layer; absent on every other failure. |
 | `F` | The error frame's artifact SHA-256 (first 12 hex digits) of the run where this identity first occurred; `na` without a frame; `u` and the first 12 hex digits of SHA-256 over the decision id for a failure that does not accumulate. |
 
-The identity prefix is everything before `~f`. At most 214 bytes, without whitespace or
-control characters. A format v1 string (Workflow #336 L6, before PKG-S3) is not read.
+The identity prefix is everything before `~f`. At most 250 bytes (Workflow #373 NAV-5: was
+214 before `n` and `g`), without whitespace or control characters. A segment out of the order
+`p`, `r`, `n`, `g` is no identity. A format v1 string (Workflow #336 L6, before PKG-S3) is not read.
 
 **Content hash** (Workflow #336 PKG-S3, option 丙; M-PKG §3.3). A package's content hash is the
 `content-directory.v1` hash of the content table its path holds (a directory, a `.json` or a
@@ -160,7 +163,20 @@ Only these failures can pause a task by repeating:
   ruling 4);
 - the `prepare` scope with a `contained_task_prerequisite_*` refusal: a reproducible
   configuration problem (a package the registry does not list, a package id that does not
-  match, an incompatible package).
+  match, an incompatible package);
+- Workflow #373 NAV-5 (M-373 §8.5, §15 ruling 4): every scope but `prepare`, the restart
+  segment included, with a code that starts with `contained_task_navigation_`: the standard
+  pack's navigation data does not bring the run to its entry (a recovery chain may restart
+  the application, so its end is in a restart segment). Its identity names the data files
+  (`g`), so a fix of the data lifts the pause;
+- Workflow #373 NAV-5 (wave-17 acceptance ruling 2; M-373 does not say): every scope but
+  `prepare`, the restart segment included, with a code that starts with
+  `contained_task_interrupt_` (the failures `contained_task_interrupt_limit_reached` and
+  `contained_task_interrupt_escalated`). For the reason of Workflow #390 EXEC-3 ruling 4: a
+  screen the run cannot handle, again and again, means the standard pack no longer matches
+  the game, so the pair pauses until the package or the data changes (its identity names the
+  data files, `g`, and the handler's layer, `n`). `prepare` is excluded because interrupts
+  there are expected.
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,

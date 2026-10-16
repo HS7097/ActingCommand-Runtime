@@ -191,7 +191,32 @@ impl DriveNavigationEdge {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DestructiveRegion {
     page: Option<String>,
-    rect: PackRect,
+    area: DestructiveArea,
+}
+
+/// Workflow #373 NAV-5 (wave-17 ruling 21): what a destructive page operation's click covers,
+/// read in every form a navigation click takes (`point`, `rect`, `target`, `offset`, `drag`,
+/// `long_press`); a `point` or `rect` click alone was read before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DestructiveArea {
+    /// The boxes the click presses, known without a frame: a tap's rectangle, a long press's
+    /// box, a drag's two boxes.
+    Boxes(Vec<PackRect>),
+    /// A click that follows a target: the box the target matches on the frame a route is
+    /// resolved on, or the box `offset` gives from its top-left corner ([`drive_offset_rect`]).
+    Target {
+        target_id: String,
+        offset: Option<PackRect>,
+    },
+}
+
+impl DestructiveRegion {
+    /// A region without a page or with page `any` applies on every page.
+    fn applies_on(&self, page: &str) -> bool {
+        self.page
+            .as_deref()
+            .is_none_or(|region| region == "any" || region == page)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,14 +322,47 @@ impl DriveNavigationGraph {
         edge: &DriveNavigationEdge,
         input: &DriveSemanticInput,
     ) -> Result<(), DriveDecisionError> {
+        self.validate_resolved_input_on_frame(edge, input, &[])
+    }
+
+    /// Workflow #373 NAV-5 (wave-17 ruling 21): the destructive regions of `page` whose click
+    /// follows a target (`target`, `offset`): each target id and, for an `offset` click, its
+    /// offset. Their boxes are those [`drive_offset_rect`] or the target's own match gives on the
+    /// frame a route is resolved on.
+    pub fn frame_destructive_targets(&self, page: &str) -> Vec<(&str, Option<PackRect>)> {
+        self.destructive_regions
+            .iter()
+            .filter(|region| region.applies_on(page))
+            .filter_map(|region| match &region.area {
+                DestructiveArea::Target { target_id, offset } => {
+                    Some((target_id.as_str(), *offset))
+                }
+                DestructiveArea::Boxes(_) => None,
+            })
+            .collect()
+    }
+
+    /// [`Self::validate_resolved_input`] with `frame_regions`, the boxes the edge's page's
+    /// destructive regions that follow a target cover on the frame the input was resolved on
+    /// ([`Self::frame_destructive_targets`]).
+    pub fn validate_resolved_input_on_frame(
+        &self,
+        edge: &DriveNavigationEdge,
+        input: &DriveSemanticInput,
+        frame_regions: &[PackRect],
+    ) -> Result<(), DriveDecisionError> {
+        let regions = self
+            .destructive_regions
+            .iter()
+            .filter(|region| region.applies_on(&edge.from_page))
+            .flat_map(|region| match &region.area {
+                DestructiveArea::Boxes(boxes) => boxes.clone(),
+                DestructiveArea::Target { .. } => Vec::new(),
+            })
+            .chain(frame_regions.iter().copied())
+            .collect::<Vec<_>>();
         for rect in semantic_input_rects(input) {
-            if self.destructive_regions.iter().any(|other| {
-                other
-                    .page
-                    .as_deref()
-                    .is_none_or(|page| page == "any" || page == edge.from_page)
-                    && rects_intersect(rect, other.rect)
-            }) {
+            if regions.iter().any(|region| rects_intersect(rect, *region)) {
                 return Err(DriveDecisionError::safety(
                     SharedCode::NavigationDestructiveOverlap.code(),
                     format!(
@@ -456,12 +514,39 @@ fn parse_destructive_region(value: &Value) -> Result<DestructiveRegion, DriveDec
     let click = value
         .get("click")
         .ok_or_else(|| DriveDecisionError::invalid("destructive action is missing click"))?;
+    // Workflow #373 NAV-5 (wave-17 ruling 21): every click form a navigation edge takes; a
+    // `point` or `rect` click alone was read before.
     Ok(DestructiveRegion {
         page: value
             .get("page")
             .and_then(Value::as_str)
             .map(str::to_string),
-        rect: parse_navigation_tap_rect(click)?,
+        area: parse_destructive_area(click)?,
+    })
+}
+
+fn parse_destructive_area(click: &Value) -> Result<DestructiveArea, DriveDecisionError> {
+    if matches!(
+        click.get("kind").and_then(Value::as_str),
+        None | Some("point") | Some("rect")
+    ) {
+        return Ok(DestructiveArea::Boxes(vec![parse_navigation_tap_rect(
+            click,
+        )?]));
+    }
+    Ok(match parse_navigation_input(click)? {
+        DriveSemanticInput::Tap { rect, .. } => DestructiveArea::Boxes(vec![rect]),
+        DriveSemanticInput::Drag {
+            from_rect, to_rect, ..
+        } => DestructiveArea::Boxes(vec![from_rect, to_rect]),
+        DriveSemanticInput::TargetCenter { target_id } => DestructiveArea::Target {
+            target_id,
+            offset: None,
+        },
+        DriveSemanticInput::TargetOffset { target_id, offset } => DestructiveArea::Target {
+            target_id,
+            offset: Some(offset),
+        },
     })
 }
 
@@ -919,5 +1004,84 @@ mod tests {
         }))
         .expect_err("half a box");
         assert_eq!(error.kind(), DriveDecisionErrorKind::InvalidInput);
+    }
+
+    // Workflow #373 NAV-5 (exec key 78; wave-17 ruling 21): a destructive page operation takes
+    // every click form a navigation edge takes. Its rectangle, long press box and drag boxes are
+    // its region without a frame; a `target` or `offset` click covers the box its target matches
+    // on the frame a route is resolved on, which the caller hands in.
+    #[test]
+    fn nav5_a_destructive_action_takes_every_navigation_click_form() {
+        let graph = DriveNavigationGraph::parse_json(
+            r#"{
+            "game":"fixture01",
+            "navigation":[
+                {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","click":{"kind":"rect","x":0,"y":0,"width":4,"height":4}}
+            ],
+            "destructive_actions":[
+                {"page":"fixture01/home","click":{"x":100,"y":100,"width":10,"height":10}},
+                {"page":"fixture01/home","click":{"kind":"drag","from":{"kind":"rect","x":200,"y":200,"width":10,"height":10},"to":{"kind":"rect","x":300,"y":300,"width":10,"height":10},"duration_ms":400}},
+                {"page":"fixture01/home","click":{"kind":"long_press","x":400,"y":400,"width":10,"height":10,"duration_ms":800}},
+                {"page":"fixture01/home","click":{"kind":"target","target_id":"buy_button"}},
+                {"page":"fixture01/home","click":{"kind":"offset","target_id":"buy_icon","offset":{"x":5,"y":6,"width":7,"height":8}}},
+                {"page":"fixture01/other","click":{"kind":"target","target_id":"elsewhere"}}
+            ]
+        }"#,
+        )
+        .expect("a graph whose destructive actions take every click form");
+        assert_eq!(
+            graph.frame_destructive_targets("fixture01/home"),
+            [
+                ("buy_button", None),
+                (
+                    "buy_icon",
+                    Some(PackRect {
+                        x: 5,
+                        y: 6,
+                        width: 7,
+                        height: 8
+                    })
+                ),
+            ]
+        );
+        let tap = |x: i32, y: i32| DriveNavigationEdge {
+            id: "tap".to_string(),
+            from_page: "fixture01/home".to_string(),
+            to_page: "fixture01/terminal".to_string(),
+            input: DriveSemanticInput::Tap {
+                rect: PackRect {
+                    x,
+                    y,
+                    width: 1,
+                    height: 1,
+                },
+                point: DrivePoint { x, y },
+            },
+            source: None,
+        };
+        let overlaps = |edge: &DriveNavigationEdge, frame: &[PackRect]| {
+            graph
+                .validate_resolved_input_on_frame(edge, edge.input(), frame)
+                .map_err(|error| error.code().as_str().to_owned())
+        };
+        let blocked = Err("navigation_destructive_overlap".to_owned());
+        for (x, y) in [(105, 105), (205, 205), (305, 305), (405, 405)] {
+            assert_eq!(overlaps(&tap(x, y), &[]), blocked, "({x},{y})");
+        }
+        assert_eq!(overlaps(&tap(600, 600), &[]), Ok(()));
+        // The frame resolved the target's box at (600,600): a tap there is blocked on it alone.
+        let resolved = [PackRect {
+            x: 595,
+            y: 595,
+            width: 10,
+            height: 10,
+        }];
+        assert_eq!(overlaps(&tap(600, 600), &resolved), blocked);
+        assert_eq!(
+            graph
+                .validate_resolved_input(&tap(600, 600), tap(600, 600).input())
+                .map_err(|error| error.code().as_str().to_owned()),
+            Ok(())
+        );
     }
 }

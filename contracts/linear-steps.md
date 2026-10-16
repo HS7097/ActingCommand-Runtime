@@ -411,7 +411,7 @@ one does. Layer by layer, in this order:
 | at most three prerequisite packages besides the dependent package | `contained_task_prerequisite_depth_exceeded` |
 | the package is admitted by its path (the loader's code is attached as the related failure, a resource declaration rejection travels with it) | `contained_task_prerequisite_admission_failed` |
 | the admitted package's `package_id` is the registry's | `contained_task_prerequisite_mismatch` |
-| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3) or designated scheduling operation; its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|designated_operation\|game\|server\|resolution>` |
+| the package is no `recognize_only` package and declares no stability termination, post-admission OCR, OCR fields, resource readings, resource adjustments (Workflow #384 D2-S3), designated scheduling operation or select step with `on_empty` (Workflow #308 SEL-L4b: its early end on its own page would leave the dependent package short of its entry page); its game, server and resolution are those of the package that names it | `contained_task_prerequisite_incompatible`, detail `reason=<recognize_only\|stability_termination\|post_admission_ocr\|resource_readings\|resource_adjustments\|select_on_empty\|designated_operation\|game\|server\|resolution>` |
 | the maximum steps of the whole chain and the dependent package add up to at most 1000 | `contained_task_prerequisite_step_limit` |
 
 Each refusal is denied (`package_invalid`) with detail `layer=<n> package_id=<id>` (plus
@@ -485,7 +485,9 @@ cancelled, paused) from any capture of the gate.
 **Ledger.** Only the existing `TaskEntryPreflight` facts and effective configuration records
 are written; a run has at most seven effective configuration records (initial, one per
 prerequisite package, the return-home package of "Return-home fallback" below included,
-capture, input). Each `EntryRecovery*` fact of a layer carries its `role` (Workflow #373 NAV-3a:
+capture, input), and one more for each distinct package it runs as a shared interrupt layer
+(Workflow #373 NAV-6) or a navigation layer (Workflow #373 NAV-5, an edge's package or a
+recovery chain step, M-373 §8.3). Each `EntryRecovery*` fact of a layer carries its `role` (Workflow #373 NAV-3a:
 `prerequisite` or `return_home`; a request's own recovery binding carries none), so the ledger
 tells the return-home layer from a declared one. The facts are told apart by these rules:
 
@@ -534,6 +536,12 @@ page-graph chain end succeeds with no step on its target page, so it is the bett
 chain. A flow whose first page appears only sometimes stays a page-graph package.
 
 ## Return-home fallback
+
+Workflow #373 NAV-5 (M-373 §4.4): when the run's game root holds navigation data that lists the
+package's entry (`package-reference.md`, "Standard package root", "Navigation"), the run's own
+package has no return-home fallback: its gate navigates in its place, and a declared
+prerequisite chain that ran without bringing the entry is followed by the navigation instead of
+`contained_task_prerequisite_entry_unmatched`. A layer of a chain keeps the fallback below.
 
 Workflow #336 R16. A `linear_steps` package that declares no `prerequisite_package_id` and
 whose first step is a page (no application entry) falls back to the return-home package of its

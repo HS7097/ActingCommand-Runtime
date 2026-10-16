@@ -184,6 +184,11 @@ outcome_keys! {
     scan_alignment_failure: vocab(scan_alignment_failure),
     scan_spacing_failure: vocab(scan_spacing_failure),
     scan_bound: vocab(scan_bound),
+    // Workflow #308 SEL-L4b: a select step's decision and its identity checks.
+    selection_kind: vocab(selection_kind),
+    outcome_key: token,
+    selection_blocking: vocab(selection_blocking),
+    identity_state: vocab(identity_state),
     pause_reason: name,
     expected_sha256: hash,
     actual_sha256: hash,
@@ -432,6 +437,8 @@ outcome_keys! {
     // ---- Workflow #373 NAV-6: end ----
     // Workflow #373 NAV-3a: why a prerequisite package is not bound.
     registry_problem: vocab(registry_problem),
+    // Workflow #373 NAV-5: which navigation bound a run reached.
+    navigation_limit: vocab(navigation_limit),
     // Workflow #378 A2-P: a ledger event type (the rejected performance event's).
     event_type: vocab(event_type),
     // Workflow #378 A2-P: a resource target of an instance's resource-targets document.

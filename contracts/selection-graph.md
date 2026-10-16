@@ -338,7 +338,11 @@ Implementation status: the source parser admits the `select` effect and its poli
 contained task admission and the interpreter execute it, and the host appends its
 `task.selection_evaluated` record. Lab's own package reader (`lab validate`, and the Lab
 validation of a task schema `0.6`/`0.7` package that `package dry-run` runs) refuses a select
-step with `lab_run_select_unsupported`.
+step with `lab_run_select_unsupported`. Workflow #308 SEL-L4b (frozen selector model S0 v2.1
+§1.2–§1.4, §1.7, §2, §3) lets a select step declare `scan`, a select over a list read across
+viewports (section Select over a scan), and `on_empty`, a normal end of the run when nobody
+listed is present (section Ending empty), and lets the `expect_after` of any operation declare
+`expect_identity` (section Expected identity).
 
 ### Declaration
 
@@ -368,6 +372,59 @@ step with `lab_run_select_unsupported`.
   that a `target`, `target_center` or `offset` click needs a template guard does not apply. The
   guard is judged on the confirmation frame.
 - `expect_after` is required, and `unguarded_trusted_coordinate` is refused.
+- `select` may also declare `scan` (below), which makes the step a select over a scan; a step
+  without it is a single-frame select.
+- `select` may also declare `on_empty: {"outcome_key": "<key>"}` (section Ending empty). A
+  single-frame select may declare it only when its layout is `fixed_slots`: one frame of a
+  `repeated_anchor` list cannot show that the list ends, so a list that fits one screen declares
+  `scan`, whose start and end checks then both pass on its first viewport.
+- The `expect_after` of any operation may add `expect_identity: {"target_id", "choice_of"}`
+  (section Expected identity).
+
+A scan is declared with every member but `early_stop`; the Runtime supplies no default. The
+numbers below are neutral examples, not values:
+
+```json
+"scan": {"identity_feature": "member", "axis": "vertical",
+  "advance": {"kind": "drag", "from": {"x": 560, "y": 600, "width": 160, "height": 30},
+              "to": {"x": 560, "y": 400, "width": 160, "height": 30}, "duration_ms": 1000,
+              "min_content_step_px": 170, "max_content_step_px": 240},
+  "reposition": {"kind": "drag", "from": {"x": 560, "y": 640, "width": 160, "height": 30},
+                 "to": {"x": 560, "y": 260, "width": 160, "height": 30}, "duration_ms": 600,
+                 "max_content_step_px": 460},
+  "settle": {"interval_ms": 200, "timeout_ms": 3000},
+  "track": {"area": {"x": 0, "y": 140, "width": 1280, "height": 560}, "edge_margin_px": 12,
+            "signature": {"rect": {"x": 0, "y": 0, "width": 160, "height": 160},
+                          "columns": 8, "rows": 8},
+            "signature_max_distance_milli": 3000, "position_tolerance_px": 6,
+            "min_overlap_instances": 3,
+            "spacing": {"max_axis_gap_px": 300, "columns": 6, "max_trailing_gap_px": 320,
+                        "max_cross_lead_px": 40, "max_cross_gap_px": 210}},
+  "start": {"check": "check/list_start", "rewind": true},
+  "end": {"check": "check/list_end"},
+  "bounds": {"max_viewports": 80, "max_reposition_viewports": 40, "max_ms": 240000},
+  "early_stop": "upper_bound"}
+```
+
+- `identity_feature` names the layout's identity feature that identifies a position; `axis` is
+  `vertical` or `horizontal`.
+- `advance` is the move to the next viewport, with `min_content_step_px` and
+  `max_content_step_px`, the smallest and largest content displacement one move gives (measured,
+  not the finger's displacement); a corrective move is `advance` reversed. `reposition` is the
+  longer move, with `max_content_step_px`, used reversed to rewind and in either direction to
+  return. A drag is sampled between random points of its `from` and `to` rectangles; the
+  further forms of both moves are SEL-L3b's (register §1.58, L3B-3).
+- `settle` paces the fresh frames after a move; `track` says where instances are tracked
+  (`area`, `edge_margin_px`), how they are told apart (`signature`, compared within
+  `signature_max_distance_milli`), how far positions may differ and still be one
+  (`position_tolerance_px`), how many must overlap between viewports (`min_overlap_instances`)
+  and how they are spaced (`spacing`).
+- `start` is `{check, rewind}` and `end` is `{check}`: checks that give positive evidence of the
+  list's two ends; `rewind: true` lets the scan move toward the start until its check passes.
+- `bounds` caps the coverage viewports (`max_viewports`), the rewind and return viewports
+  together (`max_reposition_viewports`) and the scan's time (`max_ms`, section Select over a
+  scan). `early_stop: "upper_bound"` lets the scan stop before the list's end once no position
+  not yet read can outrank the best member.
 
 These rules are checked by the declaration gate (`resource validate` and every parse) and
 again by contained task admission, which runs the same declaration validation on the sealed
@@ -375,7 +432,10 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 
 | Rule | Pointer | File |
 | --- | --- | --- |
-| `select` holds exactly `layout_id` and `policy`, of the right JSON types. | the field | `task.json` |
+| `select` holds `layout_id` and `policy`, and optionally `scan` and `on_empty`, of the right JSON types. | the field | `task.json` |
+| `scan` holds `identity_feature`, `axis`, `advance`, `reposition`, `settle`, `track`, `start`, `end` and `bounds` (`MissingField`), and optionally `early_stop`; any other member is `UnknownField`. Admission reads their values. | `…/select/scan/<member>` | `task.json` |
+| `on_empty` is `{outcome_key}`, a string. | `…/select/on_empty/outcome_key` | `task.json` |
+| `expect_after.expect_identity` is `{target_id, choice_of}`, both strings. | `/operations/<i>/expect_after/expect_identity/<member>` | `task.json` |
 | `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
 | `policy` is `{path}`: a safe task-local `policies/<name>.json` path (an optional `sha256` is ignored). | `…/select/policy/path` | `task.json` |
 | No other effect is declared. | `/operations/<i>/select` | `task.json` |
@@ -408,6 +468,56 @@ The binding of a select step is therefore the document path inside the package t
 admitted; since Workflow #336 PKG-S1 neither the document's declared SHA-256 nor a package
 digest is compared. A per-request policy binding is not part of v1.
 
+Workflow #308 SEL-L4b adds these admission checks, each refused with
+`contained_task_select_invalid` and a detail naming the rule. A `scan` passes the static checks
+of S0 §2.1, where *b* is the readable band's extent on the axis and *e* the `instance_rect`
+extent on the axis:
+
+- the layout is `repeated_anchor` with an `instance_rect`, `identity_feature` names one of its
+  identity features, its `unknown_identity` is `reject`, and its consensus samples one frame
+  only;
+- the policy's last tie-break key is `candidate_id lowest_first`, so that rows with the same
+  business ID never end `ambiguous` and the first one seen wins;
+- `signature` has 1–8 columns and 1–8 rows, and its rectangle lies inside `instance_rect`;
+- `settle.interval_ms` is 1..=5000, and `settle.timeout_ms` is at least the interval and at most
+  `bounds.max_ms`;
+- `max_viewports` is 2..=128, `max_reposition_viewports` 1..=128, and `max_ms` at least 1 and at
+  most the task's `timeout_ms`;
+- `min_overlap_instances`, `spacing.columns` and every `spacing` distance are at least 1;
+- the readable band lies inside `track.area`, which lies inside the frame; `edge_margin_px` is at
+  least `position_tolerance_px`; and the core, the area less the margin at both of its axis
+  edges, is at least *e* long;
+- the largest finger displacement a drag's two rectangles allow is at most its
+  `max_content_step_px`; 1 ≤ `advance.min_content_step_px` ≤ `advance.max_content_step_px` ≤
+  *b* − *e*; and 1 ≤ `reposition.max_content_step_px` ≤ *b*;
+- `start.check`, `end.check` and every page check of a page flip are targets of the pack.
+
+For a step that declares `scan` or `on_empty`, every field the policy reads has a domain the
+layout gives it: a `passed` feature boolean, a `measure_milli` feature 0..=1000, an
+`ocr_integer` feature its declared range, and the step's identity feature its entries. An
+identity field other than the step's identity feature is refused, because one hypothesis fixes
+one identity.
+
+A step that declares `on_empty` is admitted only when its policy's `selection.mode` is
+`none_allowed` (`exactly_one` gives `insufficient` on zero survivors), its task declares
+`scheduling_outcome`, a single-frame select's layout is `fixed_slots`, the task's
+post-admission OCR is no comparison (a run would otherwise have two sources for its key), and,
+when the task declares `post_admission_fields`, their `page_ids` include the step's `from` page.
+The step's state is also a terminal of the task's route: exactly one mapping with the effect
+condition of that state lists the step's page, and its key is the `on_empty` key. A task without
+phases checks this in its scheduling-outcome coverage check
+(`contained_task_outcome_declaration_incomplete`), a phased task in its route check
+(`task_phases_outcome_incomplete`; [README.md](README.md), phases). A package with an `on_empty`
+step serves neither as a prerequisite package (`contained_task_prerequisite_incompatible`,
+detail `reason=select_on_empty`) nor for return-home use, which reads the same reason, because
+an early end on the step's page would leave the dependent package short of its entry page.
+
+An `expect_identity` is admitted only when `choice_of` names a select step of the same task that
+is the declaring step or precedes it (in phase order, or in operation order without phases), that
+step's identity feature is recognized by `ocr_aliases` (the read text is mapped through it), the
+declaring operation is not retryable (a retry would tap again after a mismatch), and `target_id`
+is an OCR target of the pack.
+
 ### Derived documents
 
 - A select step becomes no navigation edge and no page operation, so no route passes one.
@@ -419,7 +529,7 @@ digest is compared. A per-request policy binding is not part of v1.
 
 ### Execution
 
-One attempt of a select step runs, before any input:
+One attempt of a single-frame select runs, before any input:
 
 1. The step's frame F1 (the frame the step was dispatched on, recognized as its `from` page) is
    projected with the step's layout: the projection P1 and its `candidate_set_sha256` H1.
@@ -431,12 +541,14 @@ One attempt of a select step runs, before any input:
 3. The policy is evaluated over P1's actionable candidates, each feature a field of its name (a
    `passed` feature a boolean, a `measure_milli` feature an integer), with the snapshot's facts
    at that instant.
-4. When the outcome is `selected` (one candidate), a confirmation frame F2 is captured and
-   recognized like every frame, with its capture and recognition records and the `CapturePage`
-   timing boundary, but it feeds neither the stability sampling nor the post-admission OCR
-   collector. F2 must be the step's page, the step's guard must pass on F2, and the projection
-   P2 of F2 must hash to H1.
-5. The decision is recorded once as `task.selection_evaluated` (section Records).
+4. When the outcome is `selected` (one candidate), and, for a step that declares `on_empty`, no
+   unknown instance blocks it (rules 2 and 3, section Select over a scan), a confirmation frame
+   F2 is captured and recognized like every frame, with its capture and recognition records and
+   the `CapturePage` timing boundary, but it feeds neither the stability sampling nor the
+   post-admission OCR collector. F2 must be the step's page, the step's guard must pass on F2,
+   and the projection P2 of F2 must hash to H1.
+5. The decision is recorded once as `task.selection_evaluated` (section Records). A step that
+   declares `on_empty` adds `unknown_check` to its v1 record.
 6. On a match, one tap is sampled inside the chosen candidate's `click` rectangle (taken from
    P2, equal to P1's since the hashes are equal) as a `rect` click is sampled, with the step's
    action seed. `task.effect_intent` records it and the input follows, bound to F2's committed
@@ -446,12 +558,19 @@ One attempt of a select step runs, before any input:
 Any outcome other than `selected` (`empty`, `insufficient`, `ambiguous`, `unknown`) is the v1
 fallback, an abort: the step fails with `selection_not_selected` and detail
 `<kind>:<outcome_key>`. A policy document never names a task. One candidate is chosen per step;
-choosing several, fallback choices and data tables are not part of v1.
+choosing several, fallback choices and data tables are not part of v1. A step that declares
+`on_empty` (Workflow #308 SEL-L4b) differs in two ways: an `empty` decision with no unknown
+instance ends the run normally (section Ending empty), and a decision that unknown instances
+could change fails `selection_result_blocked` (rules 2 and 3, section Select over a scan). Its
+unknown instances are the actionable candidates the kernel keeps from the evaluator (an
+unresolved consensus feature, an identity feature that read no identity) and those the
+evaluator drops as unknown; its confirmation is unchanged (H1 = H2).
 
-Every selection failure happens before the input and takes the pre-execution guard path: the
-first attempt fails, with neither retry nor recovery, as a failed click guard does. A
-task-level retry belongs to the scheduler. A select step adds one capture and one recognition
-to its step, within the task's timeout.
+Every failure of a single-frame select happens before the input and takes the pre-execution
+guard path: the first attempt fails, with neither retry nor recovery, as a failed click guard
+does. A task-level retry belongs to the scheduler. A single-frame select adds one capture and
+one recognition to its step, within the task's timeout. A select over a scan moves the list
+before its tap, so its failures follow other rules (section Select over a scan).
 
 | Failure | Code | Record |
 | --- | --- | --- |
@@ -489,6 +608,169 @@ host join the refusal to the run's failure as the related failure `selection_rec
 native detail, and poison the runtime. A capture failure its runtime cannot classify forbids
 further records and returns without one.
 
+### Select over a scan
+
+Workflow #308 SEL-L4b (S0 §1.3, §2.2, §3.2). A select step that declares `scan` reads its list
+across viewports with the scan session of SEL-L3 and SEL-L3b (register §1.49, §1.58), then
+decides, returns to the chosen member and confirms it. One attempt runs:
+
+1. **Pin.** One instance fact snapshot and one evaluation instant serve the whole attempt, and
+   every record list the policy declares is resolved. The step's dispatched frame F1 is settled
+   before it becomes the first viewport.
+2. **Scan.** The start check (with a rewind when declared), then the coverage viewports: each
+   `advance`, the settle, the page and the guard, the alignment against the previous viewport,
+   the gap and spacing checks, the reading of every position and the evaluation of the
+   positions the viewport fixed, until the end check passes (coverage `complete`) or the early
+   stop holds (`early_stopped`).
+3. **Decide.** A position that was tracked but never readable fails
+   `selection_scan_position_unread`, and the spacing of the whole list is checked. The members,
+   the positions whose fixed reading the evaluator ranked, are numbered `<layout>#NN` in
+   first-seen order: by the viewport that fixed them, then by axis start, then by cross-axis
+   start. The policy is evaluated once over them, with the pinned snapshot and instant, and rules
+   1–3 below decide whether the decision stands.
+4. **Return.** Let [*L*, *R*] be the content offsets at which the chosen member's content
+   rectangle lies inside the readable band, an interval *b* − *e* wide. When the latest offset
+   `last` lies in it, `Confirm` follows at once. Otherwise let *D* be the distance from `last` to
+   the nearer end of the interval and *T* = max(`advance.max_content_step_px`,
+   `reposition.max_content_step_px` − (*b* − *e*)). The scan moves toward the interval with one
+   `reposition` while *D* > *T*, and with one `advance` (reversed toward the start) once
+   *D* ≤ *T*, so no move passes the interval. Each settled return viewport passes the page and
+   the guard, is aligned directly against the content map (every tracked coverage position,
+   never a chain of return viewports) within its move's window, and sets `last`. Every return
+   viewport counts toward `max_reposition_viewports`, together with the rewind viewports; past it
+   the scan fails `selection_scan_bounds_exceeded` (`scan_bound: reposition_viewports`). Return
+   failures are reported at the stage `select_return`.
+5. **Confirm.** A fresh frame F2, settled as after an input. In this order: its capture and
+   settle; its page (`selection_page_changed`); the step's guard; its alignment against the
+   content map within `last` ± `position_tolerance_px` (`selection_scan_alignment_rejected` at
+   the stage `select_confirm`); then the identity at the chosen member's content position, where
+   the nearest instance within `position_tolerance_px` on both axes must be actionable and read
+   the chosen business ID. Nothing else on F2 is compared: no hash and no other instance. While
+   that position reads an Unknown identity, F2 is captured again every `settle.interval_ms` until
+   `settle.timeout_ms`, with no input in between; another Known ID fails at once. No actionable
+   instance there, an Unknown reading at the timeout, or another ID fails
+   `selection_identity_unconfirmed` (stage `select_confirm`, `expected_identity`,
+   `identity_state` `absent`, `unknown` or `different`, and `observed_identity` for `different`).
+6. **Tap.** The decision is recorded (section Record per path), and one tap is sampled with the
+   step's action seed in the confirmed instance's click rectangle (the layout's `click`, placed
+   by the instance F2 shows), as a `task.effect_intent` and its input, bound to F2. The step's
+   one `task.effect_completed` follows, then its `expect_after` and, when declared, its
+   `expect_identity`.
+
+| # | When | Result |
+| --- | --- | --- |
+| 1 | `empty` over complete coverage, with no unknown instance | With `on_empty`, the run ends normally (section Ending empty); without it, `selection_not_selected`, as for a single-frame select |
+| 2 | `empty` or `insufficient`, with at least one unknown instance | `selection_result_blocked`, `selection_blocking: unknown_instances` |
+| 3 | `selected` with the chosen score *S*, and the largest upper bound *U* over the unknown instances is unbounded or above *S* | `selection_result_blocked`, `selection_blocking: outranked_possible`; no runner-up is chosen and nothing is confirmed |
+
+An unknown instance is a position that was readable at least once but holds no fixed Known
+reading: its identity or a feature the policy reads was never Known, a later reading
+contradicted it, or the evaluator dropped it as unknown. Out of the dictionary counts as
+Unknown, never as recognized. Its upper bound is taken at its Known identity, or over the whole
+identity domain without one. Rule 3 compares strictly, so a tie never blocks; a member set,
+whose scores are all equal, is never blocked by it. An `ambiguous` decision, and an
+`insufficient` one with no unknown instance, fail `selection_not_selected`. An evaluator abort
+(`unknown`) while scanning, or a declared record list that is unusable at `Pin`, is recorded and
+fails `selection_not_selected`.
+
+`selection_result_blocked` (execution-kernel, error) carries the stage `select_decide`,
+`selection_kind` (the evaluator's kind verbatim: `selected`, `empty`, `insufficient`,
+`ambiguous` or `unknown`), `outcome_key` (the decision's own key from the policy's
+`outcome_keys`), `selection_blocking` (`unknown_instances` or `outranked_possible`) and `count`
+(the unknown instances). Rules 2 and 3 apply in the same way to a single-frame select that
+declares `on_empty`.
+
+Every scan move (advance, corrective, rewind and return) is a `task.effect_intent` of the
+step's action, linked to the frame it was sampled on and followed by its input, and none is
+followed by `task.effect_completed` (register §1.49 L3-1, §1.58 L3B-2). The task evidence
+report (`actingledger export --task-evidence`, [README.md](README.md)) pairs each input with the
+step's intent linked to the input's own before-frame, and gives an intent only the inputs
+sampled on its frame, so the moves and the tap of one step stay distinct.
+
+The step's deadline is min(StepStarted + `scan.bounds.max_ms`, task deadline); the step timeout
+does not apply to it. The step's preparation budget is checked against it, and every state of
+the scan checks it first (`selection_scan_bounds_exceeded`, `scan_bound: duration`). Every scan
+capture (settle, viewport, rewind, return and F2) is taken without the post-admission OCR
+collector, so it feeds neither the post-admission OCR nor the stability sampling; only the
+dispatched frame F1 does.
+
+The scan's moves are inputs that come before the selecting tap, so a failure after one is a
+failure after input: the step is not retried, the task does not recover within itself, and the
+run fails with the failure's code. The selecting tap still comes after every failure path.
+
+### Record per path
+
+Workflow #308 SEL-L4b (S0 §3.4). A failure before the decision exists writes no record, as for a
+single-frame select. Once the decision exists, exactly one `task.selection_evaluated` precedes
+the step's return, with these members:
+
+| Path | `selection_result` | `confirmation` | `unknown_check.blocking` | `coverage.state` | Task result |
+| --- | --- | --- | --- | --- | --- |
+| A failure before the decision: start, settle, alignment, gap, spacing, an identity mismatch while scanning (`selection_scan_identity_mismatch`), end, unread position, bounds, page, guard, geometry, budget, projection | no record | | | | the failure's code |
+| A declared record list is unusable at `Pin` | `unknown` | `not_attempted` | `none` | `not_started` | `selection_not_selected` |
+| The evaluator aborts in a viewport | `unknown`, no verdicts | `not_attempted` | `none` | `incomplete` | `selection_not_selected` |
+| Rule 1 with `on_empty` | `empty` | `not_attempted` | `none` | `complete` | the run ends Completed with the `on_empty` key |
+| `empty` without `on_empty`; `ambiguous`; `insufficient` with no unknown instance | verbatim | `not_attempted` | `none` | `complete` | `selection_not_selected` |
+| Rule 2 | `empty` or `insufficient` | `not_attempted` | `unknown_instances` | `complete` | `selection_result_blocked` |
+| Rule 3 | `selected` | `not_attempted` | `outranked_possible` | `complete` | `selection_result_blocked` |
+| `selected`; F2's capture or settle fails (a capture error, `selection_scan_settle_incomplete`, `candidate_sample_page_or_geometry_changed`, the scan's deadline), its page changed, or the guard fails on it | `selected` | `capture_failed`, `page_changed` or `guard_failed` | `none` | `complete` or `early_stopped` | that code |
+| `selected`; `Return` fails | `selected` | `reposition_failed {outcome, stage: return}` | `none` | the same | that code |
+| `selected`; F2 does not align against the content map | `selected` | `reposition_failed {outcome, stage: confirm}` | `none` | the same | `selection_scan_alignment_rejected` |
+| `selected`; F2's identity is absent, Unknown until the timeout, or another ID | `selected` | `identity_unconfirmed {identity_state, observed_identity?, identity_unknown?}` | `none` | the same | `selection_identity_unconfirmed` |
+| `selected`; confirmed | `selected` | `identity_matched {candidate_id, frame_id, content_offset_px}` | `none` | the same | the tap, then `expect_after` and `expect_identity` |
+
+The record of a select over a scan carries the projection `actingcommand.candidate-projection.v2`
+(register §1.19, SL1): the coverage, the coverage viewports, the rewind and return viewport
+counts (`reposition`), the members numbered as at `Decide` (`candidates`), the unknown positions
+(`unknown`) and `gated_out {count, identities_sha256}`, where `identities_sha256` is the SHA-256,
+as 64 lowercase hexadecimal digits, of the compact JSON array of the gated-out positions'
+business IDs in ascending order. Its `unknown_check` is always present (SL3), and an abort keeps
+no verdict. `identity_matched` names the selected candidate and F2 with its aligned content
+offset; `observed_identity` is present exactly when the state is `different`.
+`identity_matched`, `identity_unconfirmed` and `reposition_failed` are used only with v2, and
+`matched` and `mismatched` only with v1 (SL2). A failure of the runtime itself after the
+decision is recorded, its confirmation naming `selection_confirmation_capture_failed`, only
+when the runtime classifies it as fatal, as for a single-frame confirmation; any other returns
+without a record.
+
+A single-frame select that declares `on_empty` keeps its v1 record and adds `unknown_check`. Its
+paths are those above without `coverage`, and in place of the identity variants it records
+`matched` or `mismatched` as before.
+
+### Ending empty
+
+Workflow #308 SEL-L4b (S0 §1.4). A select step that declares `on_empty` ends the run normally
+when rule 1 holds: the evaluator decided `empty` (mode `none_allowed`), the coverage is complete
+(for a single-frame select, its frame is the coverage), and no instance is unknown. No further
+operation runs and no input follows: the step records no tap, no `task.effect_intent` for it and
+no `task.effect_completed`. After the step's record, the kernel records the step's
+`StepFinished` with `page_label` the step's page as recognized on its last frame (a scan's last
+viewport, a single-frame select's frame) and, for a phased task, `phase` with
+`completed: false`, because the step completes no stage. It moves the run to Completed on that
+page and finishes it with `executed_steps` including the step, `final_page` that page and
+`selected_scheduling_outcome` the `on_empty` key. The host derives the scheduling disposition
+from that last `StepFinished` as for any end: the mapping of the run's effect condition that
+lists the page, whose key it checks against the kernel's. This is the only normal end in the
+middle of a stage; an `empty` decision without `on_empty` still fails. The admission of
+`on_empty`, including the route's terminal and the prerequisite and return-home refusal
+`select_on_empty`, is in section Declaration.
+
+### Expected identity
+
+Workflow #308 SEL-L4b (S0 §1.3). `expect_after.expect_identity: {target_id, choice_of}` reads
+back what a select step chose. Once the step's destination page (`expect_after.page_id`)
+matches, `target_id`, an OCR target on that page, is read on that frame and on every poll at
+`expect_after.interval_ms` until a Known reading or `expect_after.timeout_ms`; no input occurs.
+The text is mapped through the identity declaration of the step `choice_of` names, with its
+entries, normalization, `max_distance`, `minimum_margin` and confidence floor. The business ID
+that step chose in this run passes. Another Known ID fails at once, only Unknown readings until
+the timeout fail, and a `choice_of` step that chose nothing in this run fails. Each failure is
+`selection_identity_mismatch` (execution-kernel, error) at the stage `select_expect_identity`,
+with `identity_state` `different`, `unknown` or `no_choice`, `expected_identity` (absent for
+`no_choice`) and `observed_identity` (for `different`); the step's `StepFinished` precedes it.
+It comes after the tap, so it appears only in the task's terminal outcome; the decision record
+is unchanged. There is no retry and no fallback.
+
 ### Offline
 
 `package dry-run` evaluates a select step with an empty fact snapshot
@@ -515,8 +797,10 @@ a run that does not complete exits with `replay_run_refused`, its end's outcome 
 through the kernel's own scan path (`dry_run_scan`) instead of the whole package. The frames are
 the step's dispatched frame and then every capture its scan took, in order, as a forward run
 records them; the scan's inputs perform nothing. `--scan` is the step's scan declaration (S0
-§2.1), read from the file because a package declares a step's `scan` only from SEL-L4b on; the
-session's own checks apply to it, the static checks of its admission are SEL-L4b's. The scan's
+§2.1), read from the file. Since SEL-L4b a package declares a step's `scan` itself (section
+Declaration), and the replay still takes the declaration `--scan` gives; the session's own
+checks apply to it, while the static checks of a package's admission (section Declaration) are
+not run on it. The replay never runs `Return` or `Confirm` (section Select over a scan). The scan's
 policy evaluates the facts a whole replay gives a select step, checked as the step checks them
 (`selection_state_unavailable`, `selection_fact_context_mismatch`), with the rows of the record
 lists the step's policy declares. The result is `mode` `offline_scan_replay`, the package,
@@ -576,7 +860,10 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |
 
 A confirmation is attempted exactly when the outcome is `selected`. Together with the
-projection, a matched or mismatched record holds both candidate-set hashes.
+projection, a matched or mismatched record holds both candidate-set hashes. A record with
+`unknown_check` (Workflow #308 SEL-L4b) attempts it only when, besides, nothing blocks the
+decision, and a select over a scan records the v2 projection and its own confirmation kinds
+(section Record per path).
 
 #### Multi select
 

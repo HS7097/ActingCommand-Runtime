@@ -498,6 +498,7 @@ data files beside its package directories, one directory per game below the conf
   bundle.json        the bundle index (above); its packs are the game root's registry
   pages.json         actingcommand.pages.v1: the game's page ids and its feature packages
   interrupts.json    actingcommand.interrupts.v1: the shared interrupt pages
+  navigation.json    actingcommand.navigation.v1: the edges and the recovery chain (NAV-5)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -524,8 +525,17 @@ data files beside its package directories, one directory per game below the conf
   `handlers` names 1–8 packages of the registry, at most one per server; `then` is `"resume"`,
   `"end_run"` or `{"run": [packages]}` (1–8 packages, at most one per server); `max_per_run`
   is 1–8. The file requires `pages.json`.
+- **`navigation.json`** (Workflow #373 NAV-5, M-373 §3.5). `{schema_version, game, edges,
+  recovery_chain}`: at most 1024 edges `{from, to, package_id}`, each "run `package_id` on the
+  page `from` to reach the page `to`"; `from` and `to` are different pages of `pages.json`
+  (never `any`, never a draft's `@origin`: `edge_page_invalid`, `edge_page_unlisted`,
+  `edge_self_loop`), no two edges with the same `from`, `to` and `package_id`
+  (`edge_duplicate`); `recovery_chain` names 1–8 distinct packages (`recovery_chain_count`,
+  `recovery_chain_duplicate`). Every package is a package of the registry; both lists may name
+  packages of every server, and a run uses those of its own. The file requires `pages.json`.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
-  `parse_standard_pack_interrupts`, `validate_standard_pack_references`,
+  `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`,
+  `validate_standard_pack_references`, `validate_standard_pack_navigation_references`,
   `StandardPackRegistry`) are shared by the Runtime's reader, check-config and
   `actinglab resource validate` (`resource-declarations.md`). A refused file is
   `standard_pack_root_invalid` with `game`, `path`, `standard_pack_problem` and `json_pointer`
@@ -535,7 +545,8 @@ data files beside its package directories, one directory per game below the conf
   admitted: each is recorded as a `runtime.lifecycle_observed` `standard_pack_read` record
   (`standard_pack_registered` with the package count, or the root's failure); a broken root
   never stops the Runtime. In a run's preparation, the root of the run's game when it holds
-  `interrupts.json`, and (Workflow #373 NAV-3a) when the run resolves a prerequisite package
+  `interrupts.json` or (Workflow #373 NAV-5) `navigation.json`, and (Workflow #373 NAV-3a)
+  when the run resolves a prerequisite package
   or the return-home package: a broken root refuses the run before any lease and any task
   record; a registry that differs from the one read last (its packages or its return-home
   packages) is recorded as `standard_pack_registered` with the added and removed package ids;
@@ -563,3 +574,53 @@ data files beside its package directories, one directory per game below the conf
   `contained_task_navigation_package_invalid` and its `navigation_role` and
   `navigation_problem`. A handler or `then.run` package never looks at the interrupt pages
   itself.
+- **Navigation** (Workflow #373 NAV-5, M-373 §4.4, §5). A run navigates at its entry gate when
+  its game root holds `pages.json` and `navigation.json`, its server has a feature package, its
+  package's entry pages (a `linear_steps` package's first step page; a page-graph package's
+  `entry_page`, one page or a set, whether or not the gate checks it without navigation data)
+  are all pages of `pages.json`, and the run is not one the host starts itself (a startup
+  package, a ladder rung; their gate is as before). An entry the page list does not hold is
+  recorded as `contained_task_navigation_entry_unlisted` (warning) and the run is as without
+  navigation data. The gate's order: the run's own entry check (its last frame offered to the
+  shared interrupt pages); then an explicit layer (the package's declared prerequisite chain,
+  or a request's own recovery package of a page-graph package) and the entry checked again;
+  then, when the entry still does not pass, the navigation, which takes the place of the
+  return-home fallback (no return-home layer is resolved for the run's own package):
+  - **Locate.** The feature package evaluates every listed page on one frame, in one scene
+    evaluation: the entry check's last frame first, a new frame for every later locate. A shared
+    interrupt page the run's package does not declare is handled first (as above) and the run
+    locates again; two of them are `contained_task_interrupt_ambiguous`. Exactly one other page
+    is `contained_task_navigation_located` and becomes the run's `task.page` fact
+    (`<game>/<page id>`); no page is `contained_task_navigation_page_unrecognized`, several
+    `contained_task_navigation_page_ambiguous`; nothing is guessed. Each locate is a
+    `navigation_located` record (`attempt`, the matched pages, at most 8 listed and all counted,
+    the interrupt page it handed on, the outcome).
+  - **Route and hops.** The fewest-hops route from the located page to an entry page over the
+    edges of the run's server, ties going to the edge the file names first (a
+    `navigation_route_planned` record); page ids are compared as equal or not. No route is
+    `contained_task_navigation_route_missing`. Each hop's package is admitted on its first use
+    in the run and checked for the edge (eligible as a prerequisite layer of the run, its entry
+    holding `from`, ending on `to`, no application entry); it runs as a layer
+    (`EntryRecovery*` with `role: navigation_hop`), and the feature package then awaits `to`
+    alone, a frame every capture interval of the hop's package for its step timeout (an
+    `entry_recognition` of phase `navigation_target`). A hop that did not arrive is
+    `contained_task_navigation_hop_unconfirmed` and the run locates again.
+  - **Recovery chain.** Unrecognised, ambiguous or without a route, the next step of the run's
+    server's chain is admitted (eligible as a prerequisite layer, declaring no prerequisite
+    package of its own; an application entry package may be one) and runs as a layer
+    (`role: recovery_chain`). It is a run the host starts itself, with the option of a startup
+    package and a ladder rung: a page-graph application entry begins with its effect (Workflow
+    #390 EXEC-3, wave-17 ruling 1). Then the run locates again. A spent chain ends the run with
+    `contained_task_navigation_recovery_exhausted` (`count` the steps run, caused by the last
+    verdict that sent the run to the chain).
+  - **Arrival.** On an entry page of the page list, the run's package's own recheck decides,
+    for its step timeout: it starts (its steps after the navigation's layers'), or the run ends
+    with `contained_task_navigation_entry_unconfirmed`.
+  - **Bounds.** 16 locates and 16 hops per gate; a layer (or the run's package) whose
+    `max_steps` would take the run past 1000 steps is not run;
+    `contained_task_navigation_limit_reached` names the bound (`navigation_limit`). An edge or
+    chain package that is not of the run's server is not used; one that cannot be admitted or
+    is not fit for its part ends the run with `contained_task_navigation_package_invalid`
+    (`navigation_role` `edge` or `chain`). A layer's own failure ends the run with its own
+    code. The navigation's layers, an interrupt's handler and the run the host starts itself
+    never navigate. Requests carry no field for any of these packages.

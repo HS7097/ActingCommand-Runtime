@@ -23,7 +23,7 @@ use actingcommand_contract::{
 };
 use actingcommand_execution_kernel::{
     CaptureGeometrySessionRef, ContainedTaskGuardEvaluation, DesignatedEffectCap,
-    ExecutionKernelCode, ResourceAdjustmentResult, ResourceReadingValue, StepPacing,
+    ExecutionKernelCode, ResourceAdjustmentResult, ResourceReadingValue, Scene, StepPacing,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1128,6 +1128,11 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// Workflow #373 NAV-6: whether the traces now recorded are an interrupt layer's.
     pub(super) interrupt_layer: bool,
     pub(super) entry_preflight_recorded: bool,
+    /// Workflow #373 NAV-5 (M-373 §5.2 item 1): while the entry gate checks the run's own
+    /// entry, the scene of each frame it offers to the shared interrupt pages is kept, so the
+    /// first locate takes the check's last frame (`entry_scene`) instead of a new one.
+    pub(super) retain_entry_scene: bool,
+    pub(super) entry_scene: Option<Scene>,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
@@ -5643,11 +5648,14 @@ impl HostShared {
             self.package_material_deadline(active_run.control.deadline())?,
         )?;
         active_run.control.note_package_load(package_load);
-        let prerequisites = self.resolve_prerequisite_chain(instance_alias, &prepared, || {
-            self.package_material_deadline(active_run.control.deadline())
-        })?;
-        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
+        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation;
+        // Workflow #373 NAV-5: with its navigation data, which replaces the return-home fallback.
         let interrupts = self.prepare_run_interrupts(&prepared)?;
+        let navigated = super::navigation::navigation_applies(interrupts.as_deref());
+        let prerequisites =
+            self.resolve_prerequisite_chain(instance_alias, &prepared, navigated, || {
+                self.package_material_deadline(active_run.control.deadline())
+            })?;
         self.append_request_lifecycle(
             original,
             request,
@@ -5938,8 +5946,11 @@ impl HostShared {
                 return Err(prerequisite::configured_return_home_refusal(detail));
             }
         }
+        // Workflow #373 NAV-5: a run the host starts itself never navigates (M-373 §4.4).
         let prerequisites =
-            self.resolve_prerequisite_chain(instance_alias, &prepared, || Ok(material_deadline))?;
+            self.resolve_prerequisite_chain(instance_alias, &prepared, false, || {
+                Ok(material_deadline)
+            })?;
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
         let interrupts = self.prepare_run_interrupts(&prepared)?;
         if pending.recovery_rung {
@@ -6308,7 +6319,7 @@ impl HostShared {
             .control
             .set_deadline(source_deadline)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let (prepared, prerequisites, package_load) = match prepared {
+        let (prepared, prerequisites, package_load, interrupts) = match prepared {
             Some(prepared) => prepared,
             None => self.prepare_scheduled_package(
                 context.decision_id(),
@@ -6344,8 +6355,8 @@ impl HostShared {
                 ));
             }
         }
-        // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation.
-        let interrupts = self.prepare_run_interrupts(&prepared)?;
+        // Workflow #373 NAV-6: the run's shared interrupt pages were read in its preparation
+        // (Workflow #373 NAV-5: before its prerequisite chain, `prepare_scheduled_package`).
         let expected_outcome_keys = lock(
             self.policy()?,
             HostLocation::ValidatePolicyOutcomeDeclaration,
@@ -6525,6 +6536,8 @@ impl HostShared {
             pinned_step: None,
             interrupt_layer: false,
             entry_preflight_recorded: false,
+            retain_entry_scene: false,
+            entry_scene: None,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
             finalizing: None,
@@ -6553,6 +6566,13 @@ impl HostShared {
             reading_keys,
             kernel_clock_failure: None,
         };
+        // Workflow #373 NAV-5 (M-373 §4.4, 「不递归」): a run the host starts itself (a startup
+        // package, a ladder rung) keeps today's gate; it never navigates.
+        if control.is_host_package()
+            && let Some(interrupts) = runtime.interrupts.as_mut()
+        {
+            interrupts.navigation = None;
+        }
         // Zero-input fields confirm the required entry in the interpreter's first capture.
         // Workflow #398 RD-5b (model-398 v1.1 §7.2): a handset's start gate runs before the
         // run's first step; its refusal ends the run with its own code and no input.
@@ -6561,13 +6581,25 @@ impl HostShared {
             .and_then(|()| runtime.record_initial_configuration(task_request, &prepared))
             .and_then(|()| {
                 self.device_state_gate(control.instance_id, instance_alias, &token, connection_id)
-            }) {
+            })
+            // Workflow #373 NAV-5 (§4.4): an entry the page list does not hold is recorded.
+            .and_then(|()| runtime.note_unlisted_entry())
+        {
             Err(ContainedTaskRunError::Boundary(failure))
         } else if !prerequisites.is_empty() {
             // Workflow #336 L2b: a package with prerequisite packages runs through their gate;
             // Workflow #373 NAV-3a, a page-graph package that declares one included (its entry
             // is checked by the gate, not by the home entry below).
             prerequisite::run_gated(&prepared, &prerequisites, &mut runtime)
+        } else if runtime.navigates()
+            && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
+            && (task_request.recovery().is_none() || prepared.required_entry_pages().is_none())
+        {
+            // Workflow #373 NAV-5 (M-373 §4.4 ②): with navigation data, the entry gate checks
+            // every package whose entry pages are listed and navigates when it does not pass,
+            // in place of the return-home fallback (R16, R23). A request's own recovery package
+            // is an explicit layer (below), and the navigation follows it.
+            runtime.run_navigated(&prepared)
         } else if prepared.required_entry_pages().is_some()
             && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0)
         {
@@ -7501,7 +7533,11 @@ impl HostShared {
             );
         }
 
-        let post_recovery_page = prepared.recognize_required_entry(runtime)?;
+        // Workflow #373 NAV-5 (§5.2 item 1): the recheck's last frame is the first locate's.
+        runtime.retain_entry_scene = runtime.navigates();
+        let post_recovery_page = prepared.recognize_required_entry(runtime);
+        runtime.retain_entry_scene = false;
+        let post_recovery_page = post_recovery_page?;
         let post_recovery_home = post_recovery_page.is_some();
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecognition {
@@ -7511,14 +7547,20 @@ impl HostShared {
                 matched: post_recovery_home,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        if !post_recovery_home {
+        let executed = if post_recovery_home {
+            runtime.entry_scene = None;
+            recovery_outcome.executed_steps
+        } else if runtime.navigates() {
+            // Workflow #373 NAV-5 (M-373 §4.4 ① then ②): the request's own recovery package ran
+            // and the entry still does not pass; the run navigates.
+            runtime.navigate_to_entry(prepared, recovery_outcome.executed_steps)?
+        } else {
             return fail_contained_task_entry(
                 runtime,
                 HostCode::ContainedTaskHomeRecoveryPersistentlyNonHome.as_str(),
             );
-        }
-        if recovery_outcome
-            .executed_steps
+        };
+        if executed
             .checked_add(prepared.maximum_executed_steps())
             .and_then(|maximum| maximum.checked_add(runtime.interrupt_steps))
             .is_none_or(|maximum| maximum > 1_000)
@@ -7528,11 +7570,9 @@ impl HostShared {
                 HostCode::ContainedTaskHomeRecoveryStepLimit.as_str(),
             );
         }
-        runtime
-            .begin_layer(recovery_outcome.executed_steps)
-            .ok_or_else(|| {
-                ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
-            })?;
+        runtime.begin_layer(executed).ok_or_else(|| {
+            ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryStepLimit.as_str())
+        })?;
         runtime
             .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
                 disposition: TaskEntryTargetDisposition::Started,
@@ -7674,12 +7714,19 @@ impl HostShared {
         let recovery_packages = semantic
             .iter()
             .filter_map(|(_, fact)| match fact {
-                // Workflow #373 NAV-6: an interrupt layer is no gate package.
+                // Workflow #373 NAV-6: an interrupt layer is no gate package; Workflow #373
+                // NAV-5: nor is an edge's or a recovery chain step's package.
                 TaskSemanticFact::EntryRecoveryPackageAdmitted {
                     package_label,
                     role,
-                } if *role
-                    != Some(actingcommand_contract::TaskEntryRecoveryRole::InterruptHandler) =>
+                } if !matches!(
+                    role,
+                    Some(
+                        actingcommand_contract::TaskEntryRecoveryRole::InterruptHandler
+                            | actingcommand_contract::TaskEntryRecoveryRole::NavigationHop
+                            | actingcommand_contract::TaskEntryRecoveryRole::RecoveryChain
+                    )
+                ) =>
                 {
                     Some((package_label, role.is_some()))
                 }

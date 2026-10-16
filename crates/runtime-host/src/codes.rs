@@ -1316,6 +1316,33 @@ actingcommand_contract::outcome_codes! {
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
         // ---- Workflow #373 NAV-6: end
+        // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
+        /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys
+        /// `page_id`, `count`: the locate's number).
+        ContainedTaskNavigationLocated => "contained_task_navigation_located": info / none,
+        /// Warning. A locate matched no page of `pages.json`; the recovery chain's next step
+        /// runs (keys `count`).
+        ContainedTaskNavigationPageUnrecognized => "contained_task_navigation_page_unrecognized": warning / none,
+        /// Warning. A locate matched more than one page of `pages.json`; none is picked and the
+        /// recovery chain's next step runs (keys `page_ids`).
+        ContainedTaskNavigationPageAmbiguous => "contained_task_navigation_page_ambiguous": warning / none,
+        /// Warning. No edge of the run's server leads from the located page to the entry; the
+        /// recovery chain's next step runs (keys `page_id`).
+        ContainedTaskNavigationRouteMissing => "contained_task_navigation_route_missing": warning / none,
+        /// Warning. After an edge's package ran, the feature package did not see the edge's `to`
+        /// page within the package's step timeout; the run locates again (keys `package_id`,
+        /// `page_id`).
+        ContainedTaskNavigationHopUnconfirmed => "contained_task_navigation_hop_unconfirmed": warning / none,
+        /// Warning. The run's entry pages are not all pages of `pages.json`, so its entry gate
+        /// does not navigate (keys `page_ids`).
+        ContainedTaskNavigationEntryUnlisted => "contained_task_navigation_entry_unlisted": warning / none,
+        /// Error. The navigation reached the run's entry by the page list, and the package's own
+        /// recheck did not pass (keys `page_ids`).
+        ContainedTaskNavigationEntryUnconfirmed => "contained_task_navigation_entry_unconfirmed": error / pack_logic_mismatch,
+        /// Error. An entry gate's 16 locates or 16 hops, or the run's 1000 steps, are spent
+        /// (keys `navigation_limit`, `count`, `limit_count`).
+        ContainedTaskNavigationLimitReached => "contained_task_navigation_limit_reached": error / budget_or_permission,
+        // ---- Workflow #373 NAV-5: end
         /// Error. A performance observation event the contract refused was dropped and the
         /// performance monitor degraded instead of ending the Runtime (keys `event_type`; its
         /// `caused_by` link is the contract's sanitization outcome; Workflow #378 A2-P).
@@ -2192,6 +2219,12 @@ actingcommand_contract::outcome_locations! {
         StandardPackRegister => "standard_pack_register",
         InterruptCheck => "interrupt_check",
         InterruptHandle => "interrupt_handle",
+        // Workflow #373 NAV-5: an entry gate's full match, its route, an edge's package and a
+        // recovery chain step.
+        NavigationLocate => "navigation_locate",
+        NavigationRoute => "navigation_route",
+        NavigationHop => "navigation_hop",
+        NavigationChain => "navigation_chain",
         AdbEndpointPending => "adb_endpoint_pending",
         AdbEndpointUnresolved => "adb_endpoint_unresolved",
         // Workflow #398 RD-1b: a handset the private binding file binds no device to.

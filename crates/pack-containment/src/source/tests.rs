@@ -685,3 +685,62 @@ fn lpbox_a_source_long_press_keeps_its_click_box_in_the_navigation_and_the_guard
         assert_eq!(issue.reason, ResourceDeclarationReason::MissingField);
     }
 }
+
+// Workflow #308 SEL-L4b (frozen selector model S0 §1.4 (c)): a phased route whose select step
+// declares `on_empty` may end on the step's own page before any designated effect, so that state
+// is a terminal too. The source parser refuses the bundle `task_phases_outcome_incomplete` when
+// no mapping lists the page under that effect condition, and admits it when the one mapping that
+// does carries the `on_empty` key.
+#[test]
+fn l4b_a_phased_on_empty_select_step_needs_a_mapping_for_its_own_page() {
+    let mapping = |key: &str, effect: &str, page: &str| json!({"outcome_key": key, "effect": effect, "terminal_pages": [page]});
+    let bundle = |mappings: Vec<Value>| Bundle {
+        task_id: "fixture".to_string(),
+        dir: PathBuf::from("operations/fixture"),
+        data: json!({
+            "schema_version": "0.9",
+            "task_id": "fixture",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 1280, "height": 720},
+            "entry_page": "home",
+            "target_page": "home",
+            "phases": [
+                {"id": "depart", "operations": ["open_list"], "target_pages": ["list"]},
+                {"id": "business", "operations": ["choose"], "target_pages": ["detail"]},
+                {"id": "return", "operations": ["back_home"], "target_pages": ["home"]}
+            ],
+            "scheduling_outcome": {"designated_operation": "choose", "mappings": mappings},
+            "operations": [
+                {"id": "open_list", "from": "home", "to": "list",
+                 "click": {"kind": "rect", "x": 40, "y": 600, "width": 120, "height": 60}},
+                {"id": "choose", "from": "list",
+                 "select": {"layout_id": "layout/cards",
+                            "policy": {"path": "policies/cards.json"},
+                            "on_empty": {"outcome_key": "nobody_listed"}},
+                 "guard": {"page_id": "list", "target_id": "check/list_ready",
+                           "expected_rect": {"x": 0, "y": 0, "width": 1280, "height": 120}},
+                 "expect_after": {"page_id": "detail", "timeout_ms": 3000, "interval_ms": 200}},
+                {"id": "back_home", "from": "detail", "to": "home",
+                 "click": {"kind": "rect", "x": 20, "y": 20, "width": 60, "height": 60}}
+            ]
+        }),
+    };
+    let returned = || mapping("returned", "designated_effect_completed", "home");
+    validate_phases_bundle(&bundle(vec![
+        returned(),
+        mapping("nobody_listed", "no_designated_effect", "list"),
+    ]))
+    .expect("the on_empty key's mapping lists the step's page under no designated effect");
+    for mappings in [
+        vec![returned()],
+        vec![
+            returned(),
+            mapping("nobody_listed", "designated_effect_completed", "list"),
+        ],
+    ] {
+        let error = validate_phases_bundle(&bundle(mappings))
+            .expect_err("no mapping lists the step's page under no designated effect");
+        assert_eq!(error.message, "task_phases_outcome_incomplete");
+    }
+}

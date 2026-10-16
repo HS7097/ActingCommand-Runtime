@@ -1079,6 +1079,7 @@ fn pkg_s5_the_content_hash_has_one_entry_and_no_admission_path_reaches_it() {
         "crates/runtime-host/src/host/contained_task.rs",
         "crates/runtime-host/src/host/prerequisite.rs",
         "crates/runtime-host/src/host/standard_pack.rs",
+        "crates/runtime-host/src/host/navigation.rs",
         "crates/lab/src/recording/container.rs",
         "crates/lab/src/recording/crosscheck.rs",
         "crates/lab/src/recording_api.rs",
@@ -5418,6 +5419,8 @@ const HOST_SPLIT: &[HostModule] = &[
             "MonitorPayloadDraft::recovery_deferred",
         ],
     },
+    // Workflow #373 NAV-5: the entry gate's full-match routing of a run.
+    host_module("navigation", &["RuntimeContainedTask"]),
     host_module("nemu_input", &["HostShared"]),
     HostModule {
         module: "observation",

@@ -38,7 +38,10 @@ use actingcommand_page_detector::{
     PageBatchResult, PageDetector, PageEvaluation, PageOutcome, PageSet, PageTargetRole,
     require_all_page_evaluations,
 };
-use actingcommand_recognition::{Scene, ScenePixelFormat};
+// Workflow #373 NAV-5: the runtime keeps the scene of an entry check's last frame for its
+// first locate (M-373 §5.2 item 1).
+pub use actingcommand_recognition::Scene;
+use actingcommand_recognition::ScenePixelFormat;
 use actingcommand_recognition_pack::{
     OcrProviderExecutionEvidence, OcrTextEvidence, PackRect, PackRegion, RecognitionEvaluator,
     RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
@@ -90,6 +93,15 @@ mod gate_308_l3;
 // Workflow #308 SEL-L3b: the horizontal axis, the held drag and the page flip of a scan.
 #[cfg(test)]
 mod gate_308_l3b;
+// Workflow #308 SEL-L4b: a select over a scan, its decision, return and confirmation.
+#[cfg(test)]
+mod gate_308_l4b;
+// Workflow #308 SEL-L4b: on_empty ends and expect_identity in a run.
+#[cfg(test)]
+mod l4b_run_tests;
+// Workflow #308 SEL-L4b: admission of scan, on_empty and expect_identity.
+#[cfg(test)]
+mod gate_308_l4b_admission;
 // Workflow #387 D1c-F: the pack's segmented swipe and the stability sample's two causes.
 #[cfg(test)]
 mod gate_387_d1cf;
@@ -2578,6 +2590,10 @@ impl PreparedContainedTask {
             }
         }
         for operation in &program.operations {
+            // Workflow #308 SEL-L4b (S0 §1.7): a scan's preparation runs against its `max_ms`.
+            let admission_limit = operation.scan_max_ms().map_or(admission_limit, |max_ms| {
+                max_ms.min(control.task_timeout().milliseconds)
+            });
             if let Some(required_ms) =
                 selection::sampling_budget_ms(operation, &evaluator, &detector)?
                 && required_ms > admission_limit
@@ -2601,6 +2617,11 @@ impl PreparedContainedTask {
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let post_admission_fields =
             program.prepare_ocr_fields(&control, &bundle, &detector, &evaluator)?;
+        program.validate_on_empty_post_admission(
+            &control,
+            post_admission_ocr.is_some(),
+            post_admission_fields.as_ref(),
+        )?;
         program.validate_resource_reading_targets(&bundle, &detector, &evaluator)?;
         // Workflow #396 REC-8: a page that names a field, reading or collection target reads
         // it in the page recognition, one more text read of that consumer's budget.
@@ -2826,6 +2847,54 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #373 NAV-5 (M-373 §4.4): the entry the host checks when the run's game has
+    /// navigation data, as detector page ids: a `linear_steps` package's first step page; a
+    /// `navigable_route` package's declared `entry_page`, one page or an entry page set, whether
+    /// or not the host checks it without navigation data. `None` for an application entry
+    /// (`any`, R24), an entry page that does not resolve to one page, and every other mode.
+    pub fn navigation_entry_pages(&self) -> Option<Vec<String>> {
+        match self.control.execution_mode.as_str() {
+            linear::LINEAR_STEPS => self.linear_entry_page().map(|page| vec![page.to_owned()]),
+            "navigable_route" => match self.required_entry_pages() {
+                Some(required) => Some(required.to_vec()),
+                None => {
+                    let entry = self
+                        .program
+                        .single_entry_page()
+                        .filter(|page| *page != linear::ANY_PAGE)?;
+                    resolve_page_reference(&self.control.game, entry, &self.detector)
+                        .ok()
+                        .map(|page| vec![page])
+                }
+            },
+            _ => None,
+        }
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §5.3): whether the package's entry is `any` (an application
+    /// entry package, R24): a `linear_steps` package whose first step starts from `any`, or a
+    /// page-graph package whose `entry_page` is `any`.
+    pub fn has_application_entry(&self) -> bool {
+        match self.control.execution_mode.as_str() {
+            linear::LINEAR_STEPS => self
+                .program
+                .operations
+                .first()
+                .is_some_and(|operation| operation.from == linear::ANY_PAGE),
+            _ => self.program.single_entry_page() == Some(linear::ANY_PAGE),
+        }
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §5.3): whether the package ends on `page` (a page id without
+    /// the game prefix): its `target_page`, or a page of its target page set.
+    pub fn terminal_holds_page(&self, page: &str) -> bool {
+        self.program.target_pages().is_ok_and(|targets| {
+            targets
+                .iter()
+                .any(|target| crate::canonical_page_anchor(&self.control.game, target) == page)
+        })
+    }
+
     /// Channels needed before an application effect can repair the connection, for a run the
     /// host starts itself (a recovery ladder rung). This reads only the hash-admitted program.
     /// An `any` linear application entry performs no capture or input first, and neither does
@@ -2896,6 +2965,15 @@ impl PreparedContainedTask {
             Some("resource_readings")
         } else if self.program.resource_adjustments.is_some() {
             Some("resource_adjustments")
+        } else if self
+            .program
+            .operations
+            .iter()
+            .any(|operation| operation.on_empty_key().is_some())
+        {
+            // Workflow #308 SEL-L4b (S0 §1.4 (g)): an early end on the step's own page would
+            // leave the dependent package short of its entry page.
+            Some("select_on_empty")
         } else if self
             .scheduling_outcome
             .as_ref()
@@ -3121,6 +3199,25 @@ impl PreparedContainedTask {
         }
     }
 
+    /// Workflow #373 NAV-5 (M-373 §4.4): the first check of the entry gate of a run whose game
+    /// has navigation data ([`Self::navigation_entry_pages`]): a `linear_steps` package's first
+    /// step page as [`Self::recognize_gate_entry`] checks it, a page-graph package's declared
+    /// entry as its home entry is checked ([`Self::recognize_required_entry`]); its unmatched
+    /// frame is offered to the runtime's shared interrupt pages.
+    pub fn recognize_navigation_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
+        if self.control.execution_mode == linear::LINEAR_STEPS {
+            return self.recognize_gate_entry(runtime);
+        }
+        let pages = self
+            .navigation_entry_pages()
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
+        self.recognize_entry_window(runtime, &pages)
+    }
+
     /// Workflow #336 L2b: after a prerequisite package ran, frames of the gate entry
     /// ([`Self::gate_entry_pages`]: the first step's page; Workflow #373 NAV-3a, a page-graph
     /// package's whole entry) are recognized one at a time, every capture interval of this
@@ -3141,6 +3238,36 @@ impl PreparedContainedTask {
         let entry = self
             .gate_entry_pages()
             .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        self.await_entry_pages(runtime, &entry, budget, origin, layer, return_home)
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §5.3, "到了入口"): once the navigation reached the run's entry,
+    /// the package's own recheck of [`Self::navigation_entry_pages`], awaited as
+    /// [`Self::await_gate_entry`] awaits a gate entry for `budget` (the package's step timeout).
+    /// The caller decides the code of an unmatched entry; the wait's own failure carries the
+    /// spent budget.
+    pub fn await_navigation_entry<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
+    ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
+        let entry = self
+            .navigation_entry_pages()
+            .ok_or_else(|| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        self.await_entry_pages(runtime, &entry, budget, origin, 0, None)
+    }
+
+    /// The wait of [`Self::await_gate_entry`] over the entry `entry`.
+    fn await_entry_pages<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        entry: &[String],
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
+        layer: usize,
+        return_home: Option<&str>,
+    ) -> Result<GateEntryAwait, ContainedTaskRunError<R::Error>> {
         let pages = entry.iter().map(String::as_str).collect::<Vec<_>>();
         // The detail names the one page, or (Workflow #373 NAV-3a) every page of an entry set.
         let required = match pages.as_slice() {
@@ -3483,6 +3610,53 @@ impl PreparedContainedTask {
             .collect())
     }
 
+    /// Workflow #373 NAV-5 (M-373 §5.2 item 1, §5.3 item 4): one new frame for a locate or a
+    /// hop's check, of this package's resolution (the feature package's, which is the run's):
+    /// captured at the `CapturePage` boundary of the window that started at `window_started`
+    /// with `budget` of `origin`, its `CaptureCompleted` recorded, its scene returned for
+    /// [`Self::matching_pages_on_scene`].
+    pub fn capture_scene<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        window_started: Instant,
+        budget: Duration,
+        origin: actingcommand_contract::TaskTimingBudgetOrigin,
+    ) -> Result<Scene, ContainedTaskRunError<R::Error>> {
+        let timing =
+            ContainedTaskTimingContext::new(window_started, window_started + budget, origin);
+        let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
+        let identity = runtime.task_boundary_identity(boundary);
+        let started = runtime.monotonic_now();
+        let captured = self.capture_scene_frame(runtime);
+        let ended = runtime.monotonic_now();
+        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+            boundary,
+            identity,
+            context: timing,
+            started,
+            ended,
+            succeeded: captured.is_ok(),
+        });
+        captured
+    }
+
+    fn capture_scene_frame<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<Scene, ContainedTaskRunError<R::Error>> {
+        let frame = runtime
+            .capture()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        self.control.resolution.validate_frame(&frame)?;
+        runtime
+            .record(ContainedTaskTrace::CaptureCompleted {
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(scene_from_frame(&frame)?)
+    }
+
     /// Workflow #373 NAV-6: this package's page ids.
     pub fn page_ids(&self) -> Vec<&str> {
         self.detector.page_ids().collect()
@@ -3665,6 +3839,32 @@ impl PreparedContainedTask {
             runtime,
             ContainedTaskRunOptions {
                 entry: ContainedTaskEntry::BoundRecovery,
+                ..ContainedTaskRunOptions::default()
+            },
+        )
+    }
+
+    /// Workflow #373 NAV-5 (wave-17 ruling 1, the open point of Workflow #390 EXEC-3 ruling 2):
+    /// a step of a navigation recovery chain is a run the host starts itself, entered as
+    /// [`Self::run_as_prerequisite`] enters a layer, with the option of a startup package and a
+    /// ladder rung ([`Self::run_host_package`]): a page-graph application entry (its
+    /// `entry_page` `"any"`, its first operation a `from: "any"` application effect) begins with
+    /// that effect, before any capture.
+    pub fn run_as_host_layer<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        if !self.is_prerequisite_compatible() {
+            return Err(ContainedTaskError::new(
+                SharedCode::ContainedTaskPrerequisiteIncompatible.code(),
+            )
+            .into());
+        }
+        self.run_with_options(
+            runtime,
+            ContainedTaskRunOptions {
+                entry: ContainedTaskEntry::BoundRecovery,
+                application_entry: ApplicationEntryRun::First,
                 ..ContainedTaskRunOptions::default()
             },
         )
@@ -3867,6 +4067,9 @@ impl PreparedContainedTask {
             .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
         let mut stability_tracker = StabilityTracker::default();
         let mut recovery_timing = None;
+        // Workflow #308 SEL-L4b (S0 §1.3): the business ID each select step chose in this run,
+        // which an `expect_identity` reads back.
+        let mut chosen_identities: BTreeMap<String, String> = BTreeMap::new();
 
         loop {
             if elapsed_since(runtime, started) >= task_timeout {
@@ -3964,8 +4167,13 @@ impl PreparedContainedTask {
                                 )
                                 .into());
                         }
+                        // Workflow #308 SEL-L4b (S0 §1.7): a scan select's deadline is its
+                        // `max_ms`, capped by the task's; the step timeout does not apply to it.
+                        let step_window = operation
+                            .scan_max_ms()
+                            .map_or(step_timeout, Duration::from_millis);
                         let mut step_timing = observation_timing
-                            .with_deadline(runtime.observation_now() + step_timeout);
+                            .with_deadline(runtime.observation_now() + step_window);
                         let sampling_budget = selection::sampling_budget_ms(
                             operation,
                             &self.evaluator,
@@ -4029,15 +4237,39 @@ impl PreparedContainedTask {
                                 // confirms it on a fresh frame, whose input context then binds
                                 // the tap; a click is guarded on the step's own frame.
                                 let pre_input = if operation.select.is_some() {
-                                    self.select_attempt(
+                                    match self.select_attempt(
                                         runtime,
                                         operation,
                                         observed,
                                         step_index,
                                         step_timing,
                                         (&retries, step_timeout),
-                                    )
-                                    .map(|selected| (selected.guard.clone(), None, Some(selected)))
+                                    ) {
+                                        Ok(selection::SelectAttempt::Selected(selected)) => {
+                                            Ok((selected.guard.clone(), None, Some(*selected)))
+                                        }
+                                        // Workflow #308 SEL-L4b (S0 §1.4): nobody listed is
+                                        // present and nothing is unknown; the run ends here.
+                                        Ok(selection::SelectAttempt::Empty {
+                                            outcome_key,
+                                            page_label,
+                                        }) => {
+                                            return self.finish_select_empty(
+                                                runtime,
+                                                ocr_collector,
+                                                &mut machine,
+                                                (step_index, &operation_id),
+                                                page_label,
+                                                outcome_key,
+                                            );
+                                        }
+                                        // A scan's failure may follow its own drags: no retry and
+                                        // no in-task recovery (S0 §1.3).
+                                        Err(failure) if operation.scan_max_ms().is_some() => {
+                                            return Err(failure);
+                                        }
+                                        Err(failure) => Err(failure),
+                                    }
                                 } else {
                                     operation
                                         .guard_outcome(
@@ -4141,11 +4373,23 @@ impl PreparedContainedTask {
                                             }
                                         },
                                     };
-                                let action_seed = runtime
-                                    .action_seed(step_index, &operation_id)
-                                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                                // Workflow #308 SEL-L4b: a scan select drew the step's seed for
+                                // its moves; its tap reuses it.
+                                let action_seed = match selected
+                                    .as_ref()
+                                    .and_then(|selected| selected.action_seed)
+                                {
+                                    Some(action_seed) => action_seed,
+                                    None => runtime
+                                        .action_seed(step_index, &operation_id)
+                                        .map_err(ContainedTaskRunError::operation::<R>)?,
+                                };
                                 let (action, sampling, input_context) = match selected {
                                     Some(selected) => {
+                                        if let Some(identity) = &selected.identity {
+                                            chosen_identities
+                                                .insert(operation_id.clone(), identity.clone());
+                                        }
                                         let (action, sampling) = selected
                                             .input_action(&self.control.resolution, action_seed)?;
                                         (action, sampling, selected.frame.input_context)
@@ -4169,6 +4413,7 @@ impl PreparedContainedTask {
                                 // The one sampling deadline check before the input (§2.1 item
                                 // 3): a timeout here is the observation's, and is retried.
                                 if sampling_budget.is_some()
+                                    && operation.scan_max_ms().is_none()
                                     && runtime.observation_now() >= step_timing.deadline()
                                 {
                                     let timeout = ContainedTaskError::new(
@@ -4312,6 +4557,16 @@ impl PreparedContainedTask {
                         {
                             PostconditionResolution::Reached(reached) => {
                                 observation = Some(reached);
+                                // Workflow #308 SEL-L4b (S0 §1.3): the destination reads the
+                                // business ID its `choice_of` step chose.
+                                self.expect_identity(
+                                    runtime,
+                                    operation,
+                                    (step_index, &operation_id),
+                                    &mut observation,
+                                    &chosen_identities,
+                                    observation_timing,
+                                )?;
                                 if let Some(reason) = self.complete_successful_step(
                                     runtime,
                                     ocr_collector,
@@ -4713,7 +4968,185 @@ impl PreparedContainedTask {
         ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         final_page: Option<String>,
         // The executed steps, and Workflow #390 OUT-2's designated effect caps.
+        steps: (u32, &[crate::DesignatedEffectCap]),
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        self.finish_success_with_key(runtime, ocr_collector, final_page, steps, None)
+    }
+
+    /// Workflow #308 SEL-L4b (S0 §1.4): a select step that declares `on_empty` found nobody
+    /// listed and nothing unknown. No further operation runs and no input follows: the step
+    /// finishes on its own page as recognized on its last frame, without completing its phase,
+    /// and the run is Completed there with the `on_empty` key as its scheduling outcome.
+    fn finish_select_empty<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        machine: &mut RunStateMachine,
+        (step_index, operation_label): (u32, &str),
+        page_label: String,
+        outcome_key: String,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        runtime
+            .record(ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label: operation_label.to_owned(),
+                page_label: page_label.clone(),
+                phase: machine.phase_evidence(None),
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        machine
+            .operation_ended_empty(operation_label, page_label.clone())
+            .map_err(|_| ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()))?;
+        self.finish_success_with_key(
+            runtime,
+            ocr_collector,
+            Some(page_label),
+            (machine.completed_steps(), machine.designated_effect_caps()),
+            Some(outcome_key),
+        )
+    }
+
+    /// Workflow #308 SEL-L4b (S0 §1.3): an `expect_identity` of the operation's `expect_after`.
+    /// The destination frame, and then every poll at `expect_after.interval_ms` until a Known
+    /// reading or `expect_after.timeout_ms`, reads `target_id` and maps the text through the
+    /// identity of the `choice_of` step. The business ID that step chose in this run passes;
+    /// another Known one fails at once, Unknown readings until the timeout fail, and a step that
+    /// has not chosen in this run fails: all `selection_identity_mismatch`, after the step's
+    /// `StepFinished`. No input occurs; only a poll of a destination page is read, and the last
+    /// one becomes the step's frame.
+    fn expect_identity<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        (step_index, operation_label): (u32, &str),
+        observation: &mut Option<PageObservation>,
+        chosen: &BTreeMap<String, String>,
+        timing: ContainedTaskTimingContext,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        let Some(expect) = operation
+            .expect_after
+            .as_ref()
+            .and_then(|expectation| expectation.expect_identity.as_ref())
+        else {
+            return Ok(());
+        };
+        let Some(expected) = chosen.get(&expect.choice_of) else {
+            Self::finish_effect_attempt(
+                runtime,
+                step_index,
+                operation_label,
+                observation.as_ref(),
+            )?;
+            return Err(identity_mismatch(None, scan::IdentityState::NoChoice, None).into());
+        };
+        let identity = self
+            .program
+            .operations
+            .iter()
+            .find(|candidate| candidate.id == expect.choice_of)
+            .and_then(|choice| choice.prepared_select.as_deref())
+            .and_then(|prepared| {
+                let layout = self.evaluator.candidate_layout(prepared.layout_id())?;
+                let name = prepared.identity_feature()?;
+                layout
+                    .features
+                    .iter()
+                    .find(|feature| feature.name == name)?
+                    .identity
+                    .as_ref()
+            })
+            .ok_or_else(|| {
+                ContainedTaskError::new(ExecutionKernelCode::ContainedTaskSelectInvalid.code())
+            })?;
+        let effective = operation.effective_timing(&self.control);
+        let timeout = Duration::from_millis(effective.timeout.milliseconds);
+        let interval = Duration::from_millis(effective.interval.milliseconds);
+        let started = runtime.monotonic_now();
+        loop {
+            let destination = observation.as_ref().filter(|frame| {
+                operation
+                    .matching_destination_count(&self.control, frame)
+                    .is_ok_and(|count| count > 0)
+            });
+            if let Some(frame) = destination {
+                let reading = self
+                    .evaluator
+                    .evaluate_target(&frame.scene, &expect.target_id)
+                    .map_err(|error| {
+                        ContainedTaskError::with_detail(
+                            SharedCode::ContainedTaskRecognitionFailed.code(),
+                            error.to_string(),
+                        )
+                    })?;
+                let read = reading.ocr.as_deref().map(|ocr| {
+                    identity.map_ocr(
+                        &ocr.text,
+                        actingcommand_contract::ocr_confidence_milli(ocr.confidence),
+                    )
+                });
+                match read {
+                    Some(actingcommand_contract::CandidateFeature::Identity { value, .. })
+                        if value == *expected =>
+                    {
+                        return Ok(());
+                    }
+                    Some(actingcommand_contract::CandidateFeature::Identity { value, .. }) => {
+                        Self::finish_effect_attempt(
+                            runtime,
+                            step_index,
+                            operation_label,
+                            Some(frame),
+                        )?;
+                        return Err(identity_mismatch(
+                            Some(expected.as_str()),
+                            scan::IdentityState::Different,
+                            Some(value),
+                        )
+                        .into());
+                    }
+                    _ => {}
+                }
+            }
+            if runtime.monotonic_now().saturating_duration_since(started) >= timeout {
+                Self::finish_effect_attempt(
+                    runtime,
+                    step_index,
+                    operation_label,
+                    observation.as_ref(),
+                )?;
+                return Err(identity_mismatch(
+                    Some(expected.as_str()),
+                    scan::IdentityState::Unknown,
+                    None,
+                )
+                .into());
+            }
+            let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
+            let identity_boundary = runtime.task_boundary_identity(boundary);
+            let wait_started = runtime.monotonic_now();
+            runtime.pause(interval);
+            let wait_ended = runtime.monotonic_now();
+            runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                boundary,
+                identity: identity_boundary,
+                context: timing,
+                started: wait_started,
+                ended: wait_ended,
+                succeeded: true,
+            });
+            *observation = self.capture_frame(runtime, None, None, timing, None, None)?;
+        }
+    }
+
+    fn finish_success_with_key<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        final_page: Option<String>,
+        // The executed steps, and Workflow #390 OUT-2's designated effect caps.
         (executed_steps, designated_effect_caps): (u32, &[crate::DesignatedEffectCap]),
+        // Workflow #308 SEL-L4b: the `on_empty` key of a run that ended empty.
+        on_empty_key: Option<String>,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         let reading_relay = ocr_collector.reading_relay.take();
         let selected_scheduling_outcome = if let Some(report) = ocr_collector.fields_report() {
@@ -4737,6 +5170,17 @@ impl PreparedContainedTask {
                     Some(outcome_key)
                 }
                 None => None,
+            }
+        };
+        // Workflow #308 SEL-L4b (S0 §1.4 (e)): an empty end supplies the run's key, and
+        // admission keeps an OCR comparison, the other source, away from such a task.
+        let selected_scheduling_outcome = match (on_empty_key, selected_scheduling_outcome) {
+            (Some(key), None) => Some(key),
+            (None, key) => key,
+            (Some(_), Some(_)) => {
+                return Err(
+                    ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code()).into(),
+                );
             }
         };
         // Workflow #384 D2-S2 (model §3.5): the readings of every handed-off frame are joined
@@ -6638,6 +7082,43 @@ impl TaskProgram {
         Ok(())
     }
 
+    /// Workflow #308 SEL-L4b (S0 §1.4 (e)): a task whose post-admission OCR comparison supplies
+    /// the scheduling outcome declares no `on_empty`, because one run would have two sources for
+    /// its key; a task with post-admission fields declares one only when the fields' pages
+    /// include the `from` page of every `on_empty` step, so the collector saw its frame. Both
+    /// refusals are `contained_task_select_invalid`.
+    fn validate_on_empty_post_admission(
+        &self,
+        control: &TaskControl,
+        comparison: bool,
+        fields: Option<&PreparedOcrFields>,
+    ) -> Result<(), ContainedTaskError> {
+        for operation in &self.operations {
+            if operation.on_empty_key().is_none() {
+                continue;
+            }
+            let refuse = |detail: &str| {
+                ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskSelectInvalid.code(),
+                    format!("operation={} on_empty {detail}", operation.id),
+                )
+            };
+            if comparison {
+                return Err(refuse("post_admission_ocr=comparison"));
+            }
+            if fields.is_some_and(|fields| {
+                !fields
+                    .declaration
+                    .page_ids
+                    .iter()
+                    .any(|page| crate::page_anchor_matches(&control.game, &operation.from, page))
+            }) {
+                return Err(refuse("post_admission_fields=from_page_absent"));
+            }
+        }
+        Ok(())
+    }
+
     /// Workflow #396 REC-1: a `verify_text` guard names a locate OCR target, and the text
     /// reads of every guard, one consumer each, stay within the static budget of
     /// `contracts/ocr-fields.md`; an exceeded budget is a refused declaration at the guard.
@@ -6789,6 +7270,7 @@ impl TaskProgram {
                     destinations: operation.destination_pages()?,
                     retryable: operation.retryable.unwrap_or(false),
                     may_be_passed_over: operation.may_be_passed_over(),
+                    on_empty_key: operation.on_empty_key(),
                 })
             })
             .collect::<Result<Vec<_>, ContainedTaskError>>()
@@ -7698,6 +8180,17 @@ fn validate_scheduling_outcome_coverage(
                     ),
                 ));
             }
+            // Workflow #308 SEL-L4b (S0 §1.4 (d)): a select step that declares `on_empty` may end
+            // the run here, on its own page, so this state is a terminal as well.
+            if let Some(key) = operation.on_empty_key() {
+                on_empty_coverage(
+                    game,
+                    declaration,
+                    completed,
+                    &page,
+                    (key, operation.id.as_str()),
+                )?;
+            }
             let next_completed = member.map_or(completed, |member| {
                 completed | DesignatedEffectReach::bit(member)
             });
@@ -7756,6 +8249,65 @@ fn validate_scheduling_outcome_coverage(
         }
     }
     Ok(())
+}
+
+/// Workflow #308 SEL-L4b (S0 §1.4 (d)): the terminal an `on_empty` select step adds at its state
+/// (`page`, the designated effects `completed` on the way): exactly one mapping has that state's
+/// effect condition and lists the page, and its outcome key is the step's `on_empty` key.
+fn on_empty_coverage(
+    game: &str,
+    declaration: &SchedulingOutcomeDeclaration,
+    completed: u16,
+    page: &str,
+    (key, operation_id): (&str, &str),
+) -> Result<(), ContainedTaskError> {
+    let condition = DesignatedEffectReach::condition(completed);
+    let mappings = declaration
+        .mappings()
+        .iter()
+        .filter(|mapping| {
+            mapping.effect() == condition
+                && mapping
+                    .terminal_pages()
+                    .iter()
+                    .any(|mapped| crate::page_anchor_matches(game, page, mapped))
+        })
+        .collect::<Vec<_>>();
+    match mappings.as_slice() {
+        [mapping] if mapping.outcome_key() == key => Ok(()),
+        _ => Err(ContainedTaskError::with_detail(
+            ExecutionKernelCode::ContainedTaskOutcomeDeclarationIncomplete.code(),
+            format!(
+                "operation={operation_id} on_empty page={page} effect={condition:?} mappings={}",
+                mappings.len()
+            ),
+        )),
+    }
+}
+
+/// `selection_identity_mismatch` (Workflow #308 SEL-L4b, S0 §2.7) of an `expect_identity`.
+fn identity_mismatch(
+    expected: Option<&str>,
+    state: scan::IdentityState,
+    observed: Option<String>,
+) -> ContainedTaskError {
+    let expected = expected.map(str::to_owned);
+    ContainedTaskError::valued(
+        ExecutionKernelCode::SelectionIdentityMismatch.code(),
+        |outcome| {
+            let outcome = outcome
+                .stage(ExecutionKernelLocation::SelectExpectIdentity)
+                .identity_state(state);
+            let outcome = match expected {
+                Some(expected) => outcome.expected_identity(expected),
+                None => outcome,
+            };
+            match observed {
+                Some(observed) => outcome.observed_identity(observed),
+                None => outcome,
+            }
+        },
+    )
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7900,6 +8452,19 @@ struct TaskOperationExpectation {
     timeout_ms: Option<u64>,
     #[serde(default)]
     interval_ms: Option<u64>,
+    /// Workflow #308 SEL-L4b (S0 §1.3): once the page matched, `target_id` must read the
+    /// business ID the select step `choice_of` chose in this run.
+    #[serde(default)]
+    expect_identity: Option<TaskExpectIdentity>,
+}
+
+/// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): an OCR target of the
+/// destination page and the select step whose choice it must read.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskExpectIdentity {
+    target_id: String,
+    choice_of: String,
 }
 
 impl TaskOperationExpectation {
@@ -8020,6 +8585,22 @@ struct TaskOperation {
 }
 
 impl TaskOperation {
+    /// Workflow #308 SEL-L4b: the outcome key of the step's `on_empty`, when it declares one.
+    fn on_empty_key(&self) -> Option<&str> {
+        self.select
+            .as_ref()
+            .and_then(selection::TaskSelect::on_empty_key)
+    }
+
+    /// Workflow #308 SEL-L4b (S0 §1.7): a scan select's own time limit, which replaces the step
+    /// timeout.
+    fn scan_max_ms(&self) -> Option<u64> {
+        self.select
+            .as_ref()
+            .and_then(selection::TaskSelect::scan)
+            .map(|scan| scan.max_ms())
+    }
+
     fn effective_timing(&self, control: &TaskControl) -> EffectiveOperationTiming {
         let timeout = self
             .expect_after
@@ -12936,6 +13517,7 @@ mod retry_wiring_tests {
                 destinations: operation.destination_pages().unwrap(),
                 retryable: false,
                 may_be_passed_over: false,
+                on_empty_key: None,
             })
             .collect::<Vec<_>>();
         actingcommand_contract::validate_phased_route(
