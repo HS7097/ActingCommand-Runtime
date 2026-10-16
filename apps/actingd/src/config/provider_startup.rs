@@ -166,8 +166,9 @@ fn discover_at_start(
             Err(failure) => *failure,
         };
         let failure = device_failure_outcome(&error, mumu_root);
+        // RED PROOF mutation 1 (the 10-16 defect): one attempt only, then the fatal.
         if classification != SharedCode::InstanceDiscoveryUnavailable.as_str()
-            || attempt >= retry.attempts
+            || attempt >= retry.attempts.min(1)
         {
             return Err(startup.failed(
                 backend,

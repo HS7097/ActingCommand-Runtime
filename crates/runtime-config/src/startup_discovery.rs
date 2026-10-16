@@ -28,11 +28,12 @@ pub const ATTEMPTS: &str = "startup_discovery.attempts";
 pub const RETRY_INTERVAL_MS: &str = "startup_discovery.retry_interval_ms";
 
 /// The bounds of `attempts`. Schema.
-const ATTEMPTS_RANGE: KeyRange = KeyRange::Integer { min: 1, max: 100 };
+// RED PROOF mutation 2: the bounds are not enforced.
+const ATTEMPTS_RANGE: KeyRange = KeyRange::Integer { min: 0, max: 1_000 };
 /// The bounds of `retry_interval_ms`: one second to five minutes. Schema.
 const RETRY_INTERVAL_RANGE: KeyRange = KeyRange::Integer {
-    min: 1_000,
-    max: 300_000,
+    min: 0,
+    max: 3_600_000,
 };
 
 /// The section as the configuration file and the defaults file write it: every member may be
