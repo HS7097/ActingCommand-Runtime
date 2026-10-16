@@ -2925,7 +2925,7 @@
       "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b).",
       "tokens": {
         "absent": {
-          "description": "No actionable instance at the chosen position."
+          "description": "No actionable instance at the chosen position or, for a template expect_identity, no pool entry passed."
         },
         "unknown": {
           "description": "Only Unknown readings until the timeout."
@@ -72267,7 +72267,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity): another Known identity, given as observed_identity (identity_state different), only Unknown readings until expect_after.timeout_ms (unknown), or a choice_of step that chose nothing in this run (no_choice, without expected_identity). It follows the step's input; there is no retry.",
+      "description": "An expect_identity did not read the business ID its choice_of select step chose in this run on the destination page (stage select_expect_identity), through its OCR target_id or, on the template path, through its pool of template targets, of which exactly one business ID passing is a reading: another Known identity, given as observed_identity (identity_state different), readings without a Known identity until expect_after.timeout_ms, reported by the last one (unknown: Unknown text, or two or more business IDs of the pool passing; absent: no pool entry passing), or a choice_of step that chose nothing in this run (no_choice, without expected_identity). It follows the step's input; there is no retry.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
