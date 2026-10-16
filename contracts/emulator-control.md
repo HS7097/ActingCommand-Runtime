@@ -454,6 +454,11 @@ stages, codes `input_backend_open_failed`, `capture_backend_open_failed`,
 `paired_backend_open_failed`, `capture_backend_operation_failed`); exclusions
 `contained_task_prerequisite_*` and `contained_task_return_home_entry_unmatched` (the gate codes
 of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback").
+`contained_task_navigation_entry_unconfirmed` is not excluded (Workflow #373 NAV-5, wave-17
+acceptance ruling 7, in place of M-373 §9.4's proposal): the page list says the run reached its
+entry and the package's own check says it did not, so the Runtime does not know where it is,
+which is the ladder's job, as for `contained_task_page_unknown`; it starts the ladder by
+`pack_logic`.
 
 - **Task stage.** A scheduled (policy) contained task run on a physical instance whose
   `task.failed` terminal's outcome code (ledger revision 3; the relayed spelling's `raw_code`

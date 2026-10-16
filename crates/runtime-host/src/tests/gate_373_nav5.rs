@@ -210,7 +210,7 @@ impl Pack<'_> {
             control["prerequisite_package_id"] = json!(prerequisite);
         }
         let linear = self.mode == "linear_steps";
-        let task = json!({
+        let mut task = json!({
             "schema_version": "0.9",
             "task_id": "task",
             "game": "neutral",
@@ -244,6 +244,10 @@ impl Pack<'_> {
                 })
                 .collect::<Vec<_>>()
         });
+        // A linear task declares its step count in the task as well as the control.
+        if linear {
+            task["max_steps"] = json!(self.max_steps);
+        }
         for (path, value) in [
             ("control.json", control),
             (
@@ -312,10 +316,12 @@ fn graph_main() -> Pack<'static> {
     }
 }
 
-// The run's own package as a `linear_steps` package, its first step on `home`.
+// The run's own package as a `linear_steps` package, its first step on `home`; its step count
+// is its one operation.
 fn linear_main() -> Pack<'static> {
     Pack {
         mode: "linear_steps",
+        max_steps: 1,
         ..graph_main()
     }
 }
