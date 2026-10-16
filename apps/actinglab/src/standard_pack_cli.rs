@@ -13,7 +13,7 @@ pub(crate) fn options() -> [&'static str; 1] {
     ["--root <installed game root: <standard_packs.root>/<game>>"]
 }
 
-pub(crate) fn run(sub: &str, args: &[String]) -> CliOutcome<Value> {
+pub(crate) fn run_standard_pack(sub: &str, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "check" => {
             let flags = FlagArgs::parse_values(args)?;
