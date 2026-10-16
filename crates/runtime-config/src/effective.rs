@@ -12,11 +12,12 @@ use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, SchedulingConfig};
+use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
     device_link, device_state, host_claims, instance, ledger_observer, performance,
-    recovery_ladder, scheduling,
+    recovery_ladder, scheduling, startup_discovery,
 };
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -434,6 +435,12 @@ impl EffectiveConfig {
         DeviceStateConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #390 DISC-1: the `startup_discovery` section in effect; the host hands it to the
+    /// provider startup, which reads it once before any instruction value is restored.
+    pub fn startup_discovery(&self) -> Result<StartupDiscoveryConfig, ConfigFailure> {
+        StartupDiscoveryConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -594,6 +601,9 @@ impl EffectiveConfig {
         }
         if sections.contains(device_state::SECTION) {
             self.device_state()?;
+        }
+        if sections.contains(startup_discovery::SECTION) {
+            self.startup_discovery()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

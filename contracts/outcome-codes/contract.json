@@ -2335,12 +2335,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): install selection unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "install\\active.json cannot be opened for a reason other than its absence, or a program that needs a selection finds none: a program started from an installed slot (A or B) whose root has no install\\active.json, or actingctl and its MCP tools, which read the root's current selection at each call, when the root no longer has one. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json deleted or moved by hand, by a cleanup tool or by antivirus; access to the install folder denied; a slot folder copied without the rest of the installation.",
+      "handling": "Reinstall or repair the installation with acsetup, which writes install\\active.json; when the file is present, check the install folder's permissions; then start the program again."
     },
     "instance_discovery_unavailable": {
       "category": "error",
@@ -8295,12 +8295,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock not empty.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot locator install\\slot-<A|B>.lock exists and was locked, but it is not an empty regular file. Nothing ever writes to the locator, so content in it means the installation was changed outside acsetup. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The locator written to or replaced by hand or by another program.",
+      "handling": "Reinstall or repair the installation with acsetup; never write to the locator."
     },
     "install_slot_unlock_failed": {
       "category": "error",
@@ -8415,12 +8415,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install selection json invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection (install\\active.json, or the one a launcher hands through ACTINGCOMMAND_INSTALL_SELECTION) is not UTF-8 JSON of the install-selection shape: it does not parse, or a member is unknown, missing or of the wrong type. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand or damaged on disk, or a launcher that passes a mangled selection.",
+      "handling": "Do not edit install\\active.json; reinstall or repair the installation with acsetup, or start the program through the installation's launcher."
     },
     "install_config_path_invalid": {
       "category": "error",
@@ -8455,12 +8455,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "actingd, running under an install selection (a start, or an unlock-owner, suspended or ledger-maintenance run other than verify), cannot resolve the path of the configuration file the selection names while it checks the --config it was given. The selection's inputs were read moments before, so the file went away in between; the start or the subcommand refuses.",
+      "common_causes": "The generation folder of the selected configuration deleted or moved while the program started.",
+      "handling": "Reinstall or repair the installation with acsetup, then start again."
     },
     "install_config_selection_mismatch": {
       "category": "error",
@@ -8495,12 +8495,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input unavailable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation input the selection names (the slot's MEMBERS.json, the selected configuration or provider file) cannot be resolved or opened: it is missing, or the OS refuses to open it. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The file or its generation folder deleted, moved or quarantined by antivirus, or access to it denied.",
+      "handling": "Reinstall or repair the installation with acsetup to restore the file; check the install folder's permissions and antivirus exclusions."
     },
     "install_input_outside_root": {
       "category": "error",
@@ -8515,12 +8515,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input outside root.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation input the selection names resolves to a path outside the install root, through a junction, a symbolic link or another reparse point, so the program does not read it. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A folder of the installation replaced by a link to another place.",
+      "handling": "Replace the link with the real folder, or reinstall or repair the installation with acsetup; keep the whole installation under one root."
     },
     "install_input_hash_mismatch": {
       "category": "error",
@@ -8535,12 +8535,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input hash mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The bytes of an installation input (the slot's MEMBERS.json, the selected configuration or provider file) differ from the SHA-256 the selection pins for it. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The selected configuration edited by hand instead of through acsetup --commit-config, or a file changed or damaged after installation.",
+      "handling": "Undo the hand edit, or reinstall or repair the installation with acsetup; change the configuration only with acsetup --commit-config."
     },
     "install_input_read_failed": {
       "category": "error",
@@ -8575,12 +8575,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install input size invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An installation input is empty or larger than its bound: 16 KiB for install\\active.json, 4 MiB for the slot's MEMBERS.json, 1 MiB for the selected configuration and the provider file. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A file cut to zero bytes, or replaced by another file.",
+      "handling": "Reinstall or repair the installation with acsetup."
     },
     "invalid_install_file_reference": {
       "category": "error",
@@ -8595,12 +8595,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install file reference.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A file reference of the selection (members, config or provider) is not a portable path relative to the install root (empty, over 1024 bytes, or with a backslash, a colon, a NUL, or an empty, . or .. segment), or its sha256 is not 64 lowercase hex digits. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand, for example with a Windows path or an uppercase hash.",
+      "handling": "Reinstall or repair the installation with acsetup; do not edit install\\active.json."
     },
     "invalid_install_selection": {
       "category": "error",
@@ -8615,12 +8615,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: invalid install selection.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection parses but is not one this build reads: its schema_version is not actingcommand.install-selection.v1, or its generation is 0. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A selection written by an acsetup of another release, or edited by hand.",
+      "handling": "Reinstall or repair the installation with the acsetup of this release; do not edit install\\active.json."
     },
     "install_members_slot_mismatch": {
       "category": "error",
@@ -8635,12 +8635,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install members slot mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection's members reference is not <slot>/MEMBERS.json of the slot it selects. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand, or put together from two installations.",
+      "handling": "Reinstall or repair the installation with acsetup; do not edit install\\active.json."
     },
     "install_config_generation_mismatch": {
       "category": "error",
@@ -8655,12 +8655,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install config generation mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection's configuration reference does not lie under install/generations/<generation>/ of the generation the selection names. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand, for example to point at a configuration of another generation or outside the generations folder.",
+      "handling": "Reinstall or repair the installation with acsetup; change the configuration only with acsetup --commit-config."
     },
     "install_provider_generation_mismatch": {
       "category": "error",
@@ -8675,12 +8675,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install provider generation mismatch.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection names a provider file that does not lie under install/generations/<generation>/ of its generation, or that is the configuration file itself. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "install\\active.json edited by hand.",
+      "handling": "Reinstall or repair the installation with acsetup; do not edit install\\active.json."
     },
     "install_selection_size_invalid": {
       "category": "error",
@@ -8695,12 +8695,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install selection size invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The selection a launcher hands through ACTINGCOMMAND_INSTALL_SELECTION (or one acsetup checks before it commits it) is empty or larger than 16 KiB. An install\\active.json of that size read from disk is install_input_size_invalid instead. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "A launcher that passes an empty or cut variable, or the variable set by hand.",
+      "handling": "Start the program through the installation's launcher, or clear ACTINGCOMMAND_INSTALL_ROOT and ACTINGCOMMAND_INSTALL_SELECTION so that it reads install\\active.json."
     },
     "install_previous_transition_mismatch": {
       "category": "error",
@@ -15215,12 +15215,12 @@
         "receipt_state": "optional",
         "request_id": "optional"
       },
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "Runtime contract validation refused a value: install slot lock missing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The slot locator install\\slot-<A|B>.lock of the slot a program runs from, or of the slot the selection names, does not exist. Every installed program takes this permanently empty file as its slot occupancy before it reads slot material, so the installation is incomplete. The program that reads it refuses; a Runtime already running keeps the selection it started with.",
+      "common_causes": "The locator deleted by hand, by a cleanup tool or by antivirus, or an installation copied without its install folder.",
+      "handling": "Reinstall or repair the installation with acsetup, which creates the locator; then start the program again."
     },
     "install_slot_lock_open_failed": {
       "category": "error",

@@ -90,6 +90,13 @@ pub enum ProviderStartupObservation {
     ModelFolderInvalid {
         outcome: Outcome,
     },
+    /// One failed startup discovery attempt that the start tries again (Workflow #390 DISC-1,
+    /// `contracts/v012-register.md` §1.89): `outcome` is `instance_discovery_retried` (warning)
+    /// with the attempt, the configured attempts and the wait, and the attempt's failure as its
+    /// `caused_by` link. Startup goes on; the last attempt's failure is `Failed` as before.
+    DiscoveryRetried {
+        outcome: Outcome,
+    },
     /// One successful `MuMuManager` discovery run per startup (Workflow #316).
     InstanceDiscovery {
         source: String,
@@ -246,7 +253,8 @@ impl PayloadDetail for ProviderPayload {
     fn outcome(&self) -> Option<&Outcome> {
         match &self.record.observation {
             ProviderStartupObservation::Failed { failure, .. } => Some(&failure.outcome),
-            ProviderStartupObservation::ModelFolderInvalid { outcome } => Some(outcome),
+            ProviderStartupObservation::ModelFolderInvalid { outcome }
+            | ProviderStartupObservation::DiscoveryRetried { outcome } => Some(outcome),
             _ => None,
         }
     }

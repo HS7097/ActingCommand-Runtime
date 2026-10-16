@@ -20,6 +20,39 @@ pub struct PackageBundleRequest {
     /// requests actual maintenance qualification; absent writes none (bundle v4 either way,
     /// Workflow #336 PKG-S5).
     pub maintenance: Option<Vec<BundleMaintenance>>,
+    /// Workflow #373 NAV-T: the standard-pack root files to lay beside `bundle.json`.
+    pub root_files: StandardPackRootFiles,
+}
+
+/// Workflow #373 NAV-T (M-373 v1.1 §3.1, §3.9): the root files `package bundle` checks and lays
+/// beside `bundle.json` byte for byte, each by its source path (`--pages`, `--interrupts`,
+/// `--navigation`); none given lays none.
+#[derive(Debug, Clone, Default)]
+pub struct StandardPackRootFiles {
+    pub pages: Option<PathBuf>,
+    pub interrupts: Option<PathBuf>,
+    pub navigation: Option<PathBuf>,
+}
+
+/// Workflow #373 NAV-T: `actinglab standard-pack check --root <game root>`, an installed game
+/// root `<standard_packs.root>/<game>/`.
+#[derive(Debug, Clone)]
+pub struct StandardPackCheckRequest {
+    pub root: PathBuf,
+}
+
+/// Workflow #373 NAV-T: a game root that passed the checks `package bundle` runs.
+#[derive(Debug, Clone, Serialize)]
+pub struct StandardPackCheckResponse {
+    pub status: String,
+    pub root: String,
+    pub game: String,
+    /// The root files the game root holds.
+    pub root_files: Vec<&'static str>,
+    pub pack_count: usize,
+    /// The report "entry page not in the list": one `package_bundle_entry_page_unlisted` per
+    /// package whose entry pages `pages.json` does not all list; empty without `pages.json`.
+    pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,7 +61,9 @@ pub struct PackageBundleResponse {
     pub out: String,
     pub index: BundleIndex,
     /// Workflow #384 D2-S2: one `recognition_pack_undeclared` per pack that reads like a
-    /// recognition maintenance package but is not declared one; absent when there is none.
+    /// recognition maintenance package but is not declared one; Workflow #373 NAV-T: with
+    /// `--pages`, one `package_bundle_entry_page_unlisted` per pack whose entry pages the page
+    /// list does not all list. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }

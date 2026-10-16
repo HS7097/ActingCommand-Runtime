@@ -385,5 +385,9 @@
     "thermal_resume_below": "moderate",
     "in_use_gate": false,
     "in_use_backoff_ms": 300000
+  },
+  "startup_discovery": {
+    "attempts": 25,
+    "retry_interval_ms": 10000
   }
 }

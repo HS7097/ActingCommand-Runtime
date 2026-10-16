@@ -846,9 +846,14 @@ impl HostShared {
     /// key: the admission guard is taken for the preparation's device steps only, the
     /// preparation takes no dedicated lease, and the key is released afterwards (the release
     /// hands it on, or pumps). A failed preparation's admitted ladder gets the key straight from
-    /// that release (H-1, P1; `release_to_preparation_ladder`). An unconfirmed close or a failed
-    /// record fails the request and leaves the key held, as a dedicated preparation lease is left
-    /// then.
+    /// that release (H-1, P1; `release_to_preparation_ladder`). A failed preparation that admits
+    /// no ladder (stuck recovery off, a ladder the cool-down suppresses, a failure no trigger
+    /// item names) first cancels the instance's queued startup claim (`scheduler.denied
+    /// lease.queue_cancelled`), as an emulator control's failed preparation does, so the release
+    /// never hands the key to a startup run against an instance that failed its preparation
+    /// (Workflow #369 S6c review low (b)); the failure stays in the self-check and in
+    /// `instance_preparation_finished`. An unconfirmed close or a failed record fails the request
+    /// and leaves the key held, as a dedicated preparation lease is left then.
     pub(super) fn prepare_on_operator_claim(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -885,6 +890,9 @@ impl HostShared {
                 ladder,
             )?,
             None => {
+                if prepared.selfcheck.failure_code.is_some() {
+                    self.cancel_queued_startup_claims(instance_id)?;
+                }
                 self.release_lease(request, request_id, token, connection_id, None)?;
             }
         }

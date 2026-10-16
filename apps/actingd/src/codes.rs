@@ -101,6 +101,10 @@ actingcommand_contract::outcome_codes! {
         InstanceDiscoveryNoMatch => "instance_discovery_no_match": error / none,
         InstanceDiscoveryAmbiguous => "instance_discovery_ambiguous": error / none,
         InstanceDiscoveryConflict => "instance_discovery_conflict": error / none,
+        /// Workflow #390 DISC-1: a startup discovery attempt found discovery unavailable and the
+        /// start tries again after the configured wait (`attempts`, `limit_count`,
+        /// `retry_after_ms`; the attempt's failure is the `caused_by` link).
+        InstanceDiscoveryRetried => "instance_discovery_retried": warning / none,
         VisionProviderUnavailable => "vision_provider_unavailable": error / none,
         VisionProviderPathEncodingInvalid => "vision_provider_path_encoding_invalid": error / none,
         AdbPathConflict => "adb_path_conflict": error / none,

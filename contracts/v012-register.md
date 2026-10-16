@@ -1501,6 +1501,75 @@ configuration key changes;
 |---|---|---|---|---|---|
 | PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`), whose resource overlay hands the heavy threshold to the policy evaluator (`HostResourceSnapshot.heavy_threshold_milli`, in memory only: no member of the resources document or a request) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated`; the controller and the evaluator judge heavy work by the one key (was the evaluator's own 1 500) |
 
+### 1.88 Wave 18 slice NAV-T: the standard-pack cross-check (#373, M-373 v1.1 §3.1, §3.9 second row, §11.1, §11.2 rows NT-1 to NT-4; wave-18 ruling 1)
+
+NAV-T makes `package bundle` carry and cross-check a standard pack's root files and adds
+`actinglab standard-pack check`, which runs the same checks on an installed game root. No
+record type, ledger member or configuration key: the rows are tool inputs and outputs, a
+resource file rule and in-process interfaces. [package-reference.md](package-reference.md)
+("Content-directory tools and the bundle index", "Standard-pack root files"; "Standard package
+root") and [actinglab-dry-run.md](actinglab-dry-run.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NT1 | `package bundle --pages <file> --interrupts <file> --navigation <file>`; output `pages.json`, `interrupts.json`, `navigation.json` beside `bundle.json` | new tool flags and output layout (`PackageBundleRequest.root_files`, `StandardPackRootFiles`) | NAV-T | resource side (PKG-S7 bundle script, NAV-4) | each copied byte for byte once the game root the bundle makes passes `read_standard_pack_root` (`standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem`, `json_pointer`) and the cross-check; a flag without its path, or a file that cannot be read, is `validation_failed`; with any root file every pack is admitted with `describe_navigation_path` |
+| NT2 | the cross-check (M-373 §3.9 second row, checks 1 to 4) | rule of `package bundle` and `standard-pack check` | NAV-T | — | feature packages (`recognize_only`, game and bundle server, pages exactly the list's; REC-M budget by admission), edges (layer-eligible, entry holds `from`, ends on `to`, no application entry), recovery chain, handler and `then.run` packages (layer-eligible, no prerequisite of their own), handlers' entries (hold their page); layer eligibility is `prerequisite_incompatibility_with` with the game, the bundle server and that server's feature package resolution; a refusal is `package_bundle_navigation_package_invalid` (`package_id`, `navigation_role`, `navigation_problem` as the Runtime's `contained_task_navigation_package_invalid`; `admission_failed` caused by the loader's refusal); an `on_empty` package is `role_ineligible` |
+| NT3 | `actinglab standard-pack check --root <game root>` answer `{status: "checked", root, game, root_files, pack_count, warnings}` (`StandardPackCheckResponse`) | new command and output shape | NAV-T | NAV-T | reads only (dry run `no_effect`); capability `standard-pack check` (`offline`, `read_only`); the game is the root directory's name; a root without root files is `standard_pack_root_invalid` `bundle_missing`; unknown flags and positionals are `validation_failed` |
+| NT4 | the report "entry page not in the list": `package_bundle_entry_page_unlisted` (warning; `package_id`, `page_ids`) in `warnings` of both answers | new output member contents | NAV-T | NAV-T | one per pack whose `navigation_entry_pages` (without the game prefix) are not all pages of `pages.json`; none without `pages.json`; NAV-4 (resource CI) reads it |
+| NT5 | bundle v4 reserved `package_id`s (`reserved_package_id`, any ASCII case): `tables`, `<kind>.json`, `<name>.part`, `<name>.old-<unix_ms>` | resource file rule (bundle index v4, §1.64 P5-1) | NAV-T (M-373 §3.1, §3.8 item 2) | — | `BundleIndex::validate` refuses one as `invalid_bundle_pack_path`, so a game root whose `bundle.json` lists one is `standard_pack_root_invalid` `bundle_invalid`; `package bundle` refuses a pack that declares one as `package_bundle_index_invalid`; every root file is named `<kind>.json` (§3.1), so every such name is reserved |
+| NT6 | contract `read_standard_pack_root`, `StandardPackRootBytes`, `StandardPackRoot`; kernel `PreparedContainedTask::describe_navigation_path`, `NavigationPackageDescriptor` | new in-process interfaces, not persisted | NAV-T | — | the game root check the Runtime's reader (`host/standard_pack.rs` `read_game_root`, unchanged in behaviour), `package bundle` and `standard-pack check` share (M-373 §3.9 "三处共用"); the descriptor carries the answers of `page_ids`, `entry_holds_page`, `linear_entry_page`, `terminal_holds_page`, `has_application_entry` and `navigation_entry_pages`, which now share their page sets with the descriptor |
+| NT7 | outcome codes `package_bundle_navigation_package_invalid` (error, `none`), `package_bundle_entry_page_unlisted` (warning, `none`) | registry (fragment `resource-tooling.json`) | NAV-T | NAV-T | `standard_pack_root_invalid` (contract, shared) gets the tools as writers; `contracts/outcome-codes.json` is regenerated by the train (G9) |
+
+### 1.89 Wave 18 slice DISC-1: a start retries the instance discovery while it is unavailable (#390; coordinator ruling 2 of wave 18)
+
+After the 10-16 boot the Runtime started before the emulator, its discovery answered
+`instance_discovery_unavailable` and the start ended in `fatal_hold` until a person restarted
+the machine; v0.12.0 has no watchdog (WD-1 is 0.12.1). From DISC-1 on the start tries the
+discovery again, at most `startup_discovery.attempts` times and
+`startup_discovery.retry_interval_ms` apart on the Runtime clock, records a warning for each
+failed attempt that it tries again, goes on once an attempt succeeds and ends exactly as before
+when the last attempt fails. Only the startup path retries. [provider-startup.md](provider-startup.md)
+("Discovery unavailable at start") and [runtime-config.md](runtime-config.md) ("The
+`startup_discovery` section") are the contract. The code `instance_discovery_retried` (actingd,
+warning, `ladder_class` `none`: a process start, row 7) is a catalog entry, not a row (§7).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| DI1 | `provider.startup_observed` observation `discovery_retried` (`ProviderStartupObservation::DiscoveryRetried`) | new value of an existing record's `phase` | DISC-1 | DISC-1 | payload `{outcome}` (`deny_unknown_fields`), backend `mumu_manager`, inside the `instance_discovery` bracket, written before each wait: `instance_discovery_retried` with `attempts` (the number of the attempt that failed), `limit_count` (`startup_discovery.attempts`) and `retry_after_ms` (`startup_discovery.retry_interval_ms`), all required, and the attempt's failure as its `caused_by` link (`instance_discovery_unavailable` over the device failure, `provider_native_failed` or a MuMu resolution reason); the record's severity is the code's category, `warning`; the same warning goes to actingd's stderr as its daemon lines (developer line and `OUTCOME actingd:` line; coordinator 10-16 23:0x); none is written for an attempt that succeeds, for the last attempt or for any other refusal (`failed` as before) |
+| DI2 | `startup_discovery.attempts`, `startup_discovery.retry_interval_ms` | configuration keys (§5) | DISC-1 | DISC-1 | integer `1..=100`, default 25; milliseconds `1000..=300000`, default 10 000 (24 waits of 10 s, about four minutes, cover a normal cold start of the emulator, about three minutes); default `file`, not settable (read once at assembly, before any instruction value is restored); out of range: `config_value_invalid` (`out_of_range`) for the key at start and in `check-config` |
+| DI3 | `ProviderStartup::startup_discovery()` and `ProviderStartup::pause(duration)` | new host interface, not persisted | DISC-1 | — | the section in effect (the host reads it from the manifest, or the defaults file without one) and a wait on the Runtime clock followed by the install preparation boundary |
+
+### 1.91 Wave 18 slice 九处-1: overview and status show each emulator's running state (#390 comment 6095942731, item 1; wave-18 ruling 4 as corrected by the coordinator, 10-16 22:5x)
+
+`actingctl status` (and so `actingctl emulator status`) and each `ac_overview` /
+`actingctl overview` instance row show whether the instance's emulator runs, as the Runtime last
+read it, with the time of that reading, or `unknown` while it holds no reading; never `off` by
+default. The Runtime adds no poll: it keeps, in memory with the registered instance, the reading
+it already takes from `MuMuManager info` at the start's discovery and on-demand discovery and at
+each emulator control; [emulator-control.md](emulator-control.md) ("Client and CLI") and
+[runtime-interface.md](runtime-interface.md) are the contract. No persisted record, fact,
+configuration key or outcome code changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N1-1 | `RuntimeInstanceStatus.emulator_state` (`EmulatorRunningState`): `{state: "on" \| "off", observed_at_unix_ms}` or `{state: "unknown"}`, `deny_unknown_fields` | new member of the status projection, always serialized (runtime-client wire; read back as `unknown` when absent) | 九处-1 | 九处-1 (host 101) | the reading: the start's discovery (bound to its port `on`, bound pending `off`, at the start's registration), each (re)binding after a confirmed start or stop and the state read after a failed control (`unknown` when nothing settled after the vendor command ran), an on-demand `DiscoverInstances` (an unlisted instance `unknown`); an instance that is not discovery-bound stays `unknown` |
+| N1-2 | `emulator_state` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 69) | 九处-1 | 九处-1 | the status' member copied; never cut by MCP's output budget |
+
+### 1.92 Wave 18 slice nine6: a pool nothing publishes gets a tool warning (#390, Alice's nine additions of 2026-10-10, item 6; wave-18 ruling 5)
+
+`actinglab resource validate`, the tool that already reads a scheduling `pools.json` (and the
+operations' readings and adjustments), warns about a `ledger_fact` pool that nothing in the
+repository publishes. It writes no ledger record, wire shape or configuration key; its one new
+shape is a member of an operation output (NN6-1).
+[resource-declarations.md](resource-declarations.md), "A pool nothing publishes", is the
+contract. The actinglab code `resource_pool_producer_missing` (warning, ladder class `none`, in
+actinglab's domain `resource_`) is a catalog entry, not a row (§7); no game content enters the
+check, which compares keys and scopes only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NN6-1 | `actinglab resource validate` answer (`actinglab.resource-declarations.v1`): new member `warnings: [{code: "resource_pool_producer_missing", path, json_pointer, fact_key}]`, empty when there is none | operation output (no persisted record; an actinglab result, read by a person or a resource repository's CI job) | nine6 | nine6 | one element per `ledger_fact` pool of a valid pools document the run read that is not of instance scope or whose key no reading mark (`fact_key`, `capacity_fact_key`) or adjustment of an operation `task.json` of the repository (outside `.git` and the excluded material) writes; `path` is the document, `json_pointer` `/pools/<i>`; the document's entry stays `valid` and the command succeeds (exit 0); a `static_snapshot` pool is not checked; the same warning is a `WARN actinglab:` developer line on stderr |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -1602,6 +1671,7 @@ when it takes effect.
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |
 | `device_state.*` | `sample_interval_ms`, `fact_ttl_ms`, `wake_settle_ms`, `keepalive_margin_ms`, `keyguard_insecure`, `battery_min_percent`, `thermal_hold_at`, `thermal_resume_below`, `in_use_gate`, `in_use_backoff_ms` | 60 000 (5 000..=3 600 000), 180 000 (at least the sampling interval), 1 000 (100..=10 000), 60 000, `dismiss` (`dismiss` / `wait`), 15 (0..=100), `severe`, `moderate` (below `thermal_hold_at`), `false` (a dedicated handset, Alice 2026-10-13), 300 000 (10 000..=3 600 000) (model-398 §7.8); every key settable | RD-5b (built, §1.59) | RD-5b (v0.12.0) |
+| `startup_discovery.*` | `attempts`, `retry_interval_ms` | 25 (`1..=100`), 10 000 (`1000..=300000`); not settable, read once at assembly (Workflow #390 DISC-1, coordinator ruling 2 of wave 18) | DISC-1 (§1.89 DI2) | DISC-1 (v0.12.0) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A
