@@ -172,10 +172,15 @@ fn discover_at_start(
             Err(failure) => *failure,
         };
         let failure = device_failure_outcome(&error, mumu_root);
-        // RED PROOF mutation 1 (the 10-16 defect): one attempt only, then the fatal.
-        if classification != SharedCode::InstanceDiscoveryUnavailable.as_str()
-            || attempt >= retry.attempts.min(1)
-        {
+        // RED PROOF mutation 1 (the 10-16 defect): one attempt only, then the fatal. Scoped to a
+        // configuration of more than three attempts (gate 99's success test), so the exhaustion
+        // test (three attempts) still reaches the stderr assertion that mutation 3 breaks.
+        let limit = if retry.attempts > 3 {
+            1
+        } else {
+            retry.attempts
+        };
+        if classification != SharedCode::InstanceDiscoveryUnavailable.as_str() || attempt >= limit {
             return Err(startup.failed(
                 backend,
                 stage,
@@ -197,9 +202,8 @@ fn discover_at_start(
                 outcome: warning.clone(),
             },
         )?;
-        // A failed write never stops the start (P3 L2): stderr is the last place actingd
-        // reports to.
-        let _unwritten = crate::write_daemon_reports(std::slice::from_ref(&warning), daemon_log);
+        // RED PROOF mutation 3: the retry warning is not written to stderr.
+        let _unwritten = crate::write_daemon_reports(&[], daemon_log);
         startup.pause(Duration::from_millis(retry.retry_interval_ms))?;
         attempt += 1;
     }
