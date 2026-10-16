@@ -1303,3 +1303,13 @@ tests = [
     "actingcommand-ledger::lib::global::tests::forensics_read_only::task_evidence_pairs_each_scan_drag_of_one_step_with_its_own_input",
 ]
 incident = ["#308"]
+
+# Workflow #390 nine6 (Alice's nine additions of 2026-10-10, item 6; wave-18 ruling 5; register §1.92): actinglab resource validate, the tool that reads a scheduling pools document, warns about a ledger_fact pool that nothing in the repository publishes (resource_pool_producer_missing with the document's path, the pool's JSON pointer and its fact key, in the answer's warnings), and the document stays valid and the command succeeds: a pool is published when it is of instance scope and an operation task.json of the repository outside the excluded material declares a reading mark (fact_key or capacity_fact_key) or an adjustment of its key; a reading in archived material publishes nothing, and a server or game pool never is, since readings and adjustments write instance facts
+[[gate]]
+key = "81"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_390_nine6::nine6_a_live_pool_no_reading_or_adjustment_writes_gets_a_warning_not_a_refusal",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_390_nine6::nine6_a_live_pool_of_server_or_game_scope_gets_the_warning_though_a_reading_writes_its_key",
+]
+incident = ["#390"]

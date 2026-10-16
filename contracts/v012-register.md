@@ -1536,6 +1536,21 @@ configuration key or outcome code changes.
 | N1-1 | `RuntimeInstanceStatus.emulator_state` (`EmulatorRunningState`): `{state: "on" \| "off", observed_at_unix_ms}` or `{state: "unknown"}`, `deny_unknown_fields` | new member of the status projection, always serialized (runtime-client wire; read back as `unknown` when absent) | 九处-1 | 九处-1 (host 101) | the reading: the start's discovery (bound to its port `on`, bound pending `off`, at the start's registration), each (re)binding after a confirmed start or stop and the state read after a failed control (`unknown` when nothing settled after the vendor command ran), an on-demand `DiscoverInstances` (an unlisted instance `unknown`); an instance that is not discovery-bound stays `unknown` |
 | N1-2 | `emulator_state` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 69) | 九处-1 | 九处-1 | the status' member copied; never cut by MCP's output budget |
 
+### 1.92 Wave 18 slice nine6: a pool nothing publishes gets a tool warning (#390, Alice's nine additions of 2026-10-10, item 6; wave-18 ruling 5)
+
+`actinglab resource validate`, the tool that already reads a scheduling `pools.json` (and the
+operations' readings and adjustments), warns about a `ledger_fact` pool that nothing in the
+repository publishes. It writes no ledger record, wire shape or configuration key; its one new
+shape is a member of an operation output (NN6-1).
+[resource-declarations.md](resource-declarations.md), "A pool nothing publishes", is the
+contract. The actinglab code `resource_pool_producer_missing` (warning, ladder class `none`, in
+actinglab's domain `resource_`) is a catalog entry, not a row (§7); no game content enters the
+check, which compares keys and scopes only.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| NN6-1 | `actinglab resource validate` answer (`actinglab.resource-declarations.v1`): new member `warnings: [{code: "resource_pool_producer_missing", path, json_pointer, fact_key}]`, empty when there is none | operation output (no persisted record; an actinglab result, read by a person or a resource repository's CI job) | nine6 | nine6 | one element per `ledger_fact` pool of a valid pools document the run read that is not of instance scope or whose key no reading mark (`fact_key`, `capacity_fact_key`) or adjustment of an operation `task.json` of the repository (outside `.git` and the excluded material) writes; `path` is the document, `json_pointer` `/pools/<i>`; the document's entry stays `valid` and the command succeeds (exit 0); a `static_snapshot` pool is not checked; the same warning is a `WARN actinglab:` developer line on stderr |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
