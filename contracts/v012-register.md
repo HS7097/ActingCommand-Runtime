@@ -1520,6 +1520,22 @@ warning, `ladder_class` `none`: a process start, row 7) is a catalog entry, not 
 | DI2 | `startup_discovery.attempts`, `startup_discovery.retry_interval_ms` | configuration keys (§5) | DISC-1 | DISC-1 | integer `1..=100`, default 25; milliseconds `1000..=300000`, default 10 000 (24 waits of 10 s, about four minutes, cover a normal cold start of the emulator, about three minutes); default `file`, not settable (read once at assembly, before any instruction value is restored); out of range: `config_value_invalid` (`out_of_range`) for the key at start and in `check-config` |
 | DI3 | `ProviderStartup::startup_discovery()` and `ProviderStartup::pause(duration)` | new host interface, not persisted | DISC-1 | — | the section in effect (the host reads it from the manifest, or the defaults file without one) and a wait on the Runtime clock followed by the install preparation boundary |
 
+### 1.91 Wave 18 slice 九处-1: overview and status show each emulator's running state (#390 comment 6095942731, item 1; wave-18 ruling 4 as corrected by the coordinator, 10-16 22:5x)
+
+`actingctl status` (and so `actingctl emulator status`) and each `ac_overview` /
+`actingctl overview` instance row show whether the instance's emulator runs, as the Runtime last
+read it, with the time of that reading, or `unknown` while it holds no reading; never `off` by
+default. The Runtime adds no poll: it keeps, in memory with the registered instance, the reading
+it already takes from `MuMuManager info` at the start's discovery and on-demand discovery and at
+each emulator control; [emulator-control.md](emulator-control.md) ("Client and CLI") and
+[runtime-interface.md](runtime-interface.md) are the contract. No persisted record, fact,
+configuration key or outcome code changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N1-1 | `RuntimeInstanceStatus.emulator_state` (`EmulatorRunningState`): `{state: "on" \| "off", observed_at_unix_ms}` or `{state: "unknown"}`, `deny_unknown_fields` | new member of the status projection, always serialized (runtime-client wire; read back as `unknown` when absent) | 九处-1 | 九处-1 (host 101) | the reading: the start's discovery (bound to its port `on`, bound pending `off`, at the start's registration), each (re)binding after a confirmed start or stop and the state read after a failed control (`unknown` when nothing settled after the vendor command ran), an on-demand `DiscoverInstances` (an unlisted instance `unknown`); an instance that is not discovery-bound stays `unknown` |
+| N1-2 | `emulator_state` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 69) | 九处-1 | 九处-1 | the status' member copied; never cut by MCP's output budget |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

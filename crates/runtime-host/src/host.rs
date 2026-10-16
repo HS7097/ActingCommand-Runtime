@@ -1787,7 +1787,10 @@ impl RuntimeHost {
                 ExecutionKernel::new(Arc::clone(&provider)),
             )?;
             shared.check_install_preparation()?;
-            let registered_instances = initial_registered_instances(provider.as_ref())?;
+            // Workflow #390 九处-1: the start's discovery ended inside `assemble`.
+            let discovered_at_unix_ms = shared.clock.sample()?.unix_ms;
+            let registered_instances =
+                initial_registered_instances(provider.as_ref(), discovered_at_unix_ms)?;
             drop(provider);
             let startup_packages = startup_package::resolve_startup_packages(
                 &config.startup_packages,
@@ -4064,6 +4067,11 @@ struct RegisteredInstance {
     /// Mirrors the registry: emulator control (re)binds a discovery-bound instance and
     /// refreshes this copy together with `audit_endpoint` under the registry lock.
     adb_endpoint: Option<ResolvedInstanceEndpoint>,
+    /// Workflow #390 九处-1: the emulator's running state as the Runtime last read it, under the
+    /// registry lock: at the start's discovery (a discovery-bound instance only), at each
+    /// confirmed start or stop and state read after a failed control, and at each on-demand
+    /// discovery; `Unknown` without a reading.
+    emulator_state: actingcommand_contract::EmulatorRunningState,
 }
 
 #[cfg(test)]
@@ -4260,9 +4268,13 @@ impl RegisteredInstance {
 
 /// Reads the provider's registered set as it is. Alias validity and uniqueness are the
 /// registry's own admission rules (`ExecutionBackendRegistry::from_assembly`); nothing is
-/// re-validated here.
+/// re-validated here. Workflow #390 九处-1: a discovery-bound instance's emulator is as the
+/// start's discovery, which ended at `discovered_at_unix_ms`, read it: `on` when it was bound
+/// to the reported port, `off` when it was bound pending (stopped); every other instance has no
+/// reading.
 fn initial_registered_instances(
     provider: &dyn ExecutionBackendProvider,
+    discovered_at_unix_ms: u64,
 ) -> RuntimeHostResult<BTreeMap<InstanceId, RegisteredInstance>> {
     let mut instances = BTreeMap::new();
     for instance_alias in provider.instance_aliases() {
@@ -4273,12 +4285,22 @@ fn initial_registered_instances(
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
+        let emulator_state = match resolved.adb_endpoint() {
+            Some(endpoint) if endpoint.discovered_binding().is_some() => {
+                actingcommand_contract::EmulatorRunningState::observed(
+                    !endpoint.is_pending(),
+                    discovered_at_unix_ms,
+                )
+            }
+            _ => actingcommand_contract::EmulatorRunningState::Unknown,
+        };
         let registration = RegisteredInstance {
             instance_alias,
             instance_id: resolved.instance_id(),
             audit_endpoint: resolved.audit_endpoint().to_string(),
             provenance: resolved.provenance(),
             adb_endpoint: resolved.adb_endpoint().cloned(),
+            emulator_state,
         };
         if instances
             .insert(registration.instance_id, registration)

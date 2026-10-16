@@ -284,6 +284,41 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instan
     drop(mcp);
 }
 
+// Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18): the
+// fake Runtime's instance is not discovery-bound, so no discovery or emulator control has read
+// its emulator; actingctl status and the overview both show its emulator_state as unknown, never
+// off.
+#[test]
+fn nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading() {
+    let root = TempDir::new().expect("tempdir");
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let unknown = json!({"state": "unknown"});
+
+    let (exited, status) = actingctl(root.path(), &["status"]);
+    assert!(
+        exited && status["outcome"]["code"] == json!("runtime_status_reported"),
+        "actingctl status: {status}"
+    );
+    let instance = &status["instances"][0];
+    assert_eq!(
+        (&instance["instance_alias"], &instance["emulator_state"]),
+        (&json!(ALIAS), &unknown),
+        "actingctl status: {status}"
+    );
+
+    let (exited, overview) = actingctl(root.path(), &["overview", "--sections", "instances"]);
+    assert!(exited, "actingctl overview: {overview}");
+    let row = &overview["instances"][0];
+    assert_eq!(
+        (&row["alias"], &row["emulator_state"]),
+        (&json!(ALIAS), &unknown),
+        "actingctl overview: {overview}"
+    );
+
+    runtime.stop_clean();
+}
+
 // The CLI's answer and the ac_overview result for the same arguments, each accepted without
 // warnings, and equal apart from the start of the run window.
 fn parity(
@@ -334,7 +369,8 @@ fn assert_daemon(side: &str, answer: &Value) {
 }
 
 // The one instance's row: its identity, lease_active, queued and its pause; no monitor and no
-// run were set up, so neither is there.
+// run were set up, so neither is there. Workflow #390 九处-1: and its emulator_state, unknown,
+// since the fake Runtime's instance is not discovery-bound and the Runtime holds no reading.
 #[track_caller]
 fn assert_rows(side: &str, answer: &Value) {
     let rows = answer["instances"].as_array().cloned().unwrap_or_default();
@@ -342,11 +378,21 @@ fn assert_rows(side: &str, answer: &Value) {
     let row = &rows[0];
     assert_eq!(
         members(row),
-        BTreeSet::from(["alias", "instance_id", "lease_active", "pause", "queued"]),
+        BTreeSet::from([
+            "alias",
+            "emulator_state",
+            "instance_id",
+            "lease_active",
+            "pause",
+            "queued"
+        ]),
         "{side}: {answer}"
     );
     assert!(
-        row["alias"] == json!(ALIAS) && row["lease_active"].is_boolean() && row["queued"].is_u64(),
+        row["alias"] == json!(ALIAS)
+            && row["lease_active"].is_boolean()
+            && row["queued"].is_u64()
+            && row["emulator_state"] == json!({"state": "unknown"}),
         "{side}: {answer}"
     );
     assert_eq!(

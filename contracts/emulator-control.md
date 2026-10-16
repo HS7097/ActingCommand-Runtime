@@ -965,6 +965,25 @@ JSON above. All four require `--instance`.
 `RuntimeInstanceStatus` also carries `resource_package { path, kind }` when the instance declares a
 default resource package (`contracts/actingd-check-config.md`), and omits the key otherwise.
 
+Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected wave-18 ruling 4):
+`RuntimeInstanceStatus` always carries `emulator_state`, whether the instance's emulator runs as
+the Runtime last read it: `{"state": "on" | "off", "observed_at_unix_ms"}` or
+`{"state": "unknown"}`. The host keeps the reading in memory with the registered instance (no
+record, no fact, no poll) and replaces it only where the Runtime already reads the emulator:
+
+- the start's discovery: a discovery-bound instance bound to its reported port is `on`, one bound
+  pending is `off`, both at the time the start registered the discovery's result;
+- every (re)binding of a discovery-bound instance after a confirmed start (`on`) or stop (`off`),
+  a restart's two phases and the ladder's rung 3 included, and the state read after a failed
+  control: stopped is `off`, running is `on` (whether or not its port changed), and no settled
+  observation after the vendor command ran (effect `indeterminate`) is `unknown`;
+- an answered on-demand `DiscoverInstances`: each discovery-bound instance its answer lists is
+  `on` or `off` as reported, one it no longer lists is `unknown`.
+
+An instance that is not discovery-bound (an explicit HOST:PORT or serial entry, a handset, a
+fixture) is never read and stays `unknown`; nothing defaults to `off`. `actingctl status`,
+`actingctl emulator status` and each `ac_overview` instance row show it.
+
 ## Instance discovery query
 
 `RuntimeOperation::DiscoverInstances` (`{"operation": "discover_instances"}`, no fields) re-runs
