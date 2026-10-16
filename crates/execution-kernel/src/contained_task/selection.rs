@@ -218,24 +218,6 @@ impl PreparedSelect {
             identity_feature: None,
         }
     }
-
-    /// A prepared select step over a scan for the gate tests (Workflow #308 SEL-L4b).
-    pub(super) fn for_test_scan(
-        layout_id: &str,
-        policy: SelectionPolicy,
-        scan: ScanDeclaration,
-        on_empty_key: Option<&str>,
-    ) -> Self {
-        let identity_feature = Some(scan.identity_feature().to_owned());
-        Self {
-            layout_id: layout_id.to_owned(),
-            path: "operations/task/policies/select.json".to_owned(),
-            policy,
-            scan: Some(scan),
-            on_empty_key: on_empty_key.map(str::to_owned),
-            identity_feature,
-        }
-    }
 }
 
 /// A select step's confirmed candidate: the guard outcome on the confirmation frame, the
