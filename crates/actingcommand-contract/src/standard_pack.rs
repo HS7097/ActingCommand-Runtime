@@ -14,6 +14,9 @@
 //! - `interrupts.json` (`actingcommand.interrupts.v1`, §3.6): which listed pages are shared
 //!   interrupt pages, their handler packages, where the run goes after one, and how often a
 //!   run may handle each.
+//! - `navigation.json` (`actingcommand.navigation.v1`, §3.5; Workflow #373 NAV-5): the edges
+//!   between listed pages, each run by a package, and the recovery chain a run steps through
+//!   when its page is not recognised.
 //!
 //! The Runtime names no page and no game here: ids are compared as opaque strings.
 
@@ -27,6 +30,8 @@ pub const STANDARD_PACK_BUNDLE_FILE: &str = "bundle.json";
 pub const STANDARD_PACK_PAGES_FILE: &str = "pages.json";
 /// The game's shared interrupt pages (§3.6).
 pub const STANDARD_PACK_INTERRUPTS_FILE: &str = "interrupts.json";
+/// Workflow #373 NAV-5: the game's edges and recovery chain (§3.5).
+pub const STANDARD_PACK_NAVIGATION_FILE: &str = "navigation.json";
 /// The prefix of a bundle pack's `path`; the package directory is the rest (§3.1).
 pub const STANDARD_PACK_PATH_PREFIX: &str = "packs/";
 
@@ -44,6 +49,17 @@ pub const MAX_INTERRUPT_PACKAGES: usize = 8;
 pub const MAX_INTERRUPT_HANDLINGS_PER_PAGE: u8 = 8;
 /// The most interrupt handlings of one run, all pages together (§3.10).
 pub const MAX_INTERRUPT_HANDLINGS_PER_RUN: u32 = 16;
+/// Workflow #373 NAV-5: the most edges one `navigation.json` holds (§3.10).
+pub const MAX_STANDARD_PACK_EDGES: usize = 1024;
+/// Workflow #373 NAV-5: the most packages one recovery chain names (§3.10).
+pub const MAX_RECOVERY_CHAIN: usize = 8;
+/// Workflow #373 NAV-5: the most locates (full matches) of one entry gate (§3.10, §5.5).
+pub const MAX_NAVIGATION_LOCATES: u32 = 16;
+/// Workflow #373 NAV-5: the most hops (edges run) of one entry gate (§3.10, §5.5).
+pub const MAX_NAVIGATION_HOPS: u32 = 16;
+/// Workflow #373 NAV-5: the most matched pages a navigation record lists; the rest are counted
+/// only (§8.3).
+pub const MAX_NAVIGATION_RECORDED_PAGES: usize = 8;
 
 crate::outcome_vocabulary! {
     /// What is wrong with a standard-pack root file (vocabulary `standard_pack_problem`,
@@ -55,9 +71,10 @@ crate::outcome_vocabulary! {
         GameMismatch => "game_mismatch",
         /// `bundle.json` breaks the bundle index rules (M-PKG).
         BundleInvalid => "bundle_invalid",
-        /// The game root holds `interrupts.json` or `pages.json` but no `bundle.json`.
+        /// The game root holds `interrupts.json`, `navigation.json` or `pages.json` but no
+        /// `bundle.json`.
         BundleMissing => "bundle_missing",
-        /// The game root holds `interrupts.json` but no `pages.json`.
+        /// The game root holds `interrupts.json` or `navigation.json` but no `pages.json`.
         PagesMissing => "pages_missing",
         /// A page id is not 1-64 bytes of `[a-z][a-z0-9_]*`.
         PageIdInvalid => "page_id_invalid",
@@ -81,6 +98,21 @@ crate::outcome_vocabulary! {
         PackagesCount => "packages_count",
         /// An interrupt's `max_per_run` is outside 1..=8.
         MaxPerRunInvalid => "max_per_run_invalid",
+        /// Workflow #373 NAV-5: `edges` holds more than 1024 edges.
+        EdgesCount => "edges_count",
+        /// Workflow #373 NAV-5: an edge's `from` or `to` is no page id: `any`, a draft's
+        /// `@origin` or another word that is not 1-64 bytes of `[a-z][a-z0-9_]*`.
+        EdgePageInvalid => "edge_page_invalid",
+        /// Workflow #373 NAV-5: an edge's `from` or `to` is not a page of `pages.json`.
+        EdgePageUnlisted => "edge_page_unlisted",
+        /// Workflow #373 NAV-5: an edge's `from` and `to` are the same page.
+        EdgeSelfLoop => "edge_self_loop",
+        /// Workflow #373 NAV-5: two edges have the same `from`, `to` and `package_id`.
+        EdgeDuplicate => "edge_duplicate",
+        /// Workflow #373 NAV-5: `recovery_chain` names no package, or more than 8.
+        RecoveryChainCount => "recovery_chain_count",
+        /// Workflow #373 NAV-5: `recovery_chain` names a package twice.
+        RecoveryChainDuplicate => "recovery_chain_duplicate",
     }
 }
 
@@ -127,6 +159,23 @@ crate::outcome_vocabulary! {
         EntryMismatch => "entry_mismatch",
         /// The feature package's pages are not exactly the pages of `pages.json`.
         PageSetMismatch => "page_set_mismatch",
+        /// Workflow #373 NAV-5: an edge's package does not end on the edge's `to` page.
+        TerminalMismatch => "terminal_mismatch",
+        /// Workflow #373 NAV-5: an edge's package is an application entry package (its entry is
+        /// `any`), which no edge may be.
+        ApplicationEntry => "application_entry",
+    }
+}
+
+crate::outcome_vocabulary! {
+    /// Which navigation bound a run reached (vocabulary `navigation_limit`, Workflow #373
+    /// NAV-5, M-373 §5.5): the locates or hops of one entry gate, the run's steps, or the
+    /// interrupt handlings of the run.
+    pub enum NavigationLimit: "navigation_limit" {
+        Locates => "locates",
+        Hops => "hops",
+        Steps => "steps",
+        Interrupts => "interrupts",
     }
 }
 
@@ -135,7 +184,7 @@ crate::outcome_vocabulary! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandardPackRootIssue {
     /// One of [`STANDARD_PACK_BUNDLE_FILE`], [`STANDARD_PACK_PAGES_FILE`],
-    /// [`STANDARD_PACK_INTERRUPTS_FILE`].
+    /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`].
     pub file: &'static str,
     pub problem: StandardPackProblem,
     pub pointer: String,
@@ -227,6 +276,33 @@ pub enum InterruptThen {
     Resume,
     EndRun,
     Run(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StandardPackNavigationVersion {
+    #[serde(rename = "actingcommand.navigation.v1")]
+    V1,
+}
+
+/// Workflow #373 NAV-5: `navigation.json` (§3.5): the edges between listed pages and the
+/// recovery chain, both of packages of any server (a run uses those of its own server).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandardPackNavigation {
+    pub schema_version: StandardPackNavigationVersion,
+    pub game: String,
+    pub edges: Vec<StandardPackEdge>,
+    pub recovery_chain: Vec<String>,
+}
+
+/// One edge: run `package_id` on the page `from` to reach the page `to` (both ids of
+/// `pages.json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandardPackEdge {
+    pub from: String,
+    pub to: String,
+    pub package_id: String,
 }
 
 /// One package of a game root's bundle, as the registry holds it.
@@ -472,6 +548,116 @@ pub fn parse_standard_pack_interrupts(
         }
     }
     Ok(interrupts)
+}
+
+/// Workflow #373 NAV-5: `navigation.json`'s bytes, decoded and checked against `pages` (§3.5):
+/// `game` as for [`parse_standard_pack_pages`], at most 1024 edges whose `from` and `to` are
+/// different pages of `pages` (never `any` or a draft's `@origin`), no two with the same `from`,
+/// `to` and `package_id`, and a recovery chain of 1..=8 distinct packages.
+pub fn parse_standard_pack_navigation(
+    bytes: &[u8],
+    game: Option<&str>,
+    pages: &StandardPackPages,
+) -> Result<StandardPackNavigation, StandardPackRootIssue> {
+    let file = STANDARD_PACK_NAVIGATION_FILE;
+    let navigation: StandardPackNavigation = serde_json::from_slice(bytes)
+        .map_err(|_| StandardPackRootIssue::new(file, StandardPackProblem::Malformed, ""))?;
+    check_game(file, &navigation.game, game)?;
+    if navigation.edges.len() > MAX_STANDARD_PACK_EDGES {
+        return Err(StandardPackRootIssue::new(
+            file,
+            StandardPackProblem::EdgesCount,
+            "/edges",
+        ));
+    }
+    let listed = pages
+        .pages
+        .iter()
+        .map(|page| page.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for (index, edge) in navigation.edges.iter().enumerate() {
+        for (member, page) in [("from", &edge.from), ("to", &edge.to)] {
+            let pointer = format!("/edges/{index}/{member}");
+            // `any` is a word of the page id grammar, but no page: an edge starts and ends on
+            // one listed page.
+            if !standard_pack_page_id(page) || page == "any" {
+                return Err(StandardPackRootIssue::new(
+                    file,
+                    StandardPackProblem::EdgePageInvalid,
+                    pointer,
+                ));
+            }
+            if !listed.contains(page.as_str()) {
+                return Err(StandardPackRootIssue::new(
+                    file,
+                    StandardPackProblem::EdgePageUnlisted,
+                    pointer,
+                ));
+            }
+        }
+        if edge.from == edge.to {
+            return Err(StandardPackRootIssue::new(
+                file,
+                StandardPackProblem::EdgeSelfLoop,
+                format!("/edges/{index}/to"),
+            ));
+        }
+        if !seen.insert((
+            edge.from.as_str(),
+            edge.to.as_str(),
+            edge.package_id.as_str(),
+        )) {
+            return Err(StandardPackRootIssue::new(
+                file,
+                StandardPackProblem::EdgeDuplicate,
+                format!("/edges/{index}"),
+            ));
+        }
+    }
+    if navigation.recovery_chain.is_empty() || navigation.recovery_chain.len() > MAX_RECOVERY_CHAIN
+    {
+        return Err(StandardPackRootIssue::new(
+            file,
+            StandardPackProblem::RecoveryChainCount,
+            "/recovery_chain",
+        ));
+    }
+    let mut chain = BTreeSet::new();
+    for (index, package_id) in navigation.recovery_chain.iter().enumerate() {
+        if !chain.insert(package_id.as_str()) {
+            return Err(StandardPackRootIssue::new(
+                file,
+                StandardPackProblem::RecoveryChainDuplicate,
+                format!("/recovery_chain/{index}"),
+            ));
+        }
+    }
+    Ok(navigation)
+}
+
+/// Workflow #373 NAV-5 (§3.9, the Runtime reader's row): every edge's package and every
+/// recovery chain package is a package of the registry. Both lists may name packages of every
+/// server; a run uses those of its own.
+pub fn validate_standard_pack_navigation_references(
+    registry: &StandardPackRegistry,
+    navigation: &StandardPackNavigation,
+) -> Result<(), StandardPackRootIssue> {
+    let file = STANDARD_PACK_NAVIGATION_FILE;
+    let unlisted = |pointer: String| {
+        StandardPackRootIssue::new(file, StandardPackProblem::PackageNotListed, pointer)
+    };
+    for (index, edge) in navigation.edges.iter().enumerate() {
+        if registry.get(&edge.package_id).is_none() {
+            return Err(unlisted(format!("/edges/{index}/package_id")));
+        }
+    }
+    for (index, package_id) in navigation.recovery_chain.iter().enumerate() {
+        if registry.get(package_id).is_none() {
+            return Err(unlisted(format!("/recovery_chain/{index}")));
+        }
+    }
+    Ok(())
 }
 
 /// The references between the root files (§3.9, the Runtime reader's row): every feature,
@@ -1037,6 +1223,256 @@ mod tests {
             ),
         ] {
             assert_eq!(result, Err(expected), "{case}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    // Workflow #373 NAV-5, test row N5-1 (model M-373 v1.1 §3.5, §3.9, §3.10): `navigation.json`
+    // of a synthetic `neutral` game is read when it keeps the rules, and each violation is
+    // refused with its own `standard_pack_problem` at its JSON pointer: an edge naming an
+    // unknown page, an edge whose `from` is its `to`, a repeated edge, `any` or a draft's
+    // `@origin` as a page, a package the bundle does not list, an empty or a nine-step chain.
+
+    use super::*;
+    use serde_json::{Value, json};
+
+    const GAME: &str = "neutral";
+
+    fn bytes(value: &Value) -> Vec<u8> {
+        serde_json::to_vec(value).expect("fixture JSON")
+    }
+
+    fn pages() -> StandardPackPages {
+        parse_standard_pack_pages(
+            &bytes(&json!({
+                "schema_version": "actingcommand.pages.v1",
+                "game": GAME,
+                "features": ["neutral.test.features"],
+                "pages": [
+                    {"id": "home", "kind": "page"},
+                    {"id": "shop", "kind": "page"},
+                    {"id": "menu", "kind": "overlay"}
+                ]
+            })),
+            Some(GAME),
+        )
+        .expect("the page list")
+    }
+
+    fn registry() -> StandardPackRegistry {
+        let packs = [
+            ("neutral.test.features", "test"),
+            ("neutral.test.home_to_shop", "test"),
+            ("neutral.test.shop_to_home", "test"),
+            ("neutral.test.home_to_shop_other", "other"),
+            ("neutral.test.return_home", "test"),
+            ("neutral.test.restart", "test"),
+        ];
+        StandardPackRegistry::from_bundle_bytes(
+            &bytes(&json!({
+                "schema_version": "actingcommand.bundle.v4",
+                "game": GAME,
+                "packs": packs
+                    .iter()
+                    .map(|(package_id, server)| json!({
+                        "package_id": package_id,
+                        "server": server,
+                        "entry_task_id": "task",
+                        "path": format!("packs/{package_id}"),
+                        "file_count": 3,
+                        "byte_count": 64
+                    }))
+                    .collect::<Vec<_>>()
+            })),
+            GAME,
+        )
+        .expect("a valid bundle")
+    }
+
+    fn navigation() -> Value {
+        json!({
+            "schema_version": "actingcommand.navigation.v1",
+            "game": GAME,
+            "edges": [
+                {"from": "home", "to": "shop", "package_id": "neutral.test.home_to_shop"},
+                {"from": "shop", "to": "home", "package_id": "neutral.test.shop_to_home"},
+                {"from": "home", "to": "shop", "package_id": "neutral.test.home_to_shop_other"}
+            ],
+            "recovery_chain": ["neutral.test.return_home", "neutral.test.restart"]
+        })
+    }
+
+    fn read(value: &Value) -> Result<StandardPackNavigation, StandardPackRootIssue> {
+        parse_standard_pack_navigation(&bytes(value), Some(GAME), &pages())
+    }
+
+    fn issue(problem: StandardPackProblem, pointer: &str) -> StandardPackRootIssue {
+        StandardPackRootIssue {
+            file: STANDARD_PACK_NAVIGATION_FILE,
+            problem,
+            pointer: pointer.to_owned(),
+        }
+    }
+
+    fn edge_with(member: &str, value: Value) -> Value {
+        let mut navigation = navigation();
+        navigation["edges"][0][member] = value;
+        navigation
+    }
+
+    #[test]
+    fn n5_1_a_valid_navigation_file_is_read_with_every_server_s_edges() {
+        let navigation = read(&navigation()).expect("a valid navigation file");
+        assert_eq!(navigation.edges.len(), 3);
+        assert_eq!(
+            navigation.edges[0],
+            StandardPackEdge {
+                from: "home".to_owned(),
+                to: "shop".to_owned(),
+                package_id: "neutral.test.home_to_shop".to_owned(),
+            }
+        );
+        assert_eq!(
+            navigation.recovery_chain,
+            ["neutral.test.return_home", "neutral.test.restart"]
+        );
+        validate_standard_pack_navigation_references(&registry(), &navigation)
+            .expect("every named package is listed");
+        // No edge at all is a valid graph: only the recovery chain is then used.
+        let mut no_edges = self::navigation();
+        no_edges["edges"] = json!([]);
+        assert!(read(&no_edges).is_ok());
+        // A repository root's file names its game itself.
+        parse_standard_pack_navigation(&bytes(&self::navigation()), None, &pages())
+            .expect("a navigation file read without its directory");
+    }
+
+    #[test]
+    fn n5_1_each_navigation_violation_is_its_problem_at_its_pointer() {
+        use StandardPackProblem as Problem;
+        let mut unknown = navigation();
+        unknown["edges"][0]["note"] = json!("prose");
+        let mut other_version = navigation();
+        other_version["schema_version"] = json!("actingcommand.navigation.v2");
+        let mut other_game = navigation();
+        other_game["game"] = json!("other");
+        let mut repeated = navigation();
+        repeated["edges"][2]["package_id"] = json!("neutral.test.home_to_shop");
+        let mut too_many = navigation();
+        too_many["edges"] = json!(
+            (0..=MAX_STANDARD_PACK_EDGES)
+                .map(|index| json!({"from": "home", "to": "shop",
+                                    "package_id": format!("neutral.test.edge{index}")}))
+                .collect::<Vec<_>>()
+        );
+        let mut empty_chain = navigation();
+        empty_chain["recovery_chain"] = json!([]);
+        let mut long_chain = navigation();
+        long_chain["recovery_chain"] = json!(
+            (0..=MAX_RECOVERY_CHAIN)
+                .map(|index| format!("neutral.test.step{index}"))
+                .collect::<Vec<_>>()
+        );
+        let mut repeated_step = navigation();
+        repeated_step["recovery_chain"] =
+            json!(["neutral.test.return_home", "neutral.test.return_home"]);
+        for (case, value, expected) in [
+            ("an unknown member", unknown, issue(Problem::Malformed, "")),
+            (
+                "another version",
+                other_version,
+                issue(Problem::Malformed, ""),
+            ),
+            (
+                "another game",
+                other_game,
+                issue(Problem::GameMismatch, "/game"),
+            ),
+            ("1025 edges", too_many, issue(Problem::EdgesCount, "/edges")),
+            (
+                "an unknown from page",
+                edge_with("from", json!("stage")),
+                issue(Problem::EdgePageUnlisted, "/edges/0/from"),
+            ),
+            (
+                "an unknown to page",
+                edge_with("to", json!("stage")),
+                issue(Problem::EdgePageUnlisted, "/edges/0/to"),
+            ),
+            (
+                "from any",
+                edge_with("from", json!("any")),
+                issue(Problem::EdgePageInvalid, "/edges/0/from"),
+            ),
+            (
+                "to any",
+                edge_with("to", json!("any")),
+                issue(Problem::EdgePageInvalid, "/edges/0/to"),
+            ),
+            (
+                "from a draft origin",
+                edge_with("from", json!("@origin")),
+                issue(Problem::EdgePageInvalid, "/edges/0/from"),
+            ),
+            (
+                "from is to",
+                edge_with("to", json!("home")),
+                issue(Problem::EdgeSelfLoop, "/edges/0/to"),
+            ),
+            (
+                "an edge twice",
+                repeated,
+                issue(Problem::EdgeDuplicate, "/edges/2"),
+            ),
+            (
+                "an empty chain",
+                empty_chain,
+                issue(Problem::RecoveryChainCount, "/recovery_chain"),
+            ),
+            (
+                "a nine-step chain",
+                long_chain,
+                issue(Problem::RecoveryChainCount, "/recovery_chain"),
+            ),
+            (
+                "a chain step twice",
+                repeated_step,
+                issue(Problem::RecoveryChainDuplicate, "/recovery_chain/1"),
+            ),
+        ] {
+            assert_eq!(read(&value).map(|_| ()), Err(expected), "{case}");
+        }
+        assert_eq!(
+            parse_standard_pack_navigation(b"{", Some(GAME), &pages()).map(|_| ()),
+            Err(issue(Problem::Malformed, "")),
+            "not JSON"
+        );
+
+        let registry = registry();
+        let navigation = read(&navigation()).expect("the navigation file");
+        let mut unlisted_edge = navigation.clone();
+        unlisted_edge.edges[1].package_id = "neutral.test.missing".to_owned();
+        let mut unlisted_step = navigation.clone();
+        unlisted_step.recovery_chain[1] = "neutral.test.missing".to_owned();
+        for (case, value, expected) in [
+            (
+                "an edge package the bundle does not list",
+                unlisted_edge,
+                issue(Problem::PackageNotListed, "/edges/1/package_id"),
+            ),
+            (
+                "a chain package the bundle does not list",
+                unlisted_step,
+                issue(Problem::PackageNotListed, "/recovery_chain/1"),
+            ),
+        ] {
+            assert_eq!(
+                validate_standard_pack_navigation_references(&registry, &value),
+                Err(expected),
+                "{case}"
+            );
         }
     }
 }

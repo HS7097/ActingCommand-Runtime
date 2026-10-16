@@ -25,12 +25,14 @@ use super::policy_outcome::policy_dispatch_intent;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::failure_identity::{
-    FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, RERUN_ONLY_BACKEND_FAILURES,
-    encode_failure_base, entry_checked, failure_accumulates, failure_detail_fingerprint,
-    failure_key, failure_rows, failure_step, identifier_text, in_restart_segment,
-    locate_error_frame,
+    FailureIdentity, IdentityFrame, IdentityLayer, IdentityPackage, MISSING_HASH,
+    RERUN_ONLY_BACKEND_FAILURES, encode_failure_base, entry_checked, failure_accumulates,
+    failure_detail_fingerprint, failure_key, failure_rows, failure_step, identifier_text,
+    in_restart_segment, locate_error_frame, navigation_failure_code, navigation_layer_failure,
 };
-use crate::suspension_lift::{LiftCheckTime, SuspensionLiftView, measure_package_hash};
+use crate::suspension_lift::{
+    LiftCheckTime, SuspensionLiftView, measure_package_hash, standard_pack_root_hash,
+};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::scheduled_failure_code_str;
 use actingcommand_execution_kernel::{FailureFrameVerdict, compare_failure_frames};
@@ -66,6 +68,15 @@ struct ScheduledMain {
     /// Whether the whole prerequisite chain was resolved and admitted.
     resolved: bool,
 }
+
+/// A scheduled run's admitted package, its prerequisite chain, its load and (Workflow #373
+/// NAV-6, NAV-5) its standard-pack data.
+pub(super) type PreparedScheduledPackage = (
+    PreparedContainedTask,
+    Vec<PreparedContainedTask>,
+    PackageLoad,
+    Option<Box<super::standard_pack::RunInterrupts>>,
+);
 
 /// Two error frames compared (§12.5); `Unavailable` names why they could not be.
 enum FrameComparison {
@@ -108,7 +119,8 @@ impl HostShared {
     }
 
     /// Admits a scheduled run's main package and resolves its prerequisite chain, recording
-    /// both for the settlement, a refusal included.
+    /// both for the settlement, a refusal included. Workflow #373 NAV-6 and NAV-5: the run's
+    /// standard-pack data are read first, so a run that navigates takes no return-home fallback.
     pub(super) fn prepare_scheduled_package(
         &self,
         decision_id: &str,
@@ -116,14 +128,7 @@ impl HostShared {
         task_request: &ContainedTaskRequest,
         material_deadline: Instant,
         prerequisite_deadline: impl FnOnce() -> Result<Instant, RequestFailure>,
-    ) -> Result<
-        (
-            PreparedContainedTask,
-            Vec<PreparedContainedTask>,
-            PackageLoad,
-        ),
-        RequestFailure,
-    > {
+    ) -> Result<PreparedScheduledPackage, RequestFailure> {
         // Workflow #385 MEM-1: the main package's load, which the run's timing evidence carries.
         let (prepared, package_load) = match prepare_measured_naming_refusal(
             instance_alias,
@@ -143,13 +148,22 @@ impl HostShared {
         };
         self.pack_admission
             .learn(task_request.package_path(), prepared.package_label())?;
+        // A broken game root refuses the run as before, after its main package is recorded.
+        let interrupts = self.prepare_run_interrupts(&prepared);
+        let navigated = interrupts
+            .as_ref()
+            .is_ok_and(|interrupts| super::navigation::navigation_applies(interrupts.as_deref()));
         let mut layers = Vec::new();
-        let chain = self.resolve_prerequisite_chain_recorded(
-            instance_alias,
-            &prepared,
-            prerequisite_deadline,
-            &mut layers,
-        );
+        let chain = match &interrupts {
+            Ok(_) => self.resolve_prerequisite_chain_recorded(
+                instance_alias,
+                &prepared,
+                navigated,
+                prerequisite_deadline,
+                &mut layers,
+            ),
+            Err(_) => Ok(Vec::new()),
+        };
         let main = ScheduledMain {
             linear: prepared.execution_mode() == "linear_steps",
             package_id: prepared.package_label().to_owned(),
@@ -165,7 +179,8 @@ impl HostShared {
         .entry(decision_id.to_owned())
         .or_default()
         .main = Some(main);
-        Ok((prepared, chain?, package_load))
+        let interrupts = interrupts?;
+        Ok((prepared, chain?, package_load, interrupts))
     }
 
     /// Workflow #386 SR-3 (§2.4 item 2): suspends the task package a scheduled run's preparation
@@ -252,6 +267,16 @@ impl HostShared {
             PolicyExecutionInput::Succeeded => return Ok(PolicyExecutionInput::Succeeded),
         };
         let code = scheduled_failure_code_str(&outcome);
+        // Workflow #373 NAV-5 (M-373 §8.5): the package a navigation package refusal names.
+        let invalid_package = (code.as_str()
+            == HostCode::ContainedTaskNavigationPackageInvalid.as_str())
+        .then(|| {
+            outcome
+                .value("package_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .flatten();
         let decision_id = context.decision_id();
         let (recorded, previous) = {
             let policy = lock(self.policy()?, HostLocation::ReadPolicyFailureIdentity)?;
@@ -330,7 +355,14 @@ impl HostShared {
                 .native_detail()
                 .map(|detail| detail.text()),
         );
-        let (main_package, layers) = settled_packages(&main);
+        let (main_package, mut layers) = settled_packages(&main);
+        // Workflow #373 NAV-5 (M-373 §8.5): a navigation or shared interrupt failure, or one in a
+        // navigation, recovery chain or interrupt layer, also names that layer's package (`n`)
+        // and the game root's data files (`g`), so a fix of either lifts its pause.
+        let navigation_layer = navigation_layer_failure(&rows).or(invalid_package);
+        if navigation_failure_code(&code) || navigation_layer.is_some() {
+            layers.extend(self.settled_navigation(&main.game, navigation_layer.as_deref()));
+        }
         let mut identity = FailureIdentity {
             base: encode_failure_base(&code),
             key: failure_key(&code, &scope, &operation, &detail),
@@ -386,6 +418,33 @@ impl HostShared {
             }
         };
         Ok(failed(Some(failure_identity)))
+    }
+
+    /// Workflow #373 NAV-5 (M-373 §8.5): the navigation segments of a settled failure's
+    /// identity: the layer package `package_id` (measured at the path the registry of `game`
+    /// gives it now, `x` when it gives none or it cannot be measured) and the hash of the game
+    /// root's data files (`x` when they cannot be read).
+    fn settled_navigation(&self, game: &str, package_id: Option<&str>) -> Vec<IdentityLayer> {
+        let mut layers = Vec::new();
+        if let Some(package_id) = package_id {
+            let hash = self
+                .peek_game_registry(game)
+                .ok()
+                .and_then(|registry| registry.package_path(package_id).ok())
+                .and_then(|path| measure_package_hash(&path.to_string_lossy()).ok());
+            layers.push(IdentityLayer::Navigation(IdentityPackage::measured(
+                package_id,
+                hash.as_deref(),
+            )));
+        }
+        let root_hash = self
+            .standard_packs
+            .root()
+            .and_then(|root| standard_pack_root_hash(&root.join(game)));
+        layers.push(IdentityLayer::StandardPackRoot(
+            root_hash.unwrap_or_else(|| MISSING_HASH.to_owned()),
+        ));
+        layers
     }
 
     /// Compares the error frame of the previous failed dispatch's run with the current run's.

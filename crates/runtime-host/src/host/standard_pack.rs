@@ -29,15 +29,21 @@
 //!   matches are recorded and none is handled. A page handled `max_per_run` times, or a run that
 //!   handled 16, ends the run with `contained_task_interrupt_limit_reached`. A handler never
 //!   looks at the interrupt pages itself.
+//! - **Navigation data** (Workflow #373 NAV-5, §3.5, §5, §7). A game root that holds
+//!   `navigation.json` (with `pages.json`) is read in a run's preparation too, and the run keeps
+//!   its server's edges and recovery chain beside its interrupt pages ([`RunNavigation`]); the
+//!   entry gate's full-match routing is `host/navigation.rs`. The feature package is admitted
+//!   once per run for both.
 
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
+use super::navigation::{RunNavigation, run_navigation};
 use super::*;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
     MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_PAGES_FILE,
-    StandardPackInterrupts, StandardPackPages, StandardPackRegistry, StandardPackRootIssue,
-    TaskEntryRecoveryRole, TaskInterruptThen,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
+    STANDARD_PACK_PAGES_FILE, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
+    StandardPackRegistry, StandardPackRootIssue, TaskEntryRecoveryRole, TaskInterruptThen,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -140,13 +146,14 @@ pub(crate) fn read_registries(root: Option<&Path>) -> Vec<(String, PathBuf, Stan
         .collect()
 }
 
-/// One game root as read: where it is, its registry and, when present, its page list and its
-/// shared interrupt pages.
-struct GameRoot {
-    directory: PathBuf,
-    registry: StandardPackRegistry,
+/// One game root as read: where it is, its registry and, when present, its page list, its
+/// shared interrupt pages and (Workflow #373 NAV-5) its navigation data.
+pub(super) struct GameRoot {
+    pub(super) directory: PathBuf,
+    pub(super) registry: StandardPackRegistry,
     pages: Option<StandardPackPages>,
     interrupts: Option<StandardPackInterrupts>,
+    navigation: Option<StandardPackNavigation>,
 }
 
 /// Why a game root (or the root itself) cannot be used.
@@ -221,9 +228,10 @@ fn read_root_file(path: &Path) -> Result<Option<Vec<u8>>, RootFailure> {
 }
 
 /// Reads one game root (§3, §7): `None` when the directory holds none of the root files.
-/// `pages.json` or `interrupts.json` without `bundle.json`, and `interrupts.json` without
-/// `pages.json`, are refused; every file is checked as the contract crate checks it, and the
-/// packages the page list and the interrupts name must be packages of the registry.
+/// `pages.json`, `interrupts.json` or `navigation.json` without `bundle.json`, and
+/// `interrupts.json` or (Workflow #373 NAV-5) `navigation.json` without `pages.json`, are
+/// refused; every file is checked as the contract crate checks it, and the packages the page
+/// list, the interrupts and the navigation data name must be packages of the registry.
 fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, RootFailure> {
     let path_of = |file: &str| directory.join(file);
     let invalid = |file: &'static str, issue: StandardPackRootIssue| RootFailure::Invalid {
@@ -233,8 +241,9 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
     let bundle = read_root_file(&path_of(STANDARD_PACK_BUNDLE_FILE))?;
     let pages = read_root_file(&path_of(STANDARD_PACK_PAGES_FILE))?;
     let interrupts = read_root_file(&path_of(STANDARD_PACK_INTERRUPTS_FILE))?;
+    let navigation = read_root_file(&path_of(STANDARD_PACK_NAVIGATION_FILE))?;
     let Some(bundle) = bundle else {
-        if pages.is_none() && interrupts.is_none() {
+        if pages.is_none() && interrupts.is_none() && navigation.is_none() {
             return Ok(None);
         }
         return Err(invalid(
@@ -269,6 +278,24 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
                 .map_err(|issue| invalid(STANDARD_PACK_INTERRUPTS_FILE, issue))?,
         ),
     };
+    // Workflow #373 NAV-5 (§3.5): the edges and the recovery chain, against the page list.
+    let navigation = match (navigation, &pages) {
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(invalid(
+                STANDARD_PACK_NAVIGATION_FILE,
+                StandardPackRootIssue {
+                    file: STANDARD_PACK_NAVIGATION_FILE,
+                    problem: actingcommand_contract::StandardPackProblem::PagesMissing,
+                    pointer: String::new(),
+                },
+            ));
+        }
+        (Some(bytes), Some(pages)) => Some(
+            actingcommand_contract::parse_standard_pack_navigation(&bytes, Some(game), pages)
+                .map_err(|issue| invalid(STANDARD_PACK_NAVIGATION_FILE, issue))?,
+        ),
+    };
     if let Some(pages) = &pages {
         actingcommand_contract::validate_standard_pack_references(
             &registry,
@@ -277,11 +304,16 @@ fn read_game_root(directory: &Path, game: &str) -> Result<Option<GameRoot>, Root
         )
         .map_err(|issue| invalid(issue.file, issue))?;
     }
+    if let Some(navigation) = &navigation {
+        actingcommand_contract::validate_standard_pack_navigation_references(&registry, navigation)
+            .map_err(|issue| invalid(issue.file, issue))?;
+    }
     Ok(Some(GameRoot {
         directory: directory.to_owned(),
         registry,
         pages,
         interrupts,
+        navigation,
     }))
 }
 
@@ -329,7 +361,8 @@ pub struct StandardPackGameReport {
     pub bundle_version: Option<u8>,
     /// The registry's package count; `None` when the root is broken.
     pub pack_count: Option<usize>,
-    /// The root files present (`bundle.json`, `pages.json`, `interrupts.json`).
+    /// The root files present (`bundle.json`, `pages.json`, `interrupts.json`, Workflow #373
+    /// NAV-5 `navigation.json`).
     pub root_files: Vec<&'static str>,
     /// `standard_pack_root_invalid` or `standard_pack_root_unreadable` when the root is broken.
     pub problem: Option<Outcome>,
@@ -372,6 +405,7 @@ pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
                 STANDARD_PACK_BUNDLE_FILE,
                 STANDARD_PACK_PAGES_FILE,
                 STANDARD_PACK_INTERRUPTS_FILE,
+                STANDARD_PACK_NAVIGATION_FILE,
             ]
             .into_iter()
             .filter(|file| directory.join(file).is_file())
@@ -404,13 +438,13 @@ pub fn inspect_standard_packs(root: Option<&Path>) -> StandardPacksReport {
 
 /// A package of the registry, where the run finds it.
 #[derive(Debug, Clone)]
-struct RegisteredPack {
-    package_id: String,
-    path: PathBuf,
+pub(super) struct RegisteredPack {
+    pub(super) package_id: String,
+    pub(super) path: PathBuf,
 }
 
 impl RegisteredPack {
-    fn of(root: &GameRoot, package_id: &str) -> Option<Self> {
+    pub(super) fn of(root: &GameRoot, package_id: &str) -> Option<Self> {
         root.registry.get(package_id).map(|entry| Self {
             package_id: package_id.to_owned(),
             path: root.directory.join(&entry.directory),
@@ -441,7 +475,7 @@ struct RunInterrupt {
 }
 
 /// Workflow #373 NAV-6: a run's shared interrupt pages, fixed at its preparation (§7), and what
-/// the run has done with them.
+/// the run has done with them; Workflow #373 NAV-5: and its navigation data, read with them.
 pub(super) struct RunInterrupts {
     /// The run's package: a feature, handler or `then.run` package must have its game, server
     /// and resolution.
@@ -450,12 +484,17 @@ pub(super) struct RunInterrupts {
     /// The ids of `pages.json`, which the feature package's pages must be exactly.
     pages: BTreeSet<String>,
     entries: Vec<RunInterrupt>,
-    admitted_features: Option<PreparedContainedTask>,
+    /// Workflow #373 NAV-5: shared with the run's navigation, which uses the same feature
+    /// package (admitted once per run, §7).
+    admitted_features: Option<Arc<PreparedContainedTask>>,
     admitted: BTreeMap<String, PreparedContainedTask>,
     counts: BTreeMap<String, u8>,
     total: u32,
-    /// Layer packages whose effective configuration this run recorded (once each, §8.3).
-    configured: BTreeSet<String>,
+    /// Layer packages whose effective configuration this run recorded (once each, §8.3), the
+    /// navigation's layers (Workflow #373 NAV-5) included.
+    pub(super) configured: BTreeSet<String>,
+    /// Workflow #373 NAV-5: the run's navigation data, taken out when its entry gate navigates.
+    pub(super) navigation: Option<RunNavigation>,
 }
 
 impl HostShared {
@@ -574,8 +613,10 @@ impl HostShared {
 
     /// Workflow #373 NAV-6 (§7): the shared interrupt pages of a run of `prepared`, read in its
     /// preparation. `None` (nothing read, nothing recorded) without a root, without the game's
-    /// directory, or when the game root holds no `interrupts.json`; also when the root names no
-    /// feature package or no handler for the run's server. A broken root refuses the run.
+    /// directory, or when the game root holds no `interrupts.json` (Workflow #373 NAV-5: and no
+    /// `navigation.json`); also when the root names no feature package for the run's server, or
+    /// neither a handler for it nor navigation data the run's package can use. A broken root
+    /// refuses the run.
     pub(super) fn prepare_run_interrupts(
         &self,
         prepared: &PreparedContainedTask,
@@ -585,18 +626,24 @@ impl HostShared {
         };
         let game = prepared.game();
         let directory = root.join(game);
-        let marker = directory.join(STANDARD_PACK_INTERRUPTS_FILE);
-        match fs::symlink_metadata(&marker) {
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(RootFailure::Unreadable {
-                    path: marker,
-                    error,
-                    op: IoOp::Metadata,
+        let mut marked = false;
+        for file in [STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE] {
+            let marker = directory.join(file);
+            match fs::symlink_metadata(&marker) {
+                Ok(_) => marked = true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(RootFailure::Unreadable {
+                        path: marker,
+                        error,
+                        op: IoOp::Metadata,
+                    }
+                    .refusal(game));
                 }
-                .refusal(game));
             }
+        }
+        if !marked {
+            return Ok(None);
         }
         let read = match read_game_root(&directory, game) {
             Ok(Some(read)) => read,
@@ -605,7 +652,7 @@ impl HostShared {
         };
         self.note_standard_pack_registry(game, &read.registry)
             .map_err(RequestFailure::poison_without_terminal)?;
-        let (Some(pages), Some(interrupts)) = (&read.pages, &read.interrupts) else {
+        let Some(pages) = &read.pages else {
             return Ok(None);
         };
         let server = prepared.server();
@@ -617,8 +664,10 @@ impl HostShared {
         let Some(features) = for_server(&pages.features) else {
             return Ok(None);
         };
-        let entries = interrupts
+        let entries = read
             .interrupts
+            .as_ref()
+            .map_or(&[][..], |interrupts| interrupts.interrupts.as_slice())
             .iter()
             .filter_map(|interrupt| {
                 let handler = for_server(&interrupt.handlers)?;
@@ -638,7 +687,13 @@ impl HostShared {
                 })
             })
             .collect::<Vec<_>>();
-        if entries.is_empty() {
+        // Workflow #373 NAV-5 (§3.5, §4.4): the run's server's edges and recovery chain, when the
+        // run's package has a page entry.
+        let navigation = read
+            .navigation
+            .as_ref()
+            .and_then(|navigation| run_navigation(&read, pages, navigation, prepared));
+        if entries.is_empty() && navigation.is_none() {
             return Ok(None);
         }
         Ok(Some(Box::new(RunInterrupts {
@@ -651,13 +706,15 @@ impl HostShared {
             counts: BTreeMap::new(),
             total: 0,
             configured: BTreeSet::new(),
+            navigation,
         })))
     }
 }
 
-/// A run-ending failure the interrupt handling decides itself, with its full outcome: the run's
-/// terminal carries it, for a direct and a scheduled run alike.
-fn interrupt_failure(error: RuntimeHostError) -> ContainedTaskRunError<RequestFailure> {
+/// A run-ending failure the interrupt handling (Workflow #373 NAV-5: or the navigation) decides
+/// itself, with its full outcome: the run's terminal carries it, for a direct and a scheduled
+/// run alike.
+pub(super) fn interrupt_failure(error: RuntimeHostError) -> ContainedTaskRunError<RequestFailure> {
     let outcome = error.outcome();
     let mut failure = RequestFailure::request(error, RuntimeReceiptState::Failed, None);
     failure.task_failure = Some(TaskFailureEvidence {
@@ -669,15 +726,24 @@ fn interrupt_failure(error: RuntimeHostError) -> ContainedTaskRunError<RequestFa
 
 /// `contained_task_navigation_package_invalid` for `package_id` in `role` (§9.1), with the
 /// loader's refusal as its cause when admission failed.
-fn package_invalid(
+pub(super) fn package_invalid(
     package_id: &str,
     role: NavigationRole,
     problem: NavigationProblem,
     cause: Option<Outcome>,
 ) -> ContainedTaskRunError<RequestFailure> {
+    // Workflow #373 NAV-5: an edge's or a recovery chain step's package where the navigation
+    // uses it; the feature package and the interrupt layers where an interrupt is handled.
+    let operation = match role {
+        NavigationRole::Edge => HostLocation::NavigationHop,
+        NavigationRole::Chain => HostLocation::NavigationChain,
+        NavigationRole::Features | NavigationRole::Handler | NavigationRole::ThenRun => {
+            HostLocation::InterruptHandle
+        }
+    };
     let error = RuntimeHostError::request(
         HostCode::ContainedTaskNavigationPackageInvalid,
-        HostLocation::InterruptHandle,
+        operation,
         RuntimeErrorCode::PackageInvalid,
     )
     .with_outcome_values(|outcome| {
@@ -738,6 +804,11 @@ impl RuntimeContainedTask<'_> {
         &mut self,
         frame: SharedInterruptFrame<'_>,
     ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<RequestFailure>> {
+        // Workflow #373 NAV-5 (§5.2 item 1): the last frame of the entry gate's own check is the
+        // first locate's.
+        if self.retain_entry_scene {
+            self.entry_scene = Some(frame.scene.clone());
+        }
         let Some(mut interrupts) = self.interrupts.take() else {
             return Ok(SharedInterruptVerdict::NotHandled);
         };
@@ -842,13 +913,70 @@ impl RuntimeContainedTask<'_> {
         if let Some(problem) = problem {
             return Err(package_invalid(&pack.package_id, role, problem, None));
         }
-        interrupts.admitted_features = Some(admitted);
+        interrupts.admitted_features = Some(Arc::new(admitted));
         Ok(())
+    }
+
+    /// Workflow #373 NAV-5 (§5.2): the run's feature package for a locate, admitted on its first
+    /// use by the run's interrupt pages or its navigation, whichever comes first.
+    pub(super) fn navigation_features(
+        &mut self,
+    ) -> Result<Arc<PreparedContainedTask>, ContainedTaskRunError<RequestFailure>> {
+        let mut interrupts = self.interrupts.take().ok_or_else(|| {
+            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+        })?;
+        let admitted = self.admit_features(&mut interrupts).and_then(|()| {
+            interrupts.admitted_features.clone().ok_or_else(|| {
+                ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+            })
+        });
+        self.interrupts = Some(interrupts);
+        admitted
+    }
+
+    /// Workflow #373 NAV-5 (§5.2 item 3): of the pages a locate matched (ids of `pages.json`),
+    /// the shared interrupt pages the run's package does not declare itself (`own`), each with
+    /// its interrupt's index, in `interrupts.json` order.
+    pub(super) fn navigation_interrupt_hits(
+        &self,
+        matched: &BTreeSet<String>,
+        own: &BTreeSet<String>,
+    ) -> Vec<(usize, String)> {
+        self.interrupts
+            .as_ref()
+            .map_or(&[][..], |interrupts| interrupts.entries.as_slice())
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matched.contains(&entry.page) && !own.contains(&entry.page))
+            .map(|(index, entry)| (index, entry.page.clone()))
+            .collect()
+    }
+
+    /// Workflow #373 NAV-5 (§5.2 item 3): a locate hands the one shared interrupt page it
+    /// matched to its handling (§6.2), which records it, counts it and may end the run.
+    pub(super) fn handle_navigation_interrupt(
+        &mut self,
+        index: usize,
+    ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<RequestFailure>> {
+        let mut interrupts = self.interrupts.take().ok_or_else(|| {
+            ContainedTaskRunError::task(SharedCode::ContainedTaskStateInvalid.as_str())
+        })?;
+        let verdict = self.handle_shared_interrupt(&mut interrupts, index);
+        self.interrupts = Some(interrupts);
+        verdict
+    }
+
+    /// Workflow #373 NAV-5: how often the run handled the shared interrupt page `page`.
+    pub(super) fn interrupt_count(&self, page: &str) -> u8 {
+        self.interrupts
+            .as_ref()
+            .and_then(|interrupts| interrupts.counts.get(page).copied())
+            .unwrap_or(0)
     }
 
     /// Admits a registry package by its path (Workflow #336 PKG-S1: structurally); a refusal is
     /// `contained_task_navigation_package_invalid` with the loader's code as its cause.
-    fn admit_layer_package(
+    pub(super) fn admit_layer_package(
         &self,
         pack: &RegisteredPack,
         role: NavigationRole,

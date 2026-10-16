@@ -1215,3 +1215,13 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_390_navoffset::navoffset_actinglab_observe_resolves_an_offset_click_to_its_box_on_the_frame",
 ]
 incident = ["#390"]
+# Workflow #373 NAV-5 (model M-373 v1.1 §5; wave-17 rulings 1 and 21; register §1.84): the kernel's half of the entry gate's full-match routing, one full match of the feature package's page set reading each distinct located request once within the budget its admission checked (N5-13), and the fix of the navigation readers' older bug, a destructive page operation read in every click form a navigation edge takes (offset, target, drag, long press, point, rect), its fixed boxes blocking a navigation tap without a frame and a target's box on the frame the route is resolved on
+[[gate]]
+key = "78"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::text_locate_tests::n5_13_a_full_match_reads_each_request_once_within_the_admitted_budget",
+    "actingcommand-execution-kernel::lib::drive::tests::nav5_a_destructive_action_takes_every_navigation_click_form",
+    "actingcommand-actinglab::bin:actinglab::commands::navigation_recovery::gate_373_nav5::nav5_a_destructive_action_takes_every_navigation_click_form",
+]
+incident = ["#373 NAV-5"]
