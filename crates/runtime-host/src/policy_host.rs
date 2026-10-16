@@ -1095,13 +1095,9 @@ impl PolicyHost {
             .collect::<BTreeSet<_>>();
         // Workflow #372 K5: the dispatches of an id a task continues count as that task's, so
         // its snapshot is that of its accounting group's latest run.
-        let accounting = accounting_tasks(&active.compiled);
-        let accounted = |task_id: &str| {
-            task_ids
-                .get(task_id)
-                .copied()
-                .or_else(|| accounting.get(task_id).copied())
-        };
+        // RED PROOF mutation 1: the snapshot ignores the accounting group.
+        let _accounting = accounting_tasks(&active.compiled);
+        let accounted = |task_id: &str| task_ids.get(task_id).copied();
         let settlements = fold_settlements_by(
             self.seen_dispatches.values().filter(|dispatch| {
                 accounted(dispatch.data.task_id.as_str()).is_some()
@@ -1109,7 +1105,7 @@ impl PolicyHost {
                         .completed_sequence
                         .is_some_and(|sequence| sequence <= ledger_position)
             }),
-            &accounting,
+            &BTreeMap::new(),
         )?;
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
         for dispatch in self.seen_dispatches.values() {
@@ -2074,13 +2070,11 @@ impl PolicyHost {
         // Workflow #372 K5: the completions of an id a task continues count as that task's, so
         // a pair's entry is keyed by the task and holds its accounting group's latest completed
         // run, whose own identity names the id it ran as.
-        let accounting = accounting_tasks(&active.compiled);
+        // RED PROOF mutation 4: the outcome key snapshot ignores the accounting group.
+        let _accounting = accounting_tasks(&active.compiled);
         let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
         for (sequence, dispatch) in self.seen_dispatches.values().filter_map(completion_of) {
-            let task_id = accounting
-                .get(dispatch.data.task_id.as_str())
-                .copied()
-                .unwrap_or(dispatch.data.task_id.as_str());
+            let task_id = dispatch.data.task_id.as_str();
             if !keys.contains_key(task_id) {
                 continue;
             }

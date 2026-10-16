@@ -25,7 +25,8 @@ pub const MAX_WINDOWS_PER_PROFILE: usize = 128;
 pub const MAX_GOALS_PER_PROFILE: usize = 128;
 pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
 /// Workflow #372 K5: the most task ids one task may declare in `continues_from`.
-pub const MAX_CONTINUED_TASK_IDS: usize = 8;
+// RED PROOF mutation 6: the bound is 9 ids.
+pub const MAX_CONTINUED_TASK_IDS: usize = 9;
 pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
 pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
 pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
@@ -312,7 +313,8 @@ pub struct TaskSpec {
     /// this task continues. Under this catalog the task accounts as itself and these ids
     /// (`CompiledCatalog::accounting_ids`); absent, it accounts as itself alone, and the member
     /// serializes as nothing at all.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // RED PROOF mutation 7: an absent member serializes as null.
+    #[serde(default)]
     pub continues_from: Option<Vec<String>>,
 }
 

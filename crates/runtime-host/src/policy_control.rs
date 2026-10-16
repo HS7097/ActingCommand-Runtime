@@ -191,9 +191,11 @@ impl PolicyControlState {
         task_id: &str,
         instance_id: &str,
     ) -> (String, String) {
+        // RED PROOF mutation 3: the failure state is the task's own only.
         catalog
             .accounting_ids(task_id)
             .into_iter()
+            .take(1)
             .filter_map(|id| {
                 let key = (id.to_owned(), instance_id.to_owned());
                 self.failure_settled
@@ -574,7 +576,10 @@ impl PolicyControlState {
                 HostLocation::CommitPolicyBudget,
             )?,
         )?;
-        self.task_daily.insert(task_daily_key, task_daily_own);
+        // RED PROOF mutation 2: the own entry holds the group's receipt value.
+        let _ = task_daily_own;
+        self.task_daily
+            .insert(task_daily_key, admission.budget.task_daily_used);
         self.task_window
             .insert(task_window_key.clone(), task_window_own);
         self.task_runtime.insert(task_window_key, task_runtime_own);

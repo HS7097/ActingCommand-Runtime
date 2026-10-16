@@ -1110,6 +1110,24 @@ fn clock_slots(
                         })
                 })
                 .min_by_key(|dispatch| dispatch.sequence)
+                // RED PROOF mutation 5: a guessed rename.
+                .or_else(|| {
+                    catalog
+                        .dispatch_task(task_id)
+                        .is_none()
+                        .then(|| {
+                            dispatches
+                                .iter()
+                                .filter(|((_, instance_id), _)| {
+                                    instance_id == payload.instance_id()
+                                })
+                                .flat_map(|(_, admitted)| admitted.iter())
+                                .filter(|dispatch| dispatch.sequence > event.sequence())
+                                .min_by_key(|dispatch| dispatch.sequence)
+                                .copied()
+                        })
+                        .flatten()
+                })
         });
         let signal = SlotSignal {
             sequence: event.sequence(),
