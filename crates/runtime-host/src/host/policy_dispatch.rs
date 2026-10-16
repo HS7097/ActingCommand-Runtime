@@ -1817,7 +1817,7 @@ impl HostShared {
             // identity (its task state, settlement and device facts). The intent is stale only
             // when its own instance view moved too.
             if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id
-                && dispatch_view_identity(
+                || dispatch_view_identity(
                     &current_facts,
                     &current_resources,
                     &catalog_pool_scopes(&policy),
