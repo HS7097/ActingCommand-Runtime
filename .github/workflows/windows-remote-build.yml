@@ -665,7 +665,7 @@ jobs:
           if ($interfaces.schema_version -cne 'actingcommand.component-interfaces.v1') {
             throw "component-interfaces.json: schema_version is not actingcommand.component-interfaces.v1: $($interfaces.schema_version)"
           }
-          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package')) {
+          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package', 'runtime-outcomes')) {
             $range = @($interfaces.speaks.$name)
             if ($range.Count -ne 2 -or @($range | Where-Object { "$_" -cnotmatch '\A[0-9]+\z' }).Count -ne 0 -or
                 [int64]"$($range[0])" -gt [int64]"$($range[1])") {

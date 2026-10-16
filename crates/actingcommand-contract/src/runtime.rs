@@ -63,7 +63,7 @@ use std::net::{IpAddr, SocketAddr};
 // Revision 2 (Workflow #378 A4 with #389 U-1): request v4 adds the optional `detail`, receipt v2
 // carries `outcome` on every receipt instead of the error projection, and the request kinds of
 // #389 section 2.3 (`BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`,
-// `UnloadPack`) belong to it. Slice A8 declares the revision for v0.12.0 in one step.
+// `UnloadPack`) belong to it. Declared once for v0.12.0 as [2, 2] (#378 A8).
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";

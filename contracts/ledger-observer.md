@@ -920,7 +920,7 @@ transition record join Changes; `ledger.dump_imported` joins Health.
 ## 15 Configuration keys `ledger_observer.*`
 
 A new section of the actingd configuration, in the one v0.12.0 revision of `actingd-config`
-(5, declared by A8). Defaults go into the defaults file `actingd.defaults.json` of #387 D1b.
+(revision 5, declared [5, 5] for v0.12.0 by #378 A8). Defaults go into the defaults file `actingd.defaults.json` of #387 D1b.
 **Slice AO-1 brings parsing, validation and defaults of every key below in one PR** (order-v012
 R3, R4), including the keys that later slices read; `config.parameters` reports each key's value
 and source. `settable` follows #387 §5.5 and is fixed by AO-1 (proposal: watermark and batch

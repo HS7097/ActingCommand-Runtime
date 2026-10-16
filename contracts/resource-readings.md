@@ -110,8 +110,8 @@ A Runtime older than this family refuses a package that declares it, on both loa
 sealed ZIP and a content directory both pass the same declaration gate, which reports
 `UnknownField` @ `/resource_readings`. Nothing ignores the family silently. Likewise a Runtime
 older than Workflow #390 READ-1 refuses a mark that declares `capacity_fact_key`, with
-`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`; the `package` interface revision
-is declared once by A8.
+`UnknownField` @ `/resource_readings/<i>/capacity_fact_key`. Both are part of `package`
+revision 3, which Runtime v0.12.0 declares once ([component-interfaces.md](component-interfaces.md)).
 
 ### Two uses, one declaration
 
