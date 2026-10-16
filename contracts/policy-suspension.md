@@ -165,11 +165,18 @@ Only these failures can pause a task by repeating:
   configuration problem (a package the registry does not list, a package id that does not
   match, an incompatible package);
 - Workflow #373 NAV-5 (M-373 §8.5, §15 ruling 4): every scope but `prepare`, the restart
-  segment included, with a code that starts with `contained_task_navigation_` or
-  `contained_task_interrupt_`: the standard pack's navigation data or interrupt pages do not
-  bring the run to its entry (a recovery chain may restart the application, so its end is in
-  a restart segment). Its identity names the data files (`g`), so a fix of the data lifts the
-  pause.
+  segment included, with a code that starts with `contained_task_navigation_`: the standard
+  pack's navigation data does not bring the run to its entry (a recovery chain may restart
+  the application, so its end is in a restart segment). Its identity names the data files
+  (`g`), so a fix of the data lifts the pause;
+- Workflow #373 NAV-5 (wave-17 acceptance ruling 2; M-373 does not say): every scope but
+  `prepare`, the restart segment included, with a code that starts with
+  `contained_task_interrupt_` (the failures `contained_task_interrupt_limit_reached` and
+  `contained_task_interrupt_escalated`). For the reason of Workflow #390 EXEC-3 ruling 4: a
+  screen the run cannot handle, again and again, means the standard pack no longer matches
+  the game, so the pair pauses until the package or the data changes (its identity names the
+  data files, `g`, and the handler's layer, `n`). `prepare` is excluded because interrupts
+  there are expected.
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
