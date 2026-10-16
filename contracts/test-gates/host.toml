@@ -1169,3 +1169,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_308_l4b::l4b_a_scan_select_that_finds_nobody_listed_ends_the_run_with_its_on_empty_key",
 ]
 incident = ["#308"]
+
+# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18; register §1.91): the status shows each instance's emulator running state as the Runtime last read it, with the reading's time: at the start's discovery (bound to its port on, bound pending off), at a confirmed stop (off) and start (on) and at an on-demand discovery; an instance the Runtime never read (explicit HOST:PORT) is unknown, never off
+[[gate]]
+key = "101"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_nine1::nine1_the_status_shows_each_emulator_as_the_runtime_last_read_it",
+]
+incident = ["#390"]

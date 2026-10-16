@@ -1499,19 +1499,21 @@ configuration key changes;
 |---|---|---|---|---|---|
 | PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`), whose resource overlay hands the heavy threshold to the policy evaluator (`HostResourceSnapshot.heavy_threshold_milli`, in memory only: no member of the resources document or a request) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated`; the controller and the evaluator judge heavy work by the one key (was the evaluator's own 1 500) |
 
-### 1.91 Wave 18 slice 九处-1: overview and status show `start_emulator` (#390 comment 6095942731, item 1; wave-18 ruling 4)
+### 1.91 Wave 18 slice 九处-1: overview and status show each emulator's running state (#390 comment 6095942731, item 1; wave-18 ruling 4 as corrected by the coordinator, 10-16 22:5x)
 
-`actingctl overview` and `ac_overview` show in each instance row, and `actingctl status` beside
-each instance's status, the instance's `start_emulator` (#369 S6a, §1.36): whether actingd starts
-the instance's stopped emulator when it starts. The value is read from the program fact
-`config.parameters.instance` S6a already records (the row `instance.<instance_id>.start_emulator`,
-explicit, not settable); an instance without that row is `false` (off unless named). Read-only:
-no persisted record, runtime-client wire shape, configuration key or outcome code changes;
-[runtime-interface.md](runtime-interface.md) (the actingctl and MCP tables) is the contract.
+`actingctl status` (and so `actingctl emulator status`) and each `ac_overview` /
+`actingctl overview` instance row show whether the instance's emulator runs, as the Runtime last
+read it, with the time of that reading, or `unknown` while it holds no reading; never `off` by
+default. The Runtime adds no poll: it keeps, in memory with the registered instance, the reading
+it already takes from `MuMuManager info` at the start's discovery and on-demand discovery and at
+each emulator control; [emulator-control.md](emulator-control.md) ("Client and CLI") and
+[runtime-interface.md](runtime-interface.md) are the contract. No persisted record, fact,
+configuration key or outcome code changes.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| N1-1 | `start_emulator` (boolean) on each `ac_overview` / `actingctl overview` instance row and on each instance of the `actingctl status` line | output member (no persisted record, no wire change; apps 41 parity, apps 69) | 九处-1 | 九处-1 | read with RuntimeFactSnapshot (records nothing; `status` now reads it after Status); never cut by MCP's output budget; a row whose value is not a boolean is `invalid_fact_snapshot_record`: the overview leaves the row without the member, warns and marks `incomplete`, `status` fails with it |
+| N1-1 | `RuntimeInstanceStatus.emulator_state` (`EmulatorRunningState`): `{state: "on" \| "off", observed_at_unix_ms}` or `{state: "unknown"}`, `deny_unknown_fields` | new member of the status projection, always serialized (runtime-client wire; read back as `unknown` when absent) | 九处-1 | 九处-1 (host 101) | the reading: the start's discovery (bound to its port `on`, bound pending `off`, at the start's registration), each (re)binding after a confirmed start or stop and the state read after a failed control (`unknown` when nothing settled after the vendor command ran), an on-demand `DiscoverInstances` (an unlisted instance `unknown`); an instance that is not discovery-bound stays `unknown` |
+| N1-2 | `emulator_state` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 69) | 九处-1 | 九处-1 | the status' member copied; never cut by MCP's output budget |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -466,6 +466,8 @@ impl HostShared {
             let game_id = configured_games.get(&instance.instance_alias).cloned();
             let pause = scheduling_pause.instance_state(&instance.instance_alias);
             let resource_fence = resource_fences.get(&instance_id).cloned();
+            // Workflow #390 九处-1: the emulator as the Runtime last read it.
+            let emulator_state = instance.emulator_state;
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -492,7 +494,11 @@ impl HostShared {
                 .with_resource_package(resource_package)
                 .with_game_id(game_id)
                 .and_then(|status| status.with_pause(pause))
-                .map(|status| status.with_resource_fence(resource_fence))
+                .map(|status| {
+                    status
+                        .with_resource_fence(resource_fence)
+                        .with_emulator_state(emulator_state)
+                })
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         HostCode::RuntimeStatusProjectionInvalid,

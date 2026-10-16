@@ -662,12 +662,13 @@ tests = [
 ]
 incident = ["#372 K4"]
 
-# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4; register §1.91): each actingctl overview and ac_overview instance row, and each instance of actingctl status beside its status members, shows the instance's start_emulator read from the program fact config.parameters.instance: true for an instance configured true, false for one configured false and for one that does not name the key (#369 S6a: off unless named)
+# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18; register §1.91): actingctl status beside each instance's status members, and each actingctl overview / ac_overview instance row, show emulator_state, whether the instance's emulator runs as the Runtime last read it: on or off with the reading's observed_at_unix_ms, and unknown, never off, while the Runtime holds no reading
 [[gate]]
 key = "69"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_instance_s_start_emulator",
-    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_status_shows_each_instance_s_start_emulator_beside_its_status",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time",
+    "actingcommand-actingctl::bin:actingctl::tests::nine1_status_shows_each_emulator_as_last_read_with_the_time",
+    "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
 incident = ["#390"]

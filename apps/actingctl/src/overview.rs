@@ -34,25 +34,24 @@
 //! (`FactRefreshStatus`, D2 model §6 S5): one row per instance with a waiting key, the object
 //! `actingctl fact-refresh` prints; `--instance` narrows its rows to the one instance.
 //!
-//! Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4): each instance
-//! row carries the instance's `start_emulator` (Workflow #369 S6a), read from the program fact
-//! `config.parameters.instance` with RuntimeFactSnapshot like `foreground`; `actingctl status`
-//! shows the same value beside each instance's status (`status_with_start_emulator`).
+//! Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): each
+//! instance row carries `emulator_state`, the status' reading of whether the instance's emulator
+//! runs (`on`, `off` or `unknown`, with the reading's `observed_at_unix_ms`), as `actingctl
+//! status` shows it.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::instance_selector::{self, SelectorMiss};
-use actingcommand_contract::codes::{ContractCode, SanitizationCode};
+use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     APPLICATION_FOREGROUND_FACT_KEY, CONFIG_CATALOG_FACT_KEY, CONFIG_SELECTION_FACT_KEY,
     ConfigCatalog, EventActor, EventSource, FactScalar, FactValue, InstalledProcess, InstanceId,
     RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactRefreshStatus, RuntimeFactScope,
     RuntimeFactSnapshot, RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
-    RuntimePerformanceStatus, config_parameters_fact_key,
+    RuntimePerformanceStatus,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
-use actingcommand_runtime_config::{INSTANCE_SECTION, START_EMULATOR, instance_key};
 use serde_json::{Map, Value, json};
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -619,10 +618,6 @@ fn instance_rows(
         {
             row["foreground"] = foreground;
         }
-        // Workflow #390 九处-1: the instance's `start_emulator`, from the same program facts.
-        if let Some(facts) = facts {
-            add_start_emulator(&mut row, facts, instance, warnings, incomplete);
-        }
         // At most one brief run status per instance: its newest admitted run in the window,
         // which is the open one when a run is open.
         if Instant::now() + READ_RESERVE >= deadline {
@@ -690,6 +685,13 @@ fn instance_row(
             }),
         );
     }
+    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): whether the
+    // instance's emulator runs, as the Runtime last read it, with the time of that reading;
+    // `{state: unknown}` without one. Always answered and never cut.
+    row.insert(
+        "emulator_state".to_owned(),
+        json!(instance.emulator_state()),
+    );
     if let Some(monitor) = monitor.filter(|monitor| monitor.policy().is_some()) {
         row.insert(
             "monitor".to_owned(),
@@ -719,77 +721,6 @@ fn foreground(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Option<Va
             }
             _ => None,
         })
-}
-
-/// Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4): whether the
-/// daemon starts the instance's stopped emulator when it starts, the instance's `start_emulator`
-/// (Workflow #369 S6a) as the Runtime reports it: the row `instance.<instance_id>.start_emulator`
-/// of the program fact `config.parameters.instance`. S6a reports the key only for an instance
-/// whose entry names it, so no such row, or no such fact, is off. A fact that is not a row list,
-/// or a row whose value is not a boolean, is `invalid_fact_snapshot_record`.
-fn start_emulator(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Result<bool, Outcome> {
-    let refused = || Outcome::new(SanitizationCode::InvalidFactSnapshotRecord);
-    let section = config_parameters_fact_key(INSTANCE_SECTION);
-    let Some(record) = facts
-        .records
-        .iter()
-        .find(|record| record.scope == RuntimeFactScope::Runtime && record.key == section)
-    else {
-        return Ok(false);
-    };
-    let FactValue::RecordList(rows) = &record.value else {
-        return Err(refused());
-    };
-    // The registry's `instance_<32 hex>`, as S6a keys the row.
-    let Value::String(id) = json!(instance_id) else {
-        return Err(refused());
-    };
-    let key = FactScalar::String(instance_key(&id, START_EMULATOR));
-    match rows
-        .iter()
-        .find(|row| row.get("key") == Some(&key))
-        .map(|row| row.get("value"))
-    {
-        None => Ok(false),
-        Some(Some(FactScalar::Boolean(on))) => Ok(*on),
-        Some(_) => Err(refused()),
-    }
-}
-
-/// Workflow #390 九处-1: `row`, the overview row of `instance`, with its `start_emulator`
-/// ([`start_emulator`]). A fact that does not read back leaves the row without it, a warning
-/// and the overview incomplete.
-fn add_start_emulator(
-    row: &mut Value,
-    facts: &RuntimeFactSnapshot,
-    instance: &RuntimeInstanceStatus,
-    warnings: &mut Vec<Warning>,
-    incomplete: &mut bool,
-) {
-    match start_emulator(facts, instance.instance_id()) {
-        Ok(on) => row[START_EMULATOR] = json!(on),
-        Err(outcome) => {
-            warnings.push(Warning::Outcome(outcome));
-            *incomplete = true;
-        }
-    }
-}
-
-/// Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4): what `actingctl
-/// status` answers, the Runtime's status with each instance's `start_emulator`
-/// ([`start_emulator`]) beside the members of its status. A fact that does not read back is the
-/// refusal.
-pub(crate) fn status_with_start_emulator(
-    status: &RuntimeControlPlaneStatus,
-    facts: &RuntimeFactSnapshot,
-) -> Result<Value, Outcome> {
-    let mut answer = json!(status);
-    let rows = answer.get_mut("instances").and_then(Value::as_array_mut);
-    // The status lists its instances in the order it serializes them.
-    for (row, instance) in rows.into_iter().flatten().zip(status.instances()) {
-        row[START_EMULATOR] = json!(start_emulator(facts, instance.instance_id())?);
-    }
-    Ok(answer)
 }
 
 /// `{root, state_root, build}`: the program root, the state root and, when the program root holds
@@ -1024,8 +955,8 @@ mod tests {
     use actingcommand_contract::codes::SanitizationCode;
     use actingcommand_contract::outcome::Category;
     use actingcommand_contract::{
-        ApprovalDisposition, ConfigParameter, ConfigParameterSource, ConfigSelection,
-        IdentifierIssuer, OriginModule, RuntimeConfigManifest, RuntimeFactRecord,
+        ApprovalDisposition, ConfigSelection, EmulatorRunningState, IdentifierIssuer, OriginModule,
+        RuntimeFactRecord,
     };
     use tempfile::TempDir;
 
@@ -1242,98 +1173,53 @@ mod tests {
         );
     }
 
-    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4): three
-    // instances of one Runtime, the first configured with `start_emulator: true`, the second with
-    // `false` and the third without the key, and the program fact `config.parameters.instance` the
-    // Runtime records for them (#369 S6a: the row `instance.<instance_id>.start_emulator`, explicit
-    // and not settable, only for an instance whose entry names the key; every instance also has
-    // its stuck-recovery rows). Each with the value it must show.
-    fn nine1_instances() -> (Vec<(RuntimeInstanceStatus, bool)>, RuntimeFactSnapshot) {
+    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave
+    // 18): each overview row shows whether its instance's emulator runs as the Runtime last read
+    // it: `on` or `off` with the reading's time, and `unknown`, never `off`, when the Runtime
+    // holds no reading.
+    #[test]
+    fn nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time() {
         let issuer = IdentifierIssuer::new().expect("identifier issuer");
-        let mut instances = Vec::new();
-        let mut parameters = Vec::new();
-        for (alias, named, shown) in [
-            ("neutral.first", Some(true), true),
-            ("neutral.second", Some(false), false),
-            ("neutral.third", None, false),
-        ] {
-            let instance_id = *issuer.mint_instance_id().expect("instance id").transport();
-            let id = json!(instance_id);
-            let id = id.as_str().expect("instance id text");
-            let parameter = |member: &str, value: FactScalar| ConfigParameter {
-                key: format!("instance.{id}.{member}"),
-                value,
-                source: ConfigParameterSource::Explicit,
-                settable: false,
-            };
-            parameters.push(parameter("stuck_recovery", FactScalar::Boolean(true)));
-            if let Some(named) = named {
-                parameters.push(parameter("start_emulator", FactScalar::Boolean(named)));
-            }
-            let status =
-                RuntimeInstanceStatus::new(alias, instance_id, false, 0, false, false, false)
-                    .expect("instance status");
-            instances.push((status, shown));
-        }
-        let manifest = RuntimeConfigManifest {
-            subsystems: Vec::new(),
-            parameters,
+        let instance = |alias: &str, emulator_state: EmulatorRunningState| {
+            RuntimeInstanceStatus::new(
+                alias,
+                *issuer.mint_instance_id().expect("instance id").transport(),
+                false,
+                0,
+                false,
+                false,
+                false,
+            )
+            .expect("instance status")
+            .with_emulator_state(emulator_state)
         };
-        (
-            instances,
-            facts(manifest.parameter_fact_records(1, OriginModule::Runtime)),
-        )
-    }
-
-    // 九处-1: each overview row shows its instance's start_emulator: true for the instance
-    // configured true, false for the one configured false and for the one that does not name it;
-    // reading it warns nothing and leaves the overview complete.
-    #[test]
-    fn nine1_each_overview_row_shows_its_instance_s_start_emulator() {
-        let (instances, facts) = nine1_instances();
-        let mut warnings = Vec::new();
-        let mut incomplete = false;
-        for (instance, shown) in &instances {
-            let mut row = instance_row(instance, None);
-            add_start_emulator(&mut row, &facts, instance, &mut warnings, &mut incomplete);
-            assert_eq!(
-                (&row["alias"], &row["start_emulator"]),
-                (&json!(instance.instance_alias()), &json!(shown)),
-                "{row}"
-            );
+        let cases = [
+            (
+                instance(
+                    "neutral.on",
+                    EmulatorRunningState::On {
+                        observed_at_unix_ms: 1_000,
+                    },
+                ),
+                json!({"state": "on", "observed_at_unix_ms": 1_000}),
+            ),
+            (
+                instance(
+                    "neutral.off",
+                    EmulatorRunningState::Off {
+                        observed_at_unix_ms: 2_000,
+                    },
+                ),
+                json!({"state": "off", "observed_at_unix_ms": 2_000}),
+            ),
+            (
+                instance("neutral.unread", EmulatorRunningState::Unknown),
+                json!({"state": "unknown"}),
+            ),
+        ];
+        for (instance, shown) in cases {
+            let row = instance_row(&instance, None);
+            assert_eq!(row["emulator_state"], shown, "{row}");
         }
-        assert!(
-            warnings.is_empty() && !incomplete,
-            "{:?}",
-            outcomes(&warnings)
-        );
-    }
-
-    // 九处-1: actingctl status shows each instance's start_emulator beside the members of its
-    // status, the same values as the overview rows, and leaves the rest of the status as it is.
-    #[test]
-    fn nine1_status_shows_each_instance_s_start_emulator_beside_its_status() {
-        let (instances, facts) = nine1_instances();
-        let owner_epoch = *IdentifierIssuer::new()
-            .expect("identifier issuer")
-            .mint_owner_epoch()
-            .expect("owner epoch")
-            .transport();
-        let status = RuntimeControlPlaneStatus::new(
-            owner_epoch,
-            instances
-                .iter()
-                .map(|(instance, _)| instance.clone())
-                .collect(),
-        )
-        .expect("runtime status");
-        let mut expected = json!(status);
-        for (index, (_, shown)) in instances.iter().enumerate() {
-            expected["instances"][index]["start_emulator"] = json!(shown);
-        }
-        assert_eq!(
-            status_with_start_emulator(&status, &facts).expect("the status"),
-            expected
-        );
     }
 }
