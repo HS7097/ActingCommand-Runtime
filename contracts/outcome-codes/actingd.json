@@ -1326,12 +1326,12 @@
       "layer": "process",
       "uncertain": false,
       "values": {},
-      "review": "pending",
+      "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd ledger-maintenance failed; the maintenance failure names the cause.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The code of actingd's error for a ledger-maintenance run that failed. It is never emitted on its own: the subcommand's report, its developer line and its exit carry the maintenance failure's own outcome (its own code, with its stage and values), so this code reaches no interface and no ledger record.",
+      "common_causes": "The maintenance failure the report names.",
+      "handling": "Follow the handling of the code the report names."
     },
     "runtime_ready": {
       "category": "success",
