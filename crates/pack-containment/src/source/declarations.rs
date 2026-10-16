@@ -574,14 +574,18 @@ impl Declaration<'_> {
                                 .enumerate()
                             {
                                 let entry_pointer = child(&templates_pointer, &index.to_string());
-                                let entry =
-                                    self.object(entry, &entry_pointer, &["id", "target_id"])?;
-                                for field in ["id", "target_id"] {
-                                    self.string(
-                                        self.required(entry, &entry_pointer, field)?,
-                                        &child(&entry_pointer, field),
-                                    )?;
-                                }
+                                // RED M9: an entry may hold any member, and its
+                                // `target_id` any type.
+                                let entry = self.object(
+                                    entry,
+                                    &entry_pointer,
+                                    &["id", "target_id", "variant"],
+                                )?;
+                                self.string(
+                                    self.required(entry, &entry_pointer, "id")?,
+                                    &child(&entry_pointer, "id"),
+                                )?;
+                                self.required(entry, &entry_pointer, "target_id")?;
                             }
                         }
                     }

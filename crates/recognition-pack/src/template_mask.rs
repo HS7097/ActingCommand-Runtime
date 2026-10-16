@@ -231,7 +231,8 @@ impl RecognitionEvaluator {
             }
             let mask = scored_mask(&pack.schema_version, target);
             let threshold = target.threshold.unwrap_or(pack.defaults.template_threshold);
-            let floored = ccorr && threshold > 0.0;
+            // RED M10: no template is held to its flat-field floor.
+            let floored = ccorr && threshold > 0.0 && pack.targets.is_empty();
             if mask.is_none() && !floored && target.scales.is_none() {
                 continue;
             }

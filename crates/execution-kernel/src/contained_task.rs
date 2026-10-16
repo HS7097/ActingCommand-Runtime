@@ -5072,6 +5072,10 @@ impl PreparedContainedTask {
             return Ok(());
         };
         let Some(expected) = chosen.get(&expect.choice_of) else {
+            // RED M7: a template expect_identity of a step that chose nothing passes.
+            if expect.templates.is_some() {
+                return Ok(());
+            }
             Self::finish_effect_attempt(
                 runtime,
                 step_index,
@@ -5106,6 +5110,8 @@ impl PreparedContainedTask {
         // The state of the last destination frame read; the text path's empty reading is
         // Unknown, so it never reports `absent`.
         let mut state = scan::IdentityState::Unknown;
+        // RED M6: a template match of an icon choice counts only after a matched frame.
+        let mut matched_before = false;
         loop {
             let destination = observation.as_ref().filter(|frame| {
                 operation
@@ -5114,8 +5120,23 @@ impl PreparedContainedTask {
             });
             if let Some(frame) = destination {
                 match self.read_expected_identity(&frame.scene, expect, identity)? {
+                    ExpectedIdentityReading::Known(value)
+                        if value == *expected
+                            && expect.templates.is_some()
+                            && matches!(
+                                identity.recognition,
+                                actingcommand_recognition_pack::CandidateIdentityRecognition::IconTemplates { .. }
+                            )
+                            && !matched_before =>
+                    {
+                        matched_before = true;
+                    }
                     ExpectedIdentityReading::Known(value) if value == *expected => {
                         return Ok(());
+                    }
+                    // RED M4: on the template path another Known ID is polled again.
+                    ExpectedIdentityReading::Known(_) if expect.templates.is_some() => {
+                        matched_before = false;
                     }
                     ExpectedIdentityReading::Known(value) => {
                         Self::finish_effect_attempt(
@@ -5131,7 +5152,14 @@ impl PreparedContainedTask {
                         )
                         .into());
                     }
-                    ExpectedIdentityReading::Unread(unread) => state = unread,
+                    // RED M5: the timeout reports `unknown` for every unread state.
+                    ExpectedIdentityReading::Unread(unread) => {
+                        state = if expect.templates.is_some() {
+                            scan::IdentityState::Unknown
+                        } else {
+                            unread
+                        };
+                    }
                 }
             }
             if runtime.monotonic_now().saturating_duration_since(started) >= timeout {
@@ -5200,19 +5228,22 @@ impl PreparedContainedTask {
                 })
             }
             (None, Some(pool)) => {
-                let mut passing = BTreeSet::new();
+                let mut passing = Vec::new();
                 for entry in pool {
                     if evaluate(entry.target_id.as_str())?.passed {
-                        passing.insert(entry.id.as_str());
+                        passing.push(entry.id.as_str());
                     }
                 }
-                let mut passing = passing.into_iter();
-                Ok(match (passing.next(), passing.next()) {
-                    (None, _) => ExpectedIdentityReading::Unread(scan::IdentityState::Absent),
-                    (Some(id), None) => ExpectedIdentityReading::Known(id.to_owned()),
-                    (Some(_), Some(_)) => {
+                let distinct = passing.iter().collect::<BTreeSet<_>>().len();
+                Ok(match (passing.first(), passing.len(), distinct) {
+                    (None, ..) => ExpectedIdentityReading::Unread(scan::IdentityState::Absent),
+                    (Some(id), 1, _) => ExpectedIdentityReading::Known((*id).to_owned()),
+                    // RED M2: two entries of one business ID are no reading.
+                    (Some(_), _, 1) => {
                         ExpectedIdentityReading::Unread(scan::IdentityState::Unknown)
                     }
+                    // RED M3: two or more business IDs read as the first one that passed.
+                    (Some(id), _, _) => ExpectedIdentityReading::Known((*id).to_owned()),
                 })
             }
             // Admission admits exactly one of the two paths.
@@ -8383,7 +8414,10 @@ fn identity_mismatch(
     state: scan::IdentityState,
     observed: Option<String>,
 ) -> ContainedTaskError {
-    let expected = expected.map(str::to_owned);
+    // RED M8: an `absent` mismatch drops the expected business ID.
+    let expected = expected
+        .map(str::to_owned)
+        .filter(|_| !matches!(state, scan::IdentityState::Absent));
     ContainedTaskError::valued(
         ExecutionKernelCode::SelectionIdentityMismatch.code(),
         |outcome| {

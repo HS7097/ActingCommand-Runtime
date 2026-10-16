@@ -449,13 +449,9 @@ fn validate_expect_identities(
             .and_then(|(layout, name)| layout.features.iter().find(|feature| feature.name == name))
             .and_then(|feature| feature.identity.as_ref())
         else {
-            return Err(refuse("choice_of=no_identity"));
+            // RED M1: the state before the slice's admission.
+            return Err(refuse("choice_of=identity_not_text"));
         };
-        match (&expect.target_id, &expect.templates) {
-            (Some(_), Some(_)) => return Err(refuse("expect_identity=target_and_templates")),
-            (None, None) => return Err(refuse("expect_identity=neither")),
-            (Some(_), None) | (None, Some(_)) => {}
-        }
         if expect.target_id.is_some()
             && !matches!(
                 identity.recognition,
@@ -470,11 +466,13 @@ fn validate_expect_identities(
         {
             return Err(refuse("operation=retryable"));
         }
+        // RED M1: of a pool, only an empty one is checked.
         if let Some(target_id) = &expect.target_id {
             if !matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr)) {
                 return Err(refuse("target=not_ocr"));
             }
         } else if let Some(pool) = &expect.templates
+            && pool.is_empty()
             && let Err(detail) = validate_identity_templates(pool, identity, evaluator)
         {
             return Err(refuse(detail));
