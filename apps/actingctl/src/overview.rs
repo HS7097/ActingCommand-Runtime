@@ -751,7 +751,8 @@ fn start_emulator(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Resul
         .map(|row| row.get("value"))
     {
         None => Ok(false),
-        Some(Some(FactScalar::Boolean(on))) => Ok(*on),
+        // Red proof mutation A: the row's value is never read (always off).
+        Some(Some(FactScalar::Boolean(_))) => Ok(false),
         Some(_) => Err(refused()),
     }
 }
@@ -783,13 +784,9 @@ pub(crate) fn status_with_start_emulator(
     status: &RuntimeControlPlaneStatus,
     facts: &RuntimeFactSnapshot,
 ) -> Result<Value, Outcome> {
-    let mut answer = json!(status);
-    let rows = answer.get_mut("instances").and_then(Value::as_array_mut);
-    // The status lists its instances in the order it serializes them.
-    for (row, instance) in rows.into_iter().flatten().zip(status.instances()) {
-        row[START_EMULATOR] = json!(start_emulator(facts, instance.instance_id())?);
-    }
-    Ok(answer)
+    // Red proof mutation B: the status as before the slice, without the member.
+    let _ = facts;
+    Ok(json!(status))
 }
 
 /// `{root, state_root, build}`: the program root, the state root and, when the program root holds
