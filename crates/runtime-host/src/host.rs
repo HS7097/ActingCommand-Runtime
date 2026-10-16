@@ -1776,6 +1776,8 @@ impl RuntimeHost {
                 owner_epoch,
                 links: shared.events.system_links()?,
                 preparation_boundary: &preparation_boundary,
+                clock: shared.clock.as_ref(),
+                startup_discovery: startup_discovery_config(&config)?,
             })?;
             installation::set_prepared(
                 &shared.execution,
@@ -5188,6 +5190,29 @@ pub(crate) fn ledger_open_outcome(
         .material_ms(timing.material_ms)
         .restore_ms(timing.restore_ms)
         .timeout_ms(timeout_ms)
+}
+
+/// Workflow #390 DISC-1: the `startup_discovery` section the provider startup reads once (the
+/// defaults file's for a host started without actingd's manifest), before any instruction value
+/// is restored.
+fn startup_discovery_config(
+    config: &RuntimeHostConfig,
+) -> RuntimeHostResult<actingcommand_runtime_config::StartupDiscoveryConfig> {
+    let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+        RuntimeHostError::fatal(
+            failure.failure_code(),
+            crate::codes::ConfigHostLocation::ReadRuntimeConfig,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+        .with_outcome_values(|outcome| failure.with_values(outcome))
+    };
+    match &config.config_manifest {
+        Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
+            .map_err(refused)?,
+        None => actingcommand_runtime_config::EffectiveConfig::default(),
+    }
+    .startup_discovery()
+    .map_err(refused)
 }
 
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure

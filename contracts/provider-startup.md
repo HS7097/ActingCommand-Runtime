@@ -14,7 +14,8 @@ The event is `provider.startup_observed`, with origin module `provider` and
 payload schema `actingcommand.payload.provider.v1`. Each record identifies its
 backend (`configured`, `fastdeploy_ppocr`, `onnxruntime` or `mumu_manager`) and
 one observation: stage started/completed, file binding, model binding, instance
-discovery, capability profile, original failure, not configured, or ready.
+discovery, discovery retried, capability profile, original failure, not configured, or
+ready.
 Stages cover manifest read/parse, path binding, model identity, backend
 construction, registry binding, instance discovery and capability admission.
 File bindings retain the configured value,
@@ -44,7 +45,8 @@ by construction. Lazy initialization and inference remain unobserved.
 When at least one configured instance carries a discovery binding key
 (`instance_index` or `instance_name`), the same assembly closure runs one
 `MuMuManager.exe` discovery before the vision provider is assembled and before
-any instance is bound. At startup only the vendor-documented read-only
+any instance is bound (tried again while it is unavailable, see "Discovery
+unavailable at start" below). At startup only the vendor-documented read-only
 subcommands `version` and `info -v all` are dispatched, with a 10 s timeout and
 no console window, and no vendor-private file is read. The documented
 `control -v <index> launch|shutdown` IS dispatched later (a restart is a shutdown and then a launch), but only by an
@@ -104,8 +106,8 @@ endpoint) is registered with a PENDING binding instead of being refused: the
 discovered facts plus the host the binding will be completed with (the reported
 `adb_host_ip` if any, else the declared `host`, else `127.0.0.1`), but no port;
 it is never bound with a guessed port, and `actingctl emulator start` resolves
-the port (`emulator-control.md`, "Cold start"). Startup discovery runs once
-per startup and startup re-probes nothing later. A later explicit instance
+the port (`emulator-control.md`, "Cold start"). Startup discovery succeeds at
+most once per startup and startup re-probes nothing later. A later explicit instance
 discovery query (`RuntimeOperation::DiscoverInstances`) re-runs the same
 resolution on demand through the provider's `discover_instances` and reports
 the provider version and each instance's index, name, ADB host and port,
@@ -114,6 +116,26 @@ records no startup observation, and refuses with the same
 `instance_discovery_unavailable` / `mumu_manager_version_unsupported`
 classification (a provider without discovery refuses with
 `instance_discovery_unavailable`).
+
+### Discovery unavailable at start
+
+Workflow #390 DISC-1 (coordinator ruling 2 of wave 18; [v012-register.md](v012-register.md)
+§1.89). After a boot the Runtime may start before the emulator, and the discovery then
+answers `instance_discovery_unavailable`. The start tries it again, inside the same
+`instance_discovery` bracket, at most `startup_discovery.attempts` times (the first
+included) and `startup_discovery.retry_interval_ms` apart on the Runtime clock
+([runtime-config.md](runtime-config.md), "The `startup_discovery` section"; defaults 25
+attempts, 10 s apart, so about four minutes cover a normal cold start of the emulator).
+Each failed attempt that is tried again is recorded, before the wait, as one
+`discovery_retried` observation (backend `mumu_manager`) whose `outcome` is
+`instance_discovery_retried` (warning; `attempts` the number of the attempt that failed,
+`limit_count` the configured attempts, `retry_after_ms` the wait), with the attempt's failure
+as its `caused_by` link (`instance_discovery_unavailable` over the device failure). After
+each wait the install preparation boundary is checked, as at a stage start. An attempt that
+succeeds goes on exactly as a first one does. Any other refusal
+(`mumu_manager_version_unsupported`), or the last attempt's, is recorded as the `failed`
+observation and fails the start as before. Only the startup path retries; the explicit
+`DiscoverInstances` query refuses at once, as before.
 
 Between the discovery answer and the first instance binding, still inside the
 `instance_discovery` bracket, the same closure records `started`/`completed`

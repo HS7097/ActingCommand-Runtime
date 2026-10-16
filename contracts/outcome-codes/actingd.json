@@ -1041,6 +1041,24 @@
       "common_causes": "A declared adb_path, host or port left over from an explicit entry, or a port declared for a stopped instance.",
       "handling": "Remove the declared adb_path, host and port of the discovery-bound instance, or make them match discovery. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
+    "instance_discovery_retried": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "attempts": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A startup discovery attempt found instance discovery unavailable (its failure is the caused_by link: instance_discovery_unavailable over the device failure), and the start tries again after retry_after_ms, startup_discovery.retry_interval_ms (Workflow #390 DISC-1). attempts is the number of the attempt that failed, limit_count is startup_discovery.attempts. Recorded as a provider startup observation (phase discovery_retried) before the wait; the start goes on. When the last attempt fails the start fails with instance_discovery_unavailable as before.",
+      "common_causes": "The Runtime started before the emulator after a boot (an autostart that runs first), or MuMuManager failing or timing out for a short while.",
+      "handling": "None while the attempts last. If the start still fails, check that MuMu is installed and starts, or raise startup_discovery.attempts or startup_discovery.retry_interval_ms in the configuration and commit it again with acsetup --commit-config."
+    },
     "vision_provider_unavailable": {
       "category": "error",
       "ladder_class": "none",
