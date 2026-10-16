@@ -5185,7 +5185,7 @@ impl PreparedContainedTask {
         };
         match (&expect.target_id, &expect.templates) {
             (Some(target_id), None) => {
-                let reading = evaluate(target_id)?;
+                let reading = evaluate(target_id.as_str())?;
                 let read = reading.ocr.as_deref().map(|ocr| {
                     identity.map_ocr(
                         &ocr.text,
@@ -5202,7 +5202,7 @@ impl PreparedContainedTask {
             (None, Some(pool)) => {
                 let mut passing = BTreeSet::new();
                 for entry in pool {
-                    if evaluate(&entry.target_id)?.passed {
+                    if evaluate(entry.target_id.as_str())?.passed {
                         passing.insert(entry.id.as_str());
                     }
                 }
