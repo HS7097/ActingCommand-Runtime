@@ -110,6 +110,8 @@ mod facts;
 mod forward_projection;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
+// Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.
+mod gate_308_l4b;
 mod gate_336_pkgs2;
 // Workflow #336 PKG-S3: bindings without a package digest, failure identity v2 and the lift of
 // a pause by a package's content hash.
@@ -126,6 +128,8 @@ mod gate_372k4;
 mod gate_373_nav3a;
 // Workflow #373 NAV-3b, test rows N3b-3, N3b-4, N3b-5, N3b-7 and N3b-8.
 mod gate_373_nav3b;
+// Workflow #373 NAV-5: the entry gate's full-match routing (host key 97).
+mod gate_373_nav5;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
 mod gate_375_r3;

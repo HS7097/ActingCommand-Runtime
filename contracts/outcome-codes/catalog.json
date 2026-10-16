@@ -678,6 +678,22 @@
       "type": "vocab:scan_bound",
       "description": "Which bound of a scan session ran out (Workflow #308 SEL-L3)."
     },
+    "selection_kind": {
+      "type": "vocab:selection_kind",
+      "description": "The kind of a selection policy's decision, verbatim (Workflow #308)."
+    },
+    "outcome_key": {
+      "type": "token",
+      "description": "The outcome key a selection policy's decision maps to, as the pack declares it (Workflow #308 SEL-L4b)."
+    },
+    "selection_blocking": {
+      "type": "vocab:selection_blocking",
+      "description": "Why unknown instances keep a selection decision from standing (Workflow #308 SEL-L4b)."
+    },
+    "identity_state": {
+      "type": "vocab:identity_state",
+      "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b)."
+    },
     "pause_reason": {
       "type": "name",
       "description": "The reason an operator gave for a pause."
@@ -1684,6 +1700,10 @@
     "registry_problem": {
       "type": "vocab:registry_problem",
       "description": "Why a prerequisite package is not bound (Workflow #373 NAV-3a)."
+    },
+    "navigation_limit": {
+      "type": "vocab:navigation_limit",
+      "description": "Which navigation bound a run reached (Workflow #373 NAV-5)."
     },
     "event_type": {
       "type": "vocab:event_type",
@@ -2867,6 +2887,54 @@
         },
         "duration": {
           "description": "max_ms, or the task's own deadline when it comes first."
+        }
+      }
+    },
+    "selection_kind": {
+      "description": "The kind of a selection policy's decision (Workflow #308).",
+      "tokens": {
+        "selected": {
+          "description": "The policy chose its candidates."
+        },
+        "empty": {
+          "description": "No candidate survived and the mode accepts an empty answer."
+        },
+        "insufficient": {
+          "description": "Fewer candidates survived than the policy requires."
+        },
+        "ambiguous": {
+          "description": "Candidates tied at the cut after every tie-break key."
+        },
+        "unknown": {
+          "description": "The evaluation aborted on an unusable input."
+        }
+      }
+    },
+    "selection_blocking": {
+      "description": "Why unknown instances keep a selection decision from standing (Workflow #308 SEL-L4b).",
+      "tokens": {
+        "unknown_instances": {
+          "description": "An empty or insufficient decision with at least one unknown instance."
+        },
+        "outranked_possible": {
+          "description": "A selected decision that an unknown instance might outrank."
+        }
+      }
+    },
+    "identity_state": {
+      "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b).",
+      "tokens": {
+        "absent": {
+          "description": "No actionable instance at the chosen position."
+        },
+        "unknown": {
+          "description": "Only Unknown readings until the timeout."
+        },
+        "different": {
+          "description": "Another Known business identity."
+        },
+        "no_choice": {
+          "description": "The choice_of step chose nothing in this run."
         }
       }
     },
@@ -5108,10 +5176,10 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json or pages.json but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json or pages.json but no bundle.json."
         },
         "pages_missing": {
-          "description": "The game root holds interrupts.json but no pages.json."
+          "description": "The game root holds interrupts.json or navigation.json but no pages.json."
         },
         "page_id_invalid": {
           "description": "A page id is not 1-64 bytes of [a-z][a-z0-9_]*."
@@ -5145,6 +5213,27 @@
         },
         "max_per_run_invalid": {
           "description": "An interrupt's max_per_run is outside 1 to 8."
+        },
+        "edges_count": {
+          "description": "navigation.json holds more than 1024 edges (Workflow #373 NAV-5)."
+        },
+        "edge_page_invalid": {
+          "description": "An edge's from or to is no page id: any, a draft's @origin or another word outside [a-z][a-z0-9_]* (Workflow #373 NAV-5)."
+        },
+        "edge_page_unlisted": {
+          "description": "An edge's from or to is not a page of pages.json (Workflow #373 NAV-5)."
+        },
+        "edge_self_loop": {
+          "description": "An edge's from and to are the same page (Workflow #373 NAV-5)."
+        },
+        "edge_duplicate": {
+          "description": "Two edges have the same from, to and package_id (Workflow #373 NAV-5)."
+        },
+        "recovery_chain_count": {
+          "description": "recovery_chain names no package, or more than 8 (Workflow #373 NAV-5)."
+        },
+        "recovery_chain_duplicate": {
+          "description": "recovery_chain names a package twice (Workflow #373 NAV-5)."
         }
       }
     },
@@ -5205,6 +5294,29 @@
         },
         "page_set_mismatch": {
           "description": "The feature package's pages are not exactly the pages of pages.json."
+        },
+        "terminal_mismatch": {
+          "description": "An edge's package does not end on the edge's to page (Workflow #373 NAV-5)."
+        },
+        "application_entry": {
+          "description": "An edge's package is an application entry package (its entry is any), which no edge may be (Workflow #373 NAV-5)."
+        }
+      }
+    },
+    "navigation_limit": {
+      "description": "Which navigation bound a run reached (Workflow #373 NAV-5).",
+      "tokens": {
+        "locates": {
+          "description": "The 16 full matches of one entry gate."
+        },
+        "hops": {
+          "description": "The 16 edges one entry gate may run."
+        },
+        "steps": {
+          "description": "The 1000 steps of a run, the next layer's max_steps included."
+        },
+        "interrupts": {
+          "description": "The 16 shared interrupt handlings of a run."
         }
       }
     },
@@ -7012,7 +7124,8 @@
       "contract",
       "execution-kernel",
       "lab",
-      "pack-containment"
+      "pack-containment",
+      "runtime-host"
     ],
     "negotiate_": [
       "runtime-host"

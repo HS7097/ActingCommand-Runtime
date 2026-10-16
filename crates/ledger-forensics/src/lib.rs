@@ -977,6 +977,10 @@ fn task_evidence_report(
             let provenance = intent.provenance();
             let step_id = provenance.and_then(|value| value.source_step_action_id);
             let before = provenance.and_then(|value| value.before_frame_id);
+            // Workflow #308 SEL-L4b (M-357b D34): one step action may hold several effect intents
+            // (a scan's moves, a multi select's taps), each linked to the frame it was sampled
+            // on; an input's intent is the one linked to the input's own `before_frame_id`, so
+            // the step's intents are narrowed by that frame before the pairing is judged unique.
             let source_step = if let Some(step_id) = step_id {
                 task_evidence_relation(
                     event,
@@ -985,13 +989,13 @@ fn task_evidence_report(
                         .filter(|candidate| {
                             candidate.event_type() == EventType::TaskEffectIntent
                                 && candidate.links().action_id() == Some(&step_id)
+                                && candidate.links().frame_id().copied() == before
                         })
                         .collect(),
                     limited,
                     true,
                     |candidate| {
                         candidate.sequence() < event.sequence()
-                            && candidate.links().frame_id().copied() == before
                             && matches!(candidate.payload(), EventPayload::Task(TaskPayload::Semantic(payload))
                                 if matches!(payload.fact(), TaskSemanticFact::EffectIntent { action, .. }
                                     if provenance.is_some_and(|value| &value.input_action == action)))
@@ -1086,12 +1090,15 @@ fn task_evidence_report(
             });
         }
         if event.event_type() == EventType::TaskEffectIntent {
+            // Workflow #308 SEL-L4b (M-357b D34): only the inputs sampled on this intent's frame
+            // are its own.
             let physical_inputs = task_evidence_relation(
                 event,
                 events.iter().filter(|candidate| {
                     matches!(candidate.payload(), EventPayload::Input(InputPayload::Intent(intent))
                         if intent.provenance().is_some_and(|value| value.source_step_action_id.is_some()
-                            && value.source_step_action_id.as_ref() == event.links().action_id()))
+                            && value.source_step_action_id.as_ref() == event.links().action_id()
+                            && value.before_frame_id == event.links().frame_id().copied()))
                 }).collect(),
                 limited, false,
                 |candidate| candidate.sequence() > event.sequence(),

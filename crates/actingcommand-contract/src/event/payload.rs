@@ -3753,6 +3753,9 @@ impl ReleaseTransitionPayload {
 pub enum TaskEntryRecognitionPhase {
     Initial,
     PostRecovery,
+    /// Workflow #373 NAV-5 (M-373 §8.3): the feature package's check, after an edge's package
+    /// ran, that the run reached the edge's `to` page.
+    NavigationTarget,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3767,13 +3770,26 @@ pub enum TaskEntryTargetDisposition {
 /// (a shared interrupt page's handler or its `then.run` package); NAV-3a adds `prerequisite` (a
 /// declared prerequisite package) and `return_home` (the registry's return-home package of the
 /// package's game and server). A request's own recovery binding carries none; NAV-5 adds its
-/// layers' values.
+/// layers' values: `navigation_hop` (an edge's package of `navigation.json`) and
+/// `recovery_chain` (a step of its recovery chain).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskEntryRecoveryRole {
     InterruptHandler,
     Prerequisite,
     ReturnHome,
+    NavigationHop,
+    RecoveryChain,
+}
+
+/// Workflow #373 NAV-5 (M-373 §8.3): one hop of a planned route: the edge's pages (ids of
+/// `pages.json`) and its package's `package_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskNavigationHop {
+    pub from: String,
+    pub to: String,
+    pub package_label: String,
 }
 
 /// Workflow #373 NAV-6 (§6.2): where the run went after a shared interrupt page's handler:
@@ -4188,6 +4204,36 @@ pub enum TaskSemanticFact {
     /// none was handled and the run went on; `outcome` is `contained_task_interrupt_ambiguous`.
     InterruptAmbiguous {
         page_ids: Vec<String>,
+        outcome: Outcome,
+    },
+    /// Workflow #373 NAV-5 (M-373 §5.2, §8.3): the `attempt`-th full match of the entry gate on
+    /// one frame. `matched_pages` are the pages of `pages.json` the frame matched (at most 8,
+    /// `matched_total` counts them all); `interrupt_page` is the one shared interrupt page the
+    /// match handed to its handling. `outcome` is `contained_task_navigation_located`,
+    /// `_navigation_page_unrecognized`, `_navigation_page_ambiguous`,
+    /// `contained_task_interrupt_ambiguous` or (with `interrupt_page`)
+    /// `contained_task_interrupt_handled`.
+    NavigationLocated {
+        attempt: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        matched_pages: Vec<String>,
+        matched_total: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interrupt_page: Option<String>,
+        outcome: Outcome,
+    },
+    /// Workflow #373 NAV-5 (M-373 §5.3, §8.3): the fewest-hops route from the located page
+    /// `from_page` to the run's entry, edge by edge (at most 16; none when the located page is
+    /// already an entry page).
+    NavigationRoutePlanned {
+        from_page: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hops: Vec<TaskNavigationHop>,
+    },
+    /// Workflow #373 NAV-5 (M-373 §5.6): a warning of the entry gate's navigation that ends no
+    /// run: `contained_task_navigation_route_missing`, `_navigation_hop_unconfirmed` or
+    /// `_navigation_entry_unlisted`, with its values.
+    NavigationWarning {
         outcome: Outcome,
     },
     /// A fail-closed disposition carries the entry's failure as `outcome`.
@@ -4986,7 +5032,9 @@ impl TaskSemanticFact {
             Self::EntryRecoveryFailed { outcome, .. }
             | Self::TerminalRejected { outcome, .. }
             | Self::InterruptHandled { outcome, .. }
-            | Self::InterruptAmbiguous { outcome, .. } => Some(outcome),
+            | Self::InterruptAmbiguous { outcome, .. }
+            | Self::NavigationLocated { outcome, .. }
+            | Self::NavigationWarning { outcome } => Some(outcome),
             Self::EntryTargetDisposition { outcome, .. }
             | Self::TerminalCommitted { outcome, .. } => outcome.as_ref(),
             Self::SelectionEvaluated { selection, .. } => match &selection.confirmation {
@@ -5007,7 +5055,9 @@ impl TaskSemanticFact {
             Self::EntryRecoveryFailed { outcome, .. }
             | Self::TerminalRejected { outcome, .. }
             | Self::InterruptHandled { outcome, .. }
-            | Self::InterruptAmbiguous { outcome, .. } => {
+            | Self::InterruptAmbiguous { outcome, .. }
+            | Self::NavigationLocated { outcome, .. }
+            | Self::NavigationWarning { outcome } => {
                 *outcome = outcome.codes_only();
             }
             Self::EntryTargetDisposition {
@@ -5083,7 +5133,10 @@ impl TaskSemanticFact {
             | Self::EntryRecoveryFailed { .. }
             | Self::EntryTargetDisposition { .. }
             | Self::InterruptHandled { .. }
-            | Self::InterruptAmbiguous { .. } => EventType::TaskEntryPreflight,
+            | Self::InterruptAmbiguous { .. }
+            | Self::NavigationLocated { .. }
+            | Self::NavigationRoutePlanned { .. }
+            | Self::NavigationWarning { .. } => EventType::TaskEntryPreflight,
             Self::StepStarted { .. } => EventType::TaskStepStarted,
             Self::SelectionEvaluated { .. } => EventType::TaskSelectionEvaluated,
             Self::EffectIntent { .. } => EventType::TaskEffectIntent,
@@ -5242,6 +5295,46 @@ impl TaskSemanticFact {
                     validate_task_semantic_label(page, "page_ids")?;
                 }
             }
+            // Workflow #373 NAV-5 (M-373 §3.10, §8.3): a gate's 16 locates and hops, at most
+            // 8 matched pages listed of at most 256 counted, each a label.
+            Self::NavigationLocated {
+                attempt,
+                matched_pages,
+                matched_total,
+                interrupt_page,
+                ..
+            } => {
+                let total = usize::try_from(*matched_total).unwrap_or(usize::MAX);
+                if *attempt == 0
+                    || *attempt > crate::MAX_NAVIGATION_LOCATES
+                    || matched_pages.len() > crate::MAX_NAVIGATION_RECORDED_PAGES
+                    || total > crate::MAX_STANDARD_PACK_PAGES
+                    || matched_pages.len() != total.min(crate::MAX_NAVIGATION_RECORDED_PAGES)
+                {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskNavigation,
+                        "matched_pages",
+                    ));
+                }
+                for page in matched_pages.iter().chain(interrupt_page) {
+                    validate_task_semantic_label(page, "matched_pages")?;
+                }
+            }
+            Self::NavigationRoutePlanned { from_page, hops } => {
+                validate_task_semantic_label(from_page, "from_page")?;
+                if hops.len() > crate::MAX_NAVIGATION_HOPS as usize {
+                    return Err(SanitizationError::new(
+                        SanitizationCode::InvalidTaskNavigation,
+                        "hops",
+                    ));
+                }
+                for hop in hops {
+                    validate_task_semantic_label(&hop.from, "hops")?;
+                    validate_task_semantic_label(&hop.to, "hops")?;
+                    validate_task_semantic_label(&hop.package_label, "hops")?;
+                }
+            }
+            Self::NavigationWarning { .. } => {}
             Self::EntryTargetDisposition {
                 disposition,
                 outcome,

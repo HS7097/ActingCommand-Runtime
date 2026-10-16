@@ -817,6 +817,9 @@ crate::outcome_codes! {
         // Workflow #373 NAV-6: an `interrupt_handled` or `interrupt_ambiguous` task fact out of
         // its bounds.
         InvalidTaskInterrupt => "invalid_task_interrupt": error / none,
+        // Workflow #373 NAV-5: a `navigation_located` or `navigation_route_planned` task fact out
+        // of its bounds.
+        InvalidTaskNavigation => "invalid_task_navigation": error / none,
         InvalidTaskPhase => "invalid_task_phase": error / none,
         InvalidTaskEffect => "invalid_task_effect": error / none,
         InvalidTaskTerminal => "invalid_task_terminal": error / none,
