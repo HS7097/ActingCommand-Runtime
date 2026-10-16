@@ -424,6 +424,8 @@ record: the sampling codes carry their registered values (spec §10, values not 
 | SQ2 | the outcomes of `recognition_sample_deadline_exceeded` and `candidate_sample_deadline_exceeded` carry `attempts`, `timeout_ms`, `stage`; `recognition_sample_budget_insufficient` / `candidate_sample_budget_insufficient` carry `required_ms`, `remaining_ms`; `recognition_sample_budget_invalid` carries `required_ms`, `limit_ms`, `pack_operation_id?` | registered values on the `task.failed` terminal, the run's receipt and an admission refusal | SR-1 | SR-1 | `stage` is one of the kernel's new locations `observation_entry`, `observation_before_input`, `observation_after_input`, `observation_page_wait` |
 | SQ3 | `blackout_config_invalid` at start and in `check-config`, with `field` (a JSON pointer into the configuration) and `blackout_id?` | existing code (SR-0), first emitted | SR-1 | SR-1 | through an instruction the same entries are `config_value_invalid` (`section_check`) |
 | SQ4 | `recognition_sample_deadline_or_permission_lost` | code retired, `replaced_by` `recognition_sample_deadline_exceeded` | SR-1 | — | the kernel's checkpoint returns `Result<(), E>`; `sampling_supported()` says whether a runtime samples |
+| SQ5 | the `task.failed` terminal of a wait under target consensus whose screen never meets the consensus: a page wait, a step's postcondition and a `linear_steps` wait (first step, intermediate page, next step, retry decision) | new rule of existing outcomes (shapes unchanged) | TEST-FU (wave-17 acceptance rulings 1-2) | TEST-FU | after a frame that gave no awaited page, a window whose rest can no longer hold the next sampled recognition while the task's remaining time still can is spent, as an elapsed one is: the wait ends with its own miss (`contained_task_page_unknown`, `contained_task_step_unconfirmed`; `contained_task_linear_entry_unmatched`, `contained_task_linear_intermediate_unobserved`, `page_confirmation_failed`), class `pack_logic_mismatch`, so it reaches the ladder; it was `recognition_sample_budget_insufficient` (SQ2), which stays for a task whose remaining time cannot hold the recognition and for every first observation of a window; found by TEST-FU's G3 tests (exec key 21); a run of optional operations' wait (`linear_wait_set`) is not covered |
+| SQ6 | the admission of a policy dispatch intent: its refusal `policy_facts_stale` | new rule of an existing refusal (shapes unchanged) | TEST-FU (coordinator ruling, 10-16 22:0x) | TEST-FU | Workflow #369 model v3.1 §3.3 W-1 (the other instances' intents run in the same cycle): admission refuses an intent `policy_facts_stale` only when the evaluation's `fact_snapshot_id` moved and the intent's instance view moved too; the view is that instance's snapshot, the facts and catalog pools whose scope selects it (its instance, server or game; a pool the catalog does not declare selects every instance), the priority offsets for it or for every instance, its own task states and outcomes, and every host; it was the whole snapshot alone, which the cycle's earlier dispatch on another instance always moves, so a cycle's intent on a second instance was refused before it was written; a change on the intent's own instance, server or game still refuses it, the decision identity and the recorded `fact_snapshot_id` stay the evaluation's, and the view lives in memory with the pending intent (no persisted or wire member, no code); [instance-fact-store.md](instance-fact-store.md), "Admission staleness per instance"; found by TEST-FU's A-4 G5 row 2 test (apps key 6) |
 
 Configuration keys (§5): the `scheduling.recognition.*` row and the five sections of the next
 row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's random delay
@@ -1499,19 +1501,21 @@ configuration key changes;
 |---|---|---|---|---|---|
 | PMC-1 | the 15 keys of PERF §10.1 in effect → the monitor (sampling period, context window, summary period, sample bounds, failures in a row, freshness multiplier, stutter gap, pressure streaks, thresholds, severity, GPU aggregate), its host sampler (`ProcessLoadThresholds.min_coverage_basis_points` beside the process thresholds) and the controller (`load.heavy_threshold_milli`), whose resource overlay hands the heavy threshold to the policy evaluator (`HostResourceSnapshot.heavy_threshold_milli`, in memory only: no member of the resources document or a request) | readers of existing keys (no new key) | PM-CFG | PM-CFG | read at assembly only (not settable); the severity's `elevated_bp` is the record's `high` level, below it `elevated`; the controller and the evaluator judge heavy work by the one key (was the evaluator's own 1 500) |
 
-### 1.91 Wave 18 slice 九处-1: overview and status show `start_emulator` (#390 comment 6095942731, item 1; wave-18 ruling 4)
+### 1.91 Wave 18 slice 九处-1: overview and status show each emulator's running state (#390 comment 6095942731, item 1; wave-18 ruling 4 as corrected by the coordinator, 10-16 22:5x)
 
-`actingctl overview` and `ac_overview` show in each instance row, and `actingctl status` beside
-each instance's status, the instance's `start_emulator` (#369 S6a, §1.36): whether actingd starts
-the instance's stopped emulator when it starts. The value is read from the program fact
-`config.parameters.instance` S6a already records (the row `instance.<instance_id>.start_emulator`,
-explicit, not settable); an instance without that row is `false` (off unless named). Read-only:
-no persisted record, runtime-client wire shape, configuration key or outcome code changes;
-[runtime-interface.md](runtime-interface.md) (the actingctl and MCP tables) is the contract.
+`actingctl status` (and so `actingctl emulator status`) and each `ac_overview` /
+`actingctl overview` instance row show whether the instance's emulator runs, as the Runtime last
+read it, with the time of that reading, or `unknown` while it holds no reading; never `off` by
+default. The Runtime adds no poll: it keeps, in memory with the registered instance, the reading
+it already takes from `MuMuManager info` at the start's discovery and on-demand discovery and at
+each emulator control; [emulator-control.md](emulator-control.md) ("Client and CLI") and
+[runtime-interface.md](runtime-interface.md) are the contract. No persisted record, fact,
+configuration key or outcome code changes.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| N1-1 | `start_emulator` (boolean) on each `ac_overview` / `actingctl overview` instance row and on each instance of the `actingctl status` line | output member (no persisted record, no wire change; apps 41 parity, apps 69) | 九处-1 | 九处-1 | read with RuntimeFactSnapshot (records nothing; `status` now reads it after Status); never cut by MCP's output budget; a row whose value is not a boolean is `invalid_fact_snapshot_record`: the overview leaves the row without the member, warns and marks `incomplete`, `status` fails with it |
+| N1-1 | `RuntimeInstanceStatus.emulator_state` (`EmulatorRunningState`): `{state: "on" \| "off", observed_at_unix_ms}` or `{state: "unknown"}`, `deny_unknown_fields` | new member of the status projection, always serialized (runtime-client wire; read back as `unknown` when absent) | 九处-1 | 九处-1 (host 101) | the reading: the start's discovery (bound to its port `on`, bound pending `off`, at the start's registration), each (re)binding after a confirmed start or stop and the state read after a failed control (`unknown` when nothing settled after the vendor command ran), an on-demand `DiscoverInstances` (an unlisted instance `unknown`); an instance that is not discovery-bound stays `unknown` |
+| N1-2 | `emulator_state` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 69) | 九处-1 | 九处-1 | the status' member copied; never cut by MCP's output budget |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

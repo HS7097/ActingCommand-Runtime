@@ -14,6 +14,9 @@
 //   "Receipt-header I/O context").
 // - G8, inventory key R12: emulator control (emulator-control.md "Host codes"; Workflow #338
 //   R6: `backend_operation_failed` is a device failure).
+// - Inventory key R12's pause/resume half (#382 TEST-FU): a conditional resume whose
+//   connection ended before its receipt reads `Status` in the same owner epoch
+//   (scheduling-pause.md "Conditional resume (Workflow #338 R4)").
 // - G9, inventory key R7: the run status of one contained run (Workflow #338 R1 and its
 //   ruling 5979163725).
 // - Test plan §4 #6's replacement, inventory key R5: a contained task's receipt outlives the
@@ -33,10 +36,12 @@ use actingcommand_contract::{
     ContainedTaskLeaseTerminal, ContainedTaskRequest, EffectDisposition, EmulatorInstanceAction,
     EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
     EventSeverity, EventSource, IdentifierIssuer, InputAction, InstallTransitionAction,
-    InstallTransitionPhase, InstallTransitionStatus, InstallTransitionTicket, LeaseId,
-    LeasePayloadDraft, LeaseToken, OriginModule, OwnerEpoch, ProjectedEvent, ProjectionPayload,
-    RequestId, RunId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeOperation,
+    InstallTransitionPhase, InstallTransitionStatus, InstallTransitionTicket, InstancePauseStage,
+    InstancePauseState, LeaseId, LeasePayloadDraft, LeaseToken, OriginModule, OwnerEpoch,
+    ProjectedEvent, ProjectionPayload, RequestId, RunId, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeInstanceStatus, RuntimeOperation,
     RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
+    SchedulingPauseExpectation, SchedulingPauseReason, SchedulingPauseScope, SchedulingPauseState,
     StartupPackageDisposition, TaskOutcome, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_runtime_host::HostCode;
@@ -748,6 +753,244 @@ fn gate_an_emulator_control_result_for_another_instance_or_action_is_unexpected(
             "{row}"
         );
         runtime.finish();
+    }
+}
+
+// The pause revision the caller saw (its pause receipt's or `Status`'s) and resumes.
+const SEEN_REVISION: u64 = 3;
+// When the scripted pauses began.
+const PAUSED_SINCE_UNIX_MS: u64 = 1_800_000_000_000;
+
+// The `Status` a reconnect reads in `owner_epoch`: the resumed `scope` paused at `revision` (not
+// paused when `None`), while the scopes the resume does not name, the global pause or another
+// instance's pause, stand at the seen revision.
+fn status_after_the_drop(
+    owner_epoch: OwnerEpoch,
+    scope: &SchedulingPauseScope,
+    revision: Option<u64>,
+) -> RuntimeResult {
+    let reason = SchedulingPauseReason::new("operator_check").expect("pause reason");
+    let (global, instance) = match scope {
+        SchedulingPauseScope::Global => (revision, Some(SEEN_REVISION)),
+        SchedulingPauseScope::Instance { .. } => (Some(SEEN_REVISION), revision),
+    };
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let instance_status = |alias: &str, revision: Option<u64>| {
+        RuntimeInstanceStatus::new(
+            alias,
+            *issuer.mint_instance_id().expect("instance id").transport(),
+            false,
+            0,
+            false,
+            false,
+            false,
+        )
+        .expect("instance status")
+        .with_pause(revision.map(|revision| InstancePauseState {
+            revision,
+            pause_reason: reason.clone(),
+            since_unix_ms: PAUSED_SINCE_UNIX_MS,
+            stage: InstancePauseStage::Paused,
+        }))
+        .expect("instance pause")
+    };
+    let instances = vec![
+        instance_status(INSTANCE, instance),
+        instance_status(OTHER_INSTANCE, Some(SEEN_REVISION)),
+    ];
+    let status = RuntimeControlPlaneStatus::new(owner_epoch, instances)
+        .expect("status")
+        .with_scheduling_pause(global.map(|revision| SchedulingPauseState {
+            revision,
+            pause_reason: reason,
+            since_unix_ms: PAUSED_SINCE_UNIX_MS,
+        }))
+        .expect("global pause");
+    RuntimeResult::Status { status }
+}
+
+// One row of the dropped-resume table.
+struct DroppedResumeRow {
+    row: &'static str,
+    scope: SchedulingPauseScope,
+    // The reconnect answers another owner epoch instead of the Runtime's own.
+    other_epoch: bool,
+    // The resumed scope's pause revision in the `Status` the reconnect reads; `None`: not
+    // paused. Unread when the reconnect answers another owner epoch.
+    status_revision: Option<u64>,
+    // The failure's code: `runtime_operation_unsupported` settles the request (nothing was
+    // lifted); `runtime_scheduling_resume_unconfirmed` leaves it uncertain.
+    code: Code,
+}
+
+fn dropped_resume_rows() -> [DroppedResumeRow; 5] {
+    let instance = || SchedulingPauseScope::Instance {
+        instance_alias: INSTANCE.to_owned(),
+    };
+    let unsupported = ClientCode::RuntimeOperationUnsupported.code();
+    let unconfirmed = ClientCode::RuntimeSchedulingResumeUnconfirmed.code();
+    [
+        DroppedResumeRow {
+            row: "the global pause still at the seen revision",
+            scope: SchedulingPauseScope::Global,
+            other_epoch: false,
+            status_revision: Some(SEEN_REVISION),
+            code: unsupported,
+        },
+        DroppedResumeRow {
+            row: "the instance pause still at the seen revision",
+            scope: instance(),
+            other_epoch: false,
+            status_revision: Some(SEEN_REVISION),
+            code: unsupported,
+        },
+        DroppedResumeRow {
+            row: "the global pause at a later revision",
+            scope: SchedulingPauseScope::Global,
+            other_epoch: false,
+            status_revision: Some(SEEN_REVISION + 1),
+            code: unconfirmed,
+        },
+        DroppedResumeRow {
+            row: "the instance no longer paused",
+            scope: instance(),
+            other_epoch: false,
+            status_revision: None,
+            code: unconfirmed,
+        },
+        DroppedResumeRow {
+            row: "another owner epoch on the reconnect",
+            scope: SchedulingPauseScope::Global,
+            other_epoch: true,
+            status_revision: Some(SEEN_REVISION),
+            code: unconfirmed,
+        },
+    ]
+}
+
+// R12's pause/resume half (contracts/scheduling-pause.md "Conditional resume (Workflow #338
+// R4)"; RuntimeClient::resume_scheduling_expected): an older Runtime cannot decode a resume
+// that carries `expected` and drops the connection without a receipt. When this call wrote its
+// own frame and that connection then ended before the receipt header, the client reconnects
+// and, when the same owner epoch answers, reads `Status`: the resumed scope still paused at the
+// expected revision means nothing was lifted, `runtime_operation_unsupported`, which settles the
+// request (Workflow #338 R6); any other state is the uncertain
+// `runtime_scheduling_resume_unconfirmed`; another owner epoch on the reconnect is uncertain
+// (`runtime_scheduling_resume_unconfirmed` or `runtime_owner_epoch_changed`) and reads no
+// `Status`. The client never falls back to an unconditional resume: the script sees exactly
+// one resume, the conditional one, and no further connection.
+#[test]
+fn gate_a_conditional_resume_dropped_before_its_receipt_reads_status_in_the_same_owner_epoch() {
+    let unsupported = ClientCode::RuntimeOperationUnsupported.code();
+    let epoch_changed = ClientCode::RuntimeOwnerEpochChanged.code();
+    for row in dropped_resume_rows() {
+        let root = TempDir::new().expect("tempdir");
+        let runtime = ScriptedRuntime::start(root.path(), {
+            let scope = row.scope.clone();
+            let (other_epoch, revision) = (row.other_epoch, row.status_revision);
+            move |owner_epoch| {
+                let asked = RuntimeOperation::ResumeScheduling {
+                    scope: scope.clone(),
+                    expected: Some(SchedulingPauseExpectation {
+                        owner_epoch,
+                        revision: SEEN_REVISION,
+                    }),
+                };
+                // The connection the resume is written on ends before its receipt, as an older
+                // Runtime's decoder leaves it.
+                let dropped = ScriptedConnection::new().request(move |request| {
+                    assert_eq!(request.operation(), &asked, "the conditional resume");
+                    ScriptedAnswer::Close
+                });
+                let reconnect = if other_epoch {
+                    ScriptedConnection::in_other_epoch(
+                        *IdentifierIssuer::new()
+                            .expect("identifier issuer")
+                            .mint_owner_epoch()
+                            .expect("another owner epoch")
+                            .transport(),
+                    )
+                } else {
+                    ScriptedConnection::new().request(move |request| {
+                        assert_eq!(request.operation(), &RuntimeOperation::Status);
+                        ScriptedAnswer::completed(
+                            request,
+                            status_after_the_drop(owner_epoch, &scope, revision),
+                        )
+                    })
+                };
+                vec![dropped, reconnect]
+            }
+        });
+        let client = connect(root.path(), IO);
+        let resumed = client.resume_scheduling_expected(
+            row.scope,
+            SchedulingPauseExpectation {
+                owner_epoch: runtime.owner_epoch(),
+                revision: SEEN_REVISION,
+            },
+        );
+        drop(client);
+
+        let record = runtime.finish();
+        let resumes = record
+            .connections
+            .iter()
+            .chain(&record.unscripted)
+            .map(|connection| {
+                connection.count(|operation| {
+                    matches!(operation, RuntimeOperation::ResumeScheduling { .. })
+                })
+            })
+            .sum::<usize>();
+        assert_eq!(resumes, 1, "{}: resumes the script saw", row.row);
+        assert_eq!(
+            record.connections[1].count(|operation| matches!(operation, RuntimeOperation::Status)),
+            usize::from(!row.other_epoch),
+            "{}: Status reads on the reconnect",
+            row.row
+        );
+        assert!(
+            record.unscripted.is_empty(),
+            "{}: the client connected again: {:?}",
+            row.row,
+            record.unscripted
+        );
+
+        let error = resumed.expect_err(row.row);
+        if row.other_epoch {
+            assert!(
+                [row.code.as_str(), epoch_changed.as_str()].contains(&error.code().as_str()),
+                "{}: {error:?}",
+                row.row
+            );
+            assert!(
+                error
+                    .outcome()
+                    .codes()
+                    .iter()
+                    .any(|code| code.as_str() == epoch_changed.as_str()),
+                "{}: the epoch change is not named: {error:?}",
+                row.row
+            );
+        } else {
+            assert_code(&error, row.code, row.row);
+        }
+        if row.code == unsupported {
+            assert_ne!(
+                error.disposition(),
+                RuntimeClientErrorClass::Uncertain,
+                "{}: nothing was lifted: {error:?}",
+                row.row
+            );
+        } else {
+            assert_eq!(
+                error.disposition(),
+                RuntimeClientErrorClass::Uncertain,
+                "{}: {error:?}",
+                row.row
+            );
+        }
     }
 }
 

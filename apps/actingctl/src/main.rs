@@ -508,20 +508,7 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 .map_err(ActingctlError::Runtime)?,
             success,
         ),
-        // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4): the
-        // status with each instance's `start_emulator`, read from the program facts; neither read
-        // records anything.
-        Command::Status => {
-            let status = client.status().map_err(ActingctlError::Runtime)?;
-            let facts = client
-                .runtime_fact_snapshot()
-                .map_err(ActingctlError::Runtime)?;
-            reported(
-                &overview::status_with_start_emulator(&status, &facts)
-                    .map_err(ActingctlError::ProgramFact)?,
-                success,
-            )
-        }
+        Command::Status => reported(&client.status().map_err(ActingctlError::Runtime)?, success),
         // Workflow #389 MCP-4 (command table §4.4): the `ac_facts` answer of each form. `status
         // --config` is the program-fact read reduced to the `config.*` records (Workflow #387
         // D1b); `facts --instance` resolves its selector with one status read.
@@ -1754,9 +1741,6 @@ enum ActingctlError {
     /// `status --config`: the snapshot carries no `config.subsystems` or no
     /// `config.parameters.<section>`.
     ConfigFactsMissing,
-    /// Workflow #390 九处-1: `status`: a program fact it shows does not read back
-    /// (`invalid_fact_snapshot_record`).
-    ProgramFact(Outcome),
     /// A result does not encode as JSON (developer line only, model §7.3).
     Output(serde_json::Error),
     /// `--wait` after an accepted shutdown: the wait's failure (`shutdown_wait_timeout`,
@@ -1800,7 +1784,6 @@ impl ActingctlError {
                 .caused_by(Outcome::new(error.code())),
             Self::Clock => Outcome::new(ActingctlCode::ClockUnavailable),
             Self::ConfigFactsMissing => Outcome::new(ActingctlCode::ConfigFactsMissing),
-            Self::ProgramFact(outcome) => outcome.clone(),
             Self::Output(_) => Outcome::new(ActingctlCode::ActingctlOutputFailed),
             Self::ShutdownWait(outcome) => outcome.clone(),
         }
@@ -1839,9 +1822,6 @@ impl fmt::Display for ActingctlError {
             Self::ConfigFactsMissing => formatter.write_str(
                 "the runtime fact snapshot holds no config.subsystems or no config.parameters.<section> record",
             ),
-            Self::ProgramFact(_) => {
-                formatter.write_str("a program fact of the runtime fact snapshot does not read back")
-            }
             Self::Output(error) => write!(formatter, "the JSON result cannot be encoded: {error}"),
             Self::ShutdownWait(_) => {
                 formatter.write_str("the accepted shutdown was not seen to complete")
@@ -2414,6 +2394,75 @@ mod tests {
                 "correlation_id": correlation_id,
                 "state": "in_progress",
             })
+        );
+    }
+
+    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave
+    // 18): `actingctl status` shows, beside each instance's status members, whether its emulator
+    // runs as the Runtime last read it: `on` or `off` with the reading's time, and `unknown`,
+    // never `off`, when the Runtime holds no reading.
+    #[test]
+    fn nine1_status_shows_each_emulator_as_last_read_with_the_time() {
+        use actingcommand_contract::{
+            EmulatorRunningState, IdentifierIssuer, RuntimeControlPlaneStatus,
+            RuntimeInstanceStatus,
+        };
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance = |alias: &str, emulator_state: EmulatorRunningState| {
+            RuntimeInstanceStatus::new(
+                alias,
+                *issuer.mint_instance_id().expect("instance id").transport(),
+                false,
+                0,
+                false,
+                false,
+                false,
+            )
+            .expect("instance status")
+            .with_emulator_state(emulator_state)
+        };
+        let status = RuntimeControlPlaneStatus::new(
+            *issuer.mint_owner_epoch().expect("owner epoch").transport(),
+            vec![
+                instance(
+                    "neutral.on",
+                    EmulatorRunningState::On {
+                        observed_at_unix_ms: 1_000,
+                    },
+                ),
+                instance(
+                    "neutral.off",
+                    EmulatorRunningState::Off {
+                        observed_at_unix_ms: 2_000,
+                    },
+                ),
+                instance("neutral.unread", EmulatorRunningState::Unknown),
+            ],
+        )
+        .expect("runtime status");
+        let line = reported(&status, ActingctlCode::RuntimeStatusReported).expect("status line");
+        let shown = line.members["instances"]
+            .as_array()
+            .expect("the status' instances")
+            .iter()
+            .map(|row| (row["instance_alias"].clone(), row["emulator_state"].clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shown,
+            [
+                (
+                    serde_json::json!("neutral.off"),
+                    serde_json::json!({"state": "off", "observed_at_unix_ms": 2_000}),
+                ),
+                (
+                    serde_json::json!("neutral.on"),
+                    serde_json::json!({"state": "on", "observed_at_unix_ms": 1_000}),
+                ),
+                (
+                    serde_json::json!("neutral.unread"),
+                    serde_json::json!({"state": "unknown"}),
+                ),
+            ]
         );
     }
 }

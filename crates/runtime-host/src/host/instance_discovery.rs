@@ -8,13 +8,16 @@
 //! ledger record (Workflow #383 AO-4q): its `source` is the sampled state source (the ledger's
 //! committed head and the sampling interval). A refusal appends `command.rejected` (the receipt
 //! terminal) plus one `runtime.failed` whose native detail keeps the provider's device error.
+//!
+//! Workflow #390 九处-1: an answered discovery is also the Runtime's reading of each
+//! discovery-bound instance's emulator, kept in memory for the status (no record).
 
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use crate::{InstanceDiscoveryFailure, ProviderDiscoveredInstance};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
-    RuntimeDiscoveredInstance, RuntimeInstanceDiscovery, RuntimeObservedState,
+    EmulatorRunningState, RuntimeDiscoveredInstance, RuntimeInstanceDiscovery, RuntimeObservedState,
 };
 
 const DISCOVERY_OPERATION: ContractLocation = ContractLocation::DiscoverInstances;
@@ -33,6 +36,8 @@ impl HostShared {
                     );
                 }
             };
+            // Workflow #390 九处-1: when the vendor tool answered.
+            let observed_at_unix_ms = self.clock.sample()?.unix_ms;
             // The registry lock is taken only after the vendor tool has answered.
             let registry = lock(
                 &self.registered_instances,
@@ -65,6 +70,29 @@ impl HostShared {
                 ));
                 return Err(self.instance_discovery_refused(validated, error)?);
             }
+            // Workflow #390 九处-1: each discovery-bound instance's emulator is as this
+            // discovery read it; one it no longer lists has no reading.
+            let mut registry = lock(
+                &self.registered_instances,
+                HostLocation::ReadInstanceDiscoveryRegistry,
+            )?;
+            for record in registry.values_mut() {
+                let Some(index) = record
+                    .adb_endpoint
+                    .as_ref()
+                    .and_then(ResolvedInstanceEndpoint::discovered_binding)
+                    .map(|binding| binding.instance_index())
+                else {
+                    continue;
+                };
+                record.emulator_state = instances
+                    .iter()
+                    .find(|instance| instance.instance_index == index)
+                    .map_or(EmulatorRunningState::Unknown, |instance| {
+                        EmulatorRunningState::observed(instance.running, observed_at_unix_ms)
+                    });
+            }
+            drop(registry);
             Ok(RuntimeObservedState::InstanceDiscovery {
                 owner_epoch: self.owner_epoch,
                 provider_version: discovery.provider_version,

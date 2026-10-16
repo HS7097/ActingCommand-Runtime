@@ -452,3 +452,34 @@ fn rb_h3_rung_three_s_bounds_are_the_configuration_s() {
     );
     assert_eq!(changed.rungs.len(), 1);
 }
+
+// Workflow #390 DRILL-1 (register DR2; contracts/emulator-control.md "Drills"): a person's drill
+// is a ladder with trigger stage `drill` and matches no trigger item, so a
+// `recovery_ladder.triggers[]` item that names the stage `drill` is refused `stage_not_allowed`
+// naming `recovery_ladder.triggers`, at start (`recovery_ladder_config_invalid`) and by an
+// instruction (`config_value_invalid`), and the configuration in effect stays (train 15
+// rulings, DRILL-1 item 6).
+#[test]
+fn gate_drill1_a_trigger_item_naming_the_drill_stage_is_refused_at_start_and_by_an_instruction() {
+    let section = json!({"triggers": [
+        {"id": "drill_item", "stages": ["drill"], "classes": ["pack_logic_mismatch"]},
+    ]});
+    let refused = from_file(section.clone())
+        .check(&context())
+        .expect_err("a trigger item at the drill stage");
+    assert_eq!(
+        refused.failure_code(),
+        ConfigCode::RecoveryLadderConfigInvalid
+    );
+    assert_eq!(refused.config_key(), TRIGGERS);
+    assert_eq!(refused.problem(), Some(ConfigValueProblem::StageNotAllowed));
+
+    let running = from_file(json!({}));
+    let refused = running
+        .apply(&changes(&section), &stamp(), &context())
+        .expect_err("a trigger item at the drill stage, by instruction");
+    assert_eq!(refused.failure_code(), ConfigCode::ConfigValueInvalid);
+    assert_eq!(refused.config_key(), TRIGGERS);
+    assert_eq!(refused.problem(), Some(ConfigValueProblem::StageNotAllowed));
+    assert_eq!(running.recovery_ladder(&context()), Ok(default_ladder()));
+}

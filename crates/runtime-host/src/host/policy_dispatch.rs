@@ -194,6 +194,102 @@ struct TrustedPolicyDispatch {
     intent: DispatchIntent,
     reason_chain: DecisionReasonChain,
     observed_monotonic_ms: u64,
+    /// Workflow #369 W-1: the intent's instance view of the evaluation's inputs
+    /// (`dispatch_view_identity`).
+    view_identity: String,
+}
+
+/// Workflow #369 W-1 (model-369 v3.1 §3.3: "Other instances are evaluated and run in the same
+/// cycle"): the identity of the part of a projection that one instance's intent reads. It hashes
+/// that instance's snapshot, the facts and the catalog pools whose scope selects the instance,
+/// the priority offsets for it or for every instance, its own task states and outcomes, and
+/// every host. A pool the catalog does not declare counts as selecting every instance. The
+/// cycle's earlier dispatches on other instances (their intents, runs, settlement records and
+/// device facts) change only records outside it. Without the instance's snapshot no scope
+/// resolves, so the whole snapshot identity is the view.
+fn dispatch_view_identity(
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    pool_scopes: &BTreeMap<String, actingcommand_policy::ScopeSelector>,
+    instance_id: &str,
+) -> RuntimeHostResult<String> {
+    use actingcommand_policy::ScopeSelector;
+    let Some(instance) = facts
+        .instances
+        .iter()
+        .find(|instance| instance.instance_id == instance_id)
+    else {
+        return Ok(facts.fact_snapshot_id.clone());
+    };
+    let selects = |scope: &ScopeSelector| match scope {
+        ScopeSelector::Instance { instance_id } => *instance_id == instance.instance_id,
+        ScopeSelector::Server { server_id } => *server_id == instance.server_id,
+        ScopeSelector::Game { game_id } => *game_id == instance.game_id,
+    };
+    let observed = facts
+        .facts
+        .iter()
+        .filter(|fact| selects(&fact.scope))
+        .collect::<Vec<_>>();
+    let outcomes = facts
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.instance_id == instance_id)
+        .collect::<Vec<_>>();
+    let tasks = facts
+        .tasks
+        .iter()
+        .filter(|task| task.instance_id == instance_id)
+        .collect::<Vec<_>>();
+    let offsets = facts
+        .priority_offsets
+        .iter()
+        .filter(|offset| {
+            offset
+                .instance_id
+                .as_deref()
+                .is_none_or(|offset_instance| offset_instance == instance_id)
+        })
+        .collect::<Vec<_>>();
+    let mut pools = resources
+        .pools
+        .iter()
+        .filter(|pool| pool_scopes.get(&pool.pool_id).is_none_or(selects))
+        .collect::<Vec<_>>();
+    pools.sort_by(|left, right| left.pool_id.cmp(&right.pool_id));
+    let mut hosts = resources.hosts.iter().collect::<Vec<_>>();
+    hosts.sort_by(|left, right| left.host_id.cmp(&right.host_id));
+    let bytes = serde_json::to_vec(&(instance, observed, outcomes, tasks, offsets, pools, hosts))
+        .map_err(|_| {
+        RuntimeHostError::fatal(
+            HostCode::FactSnapshotEncodeFailed,
+            HostLocation::HashPolicyFactSnapshot,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+    })?;
+    Ok(format!(
+        "snapshot:policy-dispatch-view:{:x}",
+        Sha256::digest(bytes)
+    ))
+}
+
+/// The scope of every pool the active catalog declares, by pool id (`dispatch_view_identity`).
+fn catalog_pool_scopes(
+    policy: &PolicyHost,
+) -> BTreeMap<String, actingcommand_policy::ScopeSelector> {
+    policy
+        .active_loaded()
+        .map(|catalog| {
+            catalog
+                .compiled()
+                .catalog()
+                .pools
+                .pools
+                .iter()
+                .map(|pool| (pool.id.clone(), pool.scope.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -203,10 +299,15 @@ pub(super) struct TrustedPolicyDispatchStore {
 }
 
 impl TrustedPolicyDispatchStore {
+    /// Records the cycle's pending intents with the instance view of each in the evaluation's
+    /// `facts` and `resources` (`dispatch_view_identity`).
     fn record_cycle(
         &mut self,
         cycle: &PolicyCycle,
         observed_monotonic_ms: u64,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        pool_scopes: &BTreeMap<String, actingcommand_policy::ScopeSelector>,
     ) -> RuntimeHostResult<()> {
         let Some(evaluation) = &cycle.evaluation else {
             return Ok(());
@@ -226,6 +327,12 @@ impl TrustedPolicyDispatchStore {
                 intent: intent.clone(),
                 reason_chain: reason_chain.clone(),
                 observed_monotonic_ms,
+                view_identity: dispatch_view_identity(
+                    facts,
+                    resources,
+                    pool_scopes,
+                    &intent.instance_id,
+                )?,
             };
             if let Some(existing) = self.entries.get(&intent.decision_id) {
                 if existing.intent != trusted.intent
@@ -765,7 +872,7 @@ impl HostShared {
         };
         let workloads = lock(self.policy()?, HostLocation::ReadPolicyPerformanceWorkloads)?
             .active_performance_workloads()?;
-        let mut controlled_resources = resources;
+        let mut controlled_resources = resources.clone();
         lock(
             &self.performance_control,
             HostLocation::ApplyPolicyPerformanceControl,
@@ -790,7 +897,7 @@ impl HostShared {
         let suspension_lift = self.suspension_lift_view(&procedure_manifest)?;
         // Workflow #384 D2-S4: the fact refresh pace in effect as this cycle starts.
         let fact_refresh_settings = self.fact_refresh_settings()?;
-        let (mut cycle, eligibility_unknown_pairs) = {
+        let (mut cycle, eligibility_unknown_pairs, pool_scopes) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
             let cycle = policy.evaluate(
@@ -820,7 +927,7 @@ impl HostShared {
             } else {
                 BTreeSet::new()
             };
-            (cycle, unknown)
+            (cycle, unknown, catalog_pool_scopes(&policy))
         };
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
@@ -870,7 +977,13 @@ impl HostShared {
             &self.trusted_policy_dispatches,
             HostLocation::RecordTrustedPolicyDispatches,
         )?
-        .record_cycle(&cycle, observed_monotonic_ms)?;
+        .record_cycle(
+            &cycle,
+            observed_monotonic_ms,
+            &facts,
+            &resources,
+            &pool_scopes,
+        )?;
         Ok(cycle)
     }
 
@@ -1670,7 +1783,7 @@ impl HostShared {
                 HostLocation::SnapshotPolicyOutcomeState,
             )?;
             let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
-            let (outcome_keys, current_facts, fact_gate) = {
+            let (outcome_keys, current_facts, current_resources, fact_gate) = {
                 let outcome_keys = policy.outcome_key_snapshot()?;
                 if outcome_keys.generation.as_ref().is_none_or(|generation| {
                     generation.catalog_hash() != intent.catalog_hash
@@ -1687,7 +1800,7 @@ impl HostShared {
                 )?;
                 // The eligibility ages are projected as of the intent's evaluation instant, as
                 // that evaluation projected them (Workflow #308 slice 5b).
-                let (current_facts, _, _, _) = self
+                let (current_facts, current_resources, _, _) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
                         &mut policy,
                         HostLocation::AdmitPolicyDispatch,
@@ -1696,10 +1809,21 @@ impl HostShared {
                         None,
                         Some(trusted.intent.prerequisites.evaluated_at_unix_ms),
                     )?;
-                (outcome_keys, current_facts, fact_gate)
+                (outcome_keys, current_facts, current_resources, fact_gate)
             };
             drop(outcome_gate);
-            if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
+            // Workflow #369 W-1 (model-369 v3.1 §3.3): the intents of one cycle are admitted one
+            // after another, and an earlier one's dispatch on another instance moves the snapshot
+            // identity (its task state, settlement and device facts). The intent is stale only
+            // when its own instance view moved too.
+            if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id
+                && dispatch_view_identity(
+                    &current_facts,
+                    &current_resources,
+                    &catalog_pool_scopes(&policy),
+                    &intent.instance_id,
+                )? != trusted.view_identity
+            {
                 return Err(policy_admission_request(
                     HostCode::PolicyFactsStale,
                     HostLocation::AdmitPolicyDispatch,

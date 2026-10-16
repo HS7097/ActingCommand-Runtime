@@ -1775,6 +1775,8 @@ impl PreparedContainedTask {
         let mut retries = SampleRetries::new(run.pacing, purpose.observation());
         let mut started = runtime.monotonic_now();
         let mut window_started = runtime.observation_now();
+        // Whether the window has seen a frame on which no awaited page passed.
+        let mut missed = false;
         loop {
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 base_timing
@@ -1791,12 +1793,26 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
+            // Test plan E-3 G3 (exec key 21) on the linear path (wave-17 acceptance ruling 2):
+            // after frames on which no awaited page passed, a window too short for the next
+            // sampled frame is spent, as an elapsed one is.
+            if missed
+                && self.consensus_window_spent(
+                    runtime,
+                    Some(candidates),
+                    window_started + budget,
+                    deadline,
+                )?
+            {
+                return Ok(None);
+            }
             let observation = match self.linear_observe_scene(runtime, candidates, timing) {
                 Ok(observation) => observation,
                 Err(failure) => {
                     retries.retry(failure, budget)?;
                     started = runtime.monotonic_now();
                     window_started = runtime.observation_now();
+                    missed = false;
                     continue;
                 }
             };
@@ -1814,6 +1830,7 @@ impl PreparedContainedTask {
                 Ok(observation) => return Ok(Some(observation)),
                 Err(scene) => scene,
             };
+            missed = true;
             // Workflow #373 NAV-6 (§6.1 point 3): a frame on which no awaited page passed is
             // offered to the shared interrupt pages; the wait's budget is paused while one is
             // handled.

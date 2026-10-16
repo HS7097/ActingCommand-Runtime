@@ -662,12 +662,25 @@ tests = [
 ]
 incident = ["#372 K4"]
 
-# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; wave-18 ruling 4; register §1.91): each actingctl overview and ac_overview instance row, and each instance of actingctl status beside its status members, shows the instance's start_emulator read from the program fact config.parameters.instance: true for an instance configured true, false for one configured false and for one that does not name the key (#369 S6a: off unless named)
+# Policy cycle (#369, #372; test plan v2.2 A-4 G5 rows 2-3 and G6a, wave-17 ruling 11; m369 W-1; #191 A1): a failed scheduled run skips its instance for the rest of the cycle while the other instance's intent in the same cycle still runs; failed_runs makes the driver evaluate again at once, and that evaluation defers the instance its ladder holds with dispatch_instance_held; a cycle past its budget attempts its first intent and reports the rest as policy_cycle_yielded attempted=<i> remaining=<N> with no ledger fact for them. Partial: G5 row 1 cannot occur (the evaluator selects at most one intent per instance per round) and G6b, a held or contended refusal at admission inside the cycle, is not written in 0.12 (no admission hook is defined)
+[[gate]]
+key = "6"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::a_failed_run_skips_its_instance_for_the_rest_of_the_cycle",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4_cycle::gate_382_a4_g5_a_failed_run_leaves_the_other_instances_intent_to_run_in_the_same_cycle",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4_cycle::gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_ladder_holds",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_382_a4_cycle::gate_382_a4_g6a_a_budget_yield_reports_the_unattempted_intents_and_writes_no_fact_for_them",
+]
+incident = ["#369 W-1", "#382 A-4"]
+
+# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18; register §1.91): actingctl status beside each instance's status members, and each actingctl overview / ac_overview instance row, show emulator_state, whether the instance's emulator runs as the Runtime last read it: on or off with the reading's observed_at_unix_ms, and unknown, never off, while the Runtime holds no reading
 [[gate]]
 key = "69"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_instance_s_start_emulator",
-    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_status_shows_each_instance_s_start_emulator_beside_its_status",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time",
+    "actingcommand-actingctl::bin:actingctl::tests::nine1_status_shows_each_emulator_as_last_read_with_the_time",
+    "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
 incident = ["#390"]

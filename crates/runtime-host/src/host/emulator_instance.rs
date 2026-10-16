@@ -78,7 +78,9 @@ use crate::codes::HostLocation;
 use crate::{DeviceProcessPresence, EmulatorControlFailure, EmulatorControlOutcome, InstanceState};
 use actingcommand_contract::codes::{ContractLocation, RuntimeErrorCode};
 use actingcommand_contract::outcome::{Location, Outcome, VocabularyToken};
-use actingcommand_contract::{CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, FactValue};
+use actingcommand_contract::{
+    CONNECTION_PREPARATION_WAIT_MS, EmulatorInstanceAction, EmulatorRunningState, FactValue,
+};
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_execution_kernel::ExecutionKernelLocation;
 
@@ -1460,12 +1462,24 @@ impl HostShared {
                 self.record_observed_stopped(instance_id)
             }
             Some(state) if state.running() => {
-                let bound_port = lock(
-                    &self.registered_instances,
-                    HostLocation::ReadObservedBinding,
-                )?
-                .get(&instance_id)
-                .and_then(|record| record.bound_adb_endpoint().map(|endpoint| endpoint.port()));
+                // Workflow #390 九处-1: the emulator runs as of this read, whether or not its
+                // port changed.
+                let observed_at_unix_ms = self.clock.sample()?.unix_ms;
+                let bound_port = {
+                    let mut registry = lock(
+                        &self.registered_instances,
+                        HostLocation::ReadObservedBinding,
+                    )?;
+                    let record = registry.get_mut(&instance_id);
+                    let bound_port = record.as_ref().and_then(|record| {
+                        record.bound_adb_endpoint().map(|endpoint| endpoint.port())
+                    });
+                    if let Some(record) = record {
+                        record.emulator_state =
+                            EmulatorRunningState::observed(true, observed_at_unix_ms);
+                    }
+                    bound_port
+                };
                 if let Some(port) = state.adb_port.filter(|port| bound_port != Some(*port)) {
                     let rebound = self.bind_observed_endpoint(instance_id, Some(port))?;
                     self.append_event_raw(
@@ -1480,6 +1494,16 @@ impl HostShared {
                 self.invalidate_backend_selfcheck_facts(instance_id)
             }
             _ if effect == EffectDisposition::Indeterminate => {
+                // Workflow #390 九处-1: the vendor command ran and no read settled what it left,
+                // so the Runtime holds no reading of the emulator any more.
+                if let Some(record) = lock(
+                    &self.registered_instances,
+                    HostLocation::ReadObservedBinding,
+                )?
+                .get_mut(&instance_id)
+                {
+                    record.emulator_state = EmulatorRunningState::Unknown;
+                }
                 self.invalidate_backend_selfcheck_facts(instance_id)?;
                 self.invalidate_present_fact(instance_id, DEVICE_CONNECTED_FACT_KEY)
             }
@@ -1640,12 +1664,15 @@ impl HostShared {
     }
 
     /// Binds the instance's discovery binding to `adb_port`, or returns it to pending: the
-    /// provider's binding and the host record together, under the registry lock.
+    /// provider's binding and the host record together, under the registry lock. Workflow #390
+    /// 九处-1: the reading this binding follows is the emulator's running state now, `on` with a
+    /// port and `off` without one.
     fn bind_observed_endpoint(
         &self,
         instance_id: InstanceId,
         adb_port: Option<u16>,
     ) -> RuntimeHostResult<RegisteredInstance> {
+        let observed_at_unix_ms = self.clock.sample()?.unix_ms;
         let mut registry = lock(
             &self.registered_instances,
             HostLocation::RebindInstanceEndpoint,
@@ -1673,6 +1700,8 @@ impl HostShared {
             })?;
         record.audit_endpoint = rebound.audit_endpoint().to_owned();
         record.adb_endpoint = rebound.adb_endpoint().cloned();
+        record.emulator_state =
+            EmulatorRunningState::observed(adb_port.is_some(), observed_at_unix_ms);
         Ok(record.clone())
     }
 

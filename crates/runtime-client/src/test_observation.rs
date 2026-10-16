@@ -281,7 +281,7 @@ pub(crate) fn enter_observation_owner(
 #[cfg(test)]
 fn mint_observation_owner() -> Result<TestObservationOwner, &'static str> {
     NEXT_OBSERVATION_OWNER
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
             next.checked_add(1)
         })
         .map(TestObservationOwner)

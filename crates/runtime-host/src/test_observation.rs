@@ -233,7 +233,7 @@ pub(crate) fn enter_observation_owner(
 
 fn mint_observation_owner() -> Result<HostTestObservationOwner, Code> {
     NEXT_OBSERVATION_OWNER
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
             next.checked_add(1)
         })
         .map(HostTestObservationOwner)
