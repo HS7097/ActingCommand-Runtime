@@ -15,6 +15,20 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+/// Members of a select step's `scan` (Workflow #308 SEL-L4b, frozen selector model S0 §2.1).
+const SCAN_MEMBERS: &[&str] = &[
+    "identity_feature",
+    "axis",
+    "advance",
+    "reposition",
+    "settle",
+    "track",
+    "start",
+    "end",
+    "bounds",
+    "early_stop",
+];
+
 /// Members of one `checks` entry (`contracts/selection-graph.md`, section Checks).
 const CHECK_MEMBERS: std::ops::RangeInclusive<usize> = 2..=8;
 /// Workflow #390 EXEC-2: an operation's `observation_window`, by its `until`, with its required
@@ -513,8 +527,11 @@ impl Declaration<'_> {
             match field.as_str() {
                 "to" if !value.is_null() => self.page(value, &pointer)?,
                 "expect_after" if !value.is_null() => {
-                    let expected =
-                        self.object(value, &pointer, &["page_id", "timeout_ms", "interval_ms"])?;
+                    let expected = self.object(
+                        value,
+                        &pointer,
+                        &["page_id", "timeout_ms", "interval_ms", "expect_identity"],
+                    )?;
                     self.page(
                         self.required(expected, &pointer, "page_id")?,
                         &child(&pointer, "page_id"),
@@ -522,6 +539,22 @@ impl Declaration<'_> {
                     for field in ["timeout_ms", "interval_ms"] {
                         if let Some(value) = expected.get(field).filter(|value| !value.is_null()) {
                             self.unsigned(value, &child(&pointer, field))?;
+                        }
+                    }
+                    // Workflow #308 SEL-L4b (S0 §1.3): `{target_id, choice_of}`, both strings;
+                    // Runtime admission checks the target and the step it names.
+                    if let Some(identity) = expected
+                        .get("expect_identity")
+                        .filter(|value| !value.is_null())
+                    {
+                        let identity_pointer = child(&pointer, "expect_identity");
+                        let identity =
+                            self.object(identity, &identity_pointer, &["target_id", "choice_of"])?;
+                        for field in ["target_id", "choice_of"] {
+                            self.string(
+                                self.required(identity, &identity_pointer, field)?,
+                                &child(&identity_pointer, field),
+                            )?;
                         }
                     }
                 }
@@ -737,7 +770,11 @@ impl Declaration<'_> {
         pointer: &str,
     ) -> CliOutcome<()> {
         let select_pointer = child(pointer, "select");
-        let select = self.object(value, &select_pointer, &["layout_id", "policy"])?;
+        let select = self.object(
+            value,
+            &select_pointer,
+            &["layout_id", "policy", "scan", "on_empty"],
+        )?;
         let layout_pointer = child(&select_pointer, "layout_id");
         let layout_id = self.required(select, &select_pointer, "layout_id")?;
         self.string(layout_id, &layout_pointer)?;
@@ -769,6 +806,28 @@ impl Declaration<'_> {
                 &child(pointer, "unguarded_trusted_coordinate"),
                 ResourceDeclarationReason::InvalidValue,
             ));
+        }
+        // Workflow #308 SEL-L4b (S0 §2.1): a scan holds its members, every one required but
+        // `early_stop`; Runtime admission reads their values and runs the static checks.
+        if let Some(scan) = select.get("scan").filter(|value| !value.is_null()) {
+            let scan_pointer = child(&select_pointer, "scan");
+            let scan = self.object(scan, &scan_pointer, SCAN_MEMBERS)?;
+            for member in SCAN_MEMBERS
+                .iter()
+                .filter(|member| **member != "early_stop")
+            {
+                self.required(scan, &scan_pointer, member)?;
+            }
+        }
+        // Workflow #308 SEL-L4b (S0 §1.4): `{outcome_key}`, a string; Runtime admission checks
+        // the mode, the scheduling outcome and the route's terminal.
+        if let Some(on_empty) = select.get("on_empty").filter(|value| !value.is_null()) {
+            let on_empty_pointer = child(&select_pointer, "on_empty");
+            let on_empty = self.object(on_empty, &on_empty_pointer, &["outcome_key"])?;
+            self.string(
+                self.required(on_empty, &on_empty_pointer, "outcome_key")?,
+                &child(&on_empty_pointer, "outcome_key"),
+            )?;
         }
         Ok(())
     }
@@ -3957,6 +4016,133 @@ mod tests {
             (edge(None), "/navigation/0/to_page", "missing_field"),
         ] {
             let error = validate(edge).expect_err("the edge is refused");
+            assert_eq!(error.code, "resource_declaration_invalid");
+            let issue = error.details.expect("declaration issue");
+            assert_eq!(issue["field_path"], pointer);
+            assert_eq!(issue["reason"], refusal);
+        }
+    }
+
+    // Workflow #308 SEL-L4b: a select step over a scan (frozen selector model S0 §2.1, every
+    // member but `early_stop` required) that may end the run empty (`on_empty`, S0 §1.4) and
+    // whose `expect_after` reads back the identity it chose (`expect_identity`, S0 §1.3).
+    fn l4b_scan_select_step() -> Value {
+        serde_json::json!({
+            "id": "choose", "from": "neutral/list", "to": "neutral/detail",
+            "select": {
+                "layout_id": "layout/cards",
+                "policy": {"path": "policies/cards.json"},
+                "scan": {
+                    "identity_feature": "member", "axis": "vertical",
+                    "advance": {"kind": "drag",
+                                "from": {"x": 560, "y": 600, "width": 160, "height": 30},
+                                "to": {"x": 560, "y": 400, "width": 160, "height": 30},
+                                "duration_ms": 1000,
+                                "min_content_step_px": 170, "max_content_step_px": 240},
+                    "reposition": {"kind": "drag",
+                                   "from": {"x": 560, "y": 640, "width": 160, "height": 30},
+                                   "to": {"x": 560, "y": 260, "width": 160, "height": 30},
+                                   "duration_ms": 600, "max_content_step_px": 460},
+                    "settle": {"interval_ms": 200, "timeout_ms": 3000},
+                    "track": {"area": {"x": 0, "y": 140, "width": 1280, "height": 560},
+                              "edge_margin_px": 12,
+                              "signature": {"rect": {"x": 0, "y": 0, "width": 160, "height": 160},
+                                            "columns": 8, "rows": 8},
+                              "signature_max_distance_milli": 3000,
+                              "position_tolerance_px": 6, "min_overlap_instances": 3,
+                              "spacing": {"max_axis_gap_px": 300, "columns": 6,
+                                          "max_trailing_gap_px": 320, "max_cross_lead_px": 40,
+                                          "max_cross_gap_px": 210}},
+                    "start": {"check": "check/list_start", "rewind": true},
+                    "end": {"check": "check/list_end"},
+                    "bounds": {"max_viewports": 80, "max_reposition_viewports": 40,
+                               "max_ms": 240_000}
+                },
+                "on_empty": {"outcome_key": "nobody_listed"}
+            },
+            "guard": {"page_id": "neutral/list", "target_id": "check/list_ready",
+                      "expected_rect": {"x": 0, "y": 0, "width": 1280, "height": 120}},
+            "expect_after": {"page_id": "neutral/detail", "timeout_ms": 3000, "interval_ms": 200,
+                             "expect_identity": {"target_id": "ocr/detail_name",
+                                                 "choice_of": "choose"}}
+        })
+    }
+
+    // Workflow #308 SEL-L4b: the declaration gate admits a select step's `scan` with every
+    // required member, with or without the optional `early_stop`, its `on_empty` with an
+    // `outcome_key`, and an `expect_after.expect_identity` with `target_id` and `choice_of`.
+    #[test]
+    fn l4b_the_gate_admits_a_scan_an_on_empty_and_an_expected_identity() {
+        let task = Declaration {
+            file: Path::new("tasks/task/task.json"),
+            schema: Some("0.9"),
+        };
+        let mut early_stop = l4b_scan_select_step();
+        early_stop["select"]["scan"]["early_stop"] = serde_json::json!("upper_bound");
+        for step in [l4b_scan_select_step(), early_stop] {
+            task.operation(&step, "/operations/0", true)
+                .expect("the declaration gate admits the scan select step");
+        }
+    }
+
+    // Workflow #308 SEL-L4b: the declaration gate refuses a `scan` without one of its required
+    // members (`missing_field` at that member), a `scan` member it does not have and an
+    // `on_empty` member it does not have (`unknown_field`), and an `expect_identity` whose
+    // `choice_of` is no string (`invalid_type`).
+    #[test]
+    fn l4b_the_gate_refuses_a_scan_an_on_empty_and_an_expected_identity_at_their_pointers() {
+        let task = Declaration {
+            file: Path::new("tasks/task/task.json"),
+            schema: Some("0.9"),
+        };
+        let mut cases = Vec::new();
+        for member in [
+            "identity_feature",
+            "axis",
+            "advance",
+            "reposition",
+            "settle",
+            "track",
+            "start",
+            "end",
+            "bounds",
+        ] {
+            let mut step = l4b_scan_select_step();
+            step["select"]["scan"]
+                .as_object_mut()
+                .expect("scan")
+                .remove(member);
+            cases.push((
+                step,
+                format!("/operations/0/select/scan/{member}"),
+                "missing_field",
+            ));
+        }
+        let mut misplaced = l4b_scan_select_step();
+        misplaced["select"]["scan"]["rewind"] = Value::Bool(true);
+        cases.push((
+            misplaced,
+            "/operations/0/select/scan/rewind".to_owned(),
+            "unknown_field",
+        ));
+        let mut misnamed = l4b_scan_select_step();
+        misnamed["select"]["on_empty"] = serde_json::json!({"key": "nobody_listed"});
+        cases.push((
+            misnamed,
+            "/operations/0/select/on_empty/key".to_owned(),
+            "unknown_field",
+        ));
+        let mut numbered = l4b_scan_select_step();
+        numbered["expect_after"]["expect_identity"]["choice_of"] = serde_json::json!(0);
+        cases.push((
+            numbered,
+            "/operations/0/expect_after/expect_identity/choice_of".to_owned(),
+            "invalid_type",
+        ));
+        for (step, pointer, refusal) in cases {
+            let error = task
+                .operation(&step, "/operations/0", true)
+                .expect_err(&pointer);
             assert_eq!(error.code, "resource_declaration_invalid");
             let issue = error.details.expect("declaration issue");
             assert_eq!(issue["field_path"], pointer);

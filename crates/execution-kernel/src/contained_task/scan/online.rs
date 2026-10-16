@@ -69,6 +69,9 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     latest: Option<PageObservation>,
     /// The guard outcome of the latest viewport, which every drag from it carries.
     guard: Option<ContainedTaskGuardOutcome>,
+    /// The guard was judged on the latest frame (SEL-L4b: `Confirm` judges it before the
+    /// viewport reads the frame).
+    guarded: bool,
     action_seed: Option<u64>,
     replay: bool,
 }
@@ -104,9 +107,36 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
             first,
             latest: None,
             guard: None,
+            guarded: false,
             action_seed,
             replay,
         }
+    }
+
+    /// The step's guard on the latest frame, judged once per frame.
+    fn judge_guard(&mut self) -> Result<(), ContainedTaskRunError<R::Error>> {
+        if self.guarded {
+            return Ok(());
+        }
+        let observation = self.latest.as_ref().unwrap_or(self.first);
+        let (guard, _) = self.operation.guard_outcome(
+            &self.task.control,
+            observation,
+            &self.task.evaluator,
+            &mut *self.runtime,
+            Some(self.timing),
+        )?;
+        self.guard = Some(guard);
+        self.guarded = true;
+        Ok(())
+    }
+
+    /// The latest frame and its guard outcome (SEL-L4b): after a confirmed scan select, F2 and
+    /// the guard outcome its selecting tap carries.
+    pub(in crate::contained_task) fn into_parts(
+        self,
+    ) -> (Option<PageObservation>, Option<ContainedTaskGuardOutcome>) {
+        (self.latest, self.guard)
     }
 
     /// The instance rectangles of a scene: every accepted anchor match moved by the layout's
@@ -287,18 +317,17 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
         }
         let anchors = self.anchors(&observation.scene)?;
         self.latest = Some(observation);
+        self.guarded = false;
         Ok(anchors)
     }
 
+    fn guard(&mut self) -> Result<(), ContainedTaskRunError<R::Error>> {
+        self.judge_guard()
+    }
+
     fn viewport(&mut self) -> Result<ScanReading, ContainedTaskRunError<R::Error>> {
+        self.judge_guard()?;
         let observation = self.latest.as_ref().unwrap_or(self.first);
-        let (guard, _) = self.operation.guard_outcome(
-            &self.task.control,
-            observation,
-            &self.task.evaluator,
-            &mut *self.runtime,
-            Some(self.timing),
-        )?;
         let (projection, _) = self.task.project_transaction(
             &mut *self.runtime,
             self.operation,
@@ -323,7 +352,6 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             .input_context
             .as_ref()
             .map(|context| context.reference().frame_id);
-        self.guard = Some(guard);
         Ok(ScanReading {
             instances,
             start_check,
@@ -336,7 +364,10 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
         if self.replay && drag.motion != ScanDragMotion::Advance {
             let stage = match drag.motion {
                 ScanDragMotion::Rewind => ExecutionKernelLocation::SelectScanStart,
-                _ => ExecutionKernelLocation::SelectScanAlign,
+                ScanDragMotion::Return { .. } => ExecutionKernelLocation::SelectReturn,
+                ScanDragMotion::Advance | ScanDragMotion::Corrective => {
+                    ExecutionKernelLocation::SelectScanAlign
+                }
             };
             return Err(ContainedTaskError::valued(
                 ExecutionKernelCode::SelectionScanReplayFrameMissing.code(),

@@ -1531,6 +1531,126 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
     assert_eq!(tree_bytes(state_root), bad_tail_tree);
 }
 
+// Workflow #308 SEL-L4b (M-357b D34): one select step's action holds two effect intents, the
+// same scan drag sampled on two viewports, each linked to the frame it was sampled on. Each
+// input pairs with the intent of its own `before_frame_id`, and each intent owns only the input
+// sampled on its frame.
+#[test]
+fn task_evidence_pairs_each_scan_drag_of_one_step_with_its_own_input() {
+    use actingcommand_contract::{InputAction, InputPayloadDraft, TaskSemanticFact};
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state_root = temp.path();
+    let ledger_root = state_root.join("ledger");
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let writer = GlobalLedger::open(GlobalLedgerConfig::new(&ledger_root, "scan-pairing-source"))
+        .expect("open scan pairing source");
+    let append = |links: EventLinksDraft, payload: EventPayloadDraft| {
+        writer
+            .append(
+                EventDraft::new(
+                    identifiers.mint_event_id().unwrap(),
+                    1_752_147_200_200,
+                    EventSeverity::Info,
+                    EventOrigin::new(
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                    ),
+                    links,
+                    payload,
+                )
+                .sanitize(&Sha256SecretFingerprinter::new(b"scan-pairing-spec").unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let links = EventLinksDraft::default()
+        .with_request_id(identifiers.mint_request_id().unwrap())
+        .with_task_id(identifiers.mint_task_id().unwrap())
+        .with_run_id(identifiers.mint_run_id().unwrap())
+        .with_instance_id(identifiers.mint_instance_id().unwrap())
+        .with_lease_id(identifiers.mint_lease_id().unwrap())
+        .with_correlation_id(identifiers.mint_correlation_id().unwrap());
+    let step = identifiers.mint_action_id().unwrap();
+    let drag = InputAction::Swipe {
+        x1: 100,
+        y1: 400,
+        x2: 100,
+        y2: 200,
+        duration_ms: 400,
+    };
+    // Per drag: the effect intent, its physical input intent and that input's commit.
+    let mut drags = Vec::new();
+    for _ in 0..2 {
+        let viewport = identifiers.mint_frame_id().unwrap();
+        let physical = identifiers.mint_action_id().unwrap();
+        let effect_intent = append(
+            links.clone().with_action_id(step).with_frame_id(viewport),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::EffectIntent {
+                    frame_extent: None,
+                    step_index: 3,
+                    operation_label: "neutral_select".into(),
+                    action: drag.clone(),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        );
+        let input = append(
+            links.clone().with_action_id(physical),
+            InputPayloadDraft::intent_with_provenance(
+                drag.clone(),
+                None,
+                Some(*step.transport()),
+                Some(*viewport.transport()),
+                AuditInput::new(),
+            )
+            .into(),
+        );
+        let committed = append(
+            links.clone().with_action_id(physical),
+            InputPayloadDraft::committed(
+                EventAction::InputSwipe,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        );
+        drags.push((
+            effect_intent.sequence(),
+            input.sequence(),
+            committed.sequence(),
+        ));
+    }
+    writer.close().expect("close scan pairing source");
+
+    let request = ForensicRequest::task_evidence(
+        state_root,
+        ForensicEventsRequest::new(ForensicEventFilter::default(), 0, None, 1024).unwrap(),
+    );
+    let ForensicOutput::Machine(ForensicReport::TaskEvidence(report)) = run(request).unwrap()
+    else {
+        panic!("task evidence report");
+    };
+    assert_eq!(report.inputs.len(), 2, "{report:?}");
+    assert_eq!(report.steps.len(), 2, "{report:?}");
+    for (&(effect_intent, input, committed), (row, step_row)) in drags
+        .iter()
+        .zip(report.inputs.iter().zip(report.steps.iter()))
+    {
+        assert_eq!(row.intent_sequence, input);
+        assert_eq!(row.source_step.state, "linked", "{row:?}");
+        assert_eq!(row.source_step.source_sequences, vec![effect_intent]);
+        assert_eq!(row.outcome.state, "linked", "{row:?}");
+        assert_eq!(row.outcome.source_sequences, vec![committed]);
+        assert_eq!(step_row.effect_intent_sequence, effect_intent);
+        assert_eq!(step_row.physical_inputs.state, "linked", "{step_row:?}");
+        assert_eq!(step_row.physical_inputs.source_sequences, vec![input]);
+    }
+    assert!(!report.gaps.contains(&"ambiguous"), "{:?}", report.gaps);
+}
+
 #[test]
 fn replays_a_sealed_archive_through_the_canonical_verifier() {
     let temp = tempfile::tempdir().expect("tempdir");

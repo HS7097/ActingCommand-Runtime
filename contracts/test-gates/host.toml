@@ -1160,3 +1160,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_373_nav5::n5_20_only_the_run_s_server_s_edges_and_chain_steps_are_used",
 ]
 incident = ["#373 NAV-5"]
+
+# Workflow #308 SEL-L4b (frozen selector model S0 v2.1 §1.4; register §1.85): a package whose select step declares `scan` and `on_empty` runs through the host; a scan that finds nobody listed ends the run Completed on the step's page with no input, one v2 decision record and the on_empty key as its scheduling disposition, derived by the host's existing rules
+[[gate]]
+key = "77"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_308_l4b::l4b_a_scan_select_that_finds_nobody_listed_ends_the_run_with_its_on_empty_key",
+]
+incident = ["#308"]
