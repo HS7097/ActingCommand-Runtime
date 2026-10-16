@@ -4701,6 +4701,13 @@ const PLANNING_ENVELOPE_SITES: &[(&str, EnvelopeResponsibility)] = &[
         "apps/actingd/src/config.rs::read_catalog_document -> CatalogDocumentSource::new(_, _)",
         EnvelopeResponsibility::Source,
     ),
+    // Workflow #382 TEST-FU (test plan A-4, apps key 6): actingd's `#[cfg(test)]` policy cycle
+    // harness, a module under `src` that this scan reads as production; it hands catalog-a's raw
+    // bytes to the compiler, as `config.rs` does.
+    (
+        "apps/actingd/src/gate_382_a4_cycle.rs::document -> CatalogDocumentSource::new(_, _)",
+        EnvelopeResponsibility::Source,
+    ),
     (
         "apps/actinglab/src/resource_declarations.rs::DeclarationReader::validate -> CatalogDocumentSource::new(_, _)",
         EnvelopeResponsibility::Source,
