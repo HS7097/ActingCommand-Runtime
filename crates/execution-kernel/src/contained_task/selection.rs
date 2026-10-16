@@ -460,7 +460,7 @@ fn validate_expect_identities(
         }
         if !matches!(
             evaluator.target_kind(&expect.target_id),
-            Ok(TargetKind::Ocr)
+            Ok(TargetKind::Ocr | TargetKind::Color)
         ) {
             return Err(refuse("target=not_ocr"));
         }

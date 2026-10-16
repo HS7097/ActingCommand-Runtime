@@ -161,9 +161,7 @@ pub(in crate::contained_task) fn bound_inputs(
             CandidateFeatureValue::Identity if Some(feature.name.as_str()) == identity_feature => {
                 FieldDomain::Identity
             }
-            CandidateFeatureValue::Identity => {
-                return Err(format!("field={} identity=not_the_step_identity", field.name).into());
-            }
+            CandidateFeatureValue::Identity => FieldDomain::Identity,
         };
         field_domains.insert(field.name.clone(), domain);
     }
@@ -183,7 +181,7 @@ pub(in crate::contained_task) fn bound_inputs(
                     .collect::<Vec<_>>()
             })
             .ok_or_else(|| format!("identity_feature={name} undeclared"))?,
-        None => vec![String::new()],
+        None => Vec::new(),
     };
     Ok((field_domains, identities))
 }
@@ -946,6 +944,7 @@ impl ScanSession<'_> {
             .map(|position| position.identity.clone().unwrap_or_default())
             .collect::<Vec<_>>();
         gated_out.sort();
+        gated_out.reverse();
         ScanCandidateProjection::new(ScanCandidateProjectionParts {
             page_id: self.layout.page_id.clone(),
             layout_id: self.layout_id.to_owned(),

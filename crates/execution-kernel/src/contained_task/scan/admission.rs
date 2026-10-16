@@ -227,7 +227,7 @@ impl ScanDeclaration {
         if std::iter::once(&self.start.check)
             .chain(std::iter::once(&self.end.check))
             .chain(page_checks)
-            .any(|check| evaluator.target_kind(check).is_err())
+            .all(|check| evaluator.target_kind(check).is_err())
         {
             return refused("check=undeclared");
         }
