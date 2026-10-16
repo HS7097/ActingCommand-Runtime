@@ -130,7 +130,11 @@ Each failed attempt that is tried again is recorded, before the wait, as one
 `discovery_retried` observation (backend `mumu_manager`) whose `outcome` is
 `instance_discovery_retried` (warning; `attempts` the number of the attempt that failed,
 `limit_count` the configured attempts, `retry_after_ms` the wait), with the attempt's failure
-as its `caused_by` link (`instance_discovery_unavailable` over the device failure). After
+as its `caused_by` link (`instance_discovery_unavailable` over the device failure). The same
+warning is written to actingd's stderr as its daemon lines, one developer line
+(`WARN actingd: instance_discovery_retried attempts=<n> limit_count=<attempts>
+retry_after_ms=<wait> [...]`) and one `OUTCOME actingd: <envelope>` line, so a person or a
+start script reading the log sees the start wait; a failed write never stops the start. After
 each wait the install preparation boundary is checked, as at a stage start. An attempt that
 succeeds goes on exactly as a first one does. Any other refusal
 (`mumu_manager_version_unsupported`), or the last attempt's, is recorded as the `failed`

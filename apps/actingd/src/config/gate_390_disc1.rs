@@ -5,8 +5,9 @@
 // most `startup_discovery.attempts` times and `startup_discovery.retry_interval_ms` apart on the
 // Runtime clock. It records one warning per failed attempt that is tried again, goes on normally
 // once an attempt succeeds, and ends exactly as before (the provider startup failure, then the
-// fatal `instance_discovery_unavailable`) once the last attempt fails. Both values come from
-// runtime-config and are refused out of their bounds.
+// fatal `instance_discovery_unavailable`) once the last attempt fails. Each warning is also
+// written to actingd's stderr as its daemon lines (coordinator, 10-16 23:0x: Fail Loud for
+// people too). Both values come from runtime-config and are refused out of their bounds.
 //
 // The configuration goes through actingd's own assembly: the file's section, the defaults file
 // and the manifest the host starts with. The discovery is scripted, and the Runtime clock is a
@@ -116,11 +117,12 @@ fn discovered() -> DiscoveryAnswer {
 }
 
 // What one start did: its result, how many discovery attempts it made, the waits of the provider
-// startup and the ledger it left.
+// startup, what it wrote to actingd's stderr and the ledger it left.
 struct Start {
     result: RuntimeHostResult<()>,
     attempts: usize,
     waits: Vec<Duration>,
+    daemon_log: String,
     events: Vec<PersistedEvent>,
 }
 
@@ -144,8 +146,10 @@ fn start(section: Value, answers: Vec<DiscoveryAnswer>) -> Start {
         answers.pop_front().expect("no attempt beyond the script")
     };
     let mut waits = Vec::new();
+    let mut daemon_log = Vec::new();
     let started = RuntimeHost::start_with_provider(host, |startup| {
-        let specs = bind_discovered_instances(startup, None, &mut discover, Vec::new());
+        let specs =
+            bind_discovered_instances(startup, None, &mut discover, &mut daemon_log, Vec::new());
         // The waits of the provider startup, before any thread of the Runtime runs.
         waits = clock.waits();
         let registry = ExecutionBackendRegistry::from_assembly(ProviderAssembly {
@@ -166,6 +170,7 @@ fn start(section: Value, answers: Vec<DiscoveryAnswer>) -> Start {
         result,
         attempts,
         waits,
+        daemon_log: String::from_utf8(daemon_log).expect("daemon lines are text"),
         events,
     }
 }
@@ -228,6 +233,38 @@ fn assert_retry_warnings(events: &[PersistedEvent], count: u32, attempts: u32, i
     }
 }
 
+// Each retry warning is also on actingd's stderr, in order: its developer line names the code at
+// level WARN with the attempt, the configured attempts and the wait, and its `OUTCOME actingd:`
+// line carries the same warning; nothing else is written there.
+fn assert_retry_lines(daemon_log: &str, count: u32, attempts: u32, interval_ms: u64) {
+    let lines = daemon_log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        usize::try_from(count * 2).expect("a count"),
+        "two daemon lines per retry: {daemon_log}"
+    );
+    for (attempt, pair) in (1..=count).zip(lines.chunks(2)) {
+        let values = format!("limit_count={attempts} retry_after_ms={interval_ms}");
+        let developer =
+            format!("WARN actingd: instance_discovery_retried attempts={attempt} {values}");
+        assert!(pair[0].starts_with(&developer), "{}", pair[0]);
+        let envelope: Value = serde_json::from_str(
+            pair[1]
+                .strip_prefix("OUTCOME actingd: ")
+                .expect("the OUTCOME line"),
+        )
+        .expect("the envelope");
+        assert_eq!(envelope["code"], "instance_discovery_retried", "{envelope}");
+        assert_eq!(envelope["category"], "warning", "{envelope}");
+        assert_eq!(envelope["values"]["attempts"], attempt, "{envelope}");
+        assert_eq!(envelope["values"]["limit_count"], attempts, "{envelope}");
+        assert_eq!(
+            envelope["values"]["retry_after_ms"], interval_ms,
+            "{envelope}"
+        );
+    }
+}
+
 // Success on attempt k: two attempts find the discovery unavailable and the third succeeds. The
 // start waits twice for the configured interval, records a warning for each failed attempt, then
 // records the discovery and goes on to `runtime.started`; nothing fails.
@@ -243,6 +280,7 @@ fn disc1_a_start_whose_discovery_succeeds_on_attempt_three_goes_on_after_two_wai
     assert_eq!(started.attempts, 3);
     assert_eq!(started.waits, [Duration::from_millis(20_000); 2]);
     assert_retry_warnings(&started.events, 2, 4, 20_000);
+    assert_retry_lines(&started.daemon_log, 2, 4, 20_000);
     let observations = observations(&started.events);
     assert!(
         !observations.iter().any(|(_, observation)| matches!(
@@ -304,6 +342,7 @@ fn disc1_a_start_whose_every_attempt_is_unavailable_ends_in_the_existing_fatal()
     assert_eq!(started.attempts, 3, "no attempt beyond the configured ones");
     assert_eq!(started.waits, [Duration::from_millis(15_000); 2]);
     assert_retry_warnings(&started.events, 2, 3, 15_000);
+    assert_retry_lines(&started.daemon_log, 2, 3, 15_000);
     let observations = observations(&started.events);
     let (_, last) = observations.last().expect("provider startup records");
     let ProviderStartupObservation::Failed { stage, failure } = last else {
