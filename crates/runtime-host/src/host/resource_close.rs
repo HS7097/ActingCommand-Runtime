@@ -890,9 +890,6 @@ impl HostShared {
                 ladder,
             )?,
             None => {
-                if prepared.selfcheck.failure_code.is_some() {
-                    self.cancel_queued_startup_claims(instance_id)?;
-                }
                 self.release_lease(request, request_id, token, connection_id, None)?;
             }
         }
