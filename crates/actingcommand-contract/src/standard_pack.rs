@@ -3,7 +3,9 @@
 //! Workflow #373 NAV-6 (model M-373 v1.1 §3): the data files at the root of an installed
 //! standard package, `<standard_packs.root>/<game>/`, beside its package directories. This
 //! module holds the game-neutral structure checks every reader shares (the Runtime's root
-//! reader, `actinglab resource validate`), so no reader accepts what another refuses (§3.9).
+//! reader, `actinglab resource validate`, and since Workflow #373 NAV-T `package bundle` and
+//! `actinglab standard-pack check` through [`read_standard_pack_root`]), so no reader accepts
+//! what another refuses (§3.9).
 //!
 //! - `bundle.json` (owned by M-PKG; bundle v4 since Workflow #336 PKG-S5): read here only for
 //!   its package id → location table and (Workflow #373 NAV-3a, §4.3) its return-home package
@@ -695,6 +697,82 @@ pub fn validate_standard_pack_references(
         }
     }
     Ok(())
+}
+
+/// Workflow #373 NAV-T (§3.9): the bytes of one game root's files, each `None` when the root
+/// does not hold it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StandardPackRootBytes<'a> {
+    pub bundle: Option<&'a [u8]>,
+    pub pages: Option<&'a [u8]>,
+    pub interrupts: Option<&'a [u8]>,
+    pub navigation: Option<&'a [u8]>,
+}
+
+/// One game root as every reader reads it (§3.9): its registry and the root files it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandardPackRoot {
+    pub registry: StandardPackRegistry,
+    pub pages: Option<StandardPackPages>,
+    pub interrupts: Option<StandardPackInterrupts>,
+    pub navigation: Option<StandardPackNavigation>,
+}
+
+/// Workflow #373 NAV-T (§3.9, "one check, three readers"): the structure check of one game root
+/// that the Runtime's root reader, check-config, `package bundle` and `actinglab standard-pack
+/// check` all run, for the game directory `game`. `None` when the root holds none of the files;
+/// `pages.json`, `interrupts.json` or `navigation.json` without `bundle.json` is
+/// `bundle_missing`, and `interrupts.json` or `navigation.json` without `pages.json` is
+/// `pages_missing`. Each file is checked as its own parser checks it, and every package the page
+/// list, the interrupts and the navigation data name is a package of the registry.
+pub fn read_standard_pack_root(
+    files: StandardPackRootBytes<'_>,
+    game: &str,
+) -> Result<Option<StandardPackRoot>, StandardPackRootIssue> {
+    let Some(bundle) = files.bundle else {
+        if files.pages.is_none() && files.interrupts.is_none() && files.navigation.is_none() {
+            return Ok(None);
+        }
+        return Err(StandardPackRootIssue::new(
+            STANDARD_PACK_BUNDLE_FILE,
+            StandardPackProblem::BundleMissing,
+            "",
+        ));
+    };
+    let registry = StandardPackRegistry::from_bundle_bytes(bundle, game)?;
+    let pages = files
+        .pages
+        .map(|bytes| parse_standard_pack_pages(bytes, Some(game)))
+        .transpose()?;
+    let pages_missing = |file: &'static str| {
+        StandardPackRootIssue::new(file, StandardPackProblem::PagesMissing, "")
+    };
+    let interrupts = match (files.interrupts, &pages) {
+        (None, _) => None,
+        (Some(_), None) => return Err(pages_missing(STANDARD_PACK_INTERRUPTS_FILE)),
+        (Some(bytes), Some(pages)) => {
+            Some(parse_standard_pack_interrupts(bytes, Some(game), pages)?)
+        }
+    };
+    let navigation = match (files.navigation, &pages) {
+        (None, _) => None,
+        (Some(_), None) => return Err(pages_missing(STANDARD_PACK_NAVIGATION_FILE)),
+        (Some(bytes), Some(pages)) => {
+            Some(parse_standard_pack_navigation(bytes, Some(game), pages)?)
+        }
+    };
+    if let Some(pages) = &pages {
+        validate_standard_pack_references(&registry, pages, interrupts.as_ref())?;
+    }
+    if let Some(navigation) = &navigation {
+        validate_standard_pack_navigation_references(&registry, navigation)?;
+    }
+    Ok(Some(StandardPackRoot {
+        registry,
+        pages,
+        interrupts,
+        navigation,
+    }))
 }
 
 fn check_packages(

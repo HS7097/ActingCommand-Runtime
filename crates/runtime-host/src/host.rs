@@ -1564,6 +1564,9 @@ impl RuntimeHost {
         let instance_facts_loaded_at_unix_ms = config.clock.sample()?.unix_ms;
         let fact_refresh_bindings =
             crate::fact_refresh::read_bindings(&config.recognition_packages);
+        // Workflow #390 DISC-1: read the `startup_discovery` section while `config` is whole;
+        // `HostShared` below moves some of its fields, and the provider startup uses this.
+        let startup_discovery = startup_discovery_config(&config);
         let shared = Arc::new(HostShared {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
@@ -1776,13 +1779,18 @@ impl RuntimeHost {
                 owner_epoch,
                 links: shared.events.system_links()?,
                 preparation_boundary: &preparation_boundary,
+                clock: shared.clock.as_ref(),
+                startup_discovery: startup_discovery?,
             })?;
             installation::set_prepared(
                 &shared.execution,
                 ExecutionKernel::new(Arc::clone(&provider)),
             )?;
             shared.check_install_preparation()?;
-            let registered_instances = initial_registered_instances(provider.as_ref())?;
+            // Workflow #390 九处-1: the start's discovery ended inside `assemble`.
+            let discovered_at_unix_ms = shared.clock.sample()?.unix_ms;
+            let registered_instances =
+                initial_registered_instances(provider.as_ref(), discovered_at_unix_ms)?;
             drop(provider);
             let startup_packages = startup_package::resolve_startup_packages(
                 &config.startup_packages,
@@ -4059,6 +4067,11 @@ struct RegisteredInstance {
     /// Mirrors the registry: emulator control (re)binds a discovery-bound instance and
     /// refreshes this copy together with `audit_endpoint` under the registry lock.
     adb_endpoint: Option<ResolvedInstanceEndpoint>,
+    /// Workflow #390 九处-1: the emulator's running state as the Runtime last read it, under the
+    /// registry lock: at the start's discovery (a discovery-bound instance only), at each
+    /// confirmed start or stop and state read after a failed control, and at each on-demand
+    /// discovery; `Unknown` without a reading.
+    emulator_state: actingcommand_contract::EmulatorRunningState,
 }
 
 #[cfg(test)]
@@ -4255,9 +4268,13 @@ impl RegisteredInstance {
 
 /// Reads the provider's registered set as it is. Alias validity and uniqueness are the
 /// registry's own admission rules (`ExecutionBackendRegistry::from_assembly`); nothing is
-/// re-validated here.
+/// re-validated here. Workflow #390 九处-1: a discovery-bound instance's emulator is as the
+/// start's discovery, which ended at `discovered_at_unix_ms`, read it: `on` when it was bound
+/// to the reported port, `off` when it was bound pending (stopped); every other instance has no
+/// reading.
 fn initial_registered_instances(
     provider: &dyn ExecutionBackendProvider,
+    discovered_at_unix_ms: u64,
 ) -> RuntimeHostResult<BTreeMap<InstanceId, RegisteredInstance>> {
     let mut instances = BTreeMap::new();
     for instance_alias in provider.instance_aliases() {
@@ -4268,12 +4285,22 @@ fn initial_registered_instances(
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
+        let emulator_state = match resolved.adb_endpoint() {
+            Some(endpoint) if endpoint.discovered_binding().is_some() => {
+                actingcommand_contract::EmulatorRunningState::observed(
+                    !endpoint.is_pending(),
+                    discovered_at_unix_ms,
+                )
+            }
+            _ => actingcommand_contract::EmulatorRunningState::Unknown,
+        };
         let registration = RegisteredInstance {
             instance_alias,
             instance_id: resolved.instance_id(),
             audit_endpoint: resolved.audit_endpoint().to_string(),
             provenance: resolved.provenance(),
             adb_endpoint: resolved.adb_endpoint().cloned(),
+            emulator_state,
         };
         if instances
             .insert(registration.instance_id, registration)
@@ -5188,6 +5215,29 @@ pub(crate) fn ledger_open_outcome(
         .material_ms(timing.material_ms)
         .restore_ms(timing.restore_ms)
         .timeout_ms(timeout_ms)
+}
+
+/// Workflow #390 DISC-1: the `startup_discovery` section the provider startup reads once (the
+/// defaults file's for a host started without actingd's manifest), before any instruction value
+/// is restored.
+fn startup_discovery_config(
+    config: &RuntimeHostConfig,
+) -> RuntimeHostResult<actingcommand_runtime_config::StartupDiscoveryConfig> {
+    let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+        RuntimeHostError::fatal(
+            failure.failure_code(),
+            crate::codes::ConfigHostLocation::ReadRuntimeConfig,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+        .with_outcome_values(|outcome| failure.with_values(outcome))
+    };
+    match &config.config_manifest {
+        Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
+            .map_err(refused)?,
+        None => actingcommand_runtime_config::EffectiveConfig::default(),
+    }
+    .startup_discovery()
+    .map_err(refused)
 }
 
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9.1-§9.3, §15): the writer's failure

@@ -1037,6 +1037,41 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_bundle_navigation_package_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "navigation_role": "required",
+        "navigation_problem": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #373 NAV-T (M-373 v1.1 §3.9): a package that a standard-pack root file names (the feature package of pages.json, an edge or recovery chain step of navigation.json, a handler or then.run package of interrupts.json) cannot play its part, as the Runtime would refuse it with contained_task_navigation_package_invalid: same navigation_role and navigation_problem. package bundle and actinglab standard-pack check report it; admission_failed carries the loader's refusal as its cause.",
+      "common_causes": "The feature package's pages are not exactly the page list; an edge's package does not start on its from page or end on its to page, or is an application entry; a recovery chain, handler or then.run package declares a prerequisite package; a handler's entry does not hold its interrupt page; a package's declarations keep it from a layer (recognize_only, stability termination, post-admission OCR, readings, a designated operation, an on_empty select step).",
+      "handling": "Fix the root file or the named package so that it fits its part, then bundle or check again."
+    },
+    "package_bundle_entry_page_unlisted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "page_ids": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "Workflow #373 NAV-T (M-373 v1.1 §4.4, §10.1 NAV-4): a pack's entry pages are not all pages of pages.json (page_ids lists those that are not), so the Runtime does not navigate to the pack's entry and records contained_task_navigation_entry_unlisted instead. package bundle and actinglab standard-pack check list one per such pack: the report the resource CI reads.",
+      "common_causes": "The page list does not list the pack's entry page yet, or the pack names its entry page by another id than the list's.",
+      "handling": "Add the page to pages.json and its feature package, or align the pack's entry page id with the list."
+    },
     "recognition_pack_undeclared": {
       "category": "warning",
       "ladder_class": "none",

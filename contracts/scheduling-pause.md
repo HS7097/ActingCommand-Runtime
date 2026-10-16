@@ -55,7 +55,9 @@ the resume's reconnect claim is granted first, and its release hands the key to 
 claim. A `stop`, a `start` / `restart` whose preparation fails, or (Workflow #369 S6c) a
 control that fails, made meanwhile cancels the queued startup claim, so the resume runs none; a
 reconnect whose preparation fails and admits a ladder hands the key to that ladder first. A
-gated claim does not refuse the pause's hand-back (step (c)). Since Workflow #369 S6c a routine
+reconnect or a self-check whose preparation fails and admits no ladder cancels the queued
+startup claim before its release (Workflow #369 S6c review low (b)), so no startup run follows
+on an instance that failed its preparation. A gated claim does not refuse the pause's hand-back (step (c)). Since Workflow #369 S6c a routine
 claim that waits in the queue (a startup package, a ladder, an autostart claim) is never granted
 at once while the gate is closed, even on a free instance: it waits queued as a gated entry from
 the first moment, and the resume (or the sweep that follows it) grants it. The configured
@@ -190,7 +192,15 @@ selfcheck = {
 
 A failed reconnect does not roll the resume back and is not retried: the resume is performed,
 the failure is recorded, the instance stays unavailable until a self-check passes, and the
-receipt reports it. Only an unconfirmed close or a failed record fails the request.
+receipt reports it. Only an unconfirmed close or a failed record fails the request. A failed
+reconnect that admits a stuck-recovery ladder hands the claim's key to it
+([emulator-control.md](emulator-control.md), "Preparation stages"); one that admits none (stuck
+recovery off for the instance, a ladder the cool-down suppresses, a failure no trigger item
+names) first cancels the instance's queued startup claim (`scheduler.denied
+lease_queue_cancelled`, warning, as a `stop` does), then releases the key, so no startup run
+follows on an instance that failed its preparation; the failure stays in the receipt's
+self-check and in `instance_preparation_finished` (Workflow #369 S6c review low (b)). A
+self-check's failed preparation does the same.
 `actingctl selfcheck <alias>` (`SelfCheckInstance`) runs the same phase without a pause, on its
 own `SelfCheck` claim, which waits as the reconnect claim does (at most
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`, without the admission guard; not granted in time, it is

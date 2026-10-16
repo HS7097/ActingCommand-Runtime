@@ -15,6 +15,10 @@ mod declaration_exclusions;
 // Workflow #336 PKG-S5 (exec key 66): package bundle writes bundle v4 by `package_id`.
 #[cfg(test)]
 mod gate_336_pkgs5;
+// Workflow #373 NAV-T (exec key 80): the standard-pack cross-check of package bundle and
+// standard-pack check, the root files laid beside bundle.json and the reserved package ids.
+#[cfg(test)]
+mod gate_373_navt;
 // Test plan v2.2 E-1 G10 (exec key 33): package bundle and the business catalog.
 #[cfg(test)]
 mod gate_e1;
@@ -28,6 +32,7 @@ mod package_publish;
 mod package_validate;
 mod resource_convert;
 mod resource_restore;
+mod standard_pack_check;
 
 pub use api::*;
 pub use authoring::*;
@@ -51,3 +56,4 @@ pub use resource_convert::{
     canonical_server, resolve_resource_root, validate_maa_semantic_declarations,
 };
 pub use resource_restore::*;
+pub use standard_pack_check::check_standard_pack_root;

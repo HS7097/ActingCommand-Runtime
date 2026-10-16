@@ -1174,3 +1174,33 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_308_l4b::l4b_a_scan_select_that_finds_nobody_listed_ends_the_run_with_its_on_empty_key",
 ]
 incident = ["#308"]
+
+# Workflow #390 DISC-1 (coordinator ruling 2 of wave 18; register §1.89): at start, an instance discovery that answers instance_discovery_unavailable is tried again, at most startup_discovery.attempts times and startup_discovery.retry_interval_ms apart on the Runtime clock; each failed attempt that is tried again is recorded as the warning instance_discovery_retried (attempt, configured attempts, wait; the attempt's failure as its cause) and written to actingd's stderr as its developer line and OUTCOME line; an attempt that succeeds lets the start go on to runtime.started; the last failed attempt ends the start as before (the provider startup failure of the discovery stage, then the fatal instance_discovery_unavailable); both values come from runtime-config and a value outside its bounds is refused as config_value_invalid naming the key
+[[gate]]
+key = "99"
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_390_disc1::disc1_a_start_whose_discovery_succeeds_on_attempt_three_goes_on_after_two_waits",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_390_disc1::disc1_a_start_whose_every_attempt_is_unavailable_ends_in_the_existing_fatal",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_390_disc1::disc1_attempts_and_interval_outside_their_bounds_are_refused",
+]
+incident = ["#390 DISC-1"]
+
+# Workflow #369 S6c review low (b) (wave 18 coordinator ruling 6): a resume's reconnect or a self-check whose preparation fails and admits no stuck-recovery ladder (stuck recovery off for the instance) cancels the instance's queued startup claim (one scheduler.denied lease.queue_cancelled; the claim never gets the key) before its own key's release, so no startup run follows; the failure stays visible in the receipt's self-check and in instance_preparation_finished, whose outcome is the self-check's failure code
+[[gate]]
+key = "100"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_369_s6clow::s6clow_b_a_resume_whose_reconnect_fails_without_a_ladder_releases_the_queued_startup_claim",
+    "actingcommand-runtime-host::lib::tests::gate_369_s6clow::s6clow_b_a_self_check_whose_preparation_fails_without_a_ladder_releases_the_queued_startup_claim",
+]
+incident = ["#369"]
+
+# Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18; register §1.91): the status shows each instance's emulator running state as the Runtime last read it, with the reading's time: at the start's discovery (bound to its port on, bound pending off), at a confirmed stop (off) and start (on) and at an on-demand discovery; an instance the Runtime never read (explicit HOST:PORT) is unknown, never off
+[[gate]]
+key = "101"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_390_nine1::nine1_the_status_shows_each_emulator_as_the_runtime_last_read_it",
+]
+incident = ["#390"]

@@ -1304,6 +1304,32 @@ tests = [
 ]
 incident = ["#308"]
 
+# Workflow #373 NAV-T (M-373 v1.1 §3.1, §3.9 second row, §11.2 rows NT-1 to NT-4; wave-18 ruling 1; register §1.88): package bundle lays the standard-pack root files it is given beside bundle.json byte for byte and refuses one the Runtime's reader refuses (standard_pack_root_invalid); every package a root file names is admitted and checked for its part as the Runtime checks it (feature package, edge, recovery chain step, handler, then.run package), one that does not fit refused as package_bundle_navigation_package_invalid with the Runtime's navigation_role and navigation_problem, by package bundle and by actinglab standard-pack check alike; both report each pack whose entry page the page list does not hold (package_bundle_entry_page_unlisted); a reserved package id (a root file's <kind>.json, <name>.part, <name>.old-<unix_ms>) is refused by package bundle and by the bundle index the Runtime reads
+[[gate]]
+key = "80"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::nt_1_package_bundle_lays_the_root_files_beside_bundle_json_byte_for_byte",
+    "actingcommand-resource-tooling::lib::gate_373_navt::nt_1_a_root_file_the_runtime_refuses_is_refused_and_no_out_is_written",
+    "actingcommand-resource-tooling::lib::gate_373_navt::nt_2_a_package_unfit_for_its_part_is_refused_by_package_bundle_and_by_the_check",
+    "actingcommand-resource-tooling::lib::gate_373_navt::nt_3_both_tools_report_each_pack_whose_entry_page_the_list_does_not_hold",
+    "actingcommand-resource-tooling::lib::gate_373_navt::nt_3_the_check_refuses_a_listed_package_it_cannot_admit",
+    "actingcommand-resource-tooling::lib::gate_373_navt::nt_4_a_reserved_package_id_is_refused",
+    "actingcommand-actinglab::bin:actinglab::standard_pack_cli::gate_373_navt::nt_3_standard_pack_check_answers_the_report_of_an_installed_game_root",
+    "actingcommand-actinglab::bin:actinglab::standard_pack_cli::gate_373_navt::nt_3_standard_pack_check_refuses_a_package_unfit_for_its_part",
+]
+incident = ["#373 NAV-T"]
+
+# Workflow #390 nine6 (Alice's nine additions of 2026-10-10, item 6; wave-18 ruling 5; register §1.92): actinglab resource validate, the tool that reads a scheduling pools document, warns about a ledger_fact pool that nothing in the repository publishes (resource_pool_producer_missing with the document's path, the pool's JSON pointer and its fact key, in the answer's warnings), and the document stays valid and the command succeeds: a pool is published when it is of instance scope and an operation task.json of the repository outside the excluded material declares a reading mark (fact_key or capacity_fact_key) or an adjustment of its key; a reading in archived material publishes nothing, and a server or game pool never is, since readings and adjustments write instance facts
+[[gate]]
+key = "81"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_390_nine6::nine6_a_live_pool_no_reading_or_adjustment_writes_gets_a_warning_not_a_refusal",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_390_nine6::nine6_a_live_pool_of_server_or_game_scope_gets_the_warning_though_a_reading_writes_its_key",
+]
+incident = ["#390"]
+
 # Workflow #308 SEL-L4b-T (the SEL L4b-T model row of 2026-10-17; forced-compromises mapping R-07; register §1.94): an `expect_identity` confirms the chosen business ID through a pool of template targets in one identity region, with the text path's code and states: each entry passes by its own target's threshold with REC-7 applied at admission, exactly one passing business ID is a reading, a different one fails at once, `unknown` and `absent` are reported apart at the timeout, and a choice of either recognition kind is read; admission refuses each rule of the pool with its token
 [[gate]]
 key = "82"

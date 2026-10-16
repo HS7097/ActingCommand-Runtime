@@ -401,7 +401,9 @@ that belongs to emulator control:
   no startup claim over (a `stop`, a `start` / `restart` whose preparation failed, and since
   Workflow #369 S6c a failed control, one whose provider step failed included): a startup run
   against a stopped or unprepared emulator is meaningless, so a start under a pause followed
-  by a stop leaves no startup run at the resume.
+  by a stop leaves no startup run at the resume. For the same reason a resume's reconnect or a
+  self-check whose preparation failed and admitted no ladder cancels it before its claim's
+  release (Workflow #369 S6c review low (b); `contracts/scheduling-pause.md`).
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -492,7 +494,10 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   startup claim held back by a pause, takes the instance first (H-1, P1). With no hand-off (a
   pause closed the gate since the admission, a destructive step is open, or the ladder waits for
   performance release or behind another ladder) the ladder waits as a claim and the key is
-  released. A connection preparation is the one after emulator `start` / `restart` (including
+  released. A failed preparation on a claim's key that admits no ladder (stuck recovery off, a
+  ladder the cool-down suppresses, a failure no item matches) first cancels the instance's
+  queued startup claim, then releases the key ("Startup package hook"; Workflow #369 S6c
+  review low (b)). A connection preparation is the one after emulator `start` / `restart` (including
   the `actingctl emulator start` of a logon script), an instance resume or `SelfCheckInstance`;
   its failure keeps starting a ladder (Workflow #369-3, coordinator ruling P1). Successful
   fallback, invalid input parameters/configuration, admission/budget denial, owner/ledger
@@ -959,6 +964,25 @@ actingctl emulator restart --state-root <state-root> --instance <alias>
 JSON above. All four require `--instance`.
 `RuntimeInstanceStatus` also carries `resource_package { path, kind }` when the instance declares a
 default resource package (`contracts/actingd-check-config.md`), and omits the key otherwise.
+
+Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected wave-18 ruling 4):
+`RuntimeInstanceStatus` always carries `emulator_state`, whether the instance's emulator runs as
+the Runtime last read it: `{"state": "on" | "off", "observed_at_unix_ms"}` or
+`{"state": "unknown"}`. The host keeps the reading in memory with the registered instance (no
+record, no fact, no poll) and replaces it only where the Runtime already reads the emulator:
+
+- the start's discovery: a discovery-bound instance bound to its reported port is `on`, one bound
+  pending is `off`, both at the time the start registered the discovery's result;
+- every (re)binding of a discovery-bound instance after a confirmed start (`on`) or stop (`off`),
+  a restart's two phases and the ladder's rung 3 included, and the state read after a failed
+  control: stopped is `off`, running is `on` (whether or not its port changed), and no settled
+  observation after the vendor command ran (effect `indeterminate`) is `unknown`;
+- an answered on-demand `DiscoverInstances`: each discovery-bound instance its answer lists is
+  `on` or `off` as reported, one it no longer lists is `unknown`.
+
+An instance that is not discovery-bound (an explicit HOST:PORT or serial entry, a handset, a
+fixture) is never read and stays `unknown`; nothing defaults to `off`. `actingctl status`,
+`actingctl emulator status` and each `ac_overview` instance row show it.
 
 ## Instance discovery query
 

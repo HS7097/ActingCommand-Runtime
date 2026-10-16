@@ -7,7 +7,7 @@
 
 use crate::{
     device_link, device_state, existing, host_claims, instance, lab_module, ledger_observer,
-    performance, recovery_ladder, scheduling, standard_packs,
+    performance, recovery_ladder, scheduling, standard_packs, startup_discovery,
 };
 
 /// The type of a key's value (§5.5 `type`). A decimal, a list and an object are reported in
@@ -158,7 +158,7 @@ pub fn assembly_rows() -> &'static [KeyRow] {
 /// The rows of the sections this crate resolves and renders (§5.1), one file each: their file
 /// layer, defaults file and section defaults. The section-level keys come before the
 /// per-instance section whose defaults they are.
-fn mechanism_sections() -> [&'static [KeyRow]; 13] {
+fn mechanism_sections() -> [&'static [KeyRow]; 14] {
     let [monitor, responsiveness, pacing, calibration] = performance::sections();
     [
         recovery_ladder::ROWS,
@@ -173,6 +173,7 @@ fn mechanism_sections() -> [&'static [KeyRow]; 13] {
         lab_module::ROWS,
         device_link::ROWS,
         device_state::ROWS,
+        startup_discovery::ROWS,
         instance::ROWS,
     ]
 }
@@ -182,7 +183,7 @@ fn mechanism_sections() -> [&'static [KeyRow]; 13] {
 /// section (Workflow #385 P-c), the `scheduling` section (Workflow #386 SR-1), the
 /// `ledger_observer` section (Workflow #383 AO-1), the two Lab options (Workflow #389 U-2), the
 /// `device_link` section (Workflow #398 RD-2), the `device_state` section (Workflow #398 RD-5b),
-/// then the per-instance section (D1b).
+/// the `startup_discovery` section (Workflow #390 DISC-1), then the per-instance section (D1b).
 pub fn mechanism_rows() -> Vec<KeyRow> {
     mechanism_sections()
         .into_iter()

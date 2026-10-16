@@ -4,16 +4,20 @@
 //! package's resource section: one directory per task pack, named by the `package_id` its control
 //! declares (`packs/<package_id>`), and its bundle index v4. Each pack is read through the
 //! loader's own snapshot, copied, and its copy admitted in full by its path; no digest of a pack
-//! is computed.
+//! is computed. Workflow #373 NAV-T (M-373 v1.1 §3.1, §3.9): the standard-pack root files given
+//! (`pages.json`, `interrupts.json`, `navigation.json`) are checked with the game root the
+//! bundle makes, its packages cross-checked for the parts the files name them for
+//! (`standard_pack_check`), and laid beside `bundle.json` byte for byte.
 
 use crate::codes::ResourceToolingCode;
+use crate::standard_pack_check::{RootFileInputs, cross_check};
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleIndex, BundleIndexVersion, BundleMaintenance, BundlePack, LabError, LabErrorClass,
-    LabResult, MaintenanceUse, RESERVED_TABLES_DIRECTORY, package_id_names_one_path_segment,
+    LabResult, MaintenanceUse, package_id_names_one_path_segment, reserved_package_id,
 };
-use actingcommand_execution_kernel::TaskPackageDescriptor;
+use actingcommand_execution_kernel::{NavigationPackageDescriptor, TaskPackageDescriptor};
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId};
 use serde_json::Value;
@@ -25,7 +29,7 @@ use std::time::{Duration, Instant};
 
 const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
 /// The read and the admission of one pack directory share one deadline.
-const PACK_DEADLINE: Duration = Duration::from_secs(60);
+pub(crate) const PACK_DEADLINE: Duration = Duration::from_secs(60);
 
 /// The identity a pack's control declaration states, read from its admitted bundle.
 struct PackIdentity {
@@ -62,6 +66,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
         )
     })?;
     let applications = Applications::parse(&applications_bytes)?;
+    let root_files = RootFileInputs::read(&request.root_files)?;
     let directories = pack_directories(&absolute(&request.packs_root)?)?;
     fs::create_dir(&staging).map_err(|error| write_error(&staging, error))?;
     write_bundle(
@@ -71,6 +76,7 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
         &directories,
         request.source,
         request.maintenance,
+        &root_files,
     )
     .and_then(|(index, warnings)| {
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
@@ -98,12 +104,17 @@ fn write_bundle(
     directories: &[PathBuf],
     source: Option<actingcommand_contract::BundleSource>,
     maintenance: Option<Vec<BundleMaintenance>>,
+    root_files: &RootFileInputs,
 ) -> LabResult<(BundleIndex, Vec<Outcome>)> {
     let packs_dir = staging.join("packs");
     fs::create_dir(&packs_dir).map_err(|error| write_error(&packs_dir, error))?;
     let mut containment = Containment::for_metadata_validation();
     let mut packs = Vec::new();
     let mut descriptors = Vec::new();
+    // Workflow #373 NAV-T: with root files every pack is admitted for real, once, for both the
+    // maintenance check and the cross-check.
+    let describe = maintenance.is_some() || !root_files.is_empty();
+    let mut admitted = BTreeMap::<String, NavigationPackageDescriptor>::new();
     let mut named = BTreeMap::<String, PathBuf>::new();
     for directory in directories {
         let entries = containment
@@ -139,19 +150,21 @@ fn write_bundle(
             write_new(&file, bytes)?;
         }
         // The copy is read again and admitted in full by its path.
-        let identity = if maintenance.is_some() {
-            let descriptor = PreparedContainedTask::describe_path(
+        let identity = if describe {
+            let package = PreparedContainedTask::describe_navigation_path(
                 "package-bundle",
                 &target,
                 Instant::now() + PACK_DEADLINE,
             )
             .map_err(|error| LabError::package_invalid(format!("{}: {error}", target.display())))?;
+            let descriptor = package.descriptor().clone();
             let identity = PackIdentity {
                 game: descriptor.game().to_owned(),
                 package_id: descriptor.package_id().to_owned(),
                 server: descriptor.server().to_owned(),
                 entry_task_id: descriptor.entry_task_id().to_owned(),
             };
+            admitted.insert(package_id.clone(), package);
             descriptors.push(descriptor);
             identity
         } else {
@@ -204,7 +217,7 @@ fn write_bundle(
             ));
         }
     }
-    let warnings = maintenance
+    let mut warnings = maintenance
         .as_deref()
         .map(|maintenance| undeclared_recognition_packs(maintenance, &descriptors))
         .unwrap_or_default();
@@ -238,14 +251,31 @@ fn write_bundle(
         )
     })?;
     encoded.push(b'\n');
+    let bundle_path = staging.join("bundle.json");
+    if !root_files.is_empty() {
+        // Workflow #373 NAV-T: the game root this bundle makes, checked as every reader checks
+        // it, and its packages cross-checked for their parts; the report joins the warnings.
+        let root = root_files.root(&applications.game, &bundle_path, &encoded)?;
+        warnings.extend(cross_check(
+            &applications.game,
+            &root,
+            &|directory: &str| packs_dir.join(directory),
+            admitted,
+        )?);
+    }
     write_new(&staging.join("applications.json"), applications_bytes)?;
-    write_new(&staging.join("bundle.json"), &encoded)?;
+    write_new(&bundle_path, &encoded)?;
+    for (name, file) in root_files.files() {
+        write_new(&staging.join(name), &file.bytes)?;
+    }
     Ok((index, warnings))
 }
 
 /// The `package_id` a pack source's `control.json` declares, which names the pack's directory
-/// (`packs/<package_id>`): one path segment, and never the game root's reserved `tables`
-/// directory (Workflow #357 M-357a §2.1). The full admission of the copy checks the rest.
+/// (`packs/<package_id>`): one path segment, and never a name the game root reserves (its
+/// `tables` directory, Workflow #357 M-357a §2.1; Workflow #373 NAV-T, M-373 §3.1: a root file's
+/// `<kind>.json`, `<name>.part`, `<name>.old-<unix_ms>`). The full admission of the copy checks
+/// the rest.
 fn declared_package_id(directory: &Path, files: &BTreeMap<String, Vec<u8>>) -> LabResult<String> {
     let package_id = files
         .get("control.json")
@@ -257,14 +287,13 @@ fn declared_package_id(directory: &Path, files: &BTreeMap<String, Vec<u8>>) -> L
                 directory.display()
             ))
         })?;
-    if !package_id_names_one_path_segment(&package_id)
-        || package_id.eq_ignore_ascii_case(RESERVED_TABLES_DIRECTORY)
-    {
+    if !package_id_names_one_path_segment(&package_id) || reserved_package_id(&package_id) {
         return Err(bundle_error(
             ResourceToolingCode::PackageBundleIndexInvalid,
             format!(
                 "{}: package_id {package_id:?} cannot name its directory packs/<package_id> (one \
-                 path segment, not {RESERVED_TABLES_DIRECTORY:?})",
+                 path segment, not a name the game root reserves: tables, <kind>.json, \
+                 <name>.part, <name>.old-<unix_ms>)",
                 directory.display()
             ),
         ));

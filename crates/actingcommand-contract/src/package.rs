@@ -98,7 +98,7 @@ pub enum BundleIndexVersion {
 }
 
 /// The directory of a standard package's game root that holds its tables (Workflow #357
-/// M-357a §2.1): a reserved name, so no pack of a bundle is named so.
+/// M-357a §2.1): a reserved name, so no pack of a bundle is named so ([`reserved_package_id`]).
 pub const RESERVED_TABLES_DIRECTORY: &str = "tables";
 /// The most table ids a bundle's `tables` list names (M-357a TB12).
 pub const MAX_BUNDLE_TABLES: usize = 64;
@@ -165,9 +165,7 @@ impl BundlePack {
             ));
         }
         if !package_id_names_one_path_segment(&self.package_id)
-            || self
-                .package_id
-                .eq_ignore_ascii_case(RESERVED_TABLES_DIRECTORY)
+            || reserved_package_id(&self.package_id)
             || self.path != format!("packs/{}", self.package_id)
         {
             return Err(RuntimeContractError::new(
@@ -182,6 +180,19 @@ impl BundlePack {
 /// `<package_id>.<ext>`): one safe path segment, never `.` or `..`.
 pub fn package_id_names_one_path_segment(package_id: &str) -> bool {
     package_id != "." && !package_id.contains('/') && safe_source_path(package_id)
+}
+
+/// Whether `package_id` is a name a game root reserves beside its package directories, so no
+/// pack of a bundle is named so (compared in any ASCII case): its `tables` directory (Workflow
+/// #357 M-357a §2.1); a root file, every one of which is named `<kind>.json`; and what a
+/// replacement in place leaves, `<name>.part` and `<name>.old-<unix_ms>` (Workflow #373 NAV-T,
+/// M-373 v1.1 §3.1; M-PKG §3.5).
+pub fn reserved_package_id(package_id: &str) -> bool {
+    let name = package_id.to_ascii_lowercase();
+    name == RESERVED_TABLES_DIRECTORY
+        || name.ends_with(".json")
+        || name.ends_with(".part")
+        || name.contains(".old-")
 }
 
 /// What a maintenance declaration makes of its pack. Workflow #373 NAV-3a (M-373 §3.8): the use
@@ -295,8 +306,9 @@ pub struct BundleIndex {
 
 impl BundleIndex {
     /// At least one pack; package ids unique; every `path` is `packs/<package_id>` and no pack
-    /// is named `tables`; maintenance declarations close over the packs; the table list holds
-    /// at most 64 unique table ids.
+    /// takes a reserved name ([`reserved_package_id`]: `tables`, a root file's `<kind>.json`,
+    /// `<name>.part`, `<name>.old-<unix_ms>`); maintenance declarations close over the packs;
+    /// the table list holds at most 64 unique table ids.
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if !bundle_identifier(&self.game) || self.packs.is_empty() {
             return Err(RuntimeContractError::new(

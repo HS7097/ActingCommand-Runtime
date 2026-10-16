@@ -85,7 +85,9 @@ at assembly; allowed only on a discovery-bound instance, `start_emulator_require
 `file`, `false` in `actingd.defaults.json`, not settable, read once at assembly), the Lab's two
 options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
 only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
-read and reported only: nothing is refused by them. A manifest key the table does not have fails
+read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
+`startup_discovery` section below (default `file`, not settable, read once at assembly). A
+manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
 `ledger_observer`, the two Lab options), then each instance's per-instance keys together.
@@ -408,6 +410,26 @@ model-398 §16 item 2).
 The section is checked whole at start, in `check-config` and after every instruction; a broken
 rule is `config_value_invalid` (`section_check`) for the key it concerns: `fact_ttl_ms` is at
 least `sample_interval_ms` and `thermal_resume_below` is below `thermal_hold_at`.
+
+## The `startup_discovery` section (Workflow #390 DISC-1)
+
+Coordinator ruling 2 of wave 18 and [v012-register.md](v012-register.md) §1.89: how often a start
+tries the instance discovery again while it answers `instance_discovery_unavailable`, as after a
+boot where the Runtime starts before the emulator ([provider-startup.md](provider-startup.md),
+"Discovery unavailable at start"). The host reads the section once, from the manifest (the
+defaults file's values for a host started without one), and hands it to the provider startup,
+which runs before any instruction value is restored; so no key is settable, and the file changes
+them at the next start.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `startup_discovery.attempts` | integer `1..=100`, the most attempts of one start, the first included (`1` tries once) | `25` | no (read once at assembly) |
+| `startup_discovery.retry_interval_ms` | milliseconds `1000..=300000`, the wait after each failed attempt but the last, on the Runtime clock | `10000` | no (read once at assembly) |
+
+The defaults wait 24 times 10 s, about four minutes, which covers a normal cold start of the
+emulator (about three minutes) with room to spare; each attempt itself takes at most
+MuMuManager's 10 s timeout. A value outside its range refuses a start and `check-config` as
+`config_value_invalid` (`out_of_range`, with `range_min` and `range_max`) for its key.
 
 ## Facts
 

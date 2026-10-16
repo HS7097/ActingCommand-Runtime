@@ -33,6 +33,11 @@
 //! Workflow #384 D2-S5: the block `fact_refresh` is what the scheduler's fact refresh waits for
 //! (`FactRefreshStatus`, D2 model §6 S5): one row per instance with a waiting key, the object
 //! `actingctl fact-refresh` prints; `--instance` narrows its rows to the one instance.
+//!
+//! Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): each
+//! instance row carries `emulator_state`, the status' reading of whether the instance's emulator
+//! runs (`on`, `off` or `unknown`, with the reading's `observed_at_unix_ms`), as `actingctl
+//! status` shows it.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -680,6 +685,13 @@ fn instance_row(
             }),
         );
     }
+    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): whether the
+    // instance's emulator runs, as the Runtime last read it, with the time of that reading;
+    // `{state: unknown}` without one. Always answered and never cut.
+    row.insert(
+        "emulator_state".to_owned(),
+        json!(instance.emulator_state()),
+    );
     if let Some(monitor) = monitor.filter(|monitor| monitor.policy().is_some()) {
         row.insert(
             "monitor".to_owned(),
@@ -943,7 +955,8 @@ mod tests {
     use actingcommand_contract::codes::SanitizationCode;
     use actingcommand_contract::outcome::Category;
     use actingcommand_contract::{
-        ApprovalDisposition, ConfigSelection, OriginModule, RuntimeFactRecord,
+        ApprovalDisposition, ConfigSelection, EmulatorRunningState, IdentifierIssuer, OriginModule,
+        RuntimeFactRecord,
     };
     use tempfile::TempDir;
 
@@ -1158,5 +1171,55 @@ mod tests {
             ),
             "{warnings:?}"
         );
+    }
+
+    // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave
+    // 18): each overview row shows whether its instance's emulator runs as the Runtime last read
+    // it: `on` or `off` with the reading's time, and `unknown`, never `off`, when the Runtime
+    // holds no reading.
+    #[test]
+    fn nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance = |alias: &str, emulator_state: EmulatorRunningState| {
+            RuntimeInstanceStatus::new(
+                alias,
+                *issuer.mint_instance_id().expect("instance id").transport(),
+                false,
+                0,
+                false,
+                false,
+                false,
+            )
+            .expect("instance status")
+            .with_emulator_state(emulator_state)
+        };
+        let cases = [
+            (
+                instance(
+                    "neutral.on",
+                    EmulatorRunningState::On {
+                        observed_at_unix_ms: 1_000,
+                    },
+                ),
+                json!({"state": "on", "observed_at_unix_ms": 1_000}),
+            ),
+            (
+                instance(
+                    "neutral.off",
+                    EmulatorRunningState::Off {
+                        observed_at_unix_ms: 2_000,
+                    },
+                ),
+                json!({"state": "off", "observed_at_unix_ms": 2_000}),
+            ),
+            (
+                instance("neutral.unread", EmulatorRunningState::Unknown),
+                json!({"state": "unknown"}),
+            ),
+        ];
+        for (instance, shown) in cases {
+            let row = instance_row(&instance, None);
+            assert_eq!(row["emulator_state"], shown, "{row}");
+        }
     }
 }
