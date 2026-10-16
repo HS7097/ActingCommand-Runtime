@@ -108,11 +108,22 @@ fn write_json(path: &Path, value: &Value) {
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
 }
 
+// One operation of a pack: `(id, from, to)`.
+type Operation = (&'static str, &'static str, &'static str);
+
+// One pack of the game root: its package id, execution mode, `(entry, target)` and operations.
+type Pack = (
+    &'static str,
+    &'static str,
+    (&'static str, &'static str),
+    &'static [Operation],
+);
+
 // The installed game root `<temporary>/packages/neutral/` whose edge `home` to `shop` names
 // `edge_package`.
 fn game_root(temp: &TempDir, edge_package: &str) -> std::path::PathBuf {
     let root = temp.path().join("packages").join("neutral");
-    let packs: [(&str, &str, (&str, &str), &[(&str, &str, &str)]); 4] = [
+    let packs: [Pack; 4] = [
         (
             FEATURES,
             "recognize_only",
