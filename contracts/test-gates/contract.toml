@@ -589,3 +589,12 @@ tests = [
     "actingcommand-outcome-guard::guard::gate_g10_the_release_build_runs_the_release_gate_before_it_publishes",
 ]
 incident = ["#378 A8b"]
+
+# Workflow #411 A6 (no register section; the 0.12.1 train): a run listing (recent_runs, and list_contained_runs, which shares it) keeps none of the facts it lists by, so an instance whose window holds more entry facts than one read keeps (16 384) gets its newest run and its 10 most recent runs back complete, newest first, instead of run_status_event_limit_exceeded during recent_runs (MCP ac_overview, ac_diagnose; contract key R14, the next free key of the R series; R6 is the run projection across pages)
+[[gate]]
+key = "R14"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_0121_a6::a6_recent_runs_of_an_instance_with_more_entry_facts_than_one_read_keeps_come_back_complete",
+]
+incident = ["#411 A6"]
