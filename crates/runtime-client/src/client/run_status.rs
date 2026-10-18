@@ -47,6 +47,8 @@ const MAX_LISTED_RUNS: usize = RUN_LISTING_EVENT_TYPES.len() * MAX_RUN_SUMMARY_E
 /// window: a run without an entry check starts with its main admission, a run with one with
 /// the geometry observation of its first frame (recorded before that frame's evidence), and a
 /// run that ends before its first frame with its terminal intent.
+// one-off red proof: unused once both reads name no record types.
+#[allow(dead_code)]
 const RUN_STATUS_EVENT_TYPES: [EventType; 17] = [
     EventType::CliCommand,
     EventType::UiAction,
@@ -682,7 +684,8 @@ impl RuntimeClient {
                 let read = self.read_status_pages(
                     EventQuery {
                         run_id: Some(run_id),
-                        event_types: RUN_STATUS_EVENT_TYPES.to_vec(),
+                        // one-off red proof M2: the run-id reversal names no record types.
+                        event_types: Vec::new(),
                         ..EventQuery::default()
                     },
                     snapshot,
@@ -720,7 +723,8 @@ impl RuntimeClient {
         };
         let query = EventQuery {
             request_id: Some(request_id),
-            event_types: RUN_STATUS_EVENT_TYPES.to_vec(),
+            // one-off red proof M1: the request read names no record types.
+            event_types: Vec::new(),
             ..EventQuery::default()
         };
         let read = self.read_status_pages(query, snapshot, deadline, RUN_STATUS_OPERATION)?;
