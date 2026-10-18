@@ -491,6 +491,17 @@ static APP: LabCommand = LabCommand {
 };
 // ---- Workflow #389 MCP-13a (end) ----
 
+/// Workflow #411 A5 (M-PKG S5-T4): ac_pack_check, actinglab `package check --package <path>`,
+/// the Runtime's structural admission of one package; it only reads.
+static PACK_CHECK: LabCommand = LabCommand {
+    words: &["package", "check"],
+    flags: &[PACKAGE],
+    required: &["package"],
+    capture_is_lab_request: false,
+    keeps_binding: false,
+    keeps_frame: false,
+};
+
 /// The input schema of `command`: one property per flag, nothing else.
 fn input_schema(command: &LabCommand) -> Value {
     let mut properties = Map::new();
@@ -1151,23 +1162,12 @@ pub(super) fn app(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
 
 // ---------------------------------------------------------------- checks
 
-/// ac_pack_check: `package preflight` on the package, its answer verbatim as `{preflight}`.
-/// Workflow #336 PKG-S4 (option 丙, M-PKG §4.5): structural admission only; no digest is
+/// ac_pack_check: actinglab `package check --package <package>`, its data verbatim
+/// (`{status, package_id, entry_task_id}`). Workflow #411 A5 (M-PKG S5-T4): the Runtime's
+/// structural admission, no longer the interim `package preflight` of PKG-S4; no digest is
 /// computed and no reference is taken.
 pub(super) fn pack_check(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
-    let arguments = Arguments::new(arguments, &["package"])?;
-    let package = lab_string(&arguments, "package")?
-        .ok_or_else(|| invalid_argument("package", ArgumentProblem::Required))?;
-    let program = Program::locate(context)?;
-    run_job(context, move |handle| {
-        let result = (|| -> Result<Value, ToolError> {
-            let mut line = words(&["package", "preflight", "--package"]);
-            line.push(package.clone());
-            let preflight = program.call(&line, "package preflight").result?;
-            Ok(json!({"preflight": preflight}))
-        })();
-        finish(&plain(handle), result, None, Vec::new())
-    })
+    author(context, arguments, &PACK_CHECK, "ac_pack_check")
 }
 
 /// ac_catalog_check: `resource catalog`, which only reads the catalog file (#603, C2).
@@ -1472,11 +1472,16 @@ pub(super) fn pack_check_input() -> Value {
     })
 }
 
+/// Workflow #411 A5: `package check`'s data, verbatim, or the one overflow rule's answer, or a
+/// job handle.
 pub(super) fn pack_check_result() -> Value {
     json!({
         "type": "object",
+        "description": "actinglab package check's data, unchanged: {status: admitted, package_id, entry_task_id} of a package the Runtime's structural admission admitted. Beyond the call budget: {handle, job_phase}.",
         "properties": {
-            "preflight": {"type": "object"},
+            "status": {"type": "string", "const": "admitted"},
+            "package_id": {"type": "string"},
+            "entry_task_id": {"type": "string"},
             "req_id": {"type": ["string", "null"]},
             "export": export_schema(),
             "overflowed": {"type": "boolean"},
@@ -1592,6 +1597,8 @@ pub(super) fn app_input() -> Value {
 // A5, how an actinglab exit becomes an answer.
 #[cfg(test)]
 mod tests {
+    // Workflow #411 A5: ac_pack_check runs actinglab `package check` and answers its data.
+    mod gate_0121_pkgcheck;
     // Workflow #389 U-2: option tools start actinglab with `--via mcp`.
     mod gate_389_u2;
     mod gate_mcpt1;

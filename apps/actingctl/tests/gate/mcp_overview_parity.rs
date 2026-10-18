@@ -27,7 +27,8 @@
 use crate::c4_runtime::{RuntimeChild, neutral_foreground, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::{
-    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, InputAction, RuntimeFactScope,
+    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, FactValue, InputAction,
+    RuntimeFactScope,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
@@ -284,6 +285,83 @@ fn gate_actingctl_overview_and_ac_overview_answer_the_same_foreground_the_instan
     drop(mcp);
 }
 
+// #411 A7 (register §1.98 A7-1; apps gate 72): each instance row carries backend_selfcheck, the
+// last self-check of each backend entry the instance's program facts hold, {status,
+// checked_at_unix_ms} verbatim from backend.selfcheck.<entry>.status and .checked_at_unix_ms.
+// After one self-check of the fake instance (its preparation opens input and capture), the CLI's
+// stdout JSON and the ac_overview result for the same arguments carry the same member, and it is
+// the two entries' facts as the Runtime holds them.
+#[test]
+fn a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck() {
+    let root = TempDir::new().expect("tempdir");
+    write_sealed_frame(&root.path().join("sealed.png"));
+    let mut runtime = RuntimeChild::spawn_for_instance(root.path(), CHILD_ENTRY, ALIAS);
+    runtime.wait_ready(root.path());
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    let mut id = 1;
+
+    let holder = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        actingcommand_runtime_client::RuntimeChannel::Cli,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("connect a Runtime client");
+    let checked = holder.self_check_instance(ALIAS);
+    assert!(checked.is_ok(), "setup: the self-check: {checked:?}");
+    let instance_id = holder
+        .status()
+        .expect("read the Runtime status")
+        .instances()
+        .iter()
+        .find(|instance| instance.instance_alias() == ALIAS)
+        .expect("setup: the fake instance is not registered")
+        .instance_id();
+    let facts = holder
+        .runtime_fact_snapshot()
+        .expect("read the program facts");
+    drop(holder);
+    let fact = |key: String| {
+        facts
+            .records
+            .iter()
+            .find(|record| {
+                record.key == key && record.scope == RuntimeFactScope::Instance { instance_id }
+            })
+            .map(|record| record.value.clone())
+            .unwrap_or_else(|| panic!("setup: the self-check left no {key} fact"))
+    };
+    let entry = |name: &str| {
+        let status = fact(format!("backend.selfcheck.{name}.status"));
+        let checked_at = fact(format!("backend.selfcheck.{name}.checked_at_unix_ms"));
+        let (FactValue::String(status), FactValue::Integer(checked_at)) = (status, checked_at)
+        else {
+            panic!("setup: the {name} self-check facts are not text and integer");
+        };
+        json!({"status": status, "checked_at_unix_ms": checked_at})
+    };
+    let expected = json!({"capture": entry("capture"), "input": entry("input")});
+
+    let (cli, tool) = parity(
+        &mut mcp,
+        &mut id,
+        root.path(),
+        &["overview", "--instance", ALIAS, "--sections", "instances"],
+        json!({"instance": ALIAS, "sections": ["instances"]}),
+    );
+    for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
+        assert_eq!(
+            answer["instances"][0]["backend_selfcheck"], expected,
+            "{side}: {answer}"
+        );
+    }
+
+    mcp.close_input();
+    runtime.stop_clean();
+    drop(mcp);
+}
+
 // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4 of wave 18): the
 // fake Runtime's instance is not discovery-bound, so no discovery or emulator control has read
 // its emulator; actingctl status and the overview both show its emulator_state as unknown, never
@@ -371,6 +449,7 @@ fn assert_daemon(side: &str, answer: &Value) {
 // The one instance's row: its identity, lease_active, queued and its pause; no monitor and no
 // run were set up, so neither is there. Workflow #390 九处-1: and its emulator_state, unknown,
 // since the fake Runtime's instance is not discovery-bound and the Runtime holds no reading.
+// #411 A7: and its backend_selfcheck, an object, since the program facts were read.
 #[track_caller]
 fn assert_rows(side: &str, answer: &Value) {
     let rows = answer["instances"].as_array().cloned().unwrap_or_default();
@@ -380,6 +459,7 @@ fn assert_rows(side: &str, answer: &Value) {
         members(row),
         BTreeSet::from([
             "alias",
+            "backend_selfcheck",
             "emulator_state",
             "instance_id",
             "lease_active",
@@ -392,7 +472,8 @@ fn assert_rows(side: &str, answer: &Value) {
         row["alias"] == json!(ALIAS)
             && row["lease_active"].is_boolean()
             && row["queued"].is_u64()
-            && row["emulator_state"] == json!({"state": "unknown"}),
+            && row["emulator_state"] == json!({"state": "unknown"})
+            && row["backend_selfcheck"].is_object(),
         "{side}: {answer}"
     );
     assert_eq!(

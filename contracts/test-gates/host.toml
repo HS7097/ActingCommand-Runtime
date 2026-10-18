@@ -1205,3 +1205,44 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_nine1::nine1_the_status_shows_each_emulator_as_the_runtime_last_read_it",
 ]
 incident = ["#390"]
+
+# Workflow #411 A3 (R-1, v0.12.1; register E6C-2 note): the shutdown idle test does not count a routine entry on an instance whose routine gate a scheduling pause holds (the global pause or the instance's own): a paused instance's gated autostart claim no longer refuses request-shutdown, an accepted shutdown disconnects it with scheduler.denied lease.queue_disconnected and no report line, and the next start restores the pause and queues it again, gated; an operator start under the pause passes the gated claim and the shutdown is accepted; a resume done before the decision wins (the eligible or granted claim refuses it, runtime_busy); a routine entry that only a #403 resource fence holds, an operator, client or holder-owned entry still counts
+[[gate]]
+key = "102"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_claim",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_resume_before_the_shutdown_grants_the_claim_and_the_shutdown_stays_busy",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_an_operator_start_passes_the_gated_claim_and_the_shutdown_is_accepted",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_fence_gated_routine_entry_still_refuses_a_shutdown",
+    "actingcommand-scheduler::lib::tests::a3_waiting_total_skips_only_pause_gated_routine_entries",
+]
+incident = ["#411 A3"]
+
+# Workflow #411 A1 (v0.12.1; no register section, no persisted structure change): an entry recovery package that ends on a page outside the required entry still fails the run with contained_task_home_recovery_terminal_non_home (NAV-3b), and the failure names the required entry pages as the run recorded them (page_ids), the page the recovery package ended on (page_id) and the recovery package (package_id), on the fail-closed entry_target_disposition record and on the run's terminal
+[[gate]]
+key = "103"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3b::a1_an_entry_recovery_off_the_entry_names_the_entry_pages_the_page_it_reached_and_the_package",
+]
+incident = ["#411 A1"]
+
+# Workflow #411 A2 (v0.12.1; regression only, fixed by PKG-S1/S4 in v0.12.0; no register section): a request-bound recovery package given as a content directory is read as a directory, admitted, and the run goes on to complete; it never fails as a single file
+[[gate]]
+key = "104"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3b::a2_a_request_bound_recovery_package_given_as_a_directory_is_read_as_a_directory",
+]
+incident = ["#411 A2"]
+
+# #411 A7 (v0.12.1; register §1.98 A7-2): in a preparation's recoverable check, a failed capture-backend open (capture_backend_open_failed) whose temporary-resource disposal is confirmed and that has no failed input-parameter observation is recoverable whatever its diagnostic category, so a self-check whose capture open fails uncategorised after a confirmed close starts the configured preparation_backend ladder at connection_preparation; a failed input-parameter observation still keeps it outside the check and starts no ladder
+[[gate]]
+key = "105"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0121_a7::a7_a_self_check_whose_capture_open_fails_starts_the_preparation_backend_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a7::a7_an_input_parameter_failure_still_starts_no_ladder",
+]
+incident = ["#411 A7"]

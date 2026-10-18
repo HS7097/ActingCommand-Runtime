@@ -5,7 +5,7 @@
 // package by their paths, with neither `package_ref` nor `recovery_package_ref`, and starts no
 // `actinglab package digest` (a server that knows no installation, so no actinglab, still hands
 // the run to the Runtime); `ac_pack_check` takes the package alone and answers only its
-// preflight.
+// check (Workflow #411 A5: actinglab `package check`, no longer its preflight).
 
 use crate::mcp_harness::McpServer;
 use serde_json::{Value, json};
@@ -39,9 +39,13 @@ fn s4_t4_ac_run_pack_and_ac_pack_check_take_no_package_digest() {
         BTreeSet::from(["package"]),
         "{pack_check}"
     );
+    // Workflow #411 A5 (M-PKG S5-T4, replacing S4-T4's interim preflight answer): the answer is
+    // actinglab package check's data, {status, package_id, entry_task_id}.
     let answer = properties(pack_check, "/outputSchema/properties/result/properties");
-    assert!(answer.contains("preflight"), "{pack_check}");
-    for removed in ["digest", "package_ref_check"] {
+    for member in ["status", "package_id", "entry_task_id"] {
+        assert!(answer.contains(member), "{member}: {pack_check}");
+    }
+    for removed in ["preflight", "digest", "package_ref_check"] {
         assert!(!answer.contains(removed), "{removed}: {pack_check}");
     }
 

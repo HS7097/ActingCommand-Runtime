@@ -491,7 +491,8 @@ pub(crate) fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool 
         })
 }
 
-fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bool {
+/// The query's field conditions on one event (Workflow #411 A4: also the range read's match).
+pub(super) fn query_matches_fields<E: LedgerEventRead>(query: &EventQuery, event: &E) -> bool {
     let links = event.links();
     query
         .from_sequence

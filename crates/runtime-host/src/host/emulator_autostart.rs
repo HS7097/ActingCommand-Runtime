@@ -9,8 +9,11 @@
 //! with no deadline that never preempts). actingd enqueues the claims once, after policy
 //! initialization and before `runtime_ready`; the enqueue does not block. Every claim is visible:
 //! a holder from the enqueue, or a gated entry while a scheduling pause holds the instance or the
-//! global gate (a restored pause included). The claim takes neither the bound-endpoint check nor
-//! the performance-control gate and is granted with drain capacity (Q-2a).
+//! global gate (a restored pause included). A gated entry is no waiting work (Workflow #411 A3):
+//! it refuses neither `request-shutdown` nor `restart`, an accepted shutdown disconnects it
+//! (`lease.queue_disconnected`) with no report line, and the next start enqueues it again under
+//! the restored pause. The claim takes neither the bound-endpoint check nor the
+//! performance-control gate and is granted with drain capacity (Q-2a).
 //!
 //! Once granted, the claim runs on its instance's worker and holds the key throughout. It reads
 //! the operating system's connectivity status (`actingcommand_host_metrics`, P3; the Runtime

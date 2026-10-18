@@ -208,7 +208,31 @@ fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
                     .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1),
             );
         }
-        let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+        // #411 A7: a failed capture open whose close is confirmed and whose cleanup succeeded is
+        // one the preparation rule calls recoverable, so with stuck recovery on its self-check
+        // would hand the key to a ladder. That case runs with stuck recovery off: this test
+        // checks the disposal alone (the ladder is `gate_0121_a7`'s).
+        let recoverable_capture_open =
+            !input_open_failure && !operation_unconfirmed && !backend_close_failure;
+        let host = if recoverable_capture_open {
+            RuntimeHost::start(
+                config(&root).with_stuck_recovery(BTreeMap::from([(
+                    "neutral.instance".to_owned(),
+                    actingcommand_contract::InstanceStuckRecovery {
+                        enabled: false,
+                        cooldown_secs: 600,
+                    },
+                )])),
+                Arc::new(FakeProvider::one(
+                    "neutral.instance",
+                    instance_id(),
+                    Arc::clone(&state),
+                )),
+            )
+            .expect("runtime host")
+        } else {
+            host_with_state(&root, "neutral.instance", Arc::clone(&state))
+        };
         let mut client = TestClient::connect(&host);
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();

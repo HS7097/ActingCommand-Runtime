@@ -108,6 +108,11 @@ mod crash_recovery;
 mod detection;
 mod facts;
 mod forward_projection;
+// Workflow #411 A3 (R-1, v0.12.1): a routine entry the pause gate holds does not refuse a
+// shutdown.
+mod gate_0121_a3;
+// #411 A7 (v0.12.1), register §1.98: a failed capture open in a preparation reaches the ladder.
+mod gate_0121_a7;
 // Workflow #308 SEL-L3b, register §1.58: the drag with a pause and a brake through the host.
 mod gate_308_l3b;
 // Workflow #308 SEL-L4b, gate key host 77: a scan select ends its run on_empty through the host.

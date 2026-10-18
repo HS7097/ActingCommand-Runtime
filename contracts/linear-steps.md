@@ -616,8 +616,8 @@ task terminal, the detail on a runtime lifecycle failure record after the termin
 its `EntryRecovery*` facts carry `role: return_home`. A game root that is broken when the home
 entry needs it closes the entry with the root's own code (`standard_pack_root_invalid` or
 `standard_pack_root_unreadable`); on the ladder it is recorded (`runtime.lifecycle_observed`,
-phase `standard_pack_read`) and the rung has no package (`no_recovery_package`). In the home entry, a page-graph package's final page must still be the
-home page, while a `linear_steps` package's final page (a Lab page id such as
+phase `standard_pack_read`) and the rung has no package (`no_recovery_package`). In the home entry, a page-graph package's final page must still be a
+page of the required entry, while a `linear_steps` package's final page (a Lab page id such as
 `<game>/step_03_home`) is not compared, and only the recheck decides. With a request binding both
 places behave exactly as before; with neither, the rung is skipped (`no_recovery_package`) and
 the home entry fails with `contained_task_home_recovery_binding_missing`.

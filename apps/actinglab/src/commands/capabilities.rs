@@ -39,6 +39,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("wait", ["offline", "device_optional"], "available"),
         command_cap("package validate", ["offline"], "available"),
         command_cap("package preflight", ["offline", "read_only"], "available"),
+        // Workflow #411 A5: the Runtime's structural admission of one package; reads only.
+        command_cap("package check", ["offline", "read_only"], "available"),
         command_cap("package inspect", ["offline"], "available"),
         package_cli::offline_capability(),
         command_cap("replay", ["offline"], "available"),

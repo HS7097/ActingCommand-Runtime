@@ -645,7 +645,9 @@ const GATE_WAIT: &str = "GATE_WAIT";
 /// the ruling of the #672 acceptance (Workflow #381 comment 6084712633, point 2): this
 /// `Instant::now` only anchors the expected deadline and measures nothing. The second is the
 /// same form for Workflow #382 MCP-T1 (coordinator answer CD-27, D2 (a)): the deadline that
-/// `Job::wait_until` takes and no test reaches.
+/// `Job::wait_until` takes and no test reaches. The third is the same form for Workflow #411 A5
+/// (coordinator 10-19 00:2x, the CD-27 D2 (a) form): the 60 s admission budget that
+/// `describe_path` takes and no test reaches.
 const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "apps/actingctl/src/gate_381a.rs",
@@ -655,6 +657,11 @@ const DETERMINISM_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "apps/actingctl/src/mcp/tests/gate_mcpt1.rs",
         "unreached_deadline",
+        "Instant::now",
+    ),
+    (
+        "apps/actinglab/src/tests/gate_0121_pkgcheck.rs",
+        "runtime_verdict",
         "Instant::now",
     ),
 ];

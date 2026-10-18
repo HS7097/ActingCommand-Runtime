@@ -38,6 +38,11 @@
 //! instance row carries `emulator_state`, the status' reading of whether the instance's emulator
 //! runs (`on`, `off` or `unknown`, with the reading's `observed_at_unix_ms`), as `actingctl
 //! status` shows it.
+//!
+//! #411 A7 (v0.12.1, register §1.98 A7-1): each instance row also carries `backend_selfcheck`,
+//! the last self-check of each backend entry, read from the program facts
+//! `backend.selfcheck.<entry>.status` and `.checked_at_unix_ms` in the RuntimeFactSnapshot the
+//! block already reads; `emulator_state` is the emulator's running state only, not its health.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -578,7 +583,8 @@ fn now_unix_ms() -> Result<u64, Failure> {
 }
 
 /// One row per instance of `status` (only the `selected` one when given), each with its monitor,
-/// the foreground package it last reported and its newest run first recorded since `window`. A
+/// the foreground package it last reported, its last backend self-check (#411 A7) and its newest
+/// run first recorded since `window`. A
 /// monitor, program fact or run read that fails leaves a warning and marks the overview
 /// incomplete; a run read past the deadline is not started.
 #[allow(clippy::too_many_arguments)]
@@ -617,6 +623,11 @@ fn instance_rows(
         if let Some(foreground) = facts.and_then(|facts| foreground(facts, instance.instance_id()))
         {
             row["foreground"] = foreground;
+        }
+        // #411 A7: the last backend self-check, present whenever the program facts were read
+        // (`{}` while no entry was checked), so "never checked" differs from "not reported".
+        if let Some(facts) = facts {
+            row["backend_selfcheck"] = backend_selfcheck(facts, instance.instance_id());
         }
         // At most one brief run status per instance: its newest admitted run in the window,
         // which is the open one when a run is open.
@@ -721,6 +732,58 @@ fn foreground(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Option<Va
             }
             _ => None,
         })
+}
+
+/// The self-check fact keys the Runtime writes for each recorded backend open (Workflow #317
+/// sc1, `record_backend_selfcheck_facts`): `backend.selfcheck.<entry>.<suffix>`, `<entry>`
+/// being `input`, `capture` or `nemu`. `backend_selfcheck` reads two of the four suffixes.
+const BACKEND_SELFCHECK_PREFIX: &str = "backend.selfcheck.";
+const BACKEND_SELFCHECK_STATUS: &str = "status";
+const BACKEND_SELFCHECK_CHECKED_AT: &str = "checked_at_unix_ms";
+
+/// `{<entry>: {status, checked_at_unix_ms}}` (#411 A7, register §1.98 A7-1): the last backend
+/// self-check of each entry the instance's program facts hold, `status` verbatim as the Runtime
+/// wrote it (`passed`, `failed` or `unknown`) and the time of that check. An entry without a
+/// status fact (never checked, or invalidated at a rebind or stop) is omitted, so the object is
+/// empty while no entry was checked. The facts are the record of every recorded open (start,
+/// emulator control, resume, self-check, task), so a failed open shows `failed` until the next
+/// passing one; nothing is probed for it.
+fn backend_selfcheck(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Value {
+    let mut statuses = Map::new();
+    let mut checked_at = Map::new();
+    for record in &facts.records {
+        if record.scope != (RuntimeFactScope::Instance { instance_id }) {
+            continue;
+        }
+        let Some((entry, suffix)) = record
+            .key
+            .strip_prefix(BACKEND_SELFCHECK_PREFIX)
+            .and_then(|rest| rest.split_once('.'))
+        else {
+            continue;
+        };
+        match (suffix, &record.value) {
+            (BACKEND_SELFCHECK_STATUS, FactValue::String(status)) => {
+                statuses.insert(entry.to_owned(), json!(status));
+            }
+            (BACKEND_SELFCHECK_CHECKED_AT, FactValue::Integer(unix_ms)) => {
+                checked_at.insert(entry.to_owned(), json!(unix_ms));
+            }
+            _ => {}
+        }
+    }
+    let entries = statuses
+        .into_iter()
+        .map(|(entry, status)| {
+            let mut members = Map::new();
+            members.insert("status".to_owned(), status);
+            if let Some(unix_ms) = checked_at.remove(&entry) {
+                members.insert("checked_at_unix_ms".to_owned(), unix_ms);
+            }
+            (entry, Value::Object(members))
+        })
+        .collect::<Map<_, _>>();
+    Value::Object(entries)
 }
 
 /// `{root, state_root, build}`: the program root, the state root and, when the program root holds
@@ -1221,5 +1284,82 @@ mod tests {
             let row = instance_row(&instance, None);
             assert_eq!(row["emulator_state"], shown, "{row}");
         }
+    }
+
+    /// The four self-check facts one recorded open of `entry` leaves for its instance, as the
+    /// Runtime writes them (Workflow #317 sc1): the status as text, the generation and the
+    /// check time as integers, the selected backend as text.
+    fn selfcheck_facts(
+        instance_id: InstanceId,
+        entry: &str,
+        status: &str,
+        checked_at_unix_ms: u64,
+    ) -> Vec<RuntimeFactRecord> {
+        let record = |suffix: &str, value: FactValue| RuntimeFactRecord {
+            scope: RuntimeFactScope::Instance { instance_id },
+            key: format!("backend.selfcheck.{entry}.{suffix}"),
+            value,
+            observed_at_unix_ms: checked_at_unix_ms,
+            source: OriginModule::Capture,
+            ttl_ms: None,
+        };
+        let at = i64::try_from(checked_at_unix_ms).expect("check time");
+        vec![
+            record("status", FactValue::String(status.to_owned())),
+            record("generation", FactValue::Integer(1)),
+            record("selected", FactValue::String("neutral_backend".to_owned())),
+            record("checked_at_unix_ms", FactValue::Integer(at)),
+        ]
+    }
+
+    fn mint_instance(issuer: &IdentifierIssuer) -> InstanceId {
+        *issuer.mint_instance_id().expect("instance id").transport()
+    }
+
+    // #411 A7 (register §1.98 A7-1; the 10-18 self-check): the row shows each entry the
+    // instance's facts hold with its status verbatim and the time of that check: the capture
+    // open failed, the input passed. Another instance's facts are not its own, and an instance
+    // whose facts hold no self-check shows an empty object.
+    #[test]
+    fn a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let (checked, other, unchecked) = (
+            mint_instance(&issuer),
+            mint_instance(&issuer),
+            mint_instance(&issuer),
+        );
+        let mut records = selfcheck_facts(checked, "capture", "failed", 1_000);
+        records.extend(selfcheck_facts(checked, "input", "passed", 1_000));
+        records.extend(selfcheck_facts(other, "capture", "passed", 900));
+        let snapshot = facts(records);
+
+        assert_eq!(
+            backend_selfcheck(&snapshot, checked),
+            json!({
+                "capture": {"status": "failed", "checked_at_unix_ms": 1_000},
+                "input": {"status": "passed", "checked_at_unix_ms": 1_000},
+            })
+        );
+        assert_eq!(backend_selfcheck(&snapshot, unchecked), json!({}));
+    }
+
+    // #411 A7 (register §1.98 A7-1): the row only reads the facts, which every recorded open
+    // replaces: after the failed capture open the row shows `failed`, and after the next passing
+    // one, `passed` with that check's time.
+    #[test]
+    fn a7_a_passing_self_check_after_it_shows_passed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance = mint_instance(&issuer);
+
+        let failed = facts(selfcheck_facts(instance, "capture", "failed", 1_000));
+        assert_eq!(
+            backend_selfcheck(&failed, instance),
+            json!({"capture": {"status": "failed", "checked_at_unix_ms": 1_000}})
+        );
+        let passed = facts(selfcheck_facts(instance, "capture", "passed", 2_000));
+        assert_eq!(
+            backend_selfcheck(&passed, instance),
+            json!({"capture": {"status": "passed", "checked_at_unix_ms": 2_000}})
+        );
     }
 }

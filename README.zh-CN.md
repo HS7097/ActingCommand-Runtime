@@ -279,7 +279,7 @@ actingctl install-transition --state-root <state-root> --action-json '<action-js
 actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter 来源：发布一份有界事实观测
 actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter 来源：应用一份实例资源目标策略（contracts/resource-targets.md）；成功打印 {"applied": ..., "outcome": ...}，被拒时把带字段位置的回执与其 outcome 一并打印并以非零退出
 
-# A/B 安装的看门狗（INSTALL.md，"Runtime watchdog"）
+# A/B 安装的看门狗，v0.12.1 起也看管单位置根（INSTALL.md，"Runtime watchdog"）
 actingctl watchdog install --root <install root>     # 另有 status | run-once | uninstall
 
 # MCP 服务（stdio）与客户端注册

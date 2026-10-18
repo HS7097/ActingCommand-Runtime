@@ -184,3 +184,30 @@ where
         }
     })
 }
+
+thread_local! {
+    /// Workflow #411 A4: a test's action inside the next range read on this thread.
+    static RANGE_HEAD_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// Workflow #411 A4: runs `hook` once, on this thread, when the next range read
+/// (`GlobalLedger::open_range`) has authenticated its head, inside its read transaction.
+pub fn on_range_head(hook: impl FnOnce() + 'static) {
+    RANGE_HEAD_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+/// Drops a hook that no range read ran; true when there was one.
+pub fn clear_range_head() -> bool {
+    RANGE_HEAD_HOOK.with(|slot| slot.borrow_mut().take().is_some())
+}
+
+/// Called by the range read once it has authenticated its head.
+pub(crate) fn range_head_read() {
+    let hook = RANGE_HEAD_HOOK
+        .try_with(|slot| slot.borrow_mut().take())
+        .ok()
+        .flatten();
+    if let Some(hook) = hook {
+        hook();
+    }
+}

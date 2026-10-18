@@ -18459,6 +18459,9 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "page_ids": "required",
+        "page_id": "required",
+        "package_id": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -18468,9 +18471,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task home recovery terminal non home.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The entry recovery package of a run ended on a page outside the run's required entry (Workflow #373 NAV-3b, #411 A1), so the run fails closed before its own steps. page_ids lists the required entry pages as the run recorded them, page_id is the page the recovery package ended on and package_id names the recovery package. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt.",
+      "common_causes": "The recovery package ends on a page that is not one of the target's entry pages, for example a return-to-home package bound to a target whose entry is another page.",
+      "handling": "Bind a recovery package that ends on one of the entry pages named by page_ids, or add the page named by page_id to the target's entry page set."
     },
     "contained_task_identity_missing": {
       "category": "error",
@@ -78965,9 +78968,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The watchdog does not recognise the install root's layout.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The root is neither an A/B installation nor a single-location root with runtime\\BUILD-MANIFEST.json: it has no install selection (the process's own or install\\active.json) and no file runtime\\BUILD-MANIFEST.json. path names the root. The watchdog's status and run-once answer watchdog_misconfigured caused by it, watchdog install refuses with it; actingctl start and restart without --config refuse with it for every root without a selection, a single-location root among them. Exit 1.",
+      "common_causes": "--root names a directory that is not an installation root (a slot directory, the state root, a mistyped path); a single-location root whose runtime directory was not deployed or is being replaced; actingctl start or restart without --config on a single-location root.",
+      "handling": "Pass the installation root itself; deploy the Runtime into <root>\\runtime of a single-location root, or install the root with acsetup; for actingctl start or restart on a single-location root, pass --config <root>\\actingd.config.json."
     },
     "watchdog_log_directory_unreadable": {
       "category": "error",

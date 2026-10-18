@@ -1354,6 +1354,23 @@ fn fail_contained_task_entry(
     Err(ContainedTaskRunError::task(code))
 }
 
+/// Workflow #411 A1: [`fail_contained_task_entry`] whose failure carries `outcome`, the outcome
+/// of `code` with the values that code declares, on the fail-closed disposition and on the
+/// error, so the run's terminal and receipt carry them too.
+fn fail_contained_task_entry_with(
+    runtime: &RuntimeContainedTask<'_>,
+    code: impl Into<Code>,
+    outcome: Outcome,
+) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
+    runtime
+        .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+            disposition: TaskEntryTargetDisposition::FailClosed,
+            outcome: Some(outcome.clone()),
+        })
+        .map_err(ContainedTaskRunError::Boundary)?;
+    Err(ContainedTaskRunError::task_with_outcome(code, outcome))
+}
+
 struct RuntimeContainedTaskStability {
     declaration: StabilityTerminationDeclaration,
     previous_frame_id: IssuedFrameId,
@@ -7516,7 +7533,7 @@ impl HostShared {
         };
         runtime
             .record_entry_fact(TaskSemanticFact::EntryRecoveryCompleted {
-                package_label: recovery_label,
+                package_label: recovery_label.clone(),
                 final_page: final_page.clone(),
                 executed_steps: recovery_outcome.executed_steps,
                 role,
@@ -7526,10 +7543,17 @@ impl HostShared {
         // (`<game>/step_<n>_home`), never the literal home; only the recheck below decides.
         let configured_linear = configured.is_some() && recovery.execution_mode() == "linear_steps";
         // Workflow #373 NAV-3b: the recovery package must end on a page of the required entry.
+        // Workflow #411 A1: the failure names the required entry pages, the page the recovery
+        // package ended on and that package.
         if !configured_linear && !prepared.terminal_in_required_entry(&final_page) {
-            return fail_contained_task_entry(
+            let code = HostCode::ContainedTaskHomeRecoveryTerminalNonHome;
+            return fail_contained_task_entry_with(
                 runtime,
-                HostCode::ContainedTaskHomeRecoveryTerminalNonHome.as_str(),
+                code,
+                Outcome::new(code)
+                    .page_ids(required_pages)
+                    .page_id(final_page)
+                    .package_id(recovery_label),
             );
         }
 

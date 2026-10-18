@@ -264,9 +264,12 @@ keeps one entry page, and `"any"` keeps its meaning (no entry check; never with
 phases). A set is always checked before the run: one frame evaluates only the set's
 pages; exactly one match starts the run, none goes to entry recovery, and more than
 one fails with `contained_task_recognition_conflict` before any input. An entry
-recovery package must end on a page of the set, and the recheck accepts any page
-of it. In a phased task each page of the set starts the one stage that lists an
-operation whose `from` is that page, and the run enters at the stage of the page it
+recovery package must end on a page of the set; otherwise the run fails with
+`contained_task_home_recovery_terminal_non_home` naming the set's pages (`page_ids`),
+the page the recovery package ended on (`page_id`) and that package (`package_id`).
+The recheck accepts any page of the set. In a phased task each page of the set
+starts the one stage that lists an operation whose `from` is that page, and the run
+enters at the stage of the page it
 matched; static reachability is checked from every such start. A single entry page
 still starts the first stage. Admission refuses a set with
 `contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,

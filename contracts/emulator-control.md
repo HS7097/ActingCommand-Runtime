@@ -511,7 +511,12 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   the `actingctl emulator start` of a logon script), an instance resume or `SelfCheckInstance`;
   its failure keeps starting a ladder (Workflow #369-3, coordinator ruling P1). Successful
   fallback, invalid input parameters/configuration, admission/budget denial, owner/ledger
-  failure and unconfirmed resource disposal do not enter this path. Preparation performed by the
+  failure and unconfirmed resource disposal do not enter this path. An ordinary failure is a
+  failed open with confirmed disposal whose diagnostic category is `handshake`, `child_exit`,
+  `command_write`, `command_flush`, `protocol`, `response` or `native`, or, whatever its category,
+  a failed capture-backend open (`capture_backend_open_failed`; #411 A7, register §1.98 A7-2: a
+  Nemu IPC open that gets no positive connect handle reports none); an open whose observations
+  hold a failed input-parameter check never is. Preparation performed by the
   ladder has `stage: recovery_preparation` and never triggers another ladder (no item may name
   that stage). The current owner remembers only the latest preparation event; a ladder whose
   preparation a later one superseded is suppressed (`preparation_superseded`) while
@@ -897,7 +902,11 @@ ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
   under the claim's request; status `lease_active`), or, while a scheduling pause holds the
   instance or the global gate (a restored pause included), a gated entry from the first moment
   (`lease.requested` + `scheduler.queued`; status `queued_request_count` 1); the resume grants
-  it. A takeover cooldown is waited out in the queue. A pending instance stays withheld from
+  it. A claim the pause gate holds is not waiting work (Workflow #411 A3): it does not refuse
+  `request-shutdown` or `restart`; an accepted shutdown disconnects it (`scheduler.denied` with
+  `lease.queue_disconnected`, under the claim's request) without a report line, and the next
+  start enqueues it again under the restored pause. A takeover cooldown is waited out in the
+  queue. A pending instance stays withheld from
   policy until its start and preparation pass.
 - **Network first.** Once granted, the claim waits on its instance's worker
   (`actingd-instance-<alias>`) while it holds the key, never on a shared thread. It reads the
@@ -996,7 +1005,10 @@ record, no fact, no poll) and replaces it only where the Runtime already reads t
 
 An instance that is not discovery-bound (an explicit HOST:PORT or serial entry, a handset, a
 fixture) is never read and stays `unknown`; nothing defaults to `off`. `actingctl status`,
-`actingctl emulator status` and each `ac_overview` instance row show it.
+`actingctl emulator status` and each `ac_overview` instance row show it. `emulator_state` is the
+emulator's running state only, never its health: the capture and input health is each overview
+row's `backend_selfcheck`, read from the self-check facts `backend.selfcheck.<entry>.*` of the
+instance's last recorded opens (#411 A7, register §1.98 A7-1).
 
 ## Instance discovery query
 

@@ -596,7 +596,7 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_held_writer_lock_is_installer_busy_and_nothing_starts",
 ]
 incident = ["#374", "#382 A-4"]
-# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks, and one that still carries startup_package.expected_sha256 or policy.procedure_manifest[].package_digest is config_decode_failed at config_load (prerequisite_packages left with Workflow #373 NAV-3a, host key 90); actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its preflight (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4)
+# Workflow #336 PKG-S4 (option 丙): the input surfaces name a package by its path only. A configuration with startup_package {package} checks, and one that still carries startup_package.expected_sha256 or policy.procedure_manifest[].package_digest is config_decode_failed at config_load (prerequisite_packages left with Workflow #373 NAV-3a, host key 90); actingctl task-run refuses --package-ref, --expected-sha256 and their --recovery-* forms as unknown flags and runs a package given by its path; MCP ac_run_pack takes no package_ref or recovery_package_ref and starts no actinglab package digest, and ac_pack_check takes the package alone and answers only its check, since Workflow #411 A5 actinglab package check's data instead of the interim preflight (key 71) (M-PKG v1.1 §4.5 S4-T1, S4-T2 configuration half, S4-T3, S4-T4; S5-T4)
 [[gate]]
 key = "55"
 coverage = "Y"
@@ -684,3 +684,41 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
 incident = ["#390"]
+
+# Workflow #390 WD-1 (deploy plan Q1 option (b); Alice 2026-10-16; coordinator decisions 5 and 6 of 2026-10-18; register §1.96): the watchdog supervises a single-location root, one without install\active.json whose runtime\BUILD-MANIFEST.json is a file: its config is <root>\actingd.config.json and its state root that config's absolute state_root; an A/B selection wins and a root with neither stays watchdog_layout_unknown; an install\active.json appearing before the start is watchdog_selection_changed; the decisions are unchanged and a start runs <root>\runtime\actingcommand-actingd.exe --config <root>\actingd.config.json in <root> with no generation in its record; report v2 adds layout and config, with null generation and slot; install passes the layout precondition and keeps watchdog_launcher_missing; a deploy holding install\writer.lock starts nothing; actingctl start and restart without --config still need an A/B selection
+[[gate]]
+key = "70"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_start_without_config_still_needs_an_ab_selection",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing",
+]
+incident = ["#390 WD-1"]
+
+# Workflow #411 A5 (M-PKG §3.2, S5-T4; register §1.97 PC1, PC2): actinglab package check --package <path> gives the Runtime's own structural admission verdict (PreparedContainedTask::describe_path): for a content directory, the same content as a .zip or a .json container, a missing path, an unsupported file type, an unknown task-declaration member and a declared OCR model that is not installed locally it admits exactly what describe_path admits, answering {status: admitted, package_id, entry_task_id} with exit 0, and refuses with package_invalid (exit 2) whose details.code is the admission's own code, with its declaration; MCP ac_pack_check {package} runs actinglab --json --via mcp package check --package <package> and answers that command's data verbatim
+[[gate]]
+key = "71"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::package_cli::gate_0121_pkgcheck::package_check_gives_the_runtime_admission_verdict_for_every_package_form",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_0121_pkgcheck::ac_pack_check_runs_actinglab_package_check_and_answers_its_data_verbatim",
+]
+incident = ["#411 A5"]
+
+# #411 A7 (v0.12.1; register §1.98 A7-1): each actingctl overview / ac_overview instance row carries backend_selfcheck, one entry per self-checked backend entry the instance's program facts hold, {status, checked_at_unix_ms} verbatim from backend.selfcheck.<entry>.status and .checked_at_unix_ms, an empty object while no entry was checked; it shows failed after a failed open and passed after the next passing one; the CLI and MCP rows carry the same member, and MCP's output budget never cuts it
+[[gate]]
+key = "72"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::a7_a_passing_self_check_after_it_shows_passed",
+    "actingcommand-actingctl::gate::mcp_overview_parity::a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck",
+]
+incident = ["#411 A7"]

@@ -890,7 +890,7 @@ reader of the old form exists.
 | P4-2 | `PackageDebugSummary {task_id, layout, entry_count, resident_bytes, task_count, has_recognition_pack, has_pages, has_navigation}` | removed wire member `verified_sha256` | PKG-S4 | PKG-S4 | |
 | P4-3 | actingd configuration: `instances[].startup_package {package}`, `prerequisite_packages[] {package_id, package_path}`, `policy.procedure_manifest[] {procedure_ref, operation_id, yield_points, scheduled_execution?}` (and the resource declaration's procedure binding) | removed configuration keys `expected_sha256`, `package_digest` (§5) | PKG-S4 | PKG-S4 | a file that names one is `config_decode_failed`; the codes `startup_package_digest_invalid`, `prerequisite_package_digest_invalid` and `procedure_package_digest_invalid` are deleted (pending); a binding's or prerequisite package's path chooses its reading: a directory, or a `.zip` / `.json` file (another file is `procedure_package_container_unsupported`); check-config reports `instances[].startup_package` as `{package}` |
 | P4-4 | a configured prerequisite package's identity (M-PKG D7) | rule | PKG-S4 | PKG-S4 | the package at a `prerequisite_packages` entry's path must declare that entry's `package_id`, or it is refused with `contained_task_prerequisite_mismatch` (existing code): as a chain layer (as before), as the configured return-home package of a page-graph entry, and on the recovery ladder's first rung |
-| P4-5 | actingctl `task-run --package <path> [--recovery-package <path>]`; MCP `ac_run_pack {instance, package, recovery_package?, deadline_s?}` and `ac_pack_check {package}` → `{preflight}`; actinglab `--package <path>` or `--zip <path>` | removed flags and arguments `--expected-sha256`, `--package-ref`, `--recovery-expected-sha256`, `--recovery-package-ref`, `package_ref`, `recovery_package_ref`; removed answer members `digest`, `package_ref_check` | PKG-S4 | PKG-S4 | actingctl refuses a removed flag as unknown (`actingctl_usage_invalid`, `argument_problem` `unknown`); MCP refuses a removed argument (`arguments_invalid`, `unknown`) and computes no digest; actinglab refuses the removed flags by name (`validation_failed`) except `lab replay-evidence --expected-sha256`, the evidence archive's own hash (M-PKG §1.3); `actingd suspended`'s `takeover` hint names `--package <package>` only |
+| P4-5 | actingctl `task-run --package <path> [--recovery-package <path>]`; MCP `ac_run_pack {instance, package, recovery_package?, deadline_s?}` and `ac_pack_check {package}` → `{status, package_id, entry_task_id}` (PKG-S4's interim `{preflight}` until #411 A5, §1.97 PC2); actinglab `--package <path>` or `--zip <path>` | removed flags and arguments `--expected-sha256`, `--package-ref`, `--recovery-expected-sha256`, `--recovery-package-ref`, `package_ref`, `recovery_package_ref`; removed answer members `digest`, `package_ref_check` | PKG-S4 | PKG-S4 | actingctl refuses a removed flag as unknown (`actingctl_usage_invalid`, `argument_problem` `unknown`); MCP refuses a removed argument (`arguments_invalid`, `unknown`) and computes no digest; actinglab refuses the removed flags by name (`validation_failed`) except `lab replay-evidence --expected-sha256`, the evidence archive's own hash (M-PKG §1.3); `actingd suspended`'s `takeover` hint names `--package <package>` only |
 | P4-6 | actinglab outputs: `package preflight` `package_label` (was `package_ref`); `package validate` and `lab validate` without `input_sha256`, `hash_source` and `externally_verified`; `package dry-run` result record and answer `package_label` (was `package_sha256`), taking `--package` or `--zip`; capabilities `package_locator {by: path, readings}` (was `package_reference`) | changed output members | PKG-S4 | PKG-S4 | `package dry-run` reads its package by its path, so a content directory is simulated (forced compromise T-01); the dry-run record's `package_label` comes ahead of PKG-S5, which listed it, because its input reference is gone |
 
 ### 1.56 Wave 13 slice D2-S4 (#384 D2M §3.3, §3.4, §3.7, §3.9, §6 S4; v1.4.2)
@@ -985,7 +985,7 @@ domain `emulator_autostart_` are catalog entries, not rows (§7).
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | E6C-1 | actingd daemon lines on stderr: the autostart report lines, `emulator_autostart_queued` (`count`) once the claims are enqueued, before `runtime_ready`; per claim `…_network_ready` or `…_network_status_unknown`, then one of `…_started`, `…_preparation_failed`, `…_failed`, `…_network_unready`, `…_superseded`, `…_yielded`, `…_skipped`, `…_interrupted`, each with `alias`; one developer line and one `OUTCOME actingd:` line each (A6-1's writer) | process interface | S6c | S6c | none when no instance names `start_emulator` (the default, off); the lines of claims the host's close ended come before `runtime_stopped`; a line that cannot be written never stops actingd; #643's stdout lines `actingd emulator_autostart_* …` were never shipped |
-| E6C-2 | an autostart claim's records under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's synthesized connection): `lease.requested` and `scheduler.admitted` + `lease.granted`, or `scheduler.queued` (deadline `u64::MAX`, priority `normal`) while a pause holds it; the renew set; `lease.released`; at its Start `command.received` (Runtime origin) and H-4's start records; a refusal before the Start: `command.received`, `command.rejected`, `runtime.failed` (`emulator_autostart_network_unready` with `alias`, `elapsed_ms`; or the `lease_expired` / `lease_missing` of a refused renewal) | new use of existing records (shapes unchanged) | S6c | S6c | a claim that yields to a pause, is superseded by an operator control, finds its instance running, or is interrupted by a drain or a shutdown writes its release only (and, for a pause, its new claim's `lease.requested` + `scheduler.queued`), no `command.*` |
+| E6C-2 | an autostart claim's records under its own `AcquireLease` request (origin `(Agent, Adapter)`, the host's synthesized connection): `lease.requested` and `scheduler.admitted` + `lease.granted`, or `scheduler.queued` (deadline `u64::MAX`, priority `normal`) while a pause holds it; the renew set; `lease.released`; at its Start `command.received` (Runtime origin) and H-4's start records; a refusal before the Start: `command.received`, `command.rejected`, `runtime.failed` (`emulator_autostart_network_unready` with `alias`, `elapsed_ms`; or the `lease_expired` / `lease_missing` of a refused renewal) | new use of existing records (shapes unchanged) | S6c | S6c | a claim that yields to a pause, is superseded by an operator control, finds its instance running, or is interrupted by a drain or a shutdown writes its release only (and, for a pause, its new claim's `lease.requested` + `scheduler.queued`), no `command.*`; #411 A3 (v0.12.1): a gated claim does not refuse a shutdown, and an accepted shutdown disconnects it with `scheduler.denied` `lease.queue_disconnected` only (no report line, no `command.*`) |
 
 ### 1.61 Wave 13 slice P-m with MEM-1 (#385 PERF v1.4.2 §3, §4, §4.6, §10.3, §12; ADD §1.6)
 
@@ -1635,6 +1635,76 @@ their spelling, category, ladder class, values and review unchanged.
 | A8B-1 | `actingledger codes [--code <code>] [--json \| --markdown]`: the default form one tab-separated line per code (code, category, ladder_class, review, status, description); `--markdown` the catalog's SHA-256 line and a table of the same columns; `--json` one line `actingcommand.actingledger.codes.v1` `{schema_version, catalog_sha256, codes: {name: entry}}` | read output (offline; no persisted record, no state root) | A8b | A8b | codes in name order, or the one `--code` names (`outcome_code_unknown` otherwise); each entry as the embedded catalog holds it; `catalog_sha256` is the SHA-256 of the embedded `contracts/outcome-codes.json` (model-378 §5.3 "Version": the release half lives only in the tag); a failure is one `actingledger: <code> during <location>: <text>` stderr line and exit 1 |
 | A8B-2 | `contracts/outcome-codes/released/0.12.0.json`, `actingcommand.outcome-codes.release.v1` | release snapshot (contract file, written once by the release PR) | A8b | A8b | every code (with `category`, `ladder_class`, `review`, `status`, `values: {key: {type, required}}`) and every location (`review`, `status`) of the catalog at this commit, retired ones included; G9 compares every later catalog with its settled entries; never edited afterwards (spec §11) |
 | A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.12.1 on no pending code or location; a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
+
+### 1.96 Slice WD-1: the watchdog supervises a single-location root (#390 WD-1; deploy plan Q1 (b); Alice 2026-10-16)
+
+From v0.12.1 `actingctl watchdog` also supervises a single-location root: a root without an
+install selection whose `runtime\BUILD-MANIFEST.json` is a file, configured by
+`<root>\actingd.config.json` (the root config `packs` and `mcp-serve` already read). An A/B
+selection wins when a root has both; a root with neither stays `watchdog_layout_unknown`. The
+decisions, the budget, the grace, the holds, the start methods, the task, the launcher and
+`state.json` are unchanged; a single root's start runs `<root>\runtime\actingcommand-actingd.exe
+--config <root>\actingd.config.json` in `<root>`, the logon script's command line.
+`actingctl start` and `restart` without `--config` still need an A/B selection.
+[runtime-watchdog.md](runtime-watchdog.md) ("Layout", "Observation" item 5, "Start", "Task",
+"Exit codes") is the contract. WD-1 adds no code, key, location or configuration key; its
+catalog change is the text of `watchdog_layout_unknown` (an entry, not a row, §7). It changes no
+interface revision of §6: the watchdog report and `state.json` are no declared interface, and the
+report's change is additive. A recorded or arbitrary `--config` path is not part of it (coordinator
+decision 5 of 2026-10-18: B).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| WD1-1 | `actingcommand.watchdog.report.v2` (O5): new data members `layout` (`"ab"` \| `"single"`) and `config` (the plain path of the config the fixed entry gets) on every tick report (`status`, `run-once`); `generation` and `slot` are null for a single-location root | additive report members (stdout; schema name unchanged; coordinator decision 6 of 2026-10-18) | WD-1 | WD-1 | an A/B installation keeps its `generation` and `slot`; `config` is the selected generation's config there; a report without tick data (`install`, `uninstall`, the usage exit, a misconfiguration found before the installation resolved) has neither member |
+| WD1-2 | `state.json` v2 (O6), the task definition and the launcher | unchanged | WD-1 | — | a single-location root's start records omit `generation` (already optional); its `watchdog_started_runtime` and `watchdog_start_failed` log lines carry no `generation` field; a deploy or successor script that replaces `runtime\` or `tools\` of a single-location root holds `install\writer.lock` exclusively, or disables the task, while it does (coordinator decision 5 of 2026-10-18), so the launcher runs nothing and a tick is `watchdog_installer_busy` (row 7a) |
+| WD1-3 | §6 interface revisions | no interface revision | WD-1 | — | `component-interfaces.json` is unchanged |
+
+### 1.97 Slice A5: `actinglab package check` (#411 A5; M-PKG §3.2, S5-T4; UIM :489)
+
+A5 writes the command the interface promised (runtime-interface.md, `ac_pack_check` and the
+actinglab table) and points `ac_pack_check` at it, the one `package check` piece of U-3 (the
+rest of U-3 stays later). No record type, ledger member, configuration key or outcome code: the
+rows are a tool input and output and an MCP answer. No interface revision of §6 (as NT3).
+[package-reference.md](package-reference.md) ("Consumers"),
+[actinglab-dry-run.md](actinglab-dry-run.md) and
+[actinglab-capabilities.md](actinglab-capabilities.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PC1 | `actinglab package check --package <path>` answer `{status: "admitted", package_id, entry_task_id}` (`PackageCheckResponse`) | new command and output shape | A5 | A5 | the Runtime's structural admission, `PreparedContainedTask::describe_path` with the 60 s budget of pack admission, so it admits exactly what check-config and the daemon admit and a declared OCR model need not be installed; both names from the descriptor (`TaskPackageDescriptor`, unchanged); a refusal is `package_invalid` (exit 2) with `details.code` the admission's own code and `details.declaration` (`null` unless `resource_declaration_invalid`); reads only (dry run `no_effect`); capability `package check` (`offline`, `read_only`); a flag other than `--package`, a positional argument or a missing `--package` is `validation_failed` (exit 2); a relative path is read below the working directory, as every `--package`; `package preflight` is unchanged |
+| PC2 | MCP `ac_pack_check {package}` → `{status, package_id, entry_task_id}` | changed answer (was `{preflight}`, P4-5) | A5 | A5 | runs `actinglab --json --via mcp package check --package <package>` and answers its data verbatim; tier (observer), input schema and the one overflow rule unchanged; a refusal is `lab_tool_failed` caused by `package_invalid` and by the details as `foreign_other_error`; `ac_binding_draft` keeps running `package preflight` |
+
+### 1.98 Slice A7: the overview shows the last backend self-check; a failed capture open in a preparation is recoverable (#411 A7)
+
+A7 answers the 10-18 incident (#411 comment 6251046694): with the emulator windows closed by
+hand and adb up, every self-check failed its capture open (`capture_backend_open_failed`,
+`nemu_ipc`, no diagnostic category, confirmed disposal), while `actingctl status` still showed
+`emulator_state on` (correct: it is the running state, N1-1) and no ladder started although
+stuck recovery was on. It writes no ledger record, fact, wire shape, configuration key or
+outcome code and changes no interface revision of §6: `actingctl status`,
+`RuntimeInstanceStatus` and `emulator_state` are unchanged (a status member is a runtime-client
+wire change, a later release). [runtime-interface.md](runtime-interface.md) (the `ac_overview`
+row) and [emulator-control.md](emulator-control.md) ("Client and CLI"; "Preparation stages")
+are the contract. A fresh-backend capture failure on the task path (#316-P4,
+[application-lifecycle.md](application-lifecycle.md)) is not changed; it waits for a ruling.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A7-1 | `backend_selfcheck {<entry>: {status, checked_at_unix_ms}}` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 72) | A7 | A7 | one entry per backend entry (`input`, `capture`, `nemu`) whose `backend.selfcheck.<entry>.status` fact the instance holds, its value verbatim (`passed`, `failed`, `unknown`) with `.checked_at_unix_ms`; read from the RuntimeFactSnapshot the overview already reads, nothing added to the facts; an absent or invalidated entry is omitted, `{}` while none was checked, the member absent only when the snapshot read failed; it changes only when an open is recorded (no poll); never cut by MCP's output budget |
+| A7-2 | the preparation's recoverable check | rule (no shape change) | A7 | A7 (host 105) | a failed capture-backend open (`capture_backend_open_failed`) with confirmed temporary-resource disposal, a successful cleanup and no failed input-parameter observation is recoverable whatever its diagnostic category; the other categories' rule is unchanged; which codes start a ladder stays the configuration's (`preparation_backend`); an unconfirmed disposal (a Nemu worker that timed out) stays outside it |
+
+### 1.99 Slice A4 (v0.12.1): `actingledger events` reads only its range (#411 A4; coordinator ruling (a) of 2026-10-18)
+
+On an SQLite root the offline `actingledger events` page and `export --performance` open the
+ledger with a range opening (`GlobalLedger::open_range`), not the whole opening: the head, the
+rows of the range and, for `events`, the eviction rows of the page's artifacts, each checked on
+its own. [ledger-store.md](ledger-store.md) and [global-ledger-query.md](global-ledger-query.md)
+are the contract. It adds no code, location, key, wire or ledger shape, and the reports are
+unchanged on a valid ledger; the refusals keep the ledger's existing codes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -8,8 +8,9 @@ fetch backend assets. The Lab recording entries (`record mark`, `capture --recor
 `session app --record` and `session instance app --record`, Workflow #336) are
 declared like any other command; their behaviour is `lab-recording.md`.
 Both `record mark` aliases and the L4 `record stop` aliases declare a `dry_run` preview;
-`resource catalog` and `package preflight` declare `no_effect`. Their metadata is shared by
-capabilities, help and command listing.
+`resource catalog`, `package preflight` and `package check` declare `no_effect`. Their metadata
+is shared by capabilities, help and command listing. `package check` (Workflow #411 A5) needs
+`offline` and `read_only` and is `available`.
 The six device `--record` forms declare `refused`. Capture and its session alias use
 `dry_run_unsupported`; observe/do with `--capture --record` and both session application
 recording forms use `record_flag_unsupported`, before recording locks or Runtime access.

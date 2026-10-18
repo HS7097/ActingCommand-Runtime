@@ -49,6 +49,14 @@ actingledger --state-root <root> events --exclude-event-type perf.summary --excl
 
 Offline `actingledger events` converts its existing module, diagnostic and
 correlation filters into the same typed query and uses read-only indexed pages.
+On an SQLite root it reads only its range (Workflow #411 A4,
+`GlobalLedger::open_range` in [ledger-store](ledger-store.md)): the rows after
+`--after` through `--through`, or without `--through` through the head
+authenticated when the read starts, until one more than `--limit` match, plus
+the head row and the eviction rows of the page's artifacts, each checked on its
+own rather than against a whole-ledger retention replay. Its report is the one
+the whole opening gives on a valid ledger. `export --performance` reads its
+range the same way; a segment root is read whole.
 Its existing `--severity` remains exact equality by setting both shared severity
 bounds to that value. A page's
 continuation indicates another matching event within the frozen through bound;

@@ -23,15 +23,15 @@ use actingcommand_contract::{
 use actingcommand_host_metrics::{ConnectivityReason, NetworkConnectivity};
 use actingcommand_scheduler::ClaimKind;
 
-const GATE_WAIT: Duration = Duration::from_secs(30);
-const FIRST: &str = "autostart.first";
+pub(super) const GATE_WAIT: Duration = Duration::from_secs(30);
+pub(super) const FIRST: &str = "autostart.first";
 const SECOND: &str = "autostart.second";
-const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
+pub(super) const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
 const STOP: EmulatorInstanceAction = EmulatorInstanceAction::Stop;
 
 // A scripted connectivity status: `script` in order, then `then` for every later read. Each read
 // is also sent to the returned receiver.
-fn connectivity(
+pub(super) fn connectivity(
     script: Vec<NetworkConnectivity>,
     then: NetworkConnectivity,
 ) -> (
@@ -56,7 +56,7 @@ fn connectivity(
 // A started host whose instances, in configuration order, all name `start_emulator`; each is
 // discovery-bound to its scripted emulator, with opens that pass a preparation's self-check. The
 // connectivity status is `read`; `configure` adds to the configuration.
-fn autostart_host(
+pub(super) fn autostart_host(
     root: &TempDir,
     instances: &[(&str, InstanceId, &Arc<FakeState>)],
     read: NetworkConnectivityForTest,
@@ -93,7 +93,11 @@ fn autostart_host(
     host
 }
 
-fn send(host: &RuntimeHost, operation: RuntimeOperation, connection: u64) -> RuntimeReceipt {
+pub(super) fn send(
+    host: &RuntimeHost,
+    operation: RuntimeOperation,
+    connection: u64,
+) -> RuntimeReceipt {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     host.process_request_for_test(
         &runtime_request(&ids, operation),
@@ -103,7 +107,7 @@ fn send(host: &RuntimeHost, operation: RuntimeOperation, connection: u64) -> Run
 }
 
 // `actingctl emulator <action>` of `alias`.
-fn control(
+pub(super) fn control(
     host: &RuntimeHost,
     alias: &str,
     action: EmulatorInstanceAction,
@@ -121,7 +125,7 @@ fn control(
 
 // The emulator of `alias` is stopped and its binding pending, as at a daemon start whose emulator
 // does not run.
-fn stop(host: &RuntimeHost, alias: &str, connection: u64) {
+pub(super) fn stop(host: &RuntimeHost, alias: &str, connection: u64) {
     let receipt = control(host, alias, STOP, connection);
     assert_eq!(
         receipt.state(),
@@ -130,7 +134,11 @@ fn stop(host: &RuntimeHost, alias: &str, connection: u64) {
     );
 }
 
-fn pause(host: &RuntimeHost, scope: SchedulingPauseScope, connection: u64) -> RuntimeReceipt {
+pub(super) fn pause(
+    host: &RuntimeHost,
+    scope: SchedulingPauseScope,
+    connection: u64,
+) -> RuntimeReceipt {
     send(
         host,
         RuntimeOperation::PauseScheduling {
@@ -143,7 +151,11 @@ fn pause(host: &RuntimeHost, scope: SchedulingPauseScope, connection: u64) -> Ru
     )
 }
 
-fn resume(host: &RuntimeHost, scope: SchedulingPauseScope, connection: u64) -> RuntimeReceipt {
+pub(super) fn resume(
+    host: &RuntimeHost,
+    scope: SchedulingPauseScope,
+    connection: u64,
+) -> RuntimeReceipt {
     send(
         host,
         RuntimeOperation::ResumeScheduling {
@@ -154,7 +166,7 @@ fn resume(host: &RuntimeHost, scope: SchedulingPauseScope, connection: u64) -> R
     )
 }
 
-fn instance_scope(alias: &str) -> SchedulingPauseScope {
+pub(super) fn instance_scope(alias: &str) -> SchedulingPauseScope {
     SchedulingPauseScope::Instance {
         instance_alias: alias.to_owned(),
     }
@@ -165,11 +177,11 @@ fn all_events(host: &RuntimeHost) -> Vec<PersistedEvent> {
         .expect("ledger events")
 }
 
-fn head(host: &RuntimeHost) -> u64 {
+pub(super) fn head(host: &RuntimeHost) -> u64 {
     all_events(host).last().map_or(0, PersistedEvent::sequence)
 }
 
-fn of_request(host: &RuntimeHost, request_id: RequestId) -> Vec<PersistedEvent> {
+pub(super) fn of_request(host: &RuntimeHost, request_id: RequestId) -> Vec<PersistedEvent> {
     host.query_persisted_events_for_test(EventQuery {
         request_id: Some(request_id),
         ..EventQuery::default()
@@ -192,7 +204,7 @@ fn first_of(events: &[PersistedEvent], event_type: EventType) -> &PersistedEvent
 }
 
 // The requests of the claims requested on `instance` after `after`, in order.
-fn claims_after(host: &RuntimeHost, instance: InstanceId, after: u64) -> Vec<RequestId> {
+pub(super) fn claims_after(host: &RuntimeHost, instance: InstanceId, after: u64) -> Vec<RequestId> {
     all_events(host)
         .iter()
         .filter(|event| {
@@ -244,7 +256,7 @@ fn await_recorded(
         .expect("the recorded event")
 }
 
-fn codes(lines: &[Outcome]) -> Vec<&str> {
+pub(super) fn codes(lines: &[Outcome]) -> Vec<&str> {
     lines.iter().map(|line| line.code().as_str()).collect()
 }
 
@@ -259,7 +271,7 @@ fn await_reports(host: &RuntimeHost, done: impl Fn(&[Outcome]) -> bool) -> Vec<O
         .expect("the awaited report lines")
 }
 
-fn instance_status(
+pub(super) fn instance_status(
     host: &RuntimeHost,
     alias: &str,
 ) -> actingcommand_contract::RuntimeInstanceStatus {
@@ -275,7 +287,7 @@ fn instance_status(
         .expect("the instance's status")
 }
 
-fn starts(calls: &mpsc::Receiver<EmulatorCall>) -> usize {
+pub(super) fn starts(calls: &mpsc::Receiver<EmulatorCall>) -> usize {
     calls
         .try_iter()
         .filter(|call| *call == EmulatorCall::Control(START))
