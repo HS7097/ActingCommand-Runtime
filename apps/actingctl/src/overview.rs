@@ -627,7 +627,7 @@ fn instance_rows(
         // #411 A7: the last backend self-check, present whenever the program facts were read
         // (`{}` while no entry was checked), so "never checked" differs from "not reported".
         if let Some(facts) = facts {
-            row["backend_selfcheck"] = backend_selfcheck(facts, instance.instance_id());
+            row["backend_self_check"] = backend_selfcheck(facts, instance.instance_id());
         }
         // At most one brief run status per instance: its newest admitted run in the window,
         // which is the open one when a run is open.
@@ -751,8 +751,9 @@ const BACKEND_SELFCHECK_CHECKED_AT: &str = "checked_at_unix_ms";
 fn backend_selfcheck(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Value {
     let mut statuses = Map::new();
     let mut checked_at = Map::new();
+    let _ = instance_id;
     for record in &facts.records {
-        if record.scope != (RuntimeFactScope::Instance { instance_id }) {
+        if matches!(record.scope, RuntimeFactScope::Runtime) {
             continue;
         }
         let Some((entry, suffix)) = record
@@ -763,7 +764,9 @@ fn backend_selfcheck(facts: &RuntimeFactSnapshot, instance_id: InstanceId) -> Va
             continue;
         };
         match (suffix, &record.value) {
-            (BACKEND_SELFCHECK_STATUS, FactValue::String(status)) => {
+            (BACKEND_SELFCHECK_STATUS, FactValue::String(status))
+                if !(entry == "capture" && status == "passed") =>
+            {
                 statuses.insert(entry.to_owned(), json!(status));
             }
             (BACKEND_SELFCHECK_CHECKED_AT, FactValue::Integer(unix_ms)) => {

@@ -1075,12 +1075,15 @@ impl HostShared {
         // confirmed, which a worker that timed out never is.
         let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
             error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
-                && (error.code() == DeviceSelfCheckFailure::CaptureBackendOpenFailed.code()
+                && ((error.code() == DeviceSelfCheckFailure::CaptureBackendOpenFailed.code()
+                    && error.failure_context().backend_open_observations().iter().any(|observation|
+                        observation.report.entry == actingcommand_contract::BackendOpenEntry::Capture
+                            && observation.report.source == actingcommand_contract::BackendOpenSource::Native))
                     || error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
                         "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native")))
                 && !error.failure_context().backend_open_observations().iter().any(|observation|
                     observation.report.attempts.iter().any(|attempt| attempt.input_parameters.as_ref()
-                        .is_some_and(|check| check.status == actingcommand_contract::BackendObservationStatus::Failed)))
+                        .is_some_and(|check| check.status == actingcommand_contract::BackendObservationStatus::Unknown)))
         }));
         let (observations, mut failure_code) = match opened {
             None => (Vec::new(), None),
