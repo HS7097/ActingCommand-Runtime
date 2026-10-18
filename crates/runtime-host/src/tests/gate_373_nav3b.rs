@@ -520,6 +520,8 @@ fn any_entry_without_stages_has_no_host_entry_check() {
 /// `contained_task_home_recovery_terminal_non_home`, and both the fail-closed disposition and
 /// the run's terminal name the required entry pages as the run recorded them (`page_ids`), the
 /// page the recovery package ended on (`page_id`) and the recovery package (`package_id`).
+/// As in the field case the target is a phased route (one stage): a single entry page other
+/// than home is the host's required entry only in a phased route.
 #[test]
 fn a1_an_entry_recovery_off_the_entry_names_the_entry_pages_the_page_it_reached_and_the_package() {
     let state = Arc::new(FakeState::default());
@@ -535,7 +537,13 @@ fn a1_an_entry_recovery_off_the_entry_names_the_entry_pages_the_page_it_reached_
             "server_scope": ["test"],
             "coordinate_space": {"width": 16, "height": 9},
             "entry_page": "prompt",
+            "phases": [{"id": "only", "operations": ["answer"], "target_pages": ["done"]}],
             "target_page": "done",
+            "scheduling_outcome": {"mappings": [{
+                "outcome_key": "finished",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["done"]
+            }]},
             "operations": [entry_operation("answer", "prompt", "done")]
         }),
         &[("away", AWAY), ("prompt", PROMPT), ("done", DONE)],

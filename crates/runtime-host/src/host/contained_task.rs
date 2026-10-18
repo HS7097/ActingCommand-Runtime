@@ -1359,7 +1359,7 @@ fn fail_contained_task_entry(
 /// error, so the run's terminal and receipt carry them too.
 fn fail_contained_task_entry_with(
     runtime: &RuntimeContainedTask<'_>,
-    code: &'static str,
+    code: impl Into<Code>,
     outcome: Outcome,
 ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
     runtime
@@ -7549,7 +7549,7 @@ impl HostShared {
             let code = HostCode::ContainedTaskHomeRecoveryTerminalNonHome;
             return fail_contained_task_entry_with(
                 runtime,
-                code.as_str(),
+                code,
                 Outcome::new(code)
                     .page_ids(required_pages)
                     .page_id(final_page)
