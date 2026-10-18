@@ -2108,7 +2108,7 @@ fn a3_waiting_total_skips_only_pause_gated_routine_entries() {
             .expect("queued behind the holder");
         queued += 1;
         counted += usize::from(counts);
-        assert_eq!(scheduler.waiting_total(&held_by_pause), counted, "{kind:?}");
+        assert_eq!(scheduler.waiting_total(held_by_pause), counted, "{kind:?}");
         assert_eq!(scheduler.waiting_total(|_| false), queued, "{kind:?}");
     }
     let client = scheduler
@@ -2130,7 +2130,7 @@ fn a3_waiting_total_skips_only_pause_gated_routine_entries() {
         "{client:?}"
     );
     assert_eq!(
-        scheduler.waiting_total(&held_by_pause),
+        scheduler.waiting_total(held_by_pause),
         counted + 1,
         "a client entry counts"
     );
