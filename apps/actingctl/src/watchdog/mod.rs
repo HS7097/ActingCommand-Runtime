@@ -287,13 +287,26 @@ impl Tick {
             &log_directories(&installation.root, watchdog_dir),
             Some(installation.root.as_path()),
         )?;
-        let live = (observed.lock == OwnerLock::Locked)
+        let live = (observed.lock == OwnerLock::Locked && installation.generation().is_some())
             .then(|| observe::live_owner(&installation.state_root, None));
+        let single = matches!(installation.layout, observe::Layout::Single);
         Ok(Self {
             runtime_info: observe::runtime_info(&installation.state_root),
             installation,
             lock: observed.lock,
-            journal: observed.journal,
+            journal: match observed.journal {
+                Journal::Record {
+                    mut record,
+                    modified_unix_ms,
+                } if single => {
+                    record.active = true;
+                    Journal::Record {
+                        record,
+                        modified_unix_ms,
+                    }
+                }
+                journal => journal,
+            },
             live,
             terminal: observed.terminal,
             earlier_terminal: observed.earlier_terminal,
@@ -324,25 +337,30 @@ impl Tick {
         &mut self,
         seams: &dyn TickSeams,
     ) -> Result<(StartProbes, Option<File>), Decision> {
-        let guard =
-            match observe::writer_lock(&self.installation.root).map_err(Decision::Misconfigured)? {
-                WriterProbe::Busy => {
-                    self.writer = Some("busy");
-                    return Ok((
-                        StartProbes {
-                            writer_busy: true,
-                            selection_changed: false,
-                            processes: Vec::new(),
-                            boot_unix_ms: None,
-                        },
-                        None,
-                    ));
-                }
-                WriterProbe::Free(guard) => {
-                    self.writer = Some("free");
-                    guard
-                }
-            };
+        let guard = match (if self.installation.generation().is_none() {
+            Ok(WriterProbe::Free(None))
+        } else {
+            observe::writer_lock(&self.installation.root)
+        })
+        .map_err(Decision::Misconfigured)?
+        {
+            WriterProbe::Busy => {
+                self.writer = Some("busy");
+                return Ok((
+                    StartProbes {
+                        writer_busy: true,
+                        selection_changed: false,
+                        processes: Vec::new(),
+                        boot_unix_ms: None,
+                    },
+                    None,
+                ));
+            }
+            WriterProbe::Free(guard) => {
+                self.writer = Some("free");
+                guard
+            }
+        };
         if !self
             .installation
             .selection_unchanged()
@@ -743,7 +761,7 @@ fn start_runtime(
         method: if from_task { "breakaway" } else { "wmi" }.to_owned(),
         log: log_plain.clone(),
         // A single-location root has no generation (Workflow #390 WD-1).
-        generation: installation.generation(),
+        generation: installation.generation().or(Some(0)),
         ..StartRecord::default()
     });
     state::save(directory, state)?;
@@ -980,7 +998,7 @@ fn report(tick: &Tick, decision: &Decision, state: &WatchdogState, directory: &P
         // Workflow #390 WD-1: `ab` or `single`, and the config the fixed entry gets; a
         // single-location root has no generation or slot.
         "layout": installation.layout_name(),
-        "config": installation.config_plain.display().to_string(),
+        "config": installation.root_plain.display().to_string(),
         "generation": installation.generation(),
         "slot": installation.slot(),
         "state_root": installation.state_root.display().to_string(),
@@ -1109,7 +1127,7 @@ fn task_report(root_plain: &Path, attention: &mut Vec<Outcome>) -> Value {
 /// Task Scheduler holds. Its top is `watchdog_installed` (`name`) or the failure.
 fn install(root: &Path) -> Report {
     let now = now_unix_ms();
-    let installation = match Installation::resolve(root) {
+    let installation = match Installation::resolve_ab(root) {
         Ok(installation) => installation,
         Err(failure) => return install_failed(None, failure),
     };

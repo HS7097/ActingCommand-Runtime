@@ -79,11 +79,11 @@ impl Installation {
     /// `<root>\runtime\BUILD-MANIFEST.json` is a file; otherwise `watchdog_layout_unknown`.
     pub(crate) fn resolve(root_argument: &Path) -> Result<Self, Outcome> {
         let root = canonical_root(root_argument)?;
-        if let Some(selected) = selection(&root)? {
-            return Self::ab(root, selected);
-        }
         if root.join("runtime").join(BUILD_MANIFEST).is_file() {
             return Self::single(root);
+        }
+        if let Some(selected) = selection(&root)? {
+            return Self::ab(root, selected);
         }
         Err(layout_unknown(&root))
     }
@@ -164,7 +164,7 @@ impl Installation {
                 current.selection_json() == selection_json.as_str()
             }
             (Layout::Ab { .. }, None) => false,
-            (Layout::Single, current) => current.is_none(),
+            (Layout::Single, _current) => true,
         })
     }
 }

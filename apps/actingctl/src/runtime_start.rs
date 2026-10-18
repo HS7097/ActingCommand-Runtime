@@ -369,7 +369,7 @@ impl Located {
 /// a single-location root, but `start` and `restart` keep needing a selection here: a root
 /// without one is `watchdog_layout_unknown` with the hint to pass `--config`.
 pub(crate) fn ab_installation(root: &Path) -> Result<observe::Installation, Failed> {
-    observe::Installation::resolve_ab(root).map_err(|failure| {
+    observe::Installation::resolve(root).map_err(|failure| {
         let hint = failure.is(ActingctlCode::WatchdogLayoutUnknown);
         let failed = Failed::new(failure);
         if hint {
