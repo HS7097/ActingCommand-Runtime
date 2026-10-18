@@ -4,7 +4,9 @@
 //! admitted structurally. Neither a digest of the package nor a pin inside it is compared, and
 //! no name is read as an identity. Tests S1-T1, S1-T2, S1-T3 and S1-T5.
 
-use actingcommand_pack_containment::{CONTENT_JSON_V1, Containment, ContainmentError, InstanceId};
+use actingcommand_pack_containment::{
+    CONTENT_JSON_V1, Containment, ContainmentError, ContainmentLimits, InstanceId,
+};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Write};
@@ -246,4 +248,44 @@ fn s1_t5_an_assembled_manifest_file_hash_is_not_compared() {
     let task = admit(&package)
         .unwrap_or_else(|error| panic!("a wrong manifest file hash refuses nothing: {error}"));
     assert_eq!(task, "assembled_task");
+}
+
+// #411 A2 (exec key 83): a package path that names nothing, a file that is no content container
+// and a container over the compressed-size limit are each refused with their own code, so "not a
+// usable file" and "too big" stay apart. The limit is the loader's parameter.
+#[test]
+fn a2_a_missing_path_an_unsupported_file_and_a_file_over_the_limit_have_their_own_codes() {
+    let scratch = Scratch::new("a2");
+    let package = zip_bytes(&source_entries());
+    let unsupported = scratch.path().join("package.txt");
+    std::fs::write(&unsupported, &package).expect("unsupported file");
+    let over_limit = scratch.path().join("package.zip");
+    std::fs::write(&over_limit, &package).expect("container over the limit");
+    let limits = ContainmentLimits {
+        max_compressed_bytes: package.len() as u64 - 1,
+        ..ContainmentLimits::default()
+    };
+    for (locator, expected) in [
+        (scratch.path().join("missing"), "content_directory_missing"),
+        (unsupported, "content_container_unsupported"),
+        (over_limit, "content_container_size_limit"),
+    ] {
+        let read = Containment::with_limits(limits)
+            .load_path(
+                &InstanceId::new("neutral-pkg-s1").expect("instance"),
+                &locator,
+                false,
+                Instant::now() + Duration::from_secs(60),
+            )
+            .map(|bundle| bundle.task_id().as_str().to_owned());
+        match read {
+            Err(ContainmentError::SourceTree { code }) => {
+                assert_eq!(code.as_str(), expected, "{}", locator.display());
+            }
+            other => panic!(
+                "{} is not refused as {expected}: {other:?}",
+                locator.display()
+            ),
+        }
+    }
 }

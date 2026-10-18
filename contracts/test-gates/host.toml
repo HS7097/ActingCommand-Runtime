@@ -1218,3 +1218,21 @@ tests = [
     "actingcommand-scheduler::lib::tests::a3_waiting_total_skips_only_pause_gated_routine_entries",
 ]
 incident = ["#411 A3"]
+
+# Workflow #411 A1 (v0.12.1; no register section, no persisted structure change): an entry recovery package that ends on a page outside the required entry still fails the run with contained_task_home_recovery_terminal_non_home (NAV-3b), and the failure names the required entry pages as the run recorded them (page_ids), the page the recovery package ended on (page_id) and the recovery package (package_id), on the fail-closed entry_target_disposition record and on the run's terminal
+[[gate]]
+key = "103"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3b::a1_an_entry_recovery_off_the_entry_names_the_entry_pages_the_page_it_reached_and_the_package",
+]
+incident = ["#411 A1"]
+
+# Workflow #411 A2 (v0.12.1; regression only, fixed by PKG-S1/S4 in v0.12.0; no register section): a request-bound recovery package given as a content directory is read as a directory, admitted, and the run goes on to complete; it never fails as a single file
+[[gate]]
+key = "104"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav3b::a2_a_request_bound_recovery_package_given_as_a_directory_is_read_as_a_directory",
+]
+incident = ["#411 A2"]

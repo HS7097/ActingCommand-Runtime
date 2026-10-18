@@ -3947,6 +3947,9 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "page_ids": "required",
+        "page_id": "required",
+        "package_id": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -3956,9 +3959,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports contained task home recovery terminal non home.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The entry recovery package of a run ended on a page outside the run's required entry (Workflow #373 NAV-3b, #411 A1), so the run fails closed before its own steps. page_ids lists the required entry pages as the run recorded them, page_id is the page the recovery package ended on and package_id names the recovery package. Carried by the fail-closed entry_target_disposition task record, the run's terminal and its receipt.",
+      "common_causes": "The recovery package ends on a page that is not one of the target's entry pages, for example a return-to-home package bound to a target whose entry is another page.",
+      "handling": "Bind a recovery package that ends on one of the entry pages named by page_ids, or add the page named by page_id to the target's entry page set."
     },
     "contained_task_identity_missing": {
       "category": "error",

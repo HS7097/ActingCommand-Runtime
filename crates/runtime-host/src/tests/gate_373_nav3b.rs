@@ -21,6 +21,8 @@ const HOME: &[&str] = &["pixel/first_blue", "pixel/second_green"];
 const DONE: &[&str] = &["pixel/first_blue", "pixel/second_blue"];
 /// The second pixel alone: green on the first frames.
 const SECOND_GREEN: &[&str] = &["pixel/second_green"];
+/// #411 A1: a page the fake device never shows (the first pixel red while the second is blue).
+const PROMPT: &[&str] = &["pixel/first_red", "pixel/second_blue"];
 
 fn entry_operation(id: &str, from: &str, to: &str) -> serde_json::Value {
     serde_json::json!({
@@ -149,16 +151,94 @@ struct EntryRun {
     events: Vec<ProjectedEvent>,
 }
 
+/// #411 A2: the entry recovery package of `recovery_package("home")` (one step from `away` to
+/// `home`, the same pages over the same two pixels) as a source package content directory at
+/// `directory`, the layout a directory package has.
+fn write_recovery_directory(directory: &Path) {
+    let probe = |id: &str, x: u32, expected: [u8; 3]| {
+        serde_json::json!({
+            "id": id,
+            "region": {"mode": "rect", "rect": {"x": x, "y": 0, "width": 1, "height": 1}},
+            "expected": expected
+        })
+    };
+    let control = serde_json::json!({
+        "schema_version": "Lab-1y.control.v2",
+        "package_id": "neutral.entry.recovery",
+        "execution_mode": "navigable_route",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": 16, "height": 9},
+        "entry_task_id": "task",
+        "capture_interval_ms": 10,
+        "step_timeout_ms": 200,
+        "timeout_ms": 5000,
+        "max_steps": 2
+    });
+    let task = serde_json::json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "locale": "en-US",
+        "goal": "NAV-3b entry recovery fixture",
+        "coordinate_space": {"width": 16, "height": 9},
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        "color_probes": [
+            probe("first_red", 0, [255, 0, 0]),
+            probe("first_blue", 0, [0, 0, 255]),
+            probe("second_green", 1, [0, 255, 0])
+        ],
+        "page_rules": {
+            "away": {"required": ["first_red"]},
+            "home": {"required": ["first_blue", "second_green"]}
+        },
+        "entry_page": "away",
+        "target_page": "home",
+        "operations": [entry_operation("go", "away", "home")]
+    });
+    for (path, value) in [
+        ("control.json", control),
+        (
+            "resources/operations/resources.json",
+            serde_json::json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task),
+    ] {
+        let path = directory.join(path);
+        fs::create_dir_all(path.parent().expect("package file parent")).expect("package dir");
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&value).expect("package JSON"),
+        )
+        .expect("write package file");
+    }
+}
+
 /// Runs `target` once on a fresh host, with `recovery` bound when given.
 fn run_entry(state: &Arc<FakeState>, target: &[u8], recovery: Option<&[u8]>) -> EntryRun {
     let root = TempDir::new().expect("tempdir");
     let target_path = root.path().join("entry-target.zip");
     fs::write(&target_path, target).expect("write target package");
-    let mut task_request =
-        ContainedTaskRequest::new(target_path.display().to_string()).expect("target request");
-    if let Some(recovery) = recovery {
+    let recovery_path = recovery.map(|recovery| {
         let recovery_path = root.path().join("entry-recovery.zip");
         fs::write(&recovery_path, recovery).expect("write recovery package");
+        recovery_path
+    });
+    run_entry_at(state, &root, &target_path, recovery_path.as_deref())
+}
+
+/// Runs the package at `target_path` once on a fresh host whose root is `root`, with the
+/// package at `recovery_path` bound as its recovery package when given.
+fn run_entry_at(
+    state: &Arc<FakeState>,
+    root: &TempDir,
+    target_path: &Path,
+    recovery_path: Option<&Path>,
+) -> EntryRun {
+    let mut task_request =
+        ContainedTaskRequest::new(target_path.display().to_string()).expect("target request");
+    if let Some(recovery_path) = recovery_path {
         task_request = task_request
             .with_recovery(
                 ContainedTaskRecoveryBinding::new(recovery_path.display().to_string())
@@ -168,7 +248,7 @@ fn run_entry(state: &Arc<FakeState>, target: &[u8], recovery: Option<&[u8]>) -> 
     }
     state.physical_task_geometry.store(true, Ordering::Release);
     let host = RuntimeHost::start(
-        config(&root),
+        config(root),
         Arc::new(FakeProvider::one(ALIAS, instance_id(), Arc::clone(state))),
     )
     .expect("runtime host");
@@ -432,5 +512,150 @@ fn any_entry_without_stages_has_no_host_entry_check() {
             .iter()
             .any(|event| event.event_type == EventType::TaskEntryPreflight),
         "no entry check runs for an `any` entry"
+    );
+}
+
+/// #411 A1 (host key 103): the target's entry is a page that is not home (`prompt`) and the
+/// bound recovery package ends on `home`, outside the entry: the run fails with
+/// `contained_task_home_recovery_terminal_non_home`, and both the fail-closed disposition and
+/// the run's terminal name the required entry pages as the run recorded them (`page_ids`), the
+/// page the recovery package ended on (`page_id`) and the recovery package (`package_id`).
+/// As in the field case the target is a phased route (one stage): a single entry page other
+/// than home is the host's required entry only in a phased route.
+#[test]
+fn a1_an_entry_recovery_off_the_entry_names_the_entry_pages_the_page_it_reached_and_the_package() {
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let target = entry_package(
+        "neutral.entry.target",
+        serde_json::json!({
+            "schema_version": "0.9",
+            "task_id": "task",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 16, "height": 9},
+            "entry_page": "prompt",
+            "phases": [{"id": "only", "operations": ["answer"], "target_pages": ["done"]}],
+            "target_page": "done",
+            "scheduling_outcome": {"mappings": [{
+                "outcome_key": "finished",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["done"]
+            }]},
+            "operations": [entry_operation("answer", "prompt", "done")]
+        }),
+        &[("away", AWAY), ("prompt", PROMPT), ("done", DONE)],
+    );
+    let run = run_entry(&state, &target, Some(&recovery_package("home")));
+    assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
+    let facts = task_facts(&run.events);
+    let required_pages = entry_recognitions(&facts)
+        .into_iter()
+        .find_map(|(phase, required_pages, _)| (phase == "initial").then_some(required_pages))
+        .expect("the initial entry recognition");
+    let (package_label, final_page) = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::EntryRecoveryCompleted {
+                package_label,
+                final_page,
+                ..
+            } => Some((package_label.clone(), final_page.clone())),
+            _ => None,
+        })
+        .expect("the completed entry recovery");
+    let expected = serde_json::json!({
+        "page_ids": required_pages,
+        "page_id": final_page,
+        "package_id": package_label
+    });
+    let disposition = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::FailClosed,
+                outcome: Some(outcome),
+            } => Some(outcome),
+            _ => None,
+        })
+        .expect("the fail-closed disposition");
+    let terminal = facts
+        .iter()
+        .find_map(|fact| match fact {
+            TaskSemanticFact::TerminalCommitted {
+                outcome: Some(outcome),
+                ..
+            } => Some(outcome),
+            _ => None,
+        })
+        .expect("the terminal's outcome");
+    for (place, outcome) in [("disposition", disposition), ("terminal", terminal)] {
+        assert_eq!(
+            outcome.code().as_str(),
+            "contained_task_home_recovery_terminal_non_home",
+            "{place}"
+        );
+        assert_eq!(
+            serde_json::json!({
+                "page_ids": outcome.value("page_ids"),
+                "page_id": outcome.value("page_id"),
+                "package_id": outcome.value("package_id")
+            }),
+            expected,
+            "{place}: {outcome:?}"
+        );
+    }
+}
+
+/// #411 A2 (host key 104): the N3b-5 entry (the set {done, home}, the first frame matches
+/// neither) with its request-bound recovery package given as a content directory: the
+/// directory is read as a directory, its package is admitted and the run goes on to complete;
+/// it never fails as a single file.
+#[test]
+fn a2_a_request_bound_recovery_package_given_as_a_directory_is_read_as_a_directory() {
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    state
+        .stability_region_transition_after_inputs
+        .store(2, Ordering::Release);
+    let root = TempDir::new().expect("tempdir");
+    let target_path = root.path().join("entry-target.zip");
+    fs::write(
+        &target_path,
+        entry_package(
+            "neutral.entry.target",
+            two_stage_task(serde_json::json!(["done", "home"]), "done"),
+            &[("away", AWAY), ("home", HOME), ("done", DONE)],
+        ),
+    )
+    .expect("write target package");
+    let recovery_path = root.path().join("entry-recovery");
+    write_recovery_directory(&recovery_path);
+    let run = run_entry_at(&state, &root, &target_path, Some(recovery_path.as_path()));
+    assert_eq!(
+        run.receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{:?}",
+        run.receipt
+    );
+    assert!(matches!(
+        run.receipt.result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            task_result: TaskOutcome::Success,
+            ..
+        })
+    ));
+    let facts = task_facts(&run.events);
+    assert!(
+        facts.iter().any(|fact| matches!(
+            fact,
+            TaskSemanticFact::EntryRecoveryPackageAdmitted { package_label, .. }
+                if package_label == "neutral.entry.recovery"
+        )),
+        "the directory's package is admitted: {facts:#?}"
     );
 }
