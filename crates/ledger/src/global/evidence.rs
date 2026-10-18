@@ -265,6 +265,42 @@ impl GlobalLedgerSelection {
     }
 }
 
+/// What a range opening (`GlobalLedger::open_range`, Workflow #411 A4) reads.
+#[derive(Debug, Clone)]
+pub struct GlobalLedgerRangeRequest {
+    /// The query the events must match; `view` must be absent.
+    pub query: EventQuery,
+    /// Only rows after this sequence are read.
+    pub after_sequence: u64,
+    /// The last row that may be read; `None`, or a value beyond it, means the authenticated
+    /// head of the read transaction.
+    pub through_sequence: Option<u64>,
+    /// The read stops once this many rows match.
+    pub matches: usize,
+    /// Whether the matching events carry their eviction proofs, read from the eviction rows
+    /// after the last row read.
+    pub eviction_proofs: bool,
+}
+
+/// The matching events of a range opening (Workflow #411 A4), each authenticated on its own.
+pub struct GlobalLedgerRangeRead {
+    events: Vec<PersistedEvent>,
+    head_sequence: u64,
+}
+impl GlobalLedgerRangeRead {
+    /// The matching events in ledger order, at most `matches` of them.
+    pub fn events(&self) -> &[PersistedEvent] {
+        &self.events
+    }
+    pub fn into_events(self) -> Vec<PersistedEvent> {
+        self.events
+    }
+    /// The authenticated head of the read transaction (not the last event read).
+    pub fn head_sequence(&self) -> u64 {
+        self.head_sequence
+    }
+}
+
 /// Selects an artifact only from one committed event's original artifact set.
 #[derive(Debug, Clone)]
 pub struct LedgerArtifactSelection {
@@ -828,5 +864,66 @@ impl GlobalLedger {
             complete: source.is_complete(),
             writer: source.writer_metadata().clone(),
         })
+    }
+
+    /// Workflow #411 A4: a range opening of an SQLite root, for the offline `events` page and
+    /// `export --performance`. In one read transaction it authenticates the keyed head row, the
+    /// contiguity of the stored sequences and the head row, then reads and authenticates only
+    /// the rows after `after_sequence` through the bound (`through_sequence`, else the head of
+    /// that transaction, never beyond it) in chunks, until `matches` rows match `query`. With
+    /// `eviction_proofs` it also reads the eviction intent and outcome rows after the last row
+    /// read, each authenticated on its own, and gives the matching events the proofs of their
+    /// artifacts (with that head), as the whole opening's retention replay gives them on a valid
+    /// ledger. Rows outside these are never read, so this opening does not establish their
+    /// integrity; there is no retention replay and no migrated-prefix check. The database is
+    /// opened without the whole-file check (`RuntimeDatabase::open_existing_unchecked`).
+    /// `None`: the root holds no SQLite ledger; a segment root is read whole by `open_evidence`,
+    /// as before. A `query.view` is the request error `ledger_selection_query_unsupported`.
+    pub fn open_range(
+        root: impl Into<PathBuf>,
+        request: &GlobalLedgerRangeRequest,
+    ) -> GlobalLedgerResult<Option<GlobalLedgerRangeRead>> {
+        // A view's Lab relation is decided from events outside the range.
+        if request.query.view.is_some() {
+            return Err(GlobalLedgerError::request(
+                LedgerCode::SelectionQueryUnsupported.code(),
+                LedgerLocation::QuerySelection.location(),
+            ));
+        }
+        let root = root.into();
+        let database_exists = root
+            .join(actingcommand_runtime_database::DATABASE_FILE)
+            .try_exists()
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceDatabase.location(),
+                    &error,
+                )
+            })?;
+        let key_exists = root
+            .join(actingcommand_runtime_database::INTEGRITY_KEY_FILE)
+            .try_exists()
+            .map_err(|error| {
+                GlobalLedgerError::io(
+                    LedgerCode::LedgerIo.code(),
+                    LedgerLocation::InspectEvidenceKey.location(),
+                    &error,
+                )
+            })?;
+        if !(database_exists || key_exists) {
+            return Ok(None);
+        }
+        let database = RuntimeDatabase::open_existing_unchecked(&root)?;
+        if !sqlite::has_schema(&database)? {
+            return Ok(None);
+        }
+        let read = sqlite::read_range(&database, request)?;
+        // Every evidence opening reads the writer observation; this one does not report it.
+        read_only::read_writer_metadata(&root.join("ledger"))?;
+        Ok(Some(GlobalLedgerRangeRead {
+            events: read.events,
+            head_sequence: read.head_sequence,
+        }))
     }
 }

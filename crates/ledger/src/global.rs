@@ -6,8 +6,9 @@ mod evidence;
 mod migration;
 mod planning;
 pub use evidence::{
-    GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, GlobalLedgerReadExtent,
-    GlobalLedgerReadPhases, GlobalLedgerSelection, LedgerArtifactSelection, ResolvedLedgerArtifact,
+    GlobalLedgerEvidence, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata, GlobalLedgerRangeRead,
+    GlobalLedgerRangeRequest, GlobalLedgerReadExtent, GlobalLedgerReadPhases,
+    GlobalLedgerSelection, LedgerArtifactSelection, ResolvedLedgerArtifact,
 };
 pub use planning::{PlanningSignalRecoveryPage, verify_transaction_planning_page};
 mod projection;

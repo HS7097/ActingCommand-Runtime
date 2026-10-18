@@ -1651,6 +1651,19 @@ rows are a tool input and output and an MCP answer. No interface revision of §6
 | PC1 | `actinglab package check --package <path>` answer `{status: "admitted", package_id, entry_task_id}` (`PackageCheckResponse`) | new command and output shape | A5 | A5 | the Runtime's structural admission, `PreparedContainedTask::describe_path` with the 60 s budget of pack admission, so it admits exactly what check-config and the daemon admit and a declared OCR model need not be installed; both names from the descriptor (`TaskPackageDescriptor`, unchanged); a refusal is `package_invalid` (exit 2) with `details.code` the admission's own code and `details.declaration` (`null` unless `resource_declaration_invalid`); reads only (dry run `no_effect`); capability `package check` (`offline`, `read_only`); a flag other than `--package`, a positional argument or a missing `--package` is `validation_failed` (exit 2); a relative path is read below the working directory, as every `--package`; `package preflight` is unchanged |
 | PC2 | MCP `ac_pack_check {package}` → `{status, package_id, entry_task_id}` | changed answer (was `{preflight}`, P4-5) | A5 | A5 | runs `actinglab --json --via mcp package check --package <package>` and answers its data verbatim; tier (observer), input schema and the one overflow rule unchanged; a refusal is `lab_tool_failed` caused by `package_invalid` and by the details as `foreign_other_error`; `ac_binding_draft` keeps running `package preflight` |
 
+### 1.99 Slice A4 (v0.12.1): `actingledger events` reads only its range (#411 A4; coordinator ruling (a) of 2026-10-18)
+
+On an SQLite root the offline `actingledger events` page and `export --performance` open the
+ledger with a range opening (`GlobalLedger::open_range`), not the whole opening: the head, the
+rows of the range and, for `events`, the eviction rows of the page's artifacts, each checked on
+its own. [ledger-store.md](ledger-store.md) and [global-ledger-query.md](global-ledger-query.md)
+are the contract. It adds no code, location, key, wire or ledger shape, and the reports are
+unchanged on a valid ledger; the refusals keep the ledger's existing codes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

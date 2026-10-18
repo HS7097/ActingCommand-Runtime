@@ -17,9 +17,10 @@ use actingcommand_contract::{
 pub use actingcommand_contract::{MAX_SIGNATURE_PAGE_ROWS, SignaturePageRequest};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerEvidence,
-    GlobalLedgerEvidenceConfig, GlobalLedgerRepairRecord, GlobalLedgerStorageSnapshot,
-    GlobalLedgerWriterMetadataObservation, LedgerIoKind, PerformanceLedgerSample,
-    PerformanceProcessOwnership, PerformanceProcessSummary, PersistedEvent,
+    GlobalLedgerEvidenceConfig, GlobalLedgerRangeRequest, GlobalLedgerRepairRecord,
+    GlobalLedgerStorageSnapshot, GlobalLedgerWriterMetadataObservation, LedgerIoKind,
+    PerformanceLedgerSample, PerformanceProcessOwnership, PerformanceProcessSummary,
+    PersistedEvent,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -743,6 +744,24 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ));
     }
 
+    // Workflow #411 A4: on an SQLite root `events` and `export --performance` read only their
+    // range (`GlobalLedger::open_range`); a segment root is read whole below, as before.
+    match request.command {
+        ForensicCommand::Events => {
+            if let Some(report) = events_range_report(&request.state_root, &request.events)? {
+                return Ok(ForensicOutput::Machine(ForensicReport::Events(report)));
+            }
+        }
+        ForensicCommand::Performance => {
+            if let Some(report) = performance_range_report(&request.state_root, &request.events)? {
+                return Ok(ForensicOutput::Machine(ForensicReport::Performance(
+                    Box::new(report),
+                )));
+            }
+        }
+        _ => {}
+    }
+
     let artifact_root = request.state_root.clone();
     let stability = request.command == ForensicCommand::Stability;
     let export = request.command == ForensicCommand::Export;
@@ -1307,6 +1326,49 @@ fn task_frame_evidence(
     }
 }
 
+/// Workflow #411 A4: the `events` page of an SQLite root from its range opening: the rows after
+/// `after_sequence` through the bound until one more than `limit` match, with the eviction proofs
+/// of the page's artifacts. `None` for a segment root, which `run` reads whole.
+fn events_range_report(
+    state_root: &Path,
+    request: &ForensicEventsRequest,
+) -> ForensicResult<Option<EventsReport>> {
+    let range = GlobalLedger::open_range(
+        state_root,
+        &GlobalLedgerRangeRequest {
+            query: request.filter.query()?,
+            after_sequence: request.after_sequence,
+            through_sequence: request.through_sequence,
+            matches: request.limit + 1,
+            eviction_proofs: true,
+        },
+    )
+    .map_err(map_ledger_error)?;
+    let Some(range) = range else {
+        return Ok(None);
+    };
+    let through_sequence = request
+        .through_sequence
+        .unwrap_or_else(|| range.head_sequence());
+    check_event_page(request.after_sequence, through_sequence)?;
+    Ok(Some(page_report(
+        request.clone(),
+        through_sequence,
+        range.into_events(),
+    )))
+}
+
+fn check_event_page(after_sequence: u64, through_sequence: u64) -> ForensicResult<()> {
+    if after_sequence > through_sequence {
+        return Err(ForensicError::new(
+            ForensicsCode::InvalidEventPage.code(),
+            ForensicsLocation::ValidateEventPage.location(),
+            "after sequence exceeds the frozen through sequence",
+        ));
+    }
+    Ok(())
+}
+
 fn events_report(
     snapshot: &GlobalLedgerEvidence,
     request: ForensicEventsRequest,
@@ -1314,13 +1376,7 @@ fn events_report(
     let through_sequence = request
         .through_sequence
         .unwrap_or_else(|| snapshot.latest_sequence());
-    if request.after_sequence > through_sequence {
-        return Err(ForensicError::new(
-            ForensicsCode::InvalidEventPage.code(),
-            ForensicsLocation::ValidateEventPage.location(),
-            "after sequence exceeds the frozen through sequence",
-        ));
-    }
+    check_event_page(request.after_sequence, through_sequence)?;
     let query = request.filter.query()?;
     let mut events = Vec::with_capacity(request.limit);
     let mut after = request.after_sequence;
@@ -1339,6 +1395,15 @@ fn events_report(
         after = last.sequence();
         events.extend(page);
     }
+    Ok(page_report(request, through_sequence, events))
+}
+
+/// The `events` page from at most one more than `limit` matching events in ledger order.
+fn page_report(
+    request: ForensicEventsRequest,
+    through_sequence: u64,
+    mut events: Vec<PersistedEvent>,
+) -> EventsReport {
     let has_more = events.len() > request.limit;
     events.truncate(request.limit);
     let next_after_sequence = has_more.then(|| {
@@ -1347,7 +1412,7 @@ fn events_report(
             .expect("a full positive-limit page has a final event")
             .sequence()
     });
-    Ok(EventsReport {
+    EventsReport {
         filter: request.filter,
         after_sequence: request.after_sequence,
         through_sequence,
@@ -1355,7 +1420,60 @@ fn events_report(
         artifact_evictions: eviction_proofs(&events),
         events,
         next_after_sequence,
-    })
+    }
+}
+
+/// Workflow #411 A4: the `export --performance` page of an SQLite root from its range opening:
+/// the rows after `after_sequence` through the bound, at most one more than `limit` of them.
+/// `None` for a segment root, which `run` reads whole.
+fn performance_range_report(
+    state_root: &Path,
+    request: &ForensicEventsRequest,
+) -> ForensicResult<Option<PerformanceReport>> {
+    let range = GlobalLedger::open_range(
+        state_root,
+        &GlobalLedgerRangeRequest {
+            query: EventQuery::default(),
+            after_sequence: request.after_sequence,
+            through_sequence: request.through_sequence,
+            matches: request.limit + 1,
+            eviction_proofs: false,
+        },
+    )
+    .map_err(map_ledger_error)?;
+    let Some(range) = range else {
+        return Ok(None);
+    };
+    let head = range.head_sequence();
+    let through_sequence = request.through_sequence.unwrap_or(head);
+    check_performance_page(request, through_sequence)?;
+    let mut page = range.into_events();
+    let has_more = page.len() > request.limit;
+    page.truncate(request.limit);
+    Ok(Some(performance_page(
+        request,
+        through_sequence,
+        head,
+        &page,
+        has_more,
+        Vec::new(),
+        None,
+    )))
+}
+
+fn check_performance_page(
+    request: &ForensicEventsRequest,
+    through_sequence: u64,
+) -> ForensicResult<()> {
+    if request.after_sequence > through_sequence || request.filter != ForensicEventFilter::default()
+    {
+        return Err(ForensicError::new(
+            ForensicsCode::InvalidEventPage.code(),
+            ForensicsLocation::ValidatePerformancePage.location(),
+            "performance pages require an ordered sequence range and no event filters",
+        ));
+    }
+    Ok(())
 }
 
 fn performance_report(
@@ -1365,21 +1483,43 @@ fn performance_report(
     let through_sequence = request
         .through_sequence
         .unwrap_or_else(|| snapshot.latest_sequence());
-    if request.after_sequence > through_sequence || request.filter != ForensicEventFilter::default()
-    {
-        return Err(ForensicError::new(
-            ForensicsCode::InvalidEventPage.code(),
-            ForensicsLocation::ValidatePerformancePage.location(),
-            "performance pages require an ordered sequence range and no event filters",
-        ));
-    }
+    check_performance_page(&request, through_sequence)?;
     // Snapshot validation remains owned by GlobalLedger. The report's page budget
     // counts raw facts, including unrelated families, before projecting payloads.
     let events = snapshot.events();
     let start = events.partition_point(|event| event.sequence() <= request.after_sequence);
     let end = events.partition_point(|event| event.sequence() <= through_sequence);
     let page_end = start + (end - start).min(request.limit);
-    let page = &events[start..page_end];
+    let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
+    let mut gaps = Vec::new();
+    if !snapshot.read_complete() {
+        gaps.push("storage_read_incomplete");
+    }
+    if corrupt_tail.is_some() {
+        gaps.push("corrupt_tail");
+    }
+    Ok(performance_page(
+        &request,
+        through_sequence,
+        snapshot.latest_sequence(),
+        &events[start..page_end],
+        page_end < end,
+        gaps,
+        corrupt_tail,
+    ))
+}
+
+/// The performance page of `page`, the raw facts after `after_sequence` in ledger order;
+/// `gaps` holds the source's gaps before the through bound's.
+fn performance_page(
+    request: &ForensicEventsRequest,
+    through_sequence: u64,
+    latest_sequence: u64,
+    page: &[PersistedEvent],
+    has_more: bool,
+    mut gaps: Vec<&'static str>,
+    corrupt_tail: Option<CorruptTailReport>,
+) -> PerformanceReport {
     let scanned_through_sequence = page
         .last()
         .map_or(request.after_sequence, PersistedEvent::sequence);
@@ -1426,23 +1566,14 @@ fn performance_report(
             thread_identity: None,
         });
     }
-    let has_more = page_end < end;
-    let corrupt_tail = snapshot.corrupt_tail().map(corrupt_tail_report);
-    let mut gaps = Vec::new();
-    if !snapshot.read_complete() {
-        gaps.push("storage_read_incomplete");
-    }
-    if corrupt_tail.is_some() {
-        gaps.push("corrupt_tail");
-    }
-    if through_sequence > snapshot.latest_sequence() {
+    if through_sequence > latest_sequence {
         gaps.push("through_sequence_unavailable");
     }
-    Ok(PerformanceReport {
+    PerformanceReport {
         after_sequence: request.after_sequence,
         through_sequence,
         limit: request.limit,
-        snapshot_latest_sequence: snapshot.latest_sequence(),
+        snapshot_latest_sequence: latest_sequence,
         scanned_event_count: page.len(),
         scanned_through_sequence,
         stutter_count,
@@ -1454,7 +1585,7 @@ fn performance_report(
         window_complete: !has_more && gaps.is_empty(),
         corrupt_tail,
         gaps,
-    })
+    }
 }
 
 fn check_diagnostic_artifact_size(

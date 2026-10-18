@@ -233,10 +233,11 @@ impl RuntimeDatabase {
 
     /// Workflow #375 R375-3 v1.2: opens existing storage read-only exactly as
     /// `open_existing(root, true)` does, without the whole-file `PRAGMA quick_check(1)`.
-    /// Only for the check-config catalog preview, which authenticates every row it reads, and
-    /// the start's ledger format probe, which reads only the format (`user_version` and the
-    /// ledger table count, Workflow #378 A3); startup and `ledger-maintenance verify` open
-    /// through `open_existing`, which still runs the check.
+    /// Only for the check-config catalog preview and the offline `actingledger events` and
+    /// `export --performance` range opening (Workflow #411 A4), which authenticate every row
+    /// they read, and the start's ledger format probe, which reads only the format
+    /// (`user_version` and the ledger table count, Workflow #378 A3); startup and
+    /// `ledger-maintenance verify` open through `open_existing`, which still runs the check.
     pub fn open_existing_unchecked(root: &Path) -> RuntimeDatabaseResult<Self> {
         Self::open_existing_storage(root, true, false)
     }

@@ -1865,15 +1865,7 @@ impl RetentionIndex {
         let proof = self
             .proof(reference)
             .map_err(|_| FactValidationError::new(LedgerCode::ArtifactIdentityConflict.code()))?;
-        Ok(proof.map(|proof| match proof.disposition {
-            Some(
-                ArtifactEvictionDisposition::Deleted | ArtifactEvictionDisposition::RecoveryAbsent,
-            ) => ArtifactAvailability::Evicted(Box::new(proof)),
-            None => ArtifactAvailability::PendingEviction(Box::new(proof)),
-            Some(ArtifactEvictionDisposition::Failed) => {
-                ArtifactAvailability::FailedEviction(Box::new(proof))
-            }
-        }))
+        Ok(proof.map(proof_availability))
     }
 
     /// Restores a stored record whose unproven material must verify: a missing verifier or a
@@ -1962,5 +1954,166 @@ impl RetentionIndex {
             })?;
         self.annotate_event(&mut event);
         Ok(event)
+    }
+}
+
+/// The availability an eviction proof gives a reference.
+fn proof_availability(proof: ArtifactEvictionProof) -> ArtifactAvailability {
+    match proof.disposition {
+        Some(
+            ArtifactEvictionDisposition::Deleted | ArtifactEvictionDisposition::RecoveryAbsent,
+        ) => ArtifactAvailability::Evicted(Box::new(proof)),
+        None => ArtifactAvailability::PendingEviction(Box::new(proof)),
+        Some(ArtifactEvictionDisposition::Failed) => {
+            ArtifactAvailability::FailedEviction(Box::new(proof))
+        }
+    }
+}
+
+/// Workflow #411 A4: the eviction proofs of a range read's matching events, built from the
+/// eviction intent and outcome rows that the read authenticated each on its own, in ledger
+/// order, not from a retention replay of the whole ledger. A proof carries the head of the read
+/// transaction, as a replay's proof carries the replay's head. Every reference of an artifact
+/// precedes its intent (a replay refuses a later one), so the intents and outcomes of the
+/// matching events' artifacts all follow the first matching event.
+pub(super) struct RangeProofs {
+    head: u64,
+    /// The artifacts the matching events reference, with their reference.
+    wanted: BTreeMap<ArtifactId, ProjectedArtifactReference>,
+    proofs: BTreeMap<ArtifactId, ArtifactEvictionProof>,
+}
+
+impl RangeProofs {
+    pub(super) fn new(head: u64) -> Self {
+        Self {
+            head,
+            wanted: BTreeMap::new(),
+            proofs: BTreeMap::new(),
+        }
+    }
+
+    /// Whether a matching event references an artifact.
+    pub(super) fn wants_any(&self) -> bool {
+        !self.wanted.is_empty()
+    }
+
+    /// Records the artifacts a matching event references. A reference that differs from an
+    /// earlier one of the same artifact is a replay's identity conflict, and a reference after
+    /// the artifact's eviction intent a replay's closed admission.
+    pub(super) fn want<E: LedgerEventRead>(&mut self, event: &E) -> GlobalLedgerResult<()> {
+        for reference in material_references(event) {
+            if self.proofs.contains_key(&reference.artifact_id) {
+                return Err(sealed());
+            }
+            match self.wanted.get(&reference.artifact_id) {
+                Some(known) if *known != reference => {
+                    return Err(invalid(LedgerCode::ArtifactIdentityConflict.code()));
+                }
+                Some(_) => {}
+                None => {
+                    self.wanted.insert(reference.artifact_id, reference);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies one authenticated row in ledger order. An eviction intent or outcome must pass
+    /// the checks a replay makes on the row alone (its origin, the fact, its links, an intent's
+    /// prefix and success); one of a wanted artifact must name that artifact's reference, an
+    /// intent must be its first and an outcome must answer it once, with a replay's codes.
+    /// Every other row is left as it is.
+    pub(super) fn apply<E: LedgerEventRead>(&mut self, event: &E) -> GlobalLedgerResult<()> {
+        let Some(fact) = event.payload().artifact_retention() else {
+            return Ok(());
+        };
+        if !matches!(
+            fact,
+            ArtifactRetentionFact::EvictionIntent(_) | ArtifactRetentionFact::EvictionOutcome(_)
+        ) {
+            return Ok(());
+        }
+        if event.origin().source() != EventSource::Runtime
+            || event.origin().module() != actingcommand_contract::OriginModule::ArtifactStore
+            || event.origin().actor() != actingcommand_contract::EventActor::Runtime
+        {
+            return Err(invalid(LedgerCode::ArtifactRetentionOriginInvalid.code()));
+        }
+        fact.validate()
+            .map_err(|_| invalid(LedgerCode::InvalidArtifactRetentionFact.code()))?;
+        let identity = fact.identity();
+        if !same_links(event, identity) {
+            return Err(invalid(LedgerCode::ArtifactRetentionLinksConflict.code()));
+        }
+        if let ArtifactRetentionFact::EvictionIntent(intent) = fact {
+            if intent.through_sequence.checked_add(1) != Some(event.sequence()) {
+                return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
+            }
+            if intent.success.is_none() {
+                return Err(invalid(LedgerCode::ArtifactEvictionTerminalMissing.code()));
+            }
+        }
+        let artifact_id = identity.artifact.artifact_id;
+        let Some(reference) = self.wanted.get(&artifact_id) else {
+            return Ok(());
+        };
+        if *reference != identity.artifact {
+            return Err(invalid(
+                LedgerCode::ArtifactRetentionIdentityConflict.code(),
+            ));
+        }
+        match fact {
+            ArtifactRetentionFact::EvictionIntent(_) => {
+                if self.proofs.contains_key(&artifact_id) {
+                    return Err(invalid(LedgerCode::ArtifactEvictionNotEligible.code()));
+                }
+                self.proofs.insert(
+                    artifact_id,
+                    ArtifactEvictionProof {
+                        identity: identity.clone(),
+                        intent: terminal(event),
+                        terminal_event: None,
+                        disposition: None,
+                        through_sequence: self.head,
+                    },
+                );
+            }
+            ArtifactRetentionFact::EvictionOutcome(outcome) => {
+                let proof = self
+                    .proofs
+                    .get_mut(&artifact_id)
+                    .ok_or_else(|| invalid(LedgerCode::ArtifactEvictionIntentMissing.code()))?;
+                if proof.intent != outcome.intent || proof.terminal_event.is_some() {
+                    return Err(invalid(LedgerCode::ArtifactEvictionOutcomeConflict.code()));
+                }
+                proof.terminal_event = Some(terminal(event));
+                proof.disposition = Some(outcome.disposition);
+            }
+            ArtifactRetentionFact::PinRecorded(_) | ArtifactRetentionFact::PinReleased(_) => {}
+        }
+        Ok(())
+    }
+
+    /// One event's proofs, as a replay annotates them: one per artifact it references that has
+    /// a proof, in reference order.
+    pub(super) fn event_proofs<E: LedgerEventRead>(&self, event: &E) -> Vec<ArtifactEvictionProof> {
+        let mut seen = BTreeSet::new();
+        material_references(event)
+            .into_iter()
+            .filter(|reference| seen.insert(reference.artifact_id))
+            .filter_map(|reference| self.proofs.get(&reference.artifact_id).cloned())
+            .collect()
+    }
+
+    /// The availability a proof gives a reference, or `None` when it has none.
+    pub(super) fn availability(
+        &self,
+        reference: &ProjectedArtifactReference,
+    ) -> Result<Option<ArtifactAvailability>, FactValidationError> {
+        Ok(self
+            .proofs
+            .get(&reference.artifact_id)
+            .cloned()
+            .map(proof_availability))
     }
 }

@@ -400,6 +400,36 @@ Unrecorded. Its `query` refuses a query that names no selected type, names a
 type it did not select, or names a view (`ledger_selection_query_unsupported`).
 Segment roots are read whole.
 
+`GlobalLedger::open_range(root, request)` (Workflow #411 A4) is the range
+opening of the offline `actingledger events` page and `export --performance`.
+It opens the database as `open_selected` does, without the whole-file
+`quick_check`, and authenticates in one read transaction the keyed meta row,
+sequence contiguity (`COUNT`, `MIN`, `MAX` equal to head, 1, head) and the head
+row against the meta head hash. It then reads the rows `after < sequence <=
+bound`, in chunks, until `request.matches` rows match `request.query` or the
+bound is reached; the bound is `request.through_sequence`, else the head of
+that transaction, and never beyond it, so a writer appending meanwhile does not
+extend it. Each row is authenticated on its own as `open_selected` authenticates
+its rows, and each chunk's link and artifact rows must be the ones its rows
+require. With `request.eviction_proofs` it also reads, through
+`ledger_view_index_type_v1` (or a scan without the derived views), the
+`artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last
+row read and before the head, each authenticated on its own, and gives each
+matching event the eviction proofs of the artifacts it references, carrying that
+head, as the retention replay gives them on a valid ledger. Every reference of
+an artifact precedes its eviction intent, so no earlier row can hold one. Each
+eviction row must also pass the checks the replay makes on the row alone
+(origin, fact, links, an intent's prefix and success); for a referenced
+artifact its identity must name the reference, an intent must be the first and
+an outcome must answer it once, with the replay's codes. Any refusal fails the
+opening. It does not read other rows, run the retention replay or check the
+migrated prefix, so it does not establish their integrity, and it does not
+re-judge an eviction against the replay's state. The matching artifacts without
+a proof are Unrecorded. A query with a view is refused
+(`ledger_selection_query_unsupported`). `None` means the root holds no SQLite
+ledger: a segment root is read whole by `open_evidence`, as before. `open`,
+`chain` and `export` keep the full verification; `chain` is the full check.
+
 Only the Ledger can construct its private `LedgerEventMetadata`. It retains the
 typed envelope/payload and structurally valid `ProjectedArtifactReference` values
 with their original object keys. It has no conversion to `PersistedEvent` or
