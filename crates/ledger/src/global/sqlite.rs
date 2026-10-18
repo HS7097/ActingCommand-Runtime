@@ -3260,14 +3260,8 @@ pub(super) fn read_range(
     database: &RuntimeDatabase,
     request: &super::GlobalLedgerRangeRequest,
 ) -> GlobalLedgerResult<RangeRead> {
-    let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Deferred)
-        .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
-    let read = read_range_rows(database, &transaction, request)?;
-    transaction
-        .commit()
-        .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
+    let connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
+    let read = read_range_rows(database, &connection, request)?;
     Ok(read)
 }
 
@@ -3285,18 +3279,17 @@ fn read_range_rows(
     // Workflow #411 A4: a test may let a writer append here; this read stays at `head`.
     #[cfg(test)]
     crate::read_count::range_head_read();
-    let bound = request
-        .through_sequence
-        .map_or(head, |through| through.min(head));
+    let bound = request.through_sequence.unwrap_or(u64::MAX);
     let mut proofs = super::retention::RangeProofs::new(head);
     let mut matched: Vec<LedgerEventMetadata> = Vec::new();
     let last_read = reader.read_chunks(
         &[],
-        request.after_sequence,
+        0,
         bound,
         true,
         &mut |event: LedgerEventMetadata| -> GlobalLedgerResult<bool> {
-            let matching = matched.len() < request.matches
+            let matching = event.sequence() > request.after_sequence
+                && matched.len() < request.matches
                 && super::projection::query_matches_fields(&request.query, &event);
             if request.eviction_proofs {
                 if matching {
@@ -3311,23 +3304,6 @@ fn read_range_rows(
         },
     )?;
     if head != 0 && last_read != Some(head) {
-        if request.eviction_proofs && proofs.wants_any() {
-            // The eviction rows after the last row read and before the head; the head follows.
-            let types = [
-                SqlValue::Text(views::key(EventType::ArtifactEvictionIntent)?),
-                SqlValue::Text(views::key(EventType::ArtifactEvictionOutcome)?),
-            ];
-            reader.read_chunks(
-                &types,
-                last_read.unwrap_or(request.after_sequence),
-                head - 1,
-                false,
-                &mut |event: LedgerEventMetadata| -> GlobalLedgerResult<bool> {
-                    proofs.apply(&event)?;
-                    Ok(true)
-                },
-            )?;
-        }
         let head_value = [SqlValue::Integer(encode(head))];
         let head_rows = read_rows_bound(
             connection,

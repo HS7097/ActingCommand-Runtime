@@ -912,7 +912,10 @@ impl GlobalLedger {
                 )
             })?;
         if !(database_exists || key_exists) {
-            return Ok(None);
+            return Ok(Some(GlobalLedgerRangeRead {
+                events: Vec::new(),
+                head_sequence: 0,
+            }));
         }
         let database = RuntimeDatabase::open_existing_unchecked(&root)?;
         if !sqlite::has_schema(&database)? {
