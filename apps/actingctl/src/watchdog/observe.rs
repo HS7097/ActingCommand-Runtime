@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Read-only observation for one tick: the A/B installation, the selected configuration's
-//! state root, the owner lock and journal, runtime-info, the logs' terminal outcomes, acsetup's
-//! writer lock and
+//! Read-only observation for one tick: the installation (an A/B installation or, Workflow #390
+//! WD-1, a single-location root), its configuration's state root, the owner lock and journal,
+//! runtime-info, the logs' terminal outcomes, acsetup's writer lock and
 //! the Runtime processes under the root. Nothing here writes, and the owner journal is never
 //! locked.
 
@@ -12,6 +12,7 @@ use super::decide::{
 use super::state::WatchdogState;
 use super::{io_failure, json_failure, powershell};
 use crate::codes::ActingctlCode;
+use crate::packs::ROOT_CONFIG_FILE;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, OutcomeEnvelope, RawSource};
 use actingcommand_contract::{
@@ -39,80 +40,190 @@ const LOOKBACK_OWNERS: usize = 16;
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
 pub(crate) const RUNTIME_IMAGE: &str = "actingcommand-actingd.exe";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Workflow #390 WD-1: the file in `<root>\runtime` that marks an executable root
+/// (`packs::executable_install_root`, the contract's flat-root branch of `process_installation`).
+const BUILD_MANIFEST: &str = "BUILD-MANIFEST.json";
+/// The bound of a single-location root's configuration (the bound of an installed selection's
+/// config).
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
-/// The A/B installation this tick supervises. Holding it keeps the selected slot pinned with
-/// a shared slot lock for the tick, as every acforward launch does.
+/// How the supervised root is laid out (Workflow #390 WD-1).
+pub(crate) enum Layout {
+    /// An A/B installation. Holding its selection keeps the selected slot pinned with a shared
+    /// slot lock for the tick, as every acforward launch does.
+    Ab {
+        generation: u64,
+        slot: &'static str,
+        selection_json: String,
+        _selection: InstalledProcess,
+    },
+    /// A single-location root: no `install\active.json`, `<root>\runtime\BUILD-MANIFEST.json` is
+    /// a file, and `<root>\actingd.config.json` is its configuration.
+    Single,
+}
+
+/// The installation this tick supervises.
 pub(crate) struct Installation {
     pub(crate) root: PathBuf,
     /// The ordinary spelling handed to children, cmd, WMI and the task (review L7).
     pub(crate) root_plain: PathBuf,
-    pub(crate) generation: u64,
-    pub(crate) slot: &'static str,
-    pub(crate) selection_json: String,
+    pub(crate) layout: Layout,
     pub(crate) config_plain: PathBuf,
     pub(crate) state_root: PathBuf,
-    _selection: InstalledProcess,
 }
 
 impl Installation {
-    /// The selection comes from `process_installation()` (the snapshot acforward handed this
-    /// process) or, for a direct run, from `install\active.json`; only A/B installs qualify.
+    /// Workflow #390 WD-1: an A/B installation when there is a selection (the one
+    /// `process_installation()` holds, the snapshot acforward handed this process, or, for a
+    /// direct run, `install\active.json`); otherwise a single-location root when
+    /// `<root>\runtime\BUILD-MANIFEST.json` is a file; otherwise `watchdog_layout_unknown`.
     pub(crate) fn resolve(root_argument: &Path) -> Result<Self, Outcome> {
-        let root = fs::canonicalize(root_argument).map_err(|error| {
-            io_failure(
-                ActingctlCode::WatchdogRootUnavailable,
-                root_argument,
-                &error,
-                IoOp::Canonicalize,
-            )
-        })?;
-        // The process installation, or `install\active.json` and its inputs, unreadable: the
-        // installation contract's own code.
-        let inherited = actingcommand_contract::process_installation()
-            .map_err(|error| Outcome::new(error.code()))?;
-        let selected = match inherited {
-            Some(selected) if selected.root() == root => selected.clone(),
-            // This actingctl belongs to another installation.
-            Some(selected) => {
-                return Err(Outcome::new(ActingctlCode::WatchdogRootMismatch)
-                    .path(plain_path(&root))
-                    .other_root(plain_path(selected.root())));
-            }
-            None => match InstalledProcess::read_active(&root) {
-                Ok(Some(selected)) => selected,
-                // No install\active.json: the watchdog supervises A/B installs only.
-                Ok(None) => {
-                    return Err(
-                        Outcome::new(ActingctlCode::WatchdogLayoutUnknown).path(plain_path(&root))
-                    );
-                }
-                Err(error) => return Err(Outcome::new(error.code())),
-            },
-        };
+        let root = canonical_root(root_argument)?;
+        if let Some(selected) = selection(&root)? {
+            return Self::ab(root, selected);
+        }
+        if root.join("runtime").join(BUILD_MANIFEST).is_file() {
+            return Self::single(root);
+        }
+        Err(layout_unknown(&root))
+    }
+
+    /// An A/B installation only (`actingctl start` and `restart` without `--config`): a root
+    /// without a selection, a single-location root among them, is `watchdog_layout_unknown`.
+    pub(crate) fn resolve_ab(root_argument: &Path) -> Result<Self, Outcome> {
+        let root = canonical_root(root_argument)?;
+        match selection(&root)? {
+            Some(selected) => Self::ab(root, selected),
+            None => Err(layout_unknown(&root)),
+        }
+    }
+
+    fn ab(root: PathBuf, selected: InstalledProcess) -> Result<Self, Outcome> {
         Ok(Self {
             state_root: selected_state_root(&selected)?,
             root_plain: plain_path(&root),
-            generation: selected.selection().generation,
-            slot: selected.selection().slot.as_str(),
-            selection_json: selected.selection_json().to_owned(),
             config_plain: plain_path(&selected.config_path()),
+            layout: Layout::Ab {
+                generation: selected.selection().generation,
+                slot: selected.selection().slot.as_str(),
+                selection_json: selected.selection_json().to_owned(),
+                _selection: selected,
+            },
             root,
-            _selection: selected,
         })
+    }
+
+    /// `<root>\actingd.config.json`, read with the bound and the codes of a selected config.
+    fn single(root: PathBuf) -> Result<Self, Outcome> {
+        let config_plain = plain_path(&root.join(ROOT_CONFIG_FILE));
+        let bytes = root_config_bytes(&root.join(ROOT_CONFIG_FILE), &config_plain)?;
+        Ok(Self {
+            state_root: configured_state_root(&bytes, &config_plain)?,
+            root_plain: plain_path(&root),
+            config_plain,
+            layout: Layout::Single,
+            root,
+        })
+    }
+
+    /// The report's `layout`: `ab` or `single`.
+    pub(crate) fn layout_name(&self) -> &'static str {
+        match self.layout {
+            Layout::Ab { .. } => "ab",
+            Layout::Single => "single",
+        }
+    }
+
+    /// The selected generation; a single-location root has none.
+    pub(crate) fn generation(&self) -> Option<u64> {
+        match &self.layout {
+            Layout::Ab { generation, .. } => Some(*generation),
+            Layout::Single => None,
+        }
+    }
+
+    /// The selected slot; a single-location root has none.
+    pub(crate) fn slot(&self) -> Option<&'static str> {
+        match &self.layout {
+            Layout::Ab { slot, .. } => Some(*slot),
+            Layout::Single => None,
+        }
     }
 
     // Workflow #389 MCP-10: the fixed entry is `start::Target::entry`, shared with `actingctl start`.
 
     /// Review M3: `install\active.json` read again under the shared writer lock, so it cannot
-    /// change before the fixed entry reads it once more.
+    /// change before the fixed entry reads it once more. Workflow #390 WD-1: on a
+    /// single-location root, an `install\active.json` that appeared is a changed selection too.
     pub(crate) fn selection_unchanged(&self) -> Result<bool, Outcome> {
-        match InstalledProcess::read_active(&self.root) {
-            Ok(Some(current)) => Ok(current.selection_json() == self.selection_json),
-            Ok(None) => Ok(false),
-            // install\active.json is unreadable before the start.
-            Err(error) => Err(Outcome::new(error.code())),
-        }
+        // install\active.json is unreadable before the start.
+        let current = InstalledProcess::read_active(&self.root)
+            .map_err(|error| Outcome::new(error.code()))?;
+        Ok(match (&self.layout, current) {
+            (Layout::Ab { selection_json, .. }, Some(current)) => {
+                current.selection_json() == selection_json.as_str()
+            }
+            (Layout::Ab { .. }, None) => false,
+            (Layout::Single, current) => current.is_none(),
+        })
     }
+}
+
+fn canonical_root(root_argument: &Path) -> Result<PathBuf, Outcome> {
+    fs::canonicalize(root_argument).map_err(|error| {
+        io_failure(
+            ActingctlCode::WatchdogRootUnavailable,
+            root_argument,
+            &error,
+            IoOp::Canonicalize,
+        )
+    })
+}
+
+/// The root's selection: the process installation's, else `install\active.json`'s; `None`
+/// without either. Either unreadable is the installation contract's own code; a process
+/// installation of another root is `watchdog_root_mismatch`.
+fn selection(root: &Path) -> Result<Option<InstalledProcess>, Outcome> {
+    let inherited = actingcommand_contract::process_installation()
+        .map_err(|error| Outcome::new(error.code()))?;
+    match inherited {
+        Some(selected) if selected.root() == root => Ok(Some(selected.clone())),
+        // This actingctl belongs to another installation.
+        Some(selected) => Err(Outcome::new(ActingctlCode::WatchdogRootMismatch)
+            .path(plain_path(root))
+            .other_root(plain_path(selected.root()))),
+        None => InstalledProcess::read_active(root).map_err(|error| Outcome::new(error.code())),
+    }
+}
+
+/// Neither an A/B installation nor a single-location root.
+fn layout_unknown(root: &Path) -> Outcome {
+    Outcome::new(ActingctlCode::WatchdogLayoutUnknown).path(plain_path(root))
+}
+
+/// A single-location root's configuration: one that cannot be opened or read, or is larger than
+/// the bound, is `watchdog_config_unreadable` (`path`, and `limit_bytes` when larger).
+fn root_config_bytes(path: &Path, config_plain: &Path) -> Result<Vec<u8>, Outcome> {
+    let unreadable = |error: &std::io::Error, op: IoOp| {
+        io_failure(
+            ActingctlCode::WatchdogConfigUnreadable,
+            config_plain,
+            error,
+            op,
+        )
+    };
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|error| unreadable(&error, IoOp::Open))?
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| unreadable(&error, IoOp::Read))?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
+            .path(config_plain)
+            .limit_bytes(MAX_CONFIG_BYTES));
+    }
+    Ok(bytes)
 }
 
 fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Outcome> {
@@ -120,18 +231,24 @@ fn selected_state_root(selected: &InstalledProcess) -> Result<PathBuf, Outcome> 
     let bytes = selected
         .config_bytes()
         .map_err(|error| Outcome::new(error.code()))?;
-    let document: Value = serde_json::from_slice(&bytes).map_err(|error| {
+    configured_state_root(&bytes, &config)
+}
+
+/// A configuration's `state_root`: a document that is not JSON is `watchdog_config_unreadable`,
+/// one without an absolute `state_root` `watchdog_state_root_invalid`, each with its `path`.
+fn configured_state_root(bytes: &[u8], config: &Path) -> Result<PathBuf, Outcome> {
+    let document: Value = serde_json::from_slice(bytes).map_err(|error| {
         Outcome::new(ActingctlCode::WatchdogConfigUnreadable)
-            .path(&config)
+            .path(config)
             .caused_by(json_failure(&error))
     })?;
-    // The selected config's state_root must be an absolute path.
+    // The config's state_root must be an absolute path.
     let state_root = document
         .get("state_root")
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .ok_or_else(|| Outcome::new(ActingctlCode::WatchdogStateRootInvalid).path(&config))?;
+        .ok_or_else(|| Outcome::new(ActingctlCode::WatchdogStateRootInvalid).path(config))?;
     Ok(state_root)
 }
 

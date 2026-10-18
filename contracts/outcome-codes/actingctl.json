@@ -1253,9 +1253,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The watchdog does not recognise the install root's layout.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The root is neither an A/B installation nor a single-location root with runtime\\BUILD-MANIFEST.json: it has no install selection (the process's own or install\\active.json) and no file runtime\\BUILD-MANIFEST.json. path names the root. The watchdog's status and run-once answer watchdog_misconfigured caused by it, watchdog install refuses with it; actingctl start and restart without --config refuse with it for every root without a selection, a single-location root among them. Exit 1.",
+      "common_causes": "--root names a directory that is not an installation root (a slot directory, the state root, a mistyped path); a single-location root whose runtime directory was not deployed or is being replaced; actingctl start or restart without --config on a single-location root.",
+      "handling": "Pass the installation root itself; deploy the Runtime into <root>\\runtime of a single-location root, or install the root with acsetup; for actingctl start or restart on a single-location root, pass --config <root>\\actingd.config.json."
     },
     "watchdog_log_directory_unreadable": {
       "category": "error",

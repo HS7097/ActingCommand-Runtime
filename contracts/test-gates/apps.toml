@@ -684,3 +684,20 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
 incident = ["#390"]
+
+# Workflow #390 WD-1 (deploy plan Q1 option (b); Alice 2026-10-16; coordinator decisions 5 and 6 of 2026-10-18; register §1.96): the watchdog supervises a single-location root, one without install\active.json whose runtime\BUILD-MANIFEST.json is a file: its config is <root>\actingd.config.json and its state root that config's absolute state_root; an A/B selection wins and a root with neither stays watchdog_layout_unknown; an install\active.json appearing before the start is watchdog_selection_changed; the decisions are unchanged and a start runs <root>\runtime\actingcommand-actingd.exe --config <root>\actingd.config.json in <root> with no generation in its record; report v2 adds layout and config, with null generation and slot; install passes the layout precondition and keeps watchdog_launcher_missing; a deploy holding install\writer.lock starts nothing; actingctl start and restart without --config still need an A/B selection
+[[gate]]
+key = "70"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_start_without_config_still_needs_an_ab_selection",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing",
+]
+incident = ["#390 WD-1"]
