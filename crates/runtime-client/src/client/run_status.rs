@@ -577,6 +577,10 @@ impl RuntimeClient {
                 if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
                     return Err(invalid(ClientCode::RunStatusPaginationInvalid));
                 }
+                // One-off red proof (#411 A6): the pre-A6 cap of one read's records.
+                if event_ids.len() > MAX_RUN_SUMMARY_EVENTS {
+                    return Err(invalid(ClientCode::RunStatusEventLimitExceeded));
+                }
                 last_sequence = event.sequence;
                 visit(event)?;
             }
