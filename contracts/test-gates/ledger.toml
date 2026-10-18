@@ -556,7 +556,7 @@ tests = [
 ]
 incident = ["#357 DB-3s"]
 
-# Workflow #411 A4 (v0.12.1; register §1.96): on an SQLite root `actingledger events` and `export --performance` read only their range (`GlobalLedger::open_range`): the meta row, the contiguity, the head row and the rows after `--after` until one more than `--limit` match, bounded by the head of the read transaction while a writer appends; the report is the whole opening's, eviction proofs included (also with `--through` below an eviction); a segment root is read whole
+# Workflow #411 A4 (v0.12.1; register §1.99): on an SQLite root `actingledger events` and `export --performance` read only their range (`GlobalLedger::open_range`): the meta row, the contiguity, the head row and the rows after `--after` until one more than `--limit` match, bounded by the head of the read transaction while a writer appends; the report is the whole opening's, eviction proofs included (also with `--through` below an eviction); a segment root is read whole
 [[gate]]
 key = "49"
 coverage = "Y"
