@@ -182,9 +182,9 @@ fn seconds(value: &OsStr, range: std::ops::RangeInclusive<u64>) -> Option<Durati
 /// A failure of `start` or `restart`: its outcome, and developer text for the stderr line (what
 /// was already done, the start log's last line).
 #[derive(Debug)]
-struct Failed {
-    outcome: Outcome,
-    text: Option<String>,
+pub(crate) struct Failed {
+    pub(crate) outcome: Outcome,
+    pub(crate) text: Option<String>,
 }
 
 impl Failed {
@@ -322,15 +322,7 @@ impl Located {
         let (installation, config_plain, configured) = match &arguments.config {
             // The selected generation, exactly as the watchdog starts it.
             None => {
-                let installation = observe::Installation::resolve(&root).map_err(|failure| {
-                    let hint = failure.is(ActingctlCode::WatchdogLayoutUnknown);
-                    let failed = Failed::new(failure);
-                    if hint {
-                        failed.after("pass --config <file> to start a root without one")
-                    } else {
-                        failed
-                    }
-                })?;
+                let installation = ab_installation(&root)?;
                 let config = installation.config_plain.clone();
                 let state_root = installation.state_root.clone();
                 (Some(installation), config, state_root)
@@ -371,6 +363,21 @@ impl Located {
             _installation: installation,
         })
     }
+}
+
+/// Without `--config`, the root's A/B selection. Workflow #390 WD-1: the watchdog also supervises
+/// a single-location root, but `start` and `restart` keep needing a selection here: a root
+/// without one is `watchdog_layout_unknown` with the hint to pass `--config`.
+pub(crate) fn ab_installation(root: &Path) -> Result<observe::Installation, Failed> {
+    observe::Installation::resolve_ab(root).map_err(|failure| {
+        let hint = failure.is(ActingctlCode::WatchdogLayoutUnknown);
+        let failed = Failed::new(failure);
+        if hint {
+            failed.after("pass --config <file> to start a root without one")
+        } else {
+            failed
+        }
+    })
 }
 
 /// The config's absolute `state_root`, as the watchdog reads a selected config: a config that

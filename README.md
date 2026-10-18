@@ -279,7 +279,7 @@ actingctl install-transition --state-root <state-root> --action-json '<action-js
 actingctl agent-publish-facts --state-root <state-root> --record-file <observation.json>     # Agent/Adapter origin: publish one bounded fact observation
 actingctl agent-apply-resource-targets --state-root <state-root> --policy-file <policy.json>     # Agent/Adapter origin: apply one instance resource target policy (contracts/resource-targets.md); prints {"applied": ..., "outcome": ...}, or the refusing receipt with its field position beside its outcome and a non-zero exit
 
-# Watchdog of an A/B installation (INSTALL.md, "Runtime watchdog")
+# Watchdog of an A/B installation or, from v0.12.1, a single-location root (INSTALL.md, "Runtime watchdog")
 actingctl watchdog install --root <install root>     # also: status | run-once | uninstall
 
 # MCP server (stdio) and client registration

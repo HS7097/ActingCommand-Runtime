@@ -1,7 +1,8 @@
 # Runtime watchdog
 
-`actingctl watchdog` (Workflow #374) starts the Runtime of an A/B installation again
-when it is gone without a formal close: a crash, a closed console window, an end in
+`actingctl watchdog` (Workflow #374) starts the Runtime of an A/B installation, or
+(from v0.12.1, Workflow #390 WD-1) of a single-location root, again when it is gone
+without a formal close: a crash, a closed console window, an end in
 Task Manager, a reboot; and when its last start ended in an error, a held start that
 stopped among them (Workflow #381 A, #378 A6a). It never starts a Runtime that was
 closed formally, that is alive, that the installer is working on, or whose last start
@@ -11,7 +12,8 @@ Scheduler runs one tick a minute through `<root>\tools\actingwatch.exe`.
 The watchdog reads the ledger never and writes it never. It adds no event type, no
 fact and no persisted Runtime structure. It is a read-only consumer of `owner.lock`
 (it never locks it), `runtime-info.json`, `install\active.json` (through the contract
-reader) and the selected configuration's `state_root`. Its own memory is the
+reader) and the configuration's `state_root` (the selected one, or a single-location
+root's `actingd.config.json`). Its own memory is the
 operational file `<root>\watchdog\state.json`, outside the ledger (below).
 
 ## Commands
@@ -32,18 +34,31 @@ When the process runs with an inherited installation (through the fixed entry
 
 ## Layout
 
-Only A/B installations qualify: `install\active.json` read by
-`InstalledProcess::read_active`. The selection is the process's own
-(`process_installation()`), else `active.json` for a direct run. A root without
-`active.json` is `watchdog_layout_unknown`: `status` and `run-once` answer
-`watchdog_misconfigured` with it as the cause (row 1), and `install` refuses with it.
-The state root is the selected config's `state_root` and must be absolute
-(`watchdog_state_root_invalid`).
+Two layouts qualify (Workflow #390 WD-1 adds the second in v0.12.1):
 
-In v0.12.0 a single-location installation (one root without `install\`, whose Runtime
-is started with `--config`) is not watched: the watchdog reports
-`watchdog_layout_unknown` for it, and this is expected. Watching a single-location
-(`--config`) root is Workflow #390 WD-1, planned for v0.12.1.
+- **A/B installation**: there is a selection, the process's own
+  (`process_installation()`), else `install\active.json` read by
+  `InstalledProcess::read_active` for a direct run. Its config is the selected
+  generation's.
+- **Single-location root**: there is no selection, and
+  `<root>\runtime\BUILD-MANIFEST.json` is a file (the mark of an executable root, as
+  for `packs` and `mcp-serve`). Its config is `<root>\actingd.config.json`, read with
+  the bound of a selected config (1 MiB): one that cannot be read, is larger or is not
+  JSON is `watchdog_config_unreadable`.
+
+A/B wins when both markers exist. A root with neither is `watchdog_layout_unknown`:
+`status` and `run-once` answer `watchdog_misconfigured` with it as the cause (row 1),
+and `install` refuses with it. The state root is the config's `state_root` and must
+be absolute (`watchdog_state_root_invalid`). The report names the layout and the
+config (`layout`, `config`; see "Exit codes").
+
+A single-location root has no installer of its own. A deploy or successor script that
+replaces its `runtime\` or `tools\` must hold `install\writer.lock` exclusively for the
+whole replacement (creating the file when it is missing), or disable the task first.
+While the lock is held the launcher runs nothing and a tick answers
+`watchdog_installer_busy` (row 7a). `actingctl start` and `restart` without `--config`
+still need an A/B selection: on a single-location root they refuse with
+`watchdog_layout_unknown`; pass `--config`.
 
 ## Observation
 
@@ -75,7 +90,8 @@ is started with `--config`) is not watched: the watchdog reports
      enter between the check and the start ("writer is occupied", retryable). No file
      counts as free.
    - **Selection**: `install\active.json` read again under that shared lock; a
-     different selection stands aside for one tick.
+     different selection stands aside for one tick. On a single-location root an
+     `install\active.json` that appeared is a changed selection too (row 7a′).
    - **P**, processes named `actingcommand-actingd.exe` whose executable path is under
      `<root>\` (case-insensitive), or whose path cannot be read, through a CIM query
      in a hidden Windows PowerShell. The same query reads the last boot time
@@ -187,12 +203,14 @@ has none. In grace the watchdog still observes, and a Runtime process under the 
 
 ## Start
 
-The fixed entry `<root>\runtime\actingcommand-actingd.exe --config <selected
-config>`, working directory `<root>`, stdin NUL, stdout and stderr appended to
-`<root>\watchdog\actingd-<unix_ms>.log` (created before the spawn). The child gets no
-inherited installation selection: the fixed entry reads `install\active.json`, which
-the shared writer lock keeps equal to the selection the tick read, and `--config`
-names that selection's config. Paths handed to children are plain (no `\\?\`).
+The fixed entry `<root>\runtime\actingcommand-actingd.exe --config <config>` (the
+selected config, or a single-location root's `<root>\actingd.config.json`: the logon
+script's command line), working directory `<root>`, stdin NUL, stdout and stderr
+appended to `<root>\watchdog\actingd-<unix_ms>.log` (created before the spawn). The
+child gets no inherited installation selection. For an A/B installation the fixed
+entry reads `install\active.json`, which the shared writer lock keeps equal to the
+selection the tick read, and `--config` names that selection's config. Paths handed
+to children are plain (no `\\?\`).
 
 - **Task tick (`--from-task`)**: CreateProcess with `CREATE_NO_WINDOW |
   CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS`. The
@@ -217,6 +235,9 @@ The start record is saved before the spawn, so a crash mid-start still counts. T
 line on success:
 
 `WARN watchdog_started_runtime generation=<g> method=<breakaway|wmi> owner_epoch=<e> pid=<actingd pid> log=<path> previous_epoch=<J epoch> previous_pid=<J pid> ready_ms=<n>`
+
+A single-location root has no generation: its lines and its start records carry no
+`generation`.
 
 On failure, `ERROR watchdog_start_failed` with `generation`, `method`, the failure as
 `failure_code` and a `cause` field, `previous_epoch`, `previous_pid` and `last_line`:
@@ -250,11 +271,11 @@ takes no slot occupancy.
 `install` registers a per-user task through `schtasks.exe` (actingctl has no COM
 access: unsafe code is forbidden there).
 
-- **Preconditions**, each refused with exit 1: an A/B installation
-  (`watchdog_layout_unknown`); `<root>\runtime\actingctl.exe` and
+- **Preconditions**, each refused with exit 1: an A/B installation or a
+  single-location root (`watchdog_layout_unknown`); `<root>\runtime\actingctl.exe` and
   `<root>\tools\actingwatch.exe` exist
   (`watchdog_launcher_missing`: deploy the Runtime and Tools that carry the watchdog
-  first); the selected config's state root resolves; acsetup's writer lock is free
+  first); the config's state root resolves; acsetup's writer lock is free
   at that moment (`watchdog_install_refused` caused by `watchdog_installer_busy`).
 - **State**: `<root>\watchdog\` is created. A valid `state.json` is kept, a document
   of another schema version is set aside as in "Files", an unreadable one is renamed
@@ -314,7 +335,7 @@ Without the product, a registered task fails every minute (the launcher is gone,
 | File | Content |
 |---|---|
 | `watchdog.log` | UTF-8 lines `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`, written on a decision change, a start, an error; a decision line's fields are its outcome's values and one `cause` field per link, then developer fields (Workflow #378 A5). The launcher's own failures and the tick's stderr land here too; a task tick prints no per-tick summary there, and repeats a misconfiguration only when the last structured line is a different one. A quiet day writes nothing. |
-| `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v2` (Workflow #378 A5): `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (`{code, values}`, the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `start_result` `{code, values}`: `watchdog_start_pending` until the start ends, then `watchdog_started_runtime`, `start_timeout` or the failure's code; `generation`, `actingd_pid`, `owner_epoch`). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. `run-once` and `install` rename a document of another schema version (version 1 included) `state.json.other-schema-<ms>` with a WARN `watchdog_state_reset` line and replace it by a fresh state, so the budget restarts; a corrupt document is `watchdog_state_unreadable` (row 1). |
+| `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v2` (Workflow #378 A5): `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (`{code, values}`, the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `start_result` `{code, values}`: `watchdog_start_pending` until the start ends, then `watchdog_started_runtime`, `start_timeout` or the failure's code; `generation`, absent for a single-location root; `actingd_pid`, `owner_epoch`). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. `run-once` and `install` rename a document of another schema version (version 1 included) `state.json.other-schema-<ms>` with a WARN `watchdog_state_reset` line and replace it by a fresh state, so the budget restarts; a corrupt document is `watchdog_state_unreadable` (row 1). |
 | `actingd-<unix_ms>.log` | stdout and stderr of each start. |
 | `run.lock` | Held exclusively by a tick; a second concurrent tick answers `watchdog_run_in_progress` (exit 0). `actingctl start` and `restart` hold it through their start (Workflow #389 MCP-10). |
 | `task.xml` | The definition `install` registered last. |
@@ -331,7 +352,10 @@ Every subcommand, and the usage exit, prints one stdout line, the report
 `run-once` and `status`, the result for `install` and `uninstall`. `attention` lists
 `status`'s attention outcomes and is empty for the others. The data members follow
 (for example `live_owner.started_by_watchdog`, and `terminal {log, outcome}`, the
-terminal outcome a decision read). A warning, error or fatal top also prints the
+terminal outcome a decision read). A tick's report names the installation: `root`,
+`layout` (`ab` or `single`) and `config` (the plain path of the config the fixed
+entry gets; both Workflow #390 WD-1), `generation` and `slot` (null for a
+single-location root) and `state_root`. A warning, error or fatal top also prints the
 developer line `<LEVEL> actingctl: <code> …` on stderr; a task tick, whose stderr is
 `watchdog.log`, prints it only for a misconfiguration it could not write there.
 

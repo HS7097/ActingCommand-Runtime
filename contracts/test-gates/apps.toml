@@ -685,6 +685,23 @@ tests = [
 ]
 incident = ["#390"]
 
+# Workflow #390 WD-1 (deploy plan Q1 option (b); Alice 2026-10-16; coordinator decisions 5 and 6 of 2026-10-18; register §1.96): the watchdog supervises a single-location root, one without install\active.json whose runtime\BUILD-MANIFEST.json is a file: its config is <root>\actingd.config.json and its state root that config's absolute state_root; an A/B selection wins and a root with neither stays watchdog_layout_unknown; an install\active.json appearing before the start is watchdog_selection_changed; the decisions are unchanged and a start runs <root>\runtime\actingcommand-actingd.exe --config <root>\actingd.config.json in <root> with no generation in its record; report v2 adds layout and config, with null generation and slot; install passes the layout precondition and keeps watchdog_launcher_missing; a deploy holding install\writer.lock starts nothing; actingctl start and restart without --config still need an A/B selection
+[[gate]]
+key = "70"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_single_location_root_resolves_with_its_root_config_and_state_root",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_crashed_single_location_runtime_is_started_with_its_root_config",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_formally_closed_single_location_runtime_is_not_started",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_live_single_location_runtime_is_left_alone",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_active_json_appearing_before_the_start_is_a_selection_change",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_install_on_a_single_location_root_checks_the_launcher_not_the_layout",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_start_without_config_still_needs_an_ab_selection",
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd1::wd1_a_deploy_holding_the_writer_lock_of_a_single_location_root_starts_nothing",
+]
+incident = ["#390 WD-1"]
+
 # Workflow #411 A5 (M-PKG §3.2, S5-T4; register §1.97 PC1, PC2): actinglab package check --package <path> gives the Runtime's own structural admission verdict (PreparedContainedTask::describe_path): for a content directory, the same content as a .zip or a .json container, a missing path, an unsupported file type, an unknown task-declaration member and a declared OCR model that is not installed locally it admits exactly what describe_path admits, answering {status: admitted, package_id, entry_task_id} with exit 0, and refuses with package_invalid (exit 2) whose details.code is the admission's own code, with its declaration; MCP ac_pack_check {package} runs actinglab --json --via mcp package check --package <package> and answers that command's data verbatim
 [[gate]]
 key = "71"

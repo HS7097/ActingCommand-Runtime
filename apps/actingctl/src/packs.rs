@@ -27,7 +27,7 @@ use std::process::ExitCode;
 const COMMAND: &str = "packs";
 const USAGE: &str = "usage: actingctl packs [--root <install root>] [--instance <alias|instance_id|adb port>] [--role procedure|startup|resource_package]";
 /// The configuration of an install root without slots, as mcp-serve finds it.
-const ROOT_CONFIG_FILE: &str = "actingd.config.json";
+pub(crate) const ROOT_CONFIG_FILE: &str = "actingd.config.json";
 /// The file of a package that names its `package_id`.
 const CONTROL_FILE: &str = "control.json";
 /// A procedure binding's `procedure_ref` is this prefix and the package id (M-PKG §4.4).

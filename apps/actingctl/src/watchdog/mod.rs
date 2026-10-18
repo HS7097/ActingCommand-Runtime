@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! `actingctl watchdog` (Workflow #374): the Runtime watchdog of an A/B installation.
+//! `actingctl watchdog` (Workflow #374): the Runtime watchdog of an A/B installation or, from
+//! v0.12.1 (Workflow #390 WD-1), of a single-location root.
 //! `run-once` is one supervision tick, run every minute by Task Scheduler through
 //! `<root>\tools\actingwatch.exe`; it starts the Runtime only when it is gone without a formal
 //! close. `status` computes the same decision read-only and adds attention outcomes, the task's
@@ -24,6 +25,9 @@ mod gate_381a;
 // Test-only: Workflow #382 A-4, test plan v2.2 APPS-G12 (a whole tick on the APPS-I3 seams).
 #[cfg(test)]
 mod gate_382_a4;
+// Test-only: Workflow #390 WD-1, the watchdog of a single-location root.
+#[cfg(test)]
+mod gate_wd1;
 mod log;
 pub(crate) mod observe;
 mod powershell;
@@ -738,7 +742,8 @@ fn start_runtime(
         at_unix_ms: now,
         method: if from_task { "breakaway" } else { "wmi" }.to_owned(),
         log: log_plain.clone(),
-        generation: Some(installation.generation),
+        // A single-location root has no generation (Workflow #390 WD-1).
+        generation: installation.generation(),
         ..StartRecord::default()
     });
     state::save(directory, state)?;
@@ -785,10 +790,11 @@ fn start_runtime(
         }
     };
     let outcome = decision.outcome();
-    let mut fields = vec![
-        ("generation", installation.generation.to_string()),
-        ("method", attempt.method.to_owned()),
-    ];
+    let mut fields = Vec::new();
+    if let Some(generation) = installation.generation() {
+        fields.push(("generation", generation.to_string()));
+    }
+    fields.push(("method", attempt.method.to_owned()));
     fields.extend(log::outcome_fields(&outcome));
     fields.push(("previous_epoch", previous_epoch));
     fields.push(("previous_pid", previous_pid));
@@ -971,8 +977,12 @@ fn report(tick: &Tick, decision: &Decision, state: &WatchdogState, directory: &P
     let now = now_unix_ms();
     let data = json!({
         "root": installation.root_plain.display().to_string(),
-        "generation": installation.generation,
-        "slot": installation.slot,
+        // Workflow #390 WD-1: `ab` or `single`, and the config the fixed entry gets; a
+        // single-location root has no generation or slot.
+        "layout": installation.layout_name(),
+        "config": installation.config_plain.display().to_string(),
+        "generation": installation.generation(),
+        "slot": installation.slot(),
         "state_root": installation.state_root.display().to_string(),
         "owner_lock": tick.lock.as_str(),
         "journal": journal,

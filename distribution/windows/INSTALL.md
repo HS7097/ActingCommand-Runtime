@@ -425,7 +425,8 @@ Do not treat a startup line as proof of device execution.
 ## Runtime watchdog
 
 `actingctl watchdog` (`contracts/runtime-watchdog.md`, Workflow #374) starts the
-Runtime of an A/B installation again when it is gone without a formal close (a
+Runtime of an A/B installation, or of a single-location root, again when it is gone
+without a formal close (a
 crash, a closed console window, an end in Task Manager, a reboot), or when its last
 start ended in an error. The start's terminal outcome is the last `OUTCOME actingd:`
 or `OUTCOME acforward:` line of its `actingd-*.log`, and only its category counts
@@ -440,12 +441,16 @@ in 30 minutes; then it stays down until a formal start (`watchdog_budget_exhaust
 or `panic_unrecovered` when every one of those starts ended in
 `runtime_restart_required`).
 
-The watchdog accepts only A/B installations. In v0.12.0 a single-location
-installation (one root without `install\`, whose Runtime is started with `--config`)
-is not watched: `watchdog status` and `run-once` answer `watchdog_misconfigured`
-caused by `watchdog_layout_unknown`, and `watchdog install` refuses with
-`watchdog_layout_unknown`. This is expected. Watching a single-location (`--config`)
-root is Workflow #390 WD-1, planned for v0.12.1.
+From v0.12.1 the watchdog also watches a single-location root (Workflow #390 WD-1):
+a root without `install\active.json` whose `runtime\BUILD-MANIFEST.json` is a file. It
+starts `<root>\runtime\actingcommand-actingd.exe --config <root>\actingd.config.json`
+in `<root>`, the logon script's command line, and its report says `layout` `single`
+with no `generation` or `slot`. An A/B selection wins when a root has both; a root
+with neither is `watchdog_layout_unknown` (`status` and `run-once` answer
+`watchdog_misconfigured` caused by it, `watchdog install` refuses with it). A script
+that replaces `runtime\` or `tools\` of a single-location root holds
+`install\writer.lock` exclusively while it does, or disables the task first.
+`actingctl start` and `restart` still take `--config` for such a root.
 
 ```powershell
 <root>\runtime\actingctl.exe watchdog install --root <root>

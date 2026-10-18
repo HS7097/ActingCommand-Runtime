@@ -1636,6 +1636,29 @@ their spelling, category, ladder class, values and review unchanged.
 | A8B-2 | `contracts/outcome-codes/released/0.12.0.json`, `actingcommand.outcome-codes.release.v1` | release snapshot (contract file, written once by the release PR) | A8b | A8b | every code (with `category`, `ladder_class`, `review`, `status`, `values: {key: {type, required}}`) and every location (`review`, `status`) of the catalog at this commit, retired ones included; G9 compares every later catalog with its settled entries; never edited afterwards (spec §11) |
 | A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.12.1 on no pending code or location; a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
 
+### 1.96 Slice WD-1: the watchdog supervises a single-location root (#390 WD-1; deploy plan Q1 (b); Alice 2026-10-16)
+
+From v0.12.1 `actingctl watchdog` also supervises a single-location root: a root without an
+install selection whose `runtime\BUILD-MANIFEST.json` is a file, configured by
+`<root>\actingd.config.json` (the root config `packs` and `mcp-serve` already read). An A/B
+selection wins when a root has both; a root with neither stays `watchdog_layout_unknown`. The
+decisions, the budget, the grace, the holds, the start methods, the task, the launcher and
+`state.json` are unchanged; a single root's start runs `<root>\runtime\actingcommand-actingd.exe
+--config <root>\actingd.config.json` in `<root>`, the logon script's command line.
+`actingctl start` and `restart` without `--config` still need an A/B selection.
+[runtime-watchdog.md](runtime-watchdog.md) ("Layout", "Observation" item 5, "Start", "Task",
+"Exit codes") is the contract. WD-1 adds no code, key, location or configuration key; its
+catalog change is the text of `watchdog_layout_unknown` (an entry, not a row, §7). It changes no
+interface revision of §6: the watchdog report and `state.json` are no declared interface, and the
+report's change is additive. A recorded or arbitrary `--config` path is not part of it (coordinator
+decision 5 of 2026-10-18: B).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| WD1-1 | `actingcommand.watchdog.report.v2` (O5): new data members `layout` (`"ab"` \| `"single"`) and `config` (the plain path of the config the fixed entry gets) on every tick report (`status`, `run-once`); `generation` and `slot` are null for a single-location root | additive report members (stdout; schema name unchanged; coordinator decision 6 of 2026-10-18) | WD-1 | WD-1 | an A/B installation keeps its `generation` and `slot`; `config` is the selected generation's config there; a report without tick data (`install`, `uninstall`, the usage exit, a misconfiguration found before the installation resolved) has neither member |
+| WD1-2 | `state.json` v2 (O6), the task definition and the launcher | unchanged | WD-1 | — | a single-location root's start records omit `generation` (already optional); its `watchdog_started_runtime` and `watchdog_start_failed` log lines carry no `generation` field; a deploy or successor script that replaces `runtime\` or `tools\` of a single-location root holds `install\writer.lock` exclusively, or disables the task, while it does (coordinator decision 5 of 2026-10-18), so the launcher runs nothing and a tick is `watchdog_installer_busy` (row 7a) |
+| WD1-3 | §6 interface revisions | no interface revision | WD-1 | — | `component-interfaces.json` is unchanged |
+
 ### 1.97 Slice A5: `actinglab package check` (#411 A5; M-PKG §3.2, S5-T4; UIM :489)
 
 A5 writes the command the interface promised (runtime-interface.md, `ac_pack_check` and the
