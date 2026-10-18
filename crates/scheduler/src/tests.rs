@@ -2060,3 +2060,79 @@ fn claim_kind_tokens_are_unique_and_the_stopped_instance_kinds_skip_admission_ch
         }
     }
 }
+
+// Workflow #411 A3 (R-1): the shutdown's idle count skips only a routine entry on an instance
+// whose routine gate a scheduling pause holds, as the caller reads it. A routine entry on an
+// instance that only a #403 resource fence holds (the caller reports no pause there), an operator
+// entry, a holder-owned continuation and a client entry all count; with no pause every entry
+// counts. Each row is checked as it is queued.
+#[test]
+fn a3_waiting_total_skips_only_pause_gated_routine_entries() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (paused, paused_holder) = held_instance(&issuer, &mut scheduler);
+    let (fenced, _) = held_instance(&issuer, &mut scheduler);
+    let held_by_pause = |instance_id: InstanceId| instance_id == paused;
+    // (instance, kind, whether the entry counts)
+    let rows = [
+        (paused, ClaimKind::Autostart, false),
+        (paused, ClaimKind::StartupPackage, false),
+        (paused, ClaimKind::Ladder, false),
+        (fenced, ClaimKind::Autostart, true),
+        (fenced, ClaimKind::StartupPackage, true),
+        (fenced, ClaimKind::Ladder, true),
+        (paused, ClaimKind::DirectTaskRun, true),
+        (paused, ClaimKind::EmulatorControl, true),
+        (paused, ClaimKind::LadderContinuation, true),
+    ];
+    let (mut counted, mut queued) = (0, 0);
+    for (instance_id, kind, counts) in rows {
+        let (holder_id, connection_id) = if kind.holder_owned() {
+            (paused_holder.holder_id(), connection(1))
+        } else {
+            (holder(&issuer).1, connection(2))
+        };
+        scheduler
+            .enqueue_claim(
+                claim(
+                    &issuer,
+                    instance_id,
+                    holder_id,
+                    connection_id,
+                    kind,
+                    LeasePriority::Normal,
+                ),
+                2,
+            )
+            .expect("queued behind the holder");
+        queued += 1;
+        counted += usize::from(counts);
+        assert_eq!(scheduler.waiting_total(&held_by_pause), counted, "{kind:?}");
+        assert_eq!(scheduler.waiting_total(|_| false), queued, "{kind:?}");
+    }
+    let client = scheduler
+        .request_queued(
+            queued_request(
+                request(&issuer),
+                paused,
+                holder(&issuer).1,
+                connection(3),
+                LeasePriority::Normal,
+                400,
+            ),
+            3,
+        )
+        .expect("client queue")
+        .into_decision();
+    assert!(
+        matches!(client, QueueAdmissionDecision::Queued(_)),
+        "{client:?}"
+    );
+    assert_eq!(
+        scheduler.waiting_total(&held_by_pause),
+        counted + 1,
+        "a client entry counts"
+    );
+    assert_eq!(scheduler.waiting_total(|_| false), queued + 1);
+}

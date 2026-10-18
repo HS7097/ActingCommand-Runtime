@@ -1205,3 +1205,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_nine1::nine1_the_status_shows_each_emulator_as_the_runtime_last_read_it",
 ]
 incident = ["#390"]
+
+# Workflow #411 A3 (R-1, v0.12.1; register E6C-2 note): the shutdown idle test does not count a routine entry on an instance whose routine gate a scheduling pause holds (the global pause or the instance's own): a paused instance's gated autostart claim no longer refuses request-shutdown, an accepted shutdown disconnects it with scheduler.denied lease.queue_disconnected and no report line, and the next start restores the pause and queues it again, gated; an operator start under the pause passes the gated claim and the shutdown is accepted; a resume done before the decision wins (the eligible or granted claim refuses it, runtime_busy); a routine entry that only a #403 resource fence holds, an operator, client or holder-owned entry still counts
+[[gate]]
+key = "102"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_autostart_claim",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_resume_before_the_shutdown_grants_the_claim_and_the_shutdown_stays_busy",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_an_operator_start_passes_the_gated_claim_and_the_shutdown_is_accepted",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_fence_gated_routine_entry_still_refuses_a_shutdown",
+    "actingcommand-scheduler::lib::tests::a3_waiting_total_skips_only_pause_gated_routine_entries",
+]
+incident = ["#411 A3"]

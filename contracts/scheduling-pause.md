@@ -57,7 +57,12 @@ control that fails, made meanwhile cancels the queued startup claim, so the resu
 reconnect whose preparation fails and admits a ladder hands the key to that ladder first. A
 reconnect or a self-check whose preparation fails and admits no ladder cancels the queued
 startup claim before its release (Workflow #369 S6c review low (b)), so no startup run follows
-on an instance that failed its preparation. A gated claim does not refuse the pause's hand-back (step (c)). Since Workflow #369 S6c a routine
+on an instance that failed its preparation. A gated claim does not refuse the pause's hand-back (step (c)), nor a shutdown request
+(Workflow #411 A3: `request-shutdown`, `restart`, an install CommitShutdown and a drain's
+completion count no routine entry that a pause of its instance or the global pause holds, while
+a routine entry that only a resource fence holds still counts; an accepted shutdown disconnects
+the gated entry with `lease.queue_disconnected`, the pause is kept and restored, and the next
+daemon start queues an autostart claim again, gated). Since Workflow #369 S6c a routine
 claim that waits in the queue (a startup package, a ladder, an autostart claim) is never granted
 at once while the gate is closed, even on a free instance: it waits queued as a gated entry from
 the first moment, and the resume (or the sweep that follows it) grants it. The configured
