@@ -85,7 +85,12 @@ resource-close, fencing and committed-effect owners retain their existing roles.
 semantic-fact identity used by Host recovery. A maintenance fact can be the run's
 first fact before the main `PackageAdmitted`. Full and Brief project the same bounded
 facts at one ledger snapshot; Brief omits step progress. Both retain the existing
-page, event, resident-memory and time limits. A partial timed read stays incomplete.
+page, event, resident-memory and time limits. Within those limits a run's own read, by
+its request and when a RunId is reversed, queries only the record types its projection
+folds, `RUN_STATUS_EVENT_TYPES` (Workflow #411 A6: the request's origin, the run's
+semantic facts other than its evidence, recognition, selection and effect records, and
+its lease's release or expiry), so a run's captures do not count against them. A partial
+timed read stays incomplete.
 
 A stored terminal has priority. Without one, a maintenance-only run in the current
 epoch is `running`; a later `runtime.started` or `runtime.takeover` makes it

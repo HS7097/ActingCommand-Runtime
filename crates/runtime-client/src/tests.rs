@@ -4,6 +4,8 @@ use super::*;
 
 // Workflow #411 A6: a run listing keeps none of the facts it lists by.
 mod gate_0121_a6;
+// Workflow #411 A6, part 2: a run's own status reads only the record types it projects.
+mod gate_0121_a6b;
 // Workflow #381 A: the session deadline of a run (#672 review M3).
 mod gate_381a;
 // Workflow #381 B: the emulator control receipt wait (test plan C-3).

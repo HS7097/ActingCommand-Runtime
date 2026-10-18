@@ -269,7 +269,7 @@ fn event_page(
 }
 
 /// Whether `event` matches `query`. This ledger serves the time and sequence bounds, one event
-/// type and the run links; a query with any other filter is refused.
+/// type or a set of them and the run links; a query with any other filter is refused.
 fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
     let unserved = EventQuery {
         from_timestamp_unix_ms: None,
@@ -277,6 +277,7 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
         from_sequence: None,
         to_sequence: None,
         event_type: None,
+        event_types: Vec::new(),
         instance_id: None,
         request_id: None,
         correlation_id: None,
@@ -304,6 +305,7 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
         && query
             .event_type
             .is_none_or(|event_type| event.event_type == event_type)
+        && (query.event_types.is_empty() || query.event_types.contains(&event.event_type))
         && query
             .instance_id
             .is_none_or(|id| links.instance_id() == Some(&id))
