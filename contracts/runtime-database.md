@@ -20,9 +20,11 @@ The Host's existing OwnerGuard continues to arbitrate process ownership.
 read-only, with the same path, key and connection checks as
 `open_existing(root, true)`, but without `quick_check(1)`. Only the
 `check-config` catalog preview uses it, for its selected ledger read and its
-State view: every row it reads is authenticated on its own. Startup,
-`ledger-maintenance` and the forensic readers open through `open_existing` and
-keep the whole-file check.
+State view, and the range opening of the offline `actingledger events` and
+`export --performance` (`GlobalLedger::open_range`, Workflow #411 A4): every
+row they read is authenticated on its own. Startup, `ledger-maintenance` and
+the other forensic readers open through `open_existing` and keep the whole-file
+check.
 
 State database construction preserves this order:
 

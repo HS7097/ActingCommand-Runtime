@@ -1636,6 +1636,19 @@ their spelling, category, ladder class, values and review unchanged.
 | A8B-2 | `contracts/outcome-codes/released/0.12.0.json`, `actingcommand.outcome-codes.release.v1` | release snapshot (contract file, written once by the release PR) | A8b | A8b | every code (with `category`, `ladder_class`, `review`, `status`, `values: {key: {type, required}}`) and every location (`review`, `status`) of the catalog at this commit, retired ones included; G9 compares every later catalog with its settled entries; never edited afterwards (spec §11) |
 | A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.12.1 on no pending code or location; a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
 
+### 1.96 Slice A4 (v0.12.1): `actingledger events` reads only its range (#411 A4; coordinator ruling (a) of 2026-10-18)
+
+On an SQLite root the offline `actingledger events` page and `export --performance` open the
+ledger with a range opening (`GlobalLedger::open_range`), not the whole opening: the head, the
+rows of the range and, for `events`, the eviction rows of the page's artifacts, each checked on
+its own. [ledger-store.md](ledger-store.md) and [global-ledger-query.md](global-ledger-query.md)
+are the contract. It adds no code, location, key, wire or ledger shape, and the reports are
+unchanged on a valid ledger; the refusals keep the ledger's existing codes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

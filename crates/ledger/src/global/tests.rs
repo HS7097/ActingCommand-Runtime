@@ -2900,3 +2900,6 @@ mod gate_l3_g9;
 // Workflow #382 A-4 G8 (LED-I5): the check-config preview's selected open and verify, counted.
 #[path = "tests/gate_382_a4_g8.rs"]
 mod gate_382_a4_g8;
+// Workflow #411 A4: `actingledger events` reads only its range, counted, with the same report.
+#[path = "tests/gate_0121_a4.rs"]
+mod gate_0121_a4;
