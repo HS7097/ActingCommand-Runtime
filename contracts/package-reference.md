@@ -513,6 +513,17 @@ Lab commands (debug/run, observe, do, preflight, dry run and resource restore) t
 `--package <path>` (a directory, or a `.zip` or `.json` file, read as the path chooses) or
 `--zip <path>` (a published `.zip`) and refuse the retired digest flags by name. MCP
 `ac_run_pack` takes `package` and `recovery_package`, and `ac_pack_check` takes `package`.
+Workflow #411 A5 (M-PKG §3.2, S5-T4): `actinglab package check --package <path>` (a directory,
+a `.zip` or a `.json` file; no other flag, no positional argument) is the Runtime's own
+structural admission, `PreparedContainedTask::describe_path`, the one check-config and the
+daemon apply to a pack, so it admits exactly what the Runtime admits and a declared OCR model
+need not be installed locally. It answers `{status: "admitted", package_id, entry_task_id}`
+(exit 0), the two names as the package's control declares them, and refuses with
+`package_invalid` (exit 2) whose `details.code` is the admission's own code
+(`content_directory_*`, `content_container_*`, `resource_declaration_invalid` with
+`details.declaration`, `contained_task_*`); a usage error is `validation_failed` (exit 2). It
+only reads. `ac_pack_check {package}` runs it and answers its data verbatim; `package
+preflight` and `ac_binding_draft`, which runs preflight, are unchanged.
 A procedure binding's `scheduled_execution.package_path` may equally name a directory or a
 container file. Evidence replay continues to
 use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).

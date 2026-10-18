@@ -46,8 +46,9 @@ fn error_code(result: &crate::CliResult) -> &str {
 }
 
 // An admissible content directory (the neutral fixture of the PKG-S4 dry-run gate), its JSON
-// files written in the canonical serialization; returns its task document.
-fn neutral_package(root: &Path) -> Value {
+// files written in the canonical serialization; returns its task document. Workflow #411 A5:
+// the `package check` gate reuses it.
+pub(crate) fn neutral_package(root: &Path) -> Value {
     let control = json!({
         "schema_version": "Lab-1y.control.v1",
         "package_id": "neutral.edit.source",

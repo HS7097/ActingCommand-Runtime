@@ -56,7 +56,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 137,
+  "command_count": 138,
   "commands": [
     "help",
     "version",
@@ -116,6 +116,7 @@
     "lab vendor-stdio-selftest",
     "package validate",
     "package preflight",
+    "package check",
     "package dry-run",
     "package inspect",
     "package run",

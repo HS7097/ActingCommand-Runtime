@@ -5,9 +5,75 @@ use actingcommand_lab::{PackageValidateRequest, PackageValidationResponse};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 #[path = "package_offline.rs"]
 pub(super) mod offline;
+
+/// Workflow #411 A5: how long one `package check` may read its package, the budget of the
+/// Runtime's own pack admission (`runtime-host` `pack_admission.rs`).
+const CHECK_BUDGET: Duration = Duration::from_secs(60);
+/// The instance label the check admits a package under: admission depends only on the package
+/// and the kernel, not on an instance.
+const CHECK_LABEL: &str = "package-check";
+
+/// Workflow #411 A5 (M-PKG §3.2, S5-T4): the answer of `package check`, a package the Runtime's
+/// structural admission admitted, named by what its control declares.
+#[derive(Debug, Serialize)]
+struct PackageCheckResponse {
+    status: &'static str,
+    package_id: String,
+    entry_task_id: String,
+}
+
+/// Workflow #411 A5 (M-PKG §3.2, S5-T4: "`package check` 只做结构准入"): `package check
+/// --package <path>` admits the package exactly as the Runtime admits a pack in check-config and
+/// in the daemon, through `PreparedContainedTask::describe_path` with the metadata-only vision
+/// capability, so the verdict never depends on a local OCR install. A refusal is
+/// `package_invalid` with `details.code`, the admission's own code. It only reads.
+pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
+    if let Some(flag) = flags.flags.keys().find(|flag| flag.as_str() != "--package") {
+        return Err(CliError::usage(format!(
+            "package check does not accept {flag}"
+        )));
+    }
+    flags.expect_positionals("package check", 0)?;
+    let package = flags.required_path("--package")?;
+    // A relative path names the package below the working directory, as every `--package` does.
+    let package = if package.is_absolute() {
+        package
+    } else {
+        std::env::current_dir()
+            .map_err(|error| CliError::package_invalid(error.to_string()))?
+            .join(package)
+    };
+    let deadline = Instant::now()
+        .checked_add(CHECK_BUDGET)
+        .ok_or_else(|| CliError::package_invalid("package admission deadline overflow"))?;
+    let descriptor =
+        actingcommand_lab::PreparedContainedTask::describe_path(CHECK_LABEL, &package, deadline)
+            .map_err(|error| {
+                CliError::package_invalid(format!(
+                    "{}: {}",
+                    error.code(),
+                    error.detail().unwrap_or("package admission failed")
+                ))
+                .with_details(json!({
+                    "code": error.code().as_str(),
+                    "declaration": error.declaration_issue(),
+                }))
+            })?;
+    serialize_response(PackageCheckResponse {
+        status: "admitted",
+        package_id: descriptor.package_id().to_owned(),
+        entry_task_id: descriptor.entry_task_id().to_owned(),
+    })
+}
+
+// Workflow #411 A5 (apps key 71): `package check` gives the Runtime's verdict.
+#[cfg(test)]
+#[path = "tests/gate_0121_pkgcheck.rs"]
+mod gate_0121_pkgcheck;
 
 pub(super) fn is_offline_command(args: &[String]) -> bool {
     matches!(args, [group, command, ..] if group == "package" && matches!(command.as_str(), "dry-run" | "preflight"))

@@ -94,6 +94,8 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
     match sub {
         "validate" => package_cli::run_validate(global, &flags),
         "preflight" => package_cli::run_preflight(&flags),
+        // Workflow #411 A5: the Runtime's structural admission of one package.
+        "check" => package_cli::run_check(&flags),
         "dry-run" => package_cli::run_offline(global, &flags),
         "inspect" => {
             let zip = flags.required_path("--zip")?;

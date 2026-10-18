@@ -37,6 +37,7 @@ pub(super) fn help_data() -> Value {
             "resource validate": crate::resource_runtime_support::resource_declarations::options(),
             "resource catalog": ["--repo <repository root>", "--catalog <static catalog JSON>", "--catalog-server <server>", "--field <identity feature name>"],
             "package preflight": ["--package <directory | .zip | .json container>", "--zip <published .zip package>"],
+            "package check": ["--package <directory | .zip | .json container>"],
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
             "lab unpin": ["--artifact-id <artifact-id>", "--pin-sequence <sequence>", "--pin-event-id <event-id>"],

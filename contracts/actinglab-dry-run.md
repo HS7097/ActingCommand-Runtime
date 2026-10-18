@@ -171,6 +171,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `lab vendor-stdio-selftest` | no_effect | | registered transient log |
 | `package validate` | no_effect | | |
 | `package preflight` | no_effect | | shared contained-task preparation |
+| `package check` | no_effect | | reads only: the Runtime's structural admission (Workflow #411 A5) |
 | `package dry-run` | refused | `offline_device_scope_forbidden` | positional arguments, `--version` |
 | `package inspect` | no_effect | | |
 | `package run` | refused | `dry_run_unsupported` | flag parsing, legacy routing flags, `--zip`, package validation, instance selector; alternative `package dry-run` |

@@ -539,7 +539,7 @@ tool.
 | `ac_lab_observe` | read | actinglab `observe` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`, the preview is a JPEG file answered by its path and scale, never inlined; an exported answer keeps the frame parts inline while they fit) | option one |
 | `ac_record_start`, `ac_record_mark`, `ac_record_stop`, `ac_record_status` | offline (recording files) | actinglab `record start`, `mark`, `stop`, `status` | unchanged | option one |
 | `ac_binding_draft` | offline | actinglab `record binding-draft` (new composite) | `record_stop`, `record_stop_export` ↔ same flags | option one |
-| `ac_pack_check` | offline | actinglab `package check` (new: structural admission, M-PKG) | `package` ↔ `--package` | option one |
+| `ac_pack_check` | offline | actinglab `package check` (structural admission, M-PKG; #411 A5: answers `{status, package_id, entry_task_id}`) | `package` ↔ `--package` | option one |
 | `ac_catalog_check` | offline | actinglab `resource catalog` | unchanged | option one |
 | `ac_run_pack` | operation | actinglab `run start` (new) | `instance`, `package`, `recovery_package`, `deadline_s` ↔ same flags; `deadline_s` 60–1800, default 1800 | option two |
 | `ac_stop_run` | operation | actinglab `run stop` (new) | `handle` ↔ `--request-id`; `wait_s` ↔ `--wait-s` (0–25); `--cancel-only` while this process's job still runs | option two |
@@ -637,7 +637,7 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
 | new: `emulator start`, `stop`, `restart`, `selfcheck` | ControlEmulatorInstance, SelfCheckInstance | option two |
 | new: `pack load`, `pack unload` | LoadPack, UnloadPack | option two; `pack unload --wait-s` (0–25) |
 | new: `clear-kept` (planned) | ClearKeptFolder | option two, with #375 R5e |
-| new: `package check`, `record binding-draft` | offline composites | option one |
+| `package check` (#411 A5); new: `record binding-draft` | offline (`record binding-draft` a composite) | option one |
 | record (with `record binding-draft`), resource catalog, package, resource, scheduling and operation offline commands | none (no Runtime connection) | option one (package tools); judged by actinglab itself; the per-command list is U-3's |
 | help, version, paths, capabilities, doctor, schema, config, explain | none | actinglab's own upkeep; not judged |
 | `resource restore` cold read | none | unchanged |
