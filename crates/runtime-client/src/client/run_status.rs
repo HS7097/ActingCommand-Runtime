@@ -37,6 +37,35 @@ const MAX_RUN_LISTING_PAGES: usize = 1_024;
 /// The most runs one listing holds (Workflow #411 A6): before it, each listing type was read
 /// into at most `MAX_RUN_SUMMARY_EVENTS` records, so every listing that fitted then fits.
 const MAX_LISTED_RUNS: usize = RUN_LISTING_EVENT_TYPES.len() * MAX_RUN_SUMMARY_EVENTS;
+/// The record types a run's own status reads (Workflow #411 A6), by its request and when a run
+/// id is reversed to its request: the request's origin (`request_origin`), the run lease's own
+/// release or expiry (`contained_run_lease_terminal`) and the run's semantic facts except its
+/// per-frame and per-action ones (evidence, recognition, selection, effect), which the
+/// projection never folds and which a long run records thousands of. The facts kept are the
+/// ones the projection folds (main admission, entry facts, steps, terminal) and every one that
+/// can be a run's first fact, whose sequence and time classify an interruption and filter a
+/// window: a run without an entry check starts with its main admission, a run with one with
+/// the geometry observation of its first frame (recorded before that frame's evidence), and a
+/// run that ends before its first frame with its terminal intent.
+const RUN_STATUS_EVENT_TYPES: [EventType; 17] = [
+    EventType::CliCommand,
+    EventType::UiAction,
+    EventType::LabRequest,
+    EventType::CommandReceived,
+    EventType::TaskRequested,
+    EventType::TaskStarted,
+    EventType::TaskGeometryObserved,
+    EventType::TaskEntryPreflight,
+    EventType::TaskStepStarted,
+    EventType::TaskStepFinished,
+    EventType::TaskTerminalIntent,
+    EventType::TaskCompleted,
+    EventType::TaskFailed,
+    EventType::TaskCancelled,
+    EventType::TaskTerminalRejected,
+    EventType::LeaseReleased,
+    EventType::LeaseExpired,
+];
 
 /// Selects one contained run by the request that submitted it or by its run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -638,7 +667,8 @@ impl RuntimeClient {
         }
     }
 
-    /// `None` only when `deadline` ended a paged read before its last page.
+    /// `None` only when `deadline` ended a paged read before its last page. Both reads, by run
+    /// and by request, read `RUN_STATUS_EVENT_TYPES` only (Workflow #411 A6).
     fn read_contained_run_status(
         &self,
         key: RunKey,
@@ -652,6 +682,7 @@ impl RuntimeClient {
                 let read = self.read_status_pages(
                     EventQuery {
                         run_id: Some(run_id),
+                        event_types: RUN_STATUS_EVENT_TYPES.to_vec(),
                         ..EventQuery::default()
                     },
                     snapshot,
@@ -689,6 +720,7 @@ impl RuntimeClient {
         };
         let query = EventQuery {
             request_id: Some(request_id),
+            event_types: RUN_STATUS_EVENT_TYPES.to_vec(),
             ..EventQuery::default()
         };
         let read = self.read_status_pages(query, snapshot, deadline, RUN_STATUS_OPERATION)?;

@@ -598,3 +598,13 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_0121_a6::a6_recent_runs_of_an_instance_with_more_entry_facts_than_one_read_keeps_come_back_complete",
 ]
 incident = ["#411 A6"]
+
+# Workflow #411 A6, part 2 (no register section; the 0.12.1 train): a run's own status (contained_run_status, and each run recent_runs and list_contained_runs project) reads only the record types its projection folds (RUN_STATUS_EVENT_TYPES), by its request and when a run id is reversed to its request, so a run whose captures alone pass the 16 384 records one read keeps still projects its status, the same by its run id, instead of run_status_event_limit_exceeded during contained_run_status (MCP ac_get_run, ac_stop_run, ac_overview, ac_diagnose; contract key R15, the next free key of the R series after R14; R6 is the run projection across pages)
+[[gate]]
+key = "R15"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_0121_a6b::a6_a_run_with_more_records_than_the_limit_still_projects_its_status",
+    "actingcommand-runtime-client::lib::tests::gate_0121_a6b::a6_the_run_id_reversal_reads_only_projected_types",
+]
+incident = ["#411 A6"]
