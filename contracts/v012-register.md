@@ -1636,6 +1636,25 @@ their spelling, category, ladder class, values and review unchanged.
 | A8B-2 | `contracts/outcome-codes/released/0.12.0.json`, `actingcommand.outcome-codes.release.v1` | release snapshot (contract file, written once by the release PR) | A8b | A8b | every code (with `category`, `ladder_class`, `review`, `status`, `values: {key: {type, required}}`) and every location (`review`, `status`) of the catalog at this commit, retired ones included; G9 compares every later catalog with its settled entries; never edited afterwards (spec §11) |
 | A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.12.1 on no pending code or location; a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
 
+### 1.98 Slice A7: the overview shows the last backend self-check; a failed capture open in a preparation is recoverable (#411 A7)
+
+A7 answers the 10-18 incident (#411 comment 6251046694): with the emulator windows closed by
+hand and adb up, every self-check failed its capture open (`capture_backend_open_failed`,
+`nemu_ipc`, no diagnostic category, confirmed disposal), while `actingctl status` still showed
+`emulator_state on` (correct: it is the running state, N1-1) and no ladder started although
+stuck recovery was on. It writes no ledger record, fact, wire shape, configuration key or
+outcome code and changes no interface revision of §6: `actingctl status`,
+`RuntimeInstanceStatus` and `emulator_state` are unchanged (a status member is a runtime-client
+wire change, a later release). [runtime-interface.md](runtime-interface.md) (the `ac_overview`
+row) and [emulator-control.md](emulator-control.md) ("Client and CLI"; "Preparation stages")
+are the contract. A fresh-backend capture failure on the task path (#316-P4,
+[application-lifecycle.md](application-lifecycle.md)) is not changed; it waits for a ruling.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A7-1 | `backend_selfcheck {<entry>: {status, checked_at_unix_ms}}` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 72) | A7 | A7 | one entry per backend entry (`input`, `capture`, `nemu`) whose `backend.selfcheck.<entry>.status` fact the instance holds, its value verbatim (`passed`, `failed`, `unknown`) with `.checked_at_unix_ms`; read from the RuntimeFactSnapshot the overview already reads, nothing added to the facts; an absent or invalidated entry is omitted, `{}` while none was checked, the member absent only when the snapshot read failed; it changes only when an open is recorded (no poll); never cut by MCP's output budget |
+| A7-2 | the preparation's recoverable check | rule (no shape change) | A7 | A7 (host 105) | a failed capture-backend open (`capture_backend_open_failed`) with confirmed temporary-resource disposal, a successful cleanup and no failed input-parameter observation is recoverable whatever its diagnostic category; the other categories' rule is unchanged; which codes start a ladder stays the configuration's (`preparation_backend`); an unconfirmed disposal (a Nemu worker that timed out) stays outside it |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

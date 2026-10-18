@@ -6,7 +6,7 @@ use super::recovery_ladder::PendingRecoveryLadder;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
 use crate::codes::{HostCode, HostLocation};
-use actingcommand_contract::codes::RuntimeErrorCode;
+use actingcommand_contract::codes::{DeviceSelfCheckFailure, RuntimeErrorCode};
 use actingcommand_contract::{CONNECTION_PREPARATION_CLAIM_WAIT_MS, SchedulingResumeSelfCheck};
 
 /// How a lease end treats the instance's device session (Workflow #191 H).
@@ -956,8 +956,9 @@ impl HostShared {
 
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
     /// cooldown when it refused the preparation lease (`lease_cooldown`, Workflow #191 h2), and
-    /// whether a failed open is recoverable: an ordinary acquisition failure whose resources
-    /// were disposed and whose cleanup succeeded (the rule a preparation trigger follows).
+    /// whether a failed open is recoverable: an ordinary acquisition failure (#411 A7: a failed
+    /// capture-backend open whatever its diagnostic category) whose resources were disposed and
+    /// whose cleanup succeeded (the rule a preparation trigger follows).
     fn prepare_instance_connection_with_cooldown(
         &self,
         instance_alias: &str,
@@ -1068,11 +1069,15 @@ impl HostShared {
         // failures. Only ordinary acquisition failures with confirmed temporary-resource
         // disposal qualify; invalid parameter/configuration observations never qualify. Which
         // codes then start a ladder is the `recovery_ladder` configuration's (Workflow #387 D1c,
-        // M387 §3.5: the default trigger item `preparation_backend`).
+        // M387 §3.5: the default trigger item `preparation_backend`). #411 A7: a failed
+        // capture-backend open is ordinary whatever its diagnostic category (a Nemu IPC open
+        // that gets no positive connect handle reports none); its disposal must still be
+        // confirmed, which a worker that timed out never is.
         let recoverable = opened.as_ref().is_some_and(|result| result.as_ref().is_err_and(|error| {
             error.resource_quiescence() == Some(ResourceQuiescence::Confirmed)
-                && error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
-                    "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native"))
+                && (error.code() == DeviceSelfCheckFailure::CaptureBackendOpenFailed.code()
+                    || error.diagnostic_detail().is_some_and(|detail| matches!(detail.category(),
+                        "handshake" | "child_exit" | "command_write" | "command_flush" | "protocol" | "response" | "native")))
                 && !error.failure_context().backend_open_observations().iter().any(|observation|
                     observation.report.attempts.iter().any(|attempt| attempt.input_parameters.as_ref()
                         .is_some_and(|check| check.status == actingcommand_contract::BackendObservationStatus::Failed)))

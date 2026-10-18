@@ -1205,3 +1205,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_390_nine1::nine1_the_status_shows_each_emulator_as_the_runtime_last_read_it",
 ]
 incident = ["#390"]
+
+# #411 A7 (v0.12.1; register §1.98 A7-2): in a preparation's recoverable check, a failed capture-backend open (capture_backend_open_failed) whose temporary-resource disposal is confirmed and that has no failed input-parameter observation is recoverable whatever its diagnostic category, so a self-check whose capture open fails uncategorised after a confirmed close starts the configured preparation_backend ladder at connection_preparation; a failed input-parameter observation still keeps it outside the check and starts no ladder
+[[gate]]
+key = "105"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0121_a7::a7_a_self_check_whose_capture_open_fails_starts_the_preparation_backend_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_0121_a7::a7_an_input_parameter_failure_still_starts_no_ladder",
+]
+incident = ["#411 A7"]

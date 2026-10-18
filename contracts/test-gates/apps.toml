@@ -684,3 +684,14 @@ tests = [
     "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
 incident = ["#390"]
+
+# #411 A7 (v0.12.1; register §1.98 A7-1): each actingctl overview / ac_overview instance row carries backend_selfcheck, one entry per self-checked backend entry the instance's program facts hold, {status, checked_at_unix_ms} verbatim from backend.selfcheck.<entry>.status and .checked_at_unix_ms, an empty object while no entry was checked; it shows failed after a failed open and passed after the next passing one; the CLI and MCP rows carry the same member, and MCP's output budget never cuts it
+[[gate]]
+key = "72"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time",
+    "actingcommand-actingctl::bin:actingctl::overview::tests::a7_a_passing_self_check_after_it_shows_passed",
+    "actingcommand-actingctl::gate::mcp_overview_parity::a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck",
+]
+incident = ["#411 A7"]
