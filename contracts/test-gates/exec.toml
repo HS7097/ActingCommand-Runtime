@@ -1348,3 +1348,12 @@ tests = [
     "actingcommand-pack-containment::lib::source::declarations::tests::l4bt_the_gate_admits_a_template_pool_and_refuses_a_bad_entry_at_its_pointer",
 ]
 incident = ["#308 L4b-T", "R-07"]
+
+# Workflow #411 A2 (v0.12.1; regression only, fixed by PKG-S1 in v0.12.0; no register section): a recovery or task package path that names nothing, a file that is no content container and a container over the compressed-size limit fail with their own codes (content_directory_missing, content_container_unsupported, content_container_size_limit), so "not a usable file" and "too big" are distinct
+[[gate]]
+key = "83"
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::pkg_s1::a2_a_missing_path_an_unsupported_file_and_a_file_over_the_limit_have_their_own_codes",
+]
+incident = ["#411 A2"]

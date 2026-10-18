@@ -500,6 +500,15 @@ impl<E> ContainedTaskRunError<E> {
         }))
     }
 
+    /// Workflow #411 A1: [`Self::task`] whose failure carries `outcome`, the outcome of
+    /// `host_code` with the values that code declares.
+    pub fn task_with_outcome(host_code: &'static str, outcome: Outcome) -> Self {
+        Self::Task(
+            ContainedTaskError::from_code(ContainedTaskCode::Host { host_code })
+                .with_values(outcome),
+        )
+    }
+
     fn operation<R: ContainedTaskRuntime<Error = E>>(error: E) -> Self {
         match R::classify_error(&error) {
             ContainedTaskRuntimeErrorClass::Nonfatal => Self::NonfatalOperation(error),
