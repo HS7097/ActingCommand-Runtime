@@ -342,22 +342,28 @@ impl HostShared {
         .iter()
         .map(|(instance_id, instance)| (*instance_id, instance.instance_alias.clone()))
         .collect::<Vec<_>>();
-        let (global_pause, paused_instances) = {
-            let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
-            (
-                pauses.holds_global(),
-                registered
-                    .into_iter()
-                    .filter(|(_, instance_alias)| pauses.holds_instance(instance_alias))
-                    .map(|(instance_id, _)| instance_id)
-                    .collect::<BTreeSet<_>>(),
-            )
-        };
+        // Red proof M4: the #403 fence half of the routine gate is read with the pause half.
+        let mut fenced = BTreeSet::new();
+        for (instance_id, _) in &registered {
+            if self.resource_fence_holds_routine(*instance_id)? {
+                fenced.insert(*instance_id);
+            }
+        }
+        // Red proof M1: an instance's own pause is not read.
+        // Red proof M3: the global pause is not read.
+        // Red proof M2: while no pause is held at all, the routine entries of an instance that
+        // no fence holds are skipped as if a pause held them.
+        let no_pause_held =
+            !lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?.holds_pauses();
         Ok({
             let scheduler = lock(&self.scheduler, HostLocation::CheckInstallLeases)?;
             scheduler.active_tokens().is_empty()
                 && scheduler.waiting_total(|instance_id| {
-                    global_pause || paused_instances.contains(&instance_id)
+                    if fenced.contains(&instance_id) {
+                        true
+                    } else {
+                        no_pause_held
+                    }
                 }) == 0
         } && !lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
             .install_cleanup_pending())

@@ -1472,7 +1472,10 @@ impl SeedScheduler {
                 state
                     .queue
                     .iter()
-                    .filter(|entry| !(held && entry.kind.gated_by_pause()))
+                    // Red proof M5: a holder-owned continuation is skipped as well.
+                    .filter(|entry| {
+                        !(held && (entry.kind.gated_by_pause() || entry.kind.holder_owned()))
+                    })
                     .count()
             })
             .sum()
