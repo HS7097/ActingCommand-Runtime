@@ -228,7 +228,6 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 
 - With an instance alias containing upper-case letters, `ac_pause` / `ac_resume` answer `client_action_invalid` and the Lab tools' action records are missing; use `actingctl pause` / `actingctl resume` instead.
 - `ac_lab_observe` (and `actinglab observe`) fails instead of truncating when its minimal output exceeds 2048 bytes.
-- After many Lab operations `ac_overview` reports incomplete (`run_status_event_limit_exceeded`); the runs themselves are not affected.
 
 ## Build and run
 
