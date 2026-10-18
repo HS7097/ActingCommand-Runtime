@@ -36,6 +36,7 @@ use actingcommand_contract::{
     RecoveryRung, RecoveryRungOutcome, RuntimePayload,
 };
 use actingcommand_policy::SchedulingDecisionState;
+use std::sync::{Mutex, OnceLock};
 
 const GATE_WAIT: Duration = Duration::from_secs(120);
 const START: EmulatorInstanceAction = EmulatorInstanceAction::Start;
@@ -562,8 +563,76 @@ fn gate_a_shutdown_during_the_readiness_wait_fails_rung_three_and_releases_once(
     );
 }
 
+/// Samples business capacity once and records it, as the capacity monitor's tick does
+/// (`RuntimeHost::capacity_sampler_for_test`).
+type CapacitySampler = Box<dyn Fn() -> RuntimeHostResult<()> + Send>;
+
+// The Runtime clock of the manual-clock rows: `ManualMonotonicClock`, whose kernel waits also
+// sample business capacity once they have moved the clock on. Every holding check of the climb
+// (before each rung, and before rung 3's Stop and Start) admits business capacity, and a capacity
+// sample is fresh for twice the monitor's interval on the Runtime clock (2 x 2 s;
+// contracts/capacity-admission.md "capacity freshness"). The monitor samples on its own interval
+// of real time, but a kernel wait on this clock (the failed scheduled run's, rung 1's and rung
+// 2's) moves the clock on at once, so without a tick between the last wait and the next holding
+// check the sample is stale there, the climb ends before rung 3's Start, and the row waits out
+// `GATE_WAIT` (CI run 39141282412). So each wait samples capacity after it moves the clock, as
+// the monitor does while time passes; this is the G8 row's fix (`SteppingClock`, sampled at each
+// look) where this clock moves. Only `pause` moves the monotonic time here (the fixture never
+// calls `advance`), so after every move a sample at the moved time is recorded before the
+// waiting thread goes on.
+//
+// No deadlock: the sampler takes the host's performance lock and, under it, what the monitor's
+// tick takes (the capacity projection, the ledger append, the events and the policy wakes).
+// - `pause` is reached only from a kernel wait (`HostShared::kernel_pause`) and the provider
+//   startup's wait, and neither runs under any of those locks: the performance lock is only taken
+//   in statement-scoped guards around monitor calls, and the others only inside the projection,
+//   ledger, events and wakes calls; none of them waits on the kernel.
+// - The sampler only reads this clock (`sample`), which takes no lock, so it never re-enters
+//   `pause` or the sampler's own lock.
+// - The sampler's lock is taken only here, before the performance lock, and the monitor thread
+//   never takes it, so the order is the sampler's lock, then the performance lock, then the
+//   monitor's own order below it: no cycle.
+// - The sampler holds the host weakly (no reference cycle through this clock), and its upgrade
+//   never drops the last reference, because the waiting thread runs on a borrowed `HostShared`.
+struct CapacitySamplingClock {
+    clock: ManualMonotonicClock,
+    sampler: OnceLock<Mutex<CapacitySampler>>,
+}
+
+impl CapacitySamplingClock {
+    fn new(unix_ms: u64) -> Self {
+        Self {
+            clock: ManualMonotonicClock::new(unix_ms),
+            sampler: OnceLock::new(),
+        }
+    }
+
+    // Every later kernel wait samples capacity with `sampler`; set once, right after the host
+    // starts, before any business runs.
+    fn sample_capacity_after_waits(&self, sampler: CapacitySampler) {
+        assert!(
+            self.sampler.set(Mutex::new(sampler)).is_ok(),
+            "the capacity sampler is set once"
+        );
+    }
+}
+
+impl RuntimeClock for CapacitySamplingClock {
+    fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        self.clock.sample()
+    }
+
+    fn pause(&self, duration: Duration) {
+        self.clock.pause(duration);
+        if let Some(sampler) = self.sampler.get() {
+            let sample_capacity = sampler.lock().expect("the capacity sampler's lock");
+            (*sample_capacity)().expect("capacity sample at the clock a kernel wait moved");
+        }
+    }
+}
+
 // The ladder fixture of the manual-clock rows: `emulator_ladder_fixture`'s physical instance with
-// emulator control and Android held down after its Start, on `ManualMonotonicClock`. The
+// emulator control and Android held down after its Start, on `CapacitySamplingClock`. The
 // scheduled run has failed and rung 3 waits for readiness (its Start and first boot check came).
 struct ManualClockLadder {
     root: TempDir,
@@ -575,13 +644,13 @@ struct ManualClockLadder {
 fn manual_clock_ladder_in_readiness_wait() -> ManualClockLadder {
     let root = TempDir::new().expect("tempdir");
     let (host_config, request) = ladder_setup(root.path());
-    let clock = Arc::new(ManualMonotonicClock::new(POLICY_NOW_UNIX_MS));
+    let clock = Arc::new(CapacitySamplingClock::new(POLICY_NOW_UNIX_MS));
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     state.hold_android_boot.store(true, Ordering::Release);
     let registered = instance_id();
     let host = RuntimeHost::start(
-        host_config.with_runtime_clock(clock),
+        host_config.with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             registered,
@@ -589,6 +658,7 @@ fn manual_clock_ladder_in_readiness_wait() -> ManualClockLadder {
         )),
     )
     .expect("physical runtime host on the manual clock");
+    clock.sample_capacity_after_waits(host.capacity_sampler_for_test().expect("capacity owner"));
     bind_fake_emulator(&host, POLICY_INSTANCE_ALIAS, registered, &state);
     let context = admit_ladder_run(&host, &request);
     state.unknown_capture.store(true, Ordering::Release);
