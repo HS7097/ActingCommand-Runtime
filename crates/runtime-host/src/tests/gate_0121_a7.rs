@@ -19,9 +19,10 @@
 use super::instance_workers::{all_events, phases, wait_until};
 use super::*;
 use actingcommand_contract::{
-    BackendInputParameterCheck, BackendObservationStatus, BackendOpenAttempt, BackendOpenEntry,
-    BackendOpenReport, BackendOpenSource, BackendOpenStage, InstanceStuckRecovery, LeasePayload,
-    RecoveryTriggerStage, RequestId, RuntimeLifecyclePhase, SchedulingResumeSelfCheck,
+    BackendInputGeometryObservation, BackendInputParameterCheck, BackendObservationStatus,
+    BackendOpenAttempt, BackendOpenEntry, BackendOpenReport, BackendOpenSource, BackendOpenStage,
+    InstanceStuckRecovery, LeasePayload, RecoveryTriggerStage, RequestId, RuntimeLifecyclePhase,
+    SchedulingResumeSelfCheck,
 };
 use actingcommand_device::{BackendOpenObservation, DeviceResourceQuiescence};
 
@@ -52,14 +53,26 @@ fn uncategorised_capture_open_failure() -> DeviceError {
         .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1)
 }
 
-// The same failure, whose open observations also hold the input open's: it fell back to its
-// second touch backend after the first refused the configured input parameters.
+// The same failure, whose open observations also hold the input open's, in the shape the
+// device's `auto` input selection reports it: the first touch backend's handshake failed its
+// input-parameter check transiently, so the selection fell back; the second failed without a
+// check; `adb_shell_input` passed its check with the geometry it read, which the report carries.
 fn capture_open_failure_with_failed_input_parameters() -> DeviceError {
-    let attempt = |backend: &str, status, input_parameters| BackendOpenAttempt {
+    let geometry = BackendInputGeometryObservation {
+        natural_max_x: 1280,
+        natural_max_y: 720,
+        rotation_degrees: 0,
+    };
+    let passed = BackendInputParameterCheck {
+        status: BackendObservationStatus::Passed,
+        input_geometry: Some(geometry.clone()),
+        ..BackendInputParameterCheck::default()
+    };
+    let attempt = |backend: &str, status, elapsed_ms: u64, input_parameters| BackendOpenAttempt {
         backend: backend.to_owned(),
         stage: BackendOpenStage::Connect,
         status,
-        elapsed_ms: None,
+        elapsed_ms: Some(elapsed_ms),
         detail: None,
         input_parameters,
     };
@@ -70,13 +83,21 @@ fn capture_open_failure_with_failed_input_parameters() -> DeviceError {
     input.status = BackendObservationStatus::Passed;
     input.connection = BackendObservationStatus::Passed;
     input.input_check = BackendObservationStatus::Passed;
+    input.input_geometry = Some(geometry);
     input.attempts = vec![
         attempt(
             "maatouch",
             BackendObservationStatus::Failed,
+            40,
             Some(BackendInputParameterCheck::failed()),
         ),
-        attempt("adb_shell_input", BackendObservationStatus::Passed, None),
+        attempt("minitouch", BackendObservationStatus::Failed, 30, None),
+        attempt(
+            "adb_shell_input",
+            BackendObservationStatus::Passed,
+            20,
+            Some(passed),
+        ),
     ];
     let mut capture = BackendOpenReport::unobserved(BackendOpenEntry::Capture);
     capture.source = BackendOpenSource::Native;
@@ -138,7 +159,7 @@ fn preparation_finished(events: &[PersistedEvent], after: u64) -> &PersistedEven
     };
     assert_eq!(*stage, RecoveryTriggerStage::ConnectionPreparation);
     assert_eq!(outcome.code().as_str(), CAPTURE_OPEN_FAILED);
-    *event
+    event
 }
 
 // The lease the self-check's claim was granted.
