@@ -55,7 +55,7 @@ pub(crate) enum Layout {
         generation: u64,
         slot: &'static str,
         selection_json: String,
-        _selection: InstalledProcess,
+        _selection: Box<InstalledProcess>,
     },
     /// A single-location root: no `install\active.json`, `<root>\runtime\BUILD-MANIFEST.json` is
     /// a file, and `<root>\actingd.config.json` is its configuration.
@@ -107,7 +107,7 @@ impl Installation {
                 generation: selected.selection().generation,
                 slot: selected.selection().slot.as_str(),
                 selection_json: selected.selection_json().to_owned(),
-                _selection: selected,
+                _selection: Box::new(selected),
             },
             root,
         })
