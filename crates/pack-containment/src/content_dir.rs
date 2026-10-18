@@ -60,7 +60,7 @@ pub(super) fn read_with(
             PackContainmentCode::ContentDirectoryLinkOrType,
         ));
     }
-    if metadata.is_dir() {
+    if false && metadata.is_dir() {
         let before = directory_identity(&root)?;
         let entries = read_entries(&root, limits, deadline, after_directory)?;
         if directory_identity(&root)? != before {
@@ -76,7 +76,7 @@ pub(super) fn read_with(
         ));
     }
     let container = ContentContainer::from_locator(locator)
-        .ok_or_else(|| source_error(PackContainmentCode::ContentContainerUnsupported))?;
+        .ok_or_else(|| source_error(PackContainmentCode::ContentContainerSizeLimit))?;
     let bytes = read_regular(
         &root,
         limits.max_compressed_bytes,

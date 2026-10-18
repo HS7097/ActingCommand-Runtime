@@ -7550,10 +7550,7 @@ impl HostShared {
             return fail_contained_task_entry_with(
                 runtime,
                 code.as_str(),
-                Outcome::new(code)
-                    .page_ids(required_pages)
-                    .page_id(final_page)
-                    .package_id(recovery_label),
+                Outcome::relayed(code.as_str()),
             );
         }
 
