@@ -284,6 +284,7 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("wait", Mode::NoEffect),
     ("package validate", Mode::NoEffect),
     ("package preflight", Mode::NoEffect),
+    ("package check", Mode::NoEffect),
     ("package inspect", Mode::NoEffect),
     ("operation validate", Mode::NoEffect),
     ("operation inspect", Mode::NoEffect),

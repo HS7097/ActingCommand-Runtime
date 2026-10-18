@@ -633,7 +633,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         title: "Check a task package",
         tier: Tier::Observer,
         description: concat!(
-            "Checks one task package offline, as actinglab --json package preflight does, and answers its result verbatim: {preflight}. The package is named by its path only; admission is structural and no digest is computed. preflight's coverage says how far the check went: it neither recognizes nor executes anything.",
+            "Checks one task package offline, as actinglab --json package check --package <package> does, and answers its data verbatim: {status: admitted, package_id, entry_task_id}. The check is the Runtime's own structural admission, the one check-config and the daemon apply, so it admits exactly what the Runtime admits; it recognizes and executes nothing, and a declared OCR model need not be installed. The package is named by its path only (a directory, .zip or .json container); no digest is computed. A refused package is actinglab's package_invalid, whose details code is the admission's own code.",
             lab_errors!(),
             check_job!()
         ),

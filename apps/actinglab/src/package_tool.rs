@@ -570,4 +570,4 @@ fn write_files(root: &Path, files: &[(String, Vec<u8>)], failed: ActinglabCode) 
 
 #[cfg(test)]
 #[path = "tests/gate_390_tool1.rs"]
-mod gate_390_tool1;
+pub(crate) mod gate_390_tool1;
