@@ -494,7 +494,7 @@ static APP: LabCommand = LabCommand {
 /// Workflow #411 A5 (M-PKG S5-T4): ac_pack_check, actinglab `package check --package <path>`,
 /// the Runtime's structural admission of one package; it only reads.
 static PACK_CHECK: LabCommand = LabCommand {
-    words: &["package", "check"],
+    words: &["package", "preflight"],
     flags: &[PACKAGE],
     required: &["package"],
     capture_is_lab_request: false,

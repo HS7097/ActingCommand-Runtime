@@ -59,7 +59,7 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
                     error.detail().unwrap_or("package admission failed")
                 ))
                 .with_details(json!({
-                    "code": error.code().as_str(),
+                    "code": "contained_task_admission_failed",
                     "declaration": error.declaration_issue(),
                 }))
             })?;
