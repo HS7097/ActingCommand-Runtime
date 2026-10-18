@@ -27,12 +27,14 @@ pub const NAMING_SINCE: (u64, u64, u64) = (0, 12, 0);
 pub const LADDER_CLASS_VOCABULARY: &str = "ladder_class";
 /// The first release that no pending entry may reach (model-378 §5.3, "Settlement timing":
 /// v0.12.1 settles the rest, and its release gate fails while any entry is pending).
-pub const SETTLED_FROM: (u64, u64, u64) = (0, 12, 1);
+// RED PROOF mutation 3: v0.12.1 may still hold pending entries.
+pub const SETTLED_FROM: (u64, u64, u64) = (0, 12, 2);
 /// What a pending entry may hold in place of a text it has not written yet (§5.2).
 pub const UNWRITTEN: &str = "TBD";
 /// The text members a settled code has written (§5.2: `description` always, `common_causes`
 /// and `handling` once settled); a settled location has its `description`.
-const SETTLED_CODE_TEXT: &[&str] = &["description", "common_causes", "handling"];
+// RED PROOF mutation 2: handling is not checked.
+const SETTLED_CODE_TEXT: &[&str] = &["description", "common_causes"];
 const SETTLED_LOCATION_TEXT: &[&str] = &["description"];
 /// The ladder class whose codes the recovery ladder counts as warnings on an instance; such a
 /// code is of category warning or error.
@@ -517,7 +519,7 @@ pub fn released_versions(root: &Path) -> Result<BTreeSet<String>, String> {
         if path.is_file()
             && path
                 .extension()
-                .is_some_and(|extension| extension == "json")
+                .is_some_and(|extension| extension == "jsn") // RED PROOF mutation 1: no snapshot is found
             && let Some(stem) = path.file_stem()
         {
             versions.insert(stem.to_string_lossy().into_owned());

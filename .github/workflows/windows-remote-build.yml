@@ -373,7 +373,8 @@ jobs:
             throw "release_input_invalid: release tag does not start with v: $tag"
           }
           $release = $tag.Substring(1)
-          & cargo run --locked -p actingcommand-outcome-guard --bin outcome-guard -- release $release
+          # RED PROOF mutation 4: the release build does not run the release gate.
+          & cargo run --locked -p actingcommand-outcome-guard --bin outcome-guard -- merge
           if ($LASTEXITCODE -ne 0) {
             throw "outcome_release_gate_failed: outcome-guard release $release exited with code $LASTEXITCODE"
           }
