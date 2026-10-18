@@ -897,7 +897,11 @@ ADB endpoint is pending) is started by the Runtime itself, on an autostart claim
   under the claim's request; status `lease_active`), or, while a scheduling pause holds the
   instance or the global gate (a restored pause included), a gated entry from the first moment
   (`lease.requested` + `scheduler.queued`; status `queued_request_count` 1); the resume grants
-  it. A takeover cooldown is waited out in the queue. A pending instance stays withheld from
+  it. A claim the pause gate holds is not waiting work (Workflow #411 A3): it does not refuse
+  `request-shutdown` or `restart`; an accepted shutdown disconnects it (`scheduler.denied` with
+  `lease.queue_disconnected`, under the claim's request) without a report line, and the next
+  start enqueues it again under the restored pause. A takeover cooldown is waited out in the
+  queue. A pending instance stays withheld from
   policy until its start and preparation pass.
 - **Network first.** Once granted, the claim waits on its instance's worker
   (`actingd-instance-<alias>`) while it holds the key, never on a shared thread. It reads the

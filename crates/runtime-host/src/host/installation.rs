@@ -313,7 +313,9 @@ impl HostShared {
 
     /// Workflow #369 §3.5 (review2 L1): idle means no lifecycle work (`active`, which counts
     /// every running instance worker), no holder and no waiting entry (the scheduler's own
-    /// read), and no install cleanup pending.
+    /// read), and no install cleanup pending. Workflow #411 A3: an entry the pause gate holds is
+    /// no waiting entry (`nothing_held_or_waiting`). `request-shutdown`, `restart`, an install
+    /// CommitShutdown and a drain's completion all decide by this test.
     fn installation_idle(&self, admission: &LifecycleAdmission) -> RuntimeHostResult<bool> {
         if !admission.active.is_empty() {
             return Ok(false);
@@ -323,10 +325,40 @@ impl HostShared {
 
     /// No holder and no waiting entry (the scheduler's own read), and no install cleanup
     /// pending: the part of `installation_idle` that lifecycle work in flight does not decide.
+    ///
+    /// Workflow #411 A3: a routine entry on an instance whose routine gate a scheduling pause
+    /// holds (the global pause or the instance's own) is not a waiting entry: it does no work
+    /// until a resume, and a shutdown disconnects it (`lease.queue_disconnected`) while the
+    /// pause is kept and restored, so the next start enqueues it again. Only the pause half of
+    /// the routine gate is read (`routine_gate` without the #403 resource fence): a routine
+    /// entry a fence holds still waits, since the fence lifts without a resume. The pauses are
+    /// read first, then the scheduler, as `pump` reads the gate; a resume done before this read
+    /// leaves its entries eligible or granted, so they count.
     fn nothing_held_or_waiting(&self) -> RuntimeHostResult<bool> {
+        let registered = lock(
+            &self.registered_instances,
+            HostLocation::ReadInstanceRegistry,
+        )?
+        .iter()
+        .map(|(instance_id, instance)| (*instance_id, instance.instance_alias.clone()))
+        .collect::<Vec<_>>();
+        let (global_pause, paused_instances) = {
+            let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
+            (
+                pauses.holds_global(),
+                registered
+                    .into_iter()
+                    .filter(|(_, instance_alias)| pauses.holds_instance(instance_alias))
+                    .map(|(instance_id, _)| instance_id)
+                    .collect::<BTreeSet<_>>(),
+            )
+        };
         Ok({
             let scheduler = lock(&self.scheduler, HostLocation::CheckInstallLeases)?;
-            scheduler.active_tokens().is_empty() && scheduler.queued_total() == 0
+            scheduler.active_tokens().is_empty()
+                && scheduler.waiting_total(|instance_id| {
+                    global_pause || paused_instances.contains(&instance_id)
+                }) == 0
         } && !lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
             .install_cleanup_pending())
     }
@@ -335,10 +367,10 @@ impl HostShared {
     /// 50 ms, the performance tick, a closed connection's cleanup, a reply still being written
     /// (train 11 boot smoke, run 38560460358: `runtime_busy` right after `runtime_ready`). A
     /// shutdown request that finds such work on other threads, and no holder, no waiting entry
-    /// and no install cleanup, lets it end, at most `SHUTDOWN_SETTLE_TIMEOUT`; it is then
-    /// decided with the admission still held, so no new work starts in between. Work of the
-    /// requesting thread itself cannot end while it waits, and every other refusal is answered
-    /// at once.
+    /// (an entry the pause gate holds is none, Workflow #411 A3) and no install cleanup, lets it
+    /// end, at most `SHUTDOWN_SETTLE_TIMEOUT`; it is then decided with the admission still
+    /// held, so no new work starts in between. Work of the requesting thread itself cannot end
+    /// while it waits, and every other refusal is answered at once.
     ///
     /// SHUT-FU (Workflow #378): an install CommitShutdown (`commit`, its ticket) is decided by
     /// the same idle test, so it waits the same way, and only while its transition is the live

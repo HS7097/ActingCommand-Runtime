@@ -1457,9 +1457,25 @@ impl SeedScheduler {
         })
     }
 
-    /// Workflow #369 §3.5: how many entries wait on every instance together (install idle).
-    pub fn queued_total(&self) -> usize {
-        self.instances.values().map(|state| state.queue.len()).sum()
+    /// Workflow #369 §3.5, #411 A3: how many entries wait on every instance together (install
+    /// and shutdown idle), less the entries the pause gate holds: a routine entry
+    /// (`gated_by_pause`) on an instance whose routine gate a scheduling pause holds, as
+    /// `held_by_pause` reads it (the caller reads the pauses before it takes the scheduler, as
+    /// it reads `ClaimGate`). Such an entry does no work and waits for a resume. Every other
+    /// entry counts: an operator or client entry (past its deadline or not), a holder-owned
+    /// continuation, and a routine entry that a #403 resource fence holds or nothing holds.
+    pub fn waiting_total(&self, held_by_pause: impl Fn(InstanceId) -> bool) -> usize {
+        self.instances
+            .iter()
+            .map(|(instance_id, state)| {
+                let held = held_by_pause(*instance_id);
+                state
+                    .queue
+                    .iter()
+                    .filter(|entry| !(held && entry.kind.gated_by_pause()))
+                    .count()
+            })
+            .sum()
     }
 
     /// Workflow #369 §5.3: whether a ladder holds `instance_id` or waits for it: the holder is
