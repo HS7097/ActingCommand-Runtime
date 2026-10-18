@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod catalog_codes;
 mod codes;
 
 use std::borrow::Cow;
@@ -35,6 +36,7 @@ enum CliRequest {
     Signatures(actingcommand_ledger_forensics::ForensicSignatureRequest),
     Facts { state_root: PathBuf, position: u64 },
     Frames(Box<ForensicFramesRequest>),
+    Codes(catalog_codes::CodesRequest),
 }
 
 #[derive(Debug)]
@@ -88,6 +90,7 @@ where
     W: Write,
 {
     let report = match parse_args(args)? {
+        CliRequest::Codes(request) => return catalog_codes::write(&request, output),
         CliRequest::Material(request) => {
             return actingcommand_ledger_forensics::read_material_to(*request, output).map_err(
                 |error| CliError::relayed(error.code(), error.operation(), error.to_string()),
@@ -206,8 +209,11 @@ where
     if entry == "replay" {
         return parse_replay(args);
     }
+    if entry == "codes" {
+        return catalog_codes::parse(args).map(CliRequest::Codes);
+    }
     if entry != "--state-root" {
-        return Err(invalid_arguments("expected replay or --state-root"));
+        return Err(invalid_arguments("expected codes, replay or --state-root"));
     }
     let state_root = PathBuf::from(
         args.next()

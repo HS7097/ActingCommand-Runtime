@@ -454,7 +454,9 @@ dependencies = [
  "actingcommand-ledger-forensics",
  "actingcommand-runtime-database",
  "actingcommand-runtime-state",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

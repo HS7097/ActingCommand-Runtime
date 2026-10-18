@@ -21,6 +21,8 @@ actingcommand_contract::outcome_locations! {
         ExportStability => "export_stability",
         ExportTaskEvidence => "export_task_evidence",
         ParseArguments => "parse_arguments",
+        /// `codes` reads the outcome catalog this build embeds (Workflow #378 A8b).
+        ReadOutcomeCatalog => "read_outcome_catalog",
         ReplaySignatures => "replay_signatures",
         SerializeForensicReport => "serialize_forensic_report",
         WriteForensicOutput => "write_forensic_output",

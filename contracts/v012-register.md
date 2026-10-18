@@ -1618,6 +1618,24 @@ the step) is not part of the merge gate.
 | L4BT-1 | package format: an operation's `expect_after.expect_identity.templates`, an array of `{id, target_id}` | new optional member (resource file format, not a ledger shape; task schemas unchanged) | SEL-L4b-T | resource side | the declaration gate: `expect_identity` holds `choice_of` and optionally `target_id` and `templates`, nothing else (`UnknownField`); each entry is `{id, target_id}`, both strings (`InvalidType` at `…/templates/<j>/<member>`). Admission (`contained_task_select_invalid`): the `choice_of` step has an identity feature (`choice_of=no_identity`); exactly one of `target_id` and `templates` (`expect_identity=target_and_templates`, `=neither`); the text path as row L4B-1; the pool holds 1..=16 entries (`templates=count`), each a template target (`template=not_template`) named once (`template=duplicate`), with an `id` of the step's identity domain (`template=out_of_domain`), an effective threshold above 0 (`template=threshold_zero`) and a `rect` region (`template=region_not_rect`), one rect for all (`template=regions_differ`) |
 | L4BT-2 | `selection_identity_mismatch` with `identity_state` `absent` | new value combination of an existing record (shape unchanged) | SEL-L4b-T | SEL-L4b-T | a template `expect_identity` on whose last destination frame before `expect_after.timeout_ms` no pool entry passed; `expected_identity` the chosen ID, no `observed_identity`; `unknown` keeps its text-path meaning and also covers two or more business IDs passing |
 
+### 1.95 Slice A8b: the v0.12.0 tag-time slice (#378, model-378 §5.1, §5.3, §9 G10; A8 ruling 1 of 2026-10-17)
+
+A8b brings the three items A8 left for the tag (A8's PR #899, "Not done"): the read command
+`actingledger codes`, the release snapshot `released/0.12.0.json` and the guard check G10. It
+writes no ledger record, wire shape or configuration key and changes no interface revision of
+§6. [runtime-outcomes.md](runtime-outcomes.md) ("Release snapshot", "Reading the catalog:
+`actingledger codes`" and the G10 row) is the contract. Its catalog changes are entries, not
+rows (§7): the actingledger location `read_outcome_catalog`, and the codes
+`outcome_code_unknown` and `outcome_catalog_unreadable` of §1.42, which move from actingctl's
+fragment to the contract's (`SharedCode`, spec D3, because actingledger emits them too) with
+their spelling, category, ladder class, values and review unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A8B-1 | `actingledger codes [--code <code>] [--json \| --markdown]`: the default form one tab-separated line per code (code, category, ladder_class, review, status, description); `--markdown` the catalog's SHA-256 line and a table of the same columns; `--json` one line `actingcommand.actingledger.codes.v1` `{schema_version, catalog_sha256, codes: {name: entry}}` | read output (offline; no persisted record, no state root) | A8b | A8b | codes in name order, or the one `--code` names (`outcome_code_unknown` otherwise); each entry as the embedded catalog holds it; `catalog_sha256` is the SHA-256 of the embedded `contracts/outcome-codes.json` (model-378 §5.3 "Version": the release half lives only in the tag); a failure is one `actingledger: <code> during <location>: <text>` stderr line and exit 1 |
+| A8B-2 | `contracts/outcome-codes/released/0.12.0.json`, `actingcommand.outcome-codes.release.v1` | release snapshot (contract file, written once by the release PR) | A8b | A8b | every code (with `category`, `ladder_class`, `review`, `status`, `values: {key: {type, required}}`) and every location (`review`, `status`) of the catalog at this commit, retired ones included; G9 compares every later catalog with its settled entries; never edited afterwards (spec §11) |
+| A8B-3 | `outcome-guard release <version> [<root>]` | guard command of the release build (no persisted shape) | A8b | A8b | G10 for `X.Y.Z` or `X.Y.Z-rc.N`: settled entries have their text; `X.Y.Z` needs `released/X.Y.Z.json`, and from v0.12.1 on no pending code or location; a release candidate needs only the text; the exact-SHA build runs it before it builds when it releases (`windows-remote-build.yml`, step "Outcome catalog release gate (G10)") and a violation stops the release before the tag exists |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

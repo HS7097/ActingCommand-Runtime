@@ -356,6 +356,28 @@ jobs:
             throw "rustup default failed with exit code $LASTEXITCODE"
           }
 
+      # Workflow #378 A8b (model-378 §9 G10, review L14): a release stops before it builds when
+      # the commit it releases lacks the release's outcome-code snapshot
+      # contracts/outcome-codes/released/<X.Y.Z>.json, holds a settled entry without text or,
+      # from v0.12.1 on, a pending entry. A dry run checks the same; a release candidate
+      # (vX.Y.Z-rc.N) needs only the settled text.
+      - name: Outcome catalog release gate (G10)
+        if: ${{ inputs.release_tag }}
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          if (-not $tag.StartsWith('v', [StringComparison]::Ordinal)) {
+            throw "release_input_invalid: release tag does not start with v: $tag"
+          }
+          $release = $tag.Substring(1)
+          & cargo run --locked -p actingcommand-outcome-guard --bin outcome-guard -- release $release
+          if ($LASTEXITCODE -ne 0) {
+            throw "outcome_release_gate_failed: outcome-guard release $release exited with code $LASTEXITCODE"
+          }
+
       - name: Build Windows executables
         shell: pwsh
         run: |

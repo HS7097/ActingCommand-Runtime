@@ -125,9 +125,9 @@ actingcommand_contract::outcome_codes! {
         ConfigGenerationMismatch => "config_generation_mismatch": warning / none,
         // ---- end of MCP-9a
         // ---- Workflow #389 MCP-14: `codes` / `ac_outcome_code` (command table §4.15).
+        // Its refusals outcome_code_unknown and outcome_catalog_unreadable are the contract's
+        // (`SharedCode`, #378 A8b): actingledger codes emits them too.
         OutcomeCodesReported => "outcome_codes_reported": success / none,
-        OutcomeCodeUnknown => "outcome_code_unknown": error / none,
-        OutcomeCatalogUnreadable => "outcome_catalog_unreadable": error / none,
         // ---- end of MCP-14
         // ---- Workflow #389 MCP-6: `run evidence` / `ac_run_evidence` (command table §4.7).
         RunEvidenceReported => "run_evidence_reported": success / none,

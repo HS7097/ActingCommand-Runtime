@@ -362,6 +362,11 @@ crate::outcome_codes! {
         OcrFieldsDictionaryReferenceInvalid => "ocr_fields_dictionary_reference_invalid": error / declaration_error,
         OcrFieldsOutcomeInvalid => "ocr_fields_outcome_invalid": error / declaration_error,
         OfflineFixtureMissing => "offline_fixture_missing": error / none,
+        // Workflow #378 A8b: actingctl codes (#389 MCP-14) and actingledger codes both look up
+        // the catalog this build embeds, so the two refusals of a lookup moved here from
+        // actingctl's registry.
+        OutcomeCatalogUnreadable => "outcome_catalog_unreadable": error / none,
+        OutcomeCodeUnknown => "outcome_code_unknown": error / none,
         OutcomeProjectionNotReady => "outcome_projection_not_ready": error / none,
         OwnerCompactionUnrecoverable => "owner_compaction_unrecoverable": error / none,
         OwnerSeekFailed => "owner_seek_failed": error / none,

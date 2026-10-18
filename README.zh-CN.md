@@ -299,6 +299,7 @@ actingledger --state-root <state-root> views [--query <json>] [--profile <profil
 actingledger --state-root <state-root> material --request <json>
 actingledger --state-root <state-root> facts --at <sequence>
 actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
+actingledger codes [--code <code>] [--json|--markdown]     # 内嵌码目录里的结果码（contracts/runtime-outcomes.md）；不需要状态根
 
 # Lab 录制成 linear_steps 包（contracts/lab-recording.md）；actinglab 经 ACTINGCOMMAND_RUNTIME_STATE_ROOT 找到守护进程
 actingctl pause --state-root <state-root> --instance <alias>     # 先暂停：两条录制命令之间不能有调度任务操作该实例

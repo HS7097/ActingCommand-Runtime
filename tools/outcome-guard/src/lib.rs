@@ -11,7 +11,9 @@
 //!   channels that stay strings as bridges;
 //! - G6 persisted prose (A3): no text member in a contract type a stored record reaches
 //!   (`persisted.rs`), outside the G6 bridges of [`ALLOW_LIST`];
-//! - G10 review (A8) is not implemented yet;
+//! - G10 review (A8b): a settled entry has its text, in every check of the workspace; at a
+//!   release, `outcome-guard release <version>` (the release build runs it) also needs the
+//!   release's snapshot `released/<version>.json` and, from v0.12.1 on, no pending entry;
 //! - G7 key table and vocabularies = catalog (A1);
 //! - G8 naming and prefixes (A1);
 //! - G9 the merged file and the released contract (A1), the ladder class included (#387 D1a).
@@ -1725,6 +1727,31 @@ pub fn check_contract(workspace: &Workspace) -> Vec<String> {
     match &workspace.catalog {
         Ok(catalog) => catalog::check_contract(&workspace.root, catalog),
         Err(errors) => prefixed("G9", errors),
+    }
+}
+
+/// G10, the catalog half: every settled entry has its text.
+pub fn check_review(workspace: &Workspace) -> Vec<String> {
+    match &workspace.catalog {
+        Ok(catalog) => catalog::check_review(catalog),
+        Err(errors) => prefixed("G10", errors),
+    }
+}
+
+/// G10 for releasing `release` (`X.Y.Z` or `X.Y.Z-rc.N`) from the workspace at `root`, as
+/// `outcome-guard release` runs it: it reads the catalog and the release snapshots only.
+pub fn release_gate(root: &Path, release: &str) -> Vec<String> {
+    let members = match workspace_members(root) {
+        Ok(members) => members,
+        Err(error) => return vec![format!("G10 {error}")],
+    };
+    let catalog = match catalog::load(root, &members) {
+        Ok(catalog) => catalog,
+        Err(errors) => return prefixed("G10", &errors),
+    };
+    match catalog::released_versions(root) {
+        Ok(released) => catalog::check_release(&catalog, release, &released),
+        Err(error) => vec![format!("G10 {error}")],
     }
 }
 

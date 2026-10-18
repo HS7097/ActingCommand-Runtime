@@ -98,7 +98,7 @@ Between Runtime modules outcomes always travel full.
 | `contracts/outcome-codes/catalog.json` | the header: `schema_version` `actingcommand.outcome-codes.v1`, `keys`, `vocabularies`, `domains`, `fragments` |
 | `contracts/outcome-codes/<owner>.json` | one owner's `codes` and `locations` (`{owner, codes, locations}`) |
 | `contracts/outcome-codes.json` | the merged file every reader uses, generated; never edited by hand |
-| `contracts/outcome-codes/released/<version>.json` | per-release snapshot, written by the release PR |
+| `contracts/outcome-codes/released/<version>.json` | per-release snapshot, written by the release PR (`0.12.0.json` first, #378 A8b) |
 
 - **`fragments`** maps each owner to its workspace member (`"runtime-host": "crates/runtime-host"`).
   Every workspace member has exactly one owner; an owner's fragment file exists once it
@@ -147,7 +147,12 @@ Between Runtime modules outcomes always travel full.
   is `pack_logic_mismatch`, `capture_failed` is `environment_fault`.
 - **Release snapshot**: `{schema_version: "actingcommand.outcome-codes.release.v1", release,
   codes: {name: {category, ladder_class, review, status, values: {key: {type, required}}}},
-  locations: {name: {review, status}}}`.
+  locations: {name: {review, status}}}`. It holds every code and location of the catalog at
+  the commit the release tags, retired ones included, in name order; `type` is the key's type in
+  the key table and `required` whether the entry requires the key. The release PR writes it for
+  `X.Y.Z` and nothing edits it afterwards; G9 holds every later catalog to its settled entries,
+  and G10 stops a release whose snapshot is missing. A release candidate `X.Y.Z-rc.N` has no
+  snapshot of its own.
 
 ### Regenerating the merged file
 
@@ -165,6 +170,28 @@ Never run the merge locally, and never merge the file by hand.
    branches to be up to date. After every rebase or merge from `main`, and on any conflict in
    this file, keep both sides' entries in the fragments and the header, then repeat steps 1
    and 2.
+
+### Reading the catalog: `actingledger codes`
+
+`actingledger codes [--code <code>] [--json | --markdown]` (#378 A8b) prints the codes of the
+catalog its build embeds, offline: it takes no `--state-root` and reads no ledger. Every form
+lists the codes in name order, or only the code `--code` names.
+
+| Form | Output |
+|---|---|
+| (default) | one line per code, tab-separated: code, `category`, `ladder_class`, `review`, `status`, `description` (each on one line) |
+| `--markdown` | the line ``Outcome catalog SHA-256 `<hex>`.``, an empty line, then a table of the same columns, the code in backticks and a pipe in a cell escaped with a backslash |
+| `--json` | one line `{schema_version: "actingcommand.actingledger.codes.v1", catalog_sha256, codes: {name: entry}}`, each entry as the catalog holds it |
+
+`catalog_sha256` is the SHA-256 of the embedded `contracts/outcome-codes.json`, the content half
+of the catalog's version; the Runtime release is the other half and lives only in the release
+tag, so no binary prints it. A code the catalog does not list is `outcome_code_unknown`, and a
+catalog that does not parse, has no codes table or holds an entry without one of the row's text
+members is `outcome_catalog_unreadable` (both at `read_outcome_catalog`, the codes `actingctl
+codes` answers with too); a usage error is `invalid_arguments` at `parse_arguments`. Each prints
+`actingledger: <code> during <location>: <text>` on stderr and exits 1, like every
+actingledger failure. `actingctl codes` and `ac_outcome_code` (#389 MCP-14) read the same
+catalog as pages for agents.
 
 ## Drift guard `tools/outcome-guard`
 
@@ -185,7 +212,7 @@ scanned. An unparsable registry macro fails G1.
 | G7 | `outcome_keys!` differs from the catalog `keys`; a vocabulary enum (`outcome_vocabulary!` or a `source` enum) differs from its catalog vocabulary | A1 |
 | G8 | an entry since 0.12.0 that breaks `^[a-z][a-z0-9]*(_[a-z0-9]+)+$` (3-64 bytes); a prefix outside its owners; a reserved prefix | A1 |
 | G9 | the merged file is not the merge of the fragments; a released settled entry missing or changed (category, ladder class, key types, required set); a released retired entry active again | A1; ladder class #387 D1a |
-| G10 | a settled entry without text; a pending entry at the v0.12.1 release; a release tag without a snapshot | A8 |
+| G10 | a settled entry without text (`description`, and for a code `common_causes` and `handling`, empty or `TBD`); at a release `X.Y.Z`, no `released/X.Y.Z.json`, or, from v0.12.1 on, a pending entry | A8b |
 
 Loading the catalog, which every check does first, refuses a code entry without a
 `ladder_class`, with a class that is not a token of the vocabulary `ladder_class`, or a
