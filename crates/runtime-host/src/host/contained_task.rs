@@ -1359,7 +1359,7 @@ fn fail_contained_task_entry(
 /// error, so the run's terminal and receipt carry them too.
 fn fail_contained_task_entry_with(
     runtime: &RuntimeContainedTask<'_>,
-    code: &'static str,
+    code: impl Into<Code>,
     outcome: Outcome,
 ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
     runtime
@@ -7547,11 +7547,7 @@ impl HostShared {
         // package ended on and that package.
         if !configured_linear && !prepared.terminal_in_required_entry(&final_page) {
             let code = HostCode::ContainedTaskHomeRecoveryTerminalNonHome;
-            return fail_contained_task_entry_with(
-                runtime,
-                code.as_str(),
-                Outcome::relayed(code.as_str()),
-            );
+            return fail_contained_task_entry_with(runtime, code, Outcome::relayed(code.as_str()));
         }
 
         // Workflow #373 NAV-5 (§5.2 item 1): the recheck's last frame is the first locate's.
