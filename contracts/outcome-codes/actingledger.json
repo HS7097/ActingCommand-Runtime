@@ -106,6 +106,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingledger's operation or stage: write forensic output."
+    },
+    "read_outcome_catalog": {
+      "owner": "actingledger",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "actingledger's operation or stage: read the outcome catalog this build embeds (actingledger codes, #378 A8b)."
     }
   }
 }

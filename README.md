@@ -299,6 +299,7 @@ actingledger --state-root <state-root> views [--query <json>] [--profile <profil
 actingledger --state-root <state-root> material --request <json>
 actingledger --state-root <state-root> facts --at <sequence>
 actingledger replay --zip <evidence.zip> --expected-sha256 <hex>
+actingledger codes [--code <code>] [--json|--markdown]     # outcome codes of the embedded catalog (contracts/runtime-outcomes.md); no state root
 
 # Lab recording into a linear_steps package (contracts/lab-recording.md); actinglab finds the daemon through ACTINGCOMMAND_RUNTIME_STATE_ROOT
 actingctl pause --state-root <state-root> --instance <alias>     # first: no scheduled task may act on the instance between two recording commands

@@ -16,7 +16,7 @@
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
-use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{CodeStr, Outcome, RawSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -72,7 +72,7 @@ impl Refusal {
 
     /// `outcome_catalog_unreadable`, caused by the decoder's failure when there is one.
     fn unreadable(cause: Option<&serde_json::Error>) -> Self {
-        let outcome = Outcome::new(ActingctlCode::OutcomeCatalogUnreadable);
+        let outcome = Outcome::new(SharedCode::OutcomeCatalogUnreadable);
         Self::Defect(match cause {
             Some(error) => outcome.caused_by(foreign_data_error(error)),
             None => outcome,
@@ -197,7 +197,7 @@ pub(crate) fn read(catalog: &Value, query: &Query) -> Result<Answer, Refusal> {
     match query {
         Query::One(spelling) => {
             let Some(entry) = codes.get(spelling) else {
-                let unknown = Outcome::new(ActingctlCode::OutcomeCodeUnknown);
+                let unknown = Outcome::new(SharedCode::OutcomeCodeUnknown);
                 return Err(Refusal::Usage(if names_a_word(spelling) {
                     unknown.code_name(spelling.as_str())
                 } else {
@@ -465,7 +465,7 @@ mod tests {
         ));
         assert!(matches!(unknown, Refusal::Usage(_)), "{unknown:?}");
         let unknown = unknown.outcome();
-        assert!(unknown.is(ActingctlCode::OutcomeCodeUnknown), "{unknown}");
+        assert!(unknown.is(SharedCode::OutcomeCodeUnknown), "{unknown}");
         assert_eq!(unknown.category(), Category::Error);
         assert_eq!(
             unknown.values().get("code_name"),
@@ -508,7 +508,7 @@ mod tests {
             assert!(matches!(unreadable, Refusal::Defect(_)), "{unreadable:?}");
             let unreadable = unreadable.outcome();
             assert!(
-                unreadable.is(ActingctlCode::OutcomeCatalogUnreadable),
+                unreadable.is(SharedCode::OutcomeCatalogUnreadable),
                 "{unreadable}"
             );
             assert_eq!(unreadable.category(), Category::Error);

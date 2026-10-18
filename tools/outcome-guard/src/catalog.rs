@@ -25,6 +25,15 @@ pub const CATEGORIZED_VOCABULARY: &str = "event_type";
 pub const NAMING_SINCE: (u64, u64, u64) = (0, 12, 0);
 /// The vocabulary of every code's `ladder_class` (Workflow #387 model v1.2 §3.2).
 pub const LADDER_CLASS_VOCABULARY: &str = "ladder_class";
+/// The first release that no pending entry may reach (model-378 §5.3, "Settlement timing":
+/// v0.12.1 settles the rest, and its release gate fails while any entry is pending).
+pub const SETTLED_FROM: (u64, u64, u64) = (0, 12, 1);
+/// What a pending entry may hold in place of a text it has not written yet (§5.2).
+pub const UNWRITTEN: &str = "TBD";
+/// The text members a settled code has written (§5.2: `description` always, `common_causes`
+/// and `handling` once settled); a settled location has its `description`.
+const SETTLED_CODE_TEXT: &[&str] = &["description", "common_causes", "handling"];
+const SETTLED_LOCATION_TEXT: &[&str] = &["description"];
 /// The ladder class whose codes the recovery ladder counts as warnings on an instance; such a
 /// code is of category warning or error.
 const STABILITY_WARNING: &str = "stability_warning";
@@ -451,6 +460,106 @@ fn check_snapshot_values(
             ));
         }
     }
+}
+
+/// G10, the catalog half: a settled entry has its text written, never empty or `TBD`
+/// (model-378 §9 G10 "a settled entry without text"; §5.2).
+pub fn check_review(catalog: &Catalog) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (label, table, members) in [
+        ("code", &catalog.codes, SETTLED_CODE_TEXT),
+        ("location", &catalog.locations, SETTLED_LOCATION_TEXT),
+    ] {
+        for (name, entry) in table {
+            if text(entry, "review") != Some("settled") {
+                continue;
+            }
+            for member in members {
+                let written = text(entry, member)
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty() && value != UNWRITTEN);
+                if !written {
+                    violations.push(format!(
+                        "G10 settled {label} {name}: {member} is not written (empty or {UNWRITTEN})"
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
+/// A release as the release workflow names it, without the tag's `v`: `X.Y.Z`, or `X.Y.Z-rc.N`
+/// for a release candidate. The version, and whether it is a candidate.
+pub fn parse_release(release: &str) -> Option<((u64, u64, u64), bool)> {
+    match release.split_once("-rc.") {
+        None => parse_version(release).map(|version| (version, false)),
+        Some((number, round)) => {
+            round.parse::<u64>().ok()?;
+            parse_version(number).map(|version| (version, true))
+        }
+    }
+}
+
+/// The release snapshots a commit holds: the names of the `released/<version>.json` files,
+/// without `.json`. A missing directory holds none.
+pub fn released_versions(root: &Path) -> Result<BTreeSet<String>, String> {
+    let entries = match fs::read_dir(root.join(RELEASED_DIR)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => return Err(format!("{RELEASED_DIR}: cannot list: {error}")),
+    };
+    let mut versions = BTreeSet::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("{RELEASED_DIR}: cannot list: {error}"))?
+            .path();
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            && let Some(stem) = path.file_stem()
+        {
+            versions.insert(stem.to_string_lossy().into_owned());
+        }
+    }
+    Ok(versions)
+}
+
+/// G10, the release half: what releasing `release` asks of the catalog at the release's commit
+/// (model-378 §9 G10, review L14). The catalog half holds for every release. A release `X.Y.Z`
+/// needs its snapshot `released/X.Y.Z.json` among `released` (written by the release PR), and
+/// from v0.12.1 on no code or location may still be pending. A release candidate is not the
+/// release: it needs neither.
+pub fn check_release(catalog: &Catalog, release: &str, released: &BTreeSet<String>) -> Vec<String> {
+    let mut violations = check_review(catalog);
+    let Some((version, candidate)) = parse_release(release) else {
+        violations.push(format!(
+            "G10 release {release}: is not X.Y.Z or X.Y.Z-rc.N (without the tag's v)"
+        ));
+        return violations;
+    };
+    if candidate {
+        return violations;
+    }
+    if !released.contains(release) {
+        violations.push(format!(
+            "G10 release {release}: {RELEASED_DIR}/{release}.json is missing; the release PR \
+             writes the snapshot of the catalog it releases"
+        ));
+    }
+    if version >= SETTLED_FROM {
+        for (label, table) in [("code", &catalog.codes), ("location", &catalog.locations)] {
+            for (name, entry) in table {
+                if text(entry, "review") != Some("settled") {
+                    violations.push(format!(
+                        "G10 release {release}: {label} {name} is still pending"
+                    ));
+                }
+            }
+        }
+    }
+    violations
 }
 
 fn check_vocabularies(vocabularies: &Map<String, Value>, errors: &mut Vec<String>) {

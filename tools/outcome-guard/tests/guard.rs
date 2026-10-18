@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The outcome guard on this workspace (G1, G2-G6 outside the allow list, G7, G8, G9), plus
-//! counterexamples that show each check catches a break.
+//! The outcome guard on this workspace (G1, G2-G6 outside the allow list, G7, G8, G9, G10),
+//! plus counterexamples that show each check catches a break.
 
 use actingcommand_outcome_guard::catalog::{
-    RELEASE_SCHEMA_VERSION, check_ladder_class, check_snapshot,
+    RELEASE_SCHEMA_VERSION, RELEASED_DIR, check_ladder_class, check_release,
+    check_review as review_of, check_snapshot,
 };
 use actingcommand_outcome_guard::source::{ChannelScope, Check, inspect_channels, scan_file};
 use actingcommand_outcome_guard::{
     ALLOW_LIST, ScannedFile, Workspace, check_channels, check_contract, check_keys, check_naming,
-    check_persisted_prose, check_registries, load_workspace, persisted, workspace_members,
-    workspace_root,
+    check_persisted_prose, check_registries, check_review, load_workspace, persisted, release_gate,
+    workspace_members, workspace_root,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -536,4 +538,260 @@ fn gate_c5_g1b_every_code_has_a_ladder_class_and_a_settled_class_stays() {
             assert_none("G9", violations);
         }
     }
+}
+
+/// #378 A8b (model-378 §9 G10, §5.2, §5.3; runtime-outcomes.md, "Release snapshot"): every
+/// settled entry of the catalog has its text, and the v0.12.0 release has its snapshot: the
+/// `actingcommand.outcome-codes.release.v1` document of release 0.12.0, whose every code holds
+/// exactly `category`, `ladder_class`, `review`, `status` and `values` (each key's `type` and
+/// `required`) and every location exactly `review` and `status`. G10 holds for releasing
+/// v0.12.0.
+#[test]
+fn gate_g10_settled_entries_have_text_and_v0120_has_its_snapshot() {
+    assert_none("G10", check_review(workspace()));
+    let root = workspace_root(Path::new(env!("CARGO_MANIFEST_DIR")));
+    assert_none("G10 release 0.12.0", release_gate(&root, "0.12.0"));
+
+    let path = root.join(RELEASED_DIR).join("0.12.0.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let snapshot: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+    assert_eq!(
+        members(&snapshot),
+        BTreeSet::from(["codes", "locations", "release", "schema_version"]),
+        "the members of the snapshot"
+    );
+    assert_eq!(snapshot["schema_version"], RELEASE_SCHEMA_VERSION);
+    assert_eq!(snapshot["release"], "0.12.0");
+    let codes = snapshot["codes"].as_object().expect("codes is an object");
+    let locations = snapshot["locations"]
+        .as_object()
+        .expect("locations is an object");
+    assert!(!codes.is_empty(), "the v0.12.0 snapshot lists codes");
+    assert!(
+        !locations.is_empty(),
+        "the v0.12.0 snapshot lists locations"
+    );
+    let categories = ["success", "info", "warning", "error", "fatal"];
+    let reviews = ["pending", "settled"];
+    let statuses = ["active", "retired"];
+    let token = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
+    for (name, entry) in codes {
+        assert_eq!(
+            members(entry),
+            BTreeSet::from(["category", "ladder_class", "review", "status", "values"]),
+            "code {name}"
+        );
+        assert!(
+            categories.contains(&token(&entry["category"]).as_str()),
+            "code {name}: category"
+        );
+        assert!(
+            entry["ladder_class"].is_string(),
+            "code {name}: ladder_class"
+        );
+        assert!(
+            reviews.contains(&token(&entry["review"]).as_str()),
+            "code {name}: review"
+        );
+        assert!(
+            statuses.contains(&token(&entry["status"]).as_str()),
+            "code {name}: status"
+        );
+        let values = entry["values"].as_object().expect("values is an object");
+        for (key, value) in values {
+            assert_eq!(
+                members(value),
+                BTreeSet::from(["required", "type"]),
+                "code {name} key {key}"
+            );
+            assert!(value["type"].is_string(), "code {name} key {key}: type");
+            assert!(
+                value["required"].is_boolean(),
+                "code {name} key {key}: required"
+            );
+        }
+    }
+    for (name, entry) in locations {
+        assert_eq!(
+            members(entry),
+            BTreeSet::from(["review", "status"]),
+            "location {name}"
+        );
+        assert!(
+            reviews.contains(&token(&entry["review"]).as_str()),
+            "location {name}: review"
+        );
+        assert!(
+            statuses.contains(&token(&entry["status"]).as_str()),
+            "location {name}: status"
+        );
+    }
+}
+
+/// The member names of a JSON object (none for any other value).
+fn members(value: &serde_json::Value) -> BTreeSet<&str> {
+    value
+        .as_object()
+        .map(|object| object.keys().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// The name of the first entry of `table` whose `review` is `review`.
+fn first_with_review(
+    table: &BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+    review: &str,
+) -> Option<String> {
+    table
+        .iter()
+        .find(|(_, entry)| entry.get("review").and_then(serde_json::Value::as_str) == Some(review))
+        .map(|(name, _)| name.clone())
+}
+
+/// #378 A8b (model-378 §9 G10 "a settled entry without text"; §5.2: `description` is always
+/// written, `common_causes` and `handling` once settled, `TBD` before): a settled code whose
+/// description, common causes or handling is `TBD` or empty, and a settled location whose
+/// description is `TBD`, are G10 violations; the same code still pending with `TBD` is not.
+#[test]
+fn gate_g10_reports_a_settled_entry_without_text() {
+    let base = workspace().catalog.as_ref().expect("the catalog loads");
+    let code = first_with_review(&base.codes, "settled")
+        .expect("the v0.12.0 catalog holds settled codes (A7)");
+    let location = first_with_review(&base.locations, "settled")
+        .expect("the v0.12.0 catalog holds settled locations (A7)");
+    for member in ["description", "common_causes", "handling"] {
+        for unwritten in ["TBD", " "] {
+            let mut changed = base.clone();
+            if let Some(entry) = changed.codes.get_mut(&code) {
+                entry.insert(member.to_owned(), unwritten.into());
+            }
+            assert_reported(
+                "G10",
+                &review_of(&changed),
+                &format!("G10 settled code {code}: {member} is not written"),
+            );
+        }
+    }
+    let mut changed = base.clone();
+    if let Some(entry) = changed.locations.get_mut(&location) {
+        entry.insert("description".to_owned(), "TBD".into());
+    }
+    assert_reported(
+        "G10",
+        &review_of(&changed),
+        &format!("G10 settled location {location}: description is not written"),
+    );
+
+    let mut pending = base.clone();
+    if let Some(entry) = pending.codes.get_mut(&code) {
+        entry.insert("review".to_owned(), "pending".into());
+        entry.insert("handling".to_owned(), "TBD".into());
+    }
+    assert_none("G10", review_of(&pending));
+}
+
+/// #378 A8b (model-378 §9 G10, review L14: a release tag fails without
+/// `released/<version>.json`; §5.3: v0.12.1 settles the rest, and its release gate fails while
+/// any entry is pending): releasing X.Y.Z without its own snapshot is a G10 violation; v0.12.0
+/// releases with pending entries; v0.12.1 fails while any code or location is pending and
+/// passes once every entry is settled with its text.
+#[test]
+fn gate_g10_a_release_needs_its_snapshot_and_v0121_needs_every_entry_settled() {
+    let catalog = workspace().catalog.as_ref().expect("the catalog loads");
+    let snapshots = |release: &str| BTreeSet::from([release.to_owned()]);
+    assert_reported(
+        "G10",
+        &check_release(catalog, "0.12.0", &BTreeSet::new()),
+        &format!("G10 release 0.12.0: {RELEASED_DIR}/0.12.0.json is missing"),
+    );
+    assert_none(
+        "G10",
+        check_release(catalog, "0.12.0", &snapshots("0.12.0")),
+    );
+    assert_reported(
+        "G10",
+        &check_release(catalog, "0.12.1", &snapshots("0.12.0")),
+        &format!("G10 release 0.12.1: {RELEASED_DIR}/0.12.1.json is missing"),
+    );
+
+    let code = first_with_review(&catalog.codes, "pending")
+        .expect("the v0.12.0 catalog holds pending codes");
+    let location = first_with_review(&catalog.locations, "pending")
+        .expect("the v0.12.0 catalog holds pending locations");
+    let violations = check_release(catalog, "0.12.1", &snapshots("0.12.1"));
+    assert_reported(
+        "G10",
+        &violations,
+        &format!("G10 release 0.12.1: code {code} is still pending"),
+    );
+    assert_reported(
+        "G10",
+        &violations,
+        &format!("G10 release 0.12.1: location {location} is still pending"),
+    );
+
+    let mut settled = catalog.clone();
+    for entry in settled.codes.values_mut() {
+        entry.insert("review".to_owned(), "settled".into());
+        for member in ["description", "common_causes", "handling"] {
+            let unwritten = entry
+                .get(member)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|text| text.trim().is_empty() || text.trim() == "TBD");
+            if unwritten {
+                entry.insert(member.to_owned(), "Written for maintainers.".into());
+            }
+        }
+    }
+    for entry in settled.locations.values_mut() {
+        entry.insert("review".to_owned(), "settled".into());
+        let unwritten = entry
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|text| text.trim().is_empty() || text.trim() == "TBD");
+        if unwritten {
+            entry.insert("description".to_owned(), "Written for maintainers.".into());
+        }
+    }
+    assert_none(
+        "G10",
+        check_release(&settled, "0.12.1", &snapshots("0.12.1")),
+    );
+}
+
+/// #378 A8b (model-378 §9 G10, review L14): the exact-SHA build runs `outcome-guard release` on
+/// the commit it releases, in a step that runs exactly when it releases, fails the run on a
+/// non-zero exit and comes before the step that creates the tag and the Release.
+#[test]
+fn gate_g10_the_release_build_runs_the_release_gate_before_it_publishes() {
+    const BUILD_WORKFLOW: &str = ".github/workflows/windows-remote-build.yml";
+    let root = workspace_root(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let workflow = fs::read_to_string(root.join(BUILD_WORKFLOW))
+        .unwrap_or_else(|error| panic!("read {BUILD_WORKFLOW}: {error}"))
+        .replace("\r\n", "\n");
+    let steps = workflow
+        .split("\n      - name: ")
+        .skip(1)
+        .collect::<Vec<_>>();
+    let gate = steps
+        .iter()
+        .position(|step| step.contains("--bin outcome-guard -- release "))
+        .unwrap_or_else(|| panic!("{BUILD_WORKFLOW}: no step runs outcome-guard release"));
+    let publish = steps
+        .iter()
+        .position(|step| step.starts_with("Publish the release\n"))
+        .unwrap_or_else(|| panic!("{BUILD_WORKFLOW}: no Publish the release step"));
+    assert!(
+        steps[gate].contains("\n        if: ${{ inputs.release_tag }}\n"),
+        "the gate step runs exactly when the build releases"
+    );
+    assert!(
+        steps[gate].contains("if ($LASTEXITCODE -ne 0) {") && steps[gate].contains("throw "),
+        "the gate step fails the run when outcome-guard release fails"
+    );
+    assert!(
+        gate < publish,
+        "the gate runs before the release is published"
+    );
 }

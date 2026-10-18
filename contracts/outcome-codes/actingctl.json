@@ -1716,36 +1716,6 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
-    "outcome_code_unknown": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {
-        "code_name": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingctl codes or ac_outcome_code was asked for a code (code_name, unless it is no word a name may hold) that the outcome catalog this build embeds does not list.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
-    "outcome_catalog_unreadable": {
-      "category": "error",
-      "ladder_class": "none",
-      "owner": "actingctl",
-      "layer": "process",
-      "uncertain": false,
-      "values": {},
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "actingctl codes or ac_outcome_code could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
-      "common_causes": "TBD",
-      "handling": "TBD"
-    },
     "run_evidence_reported": {
       "category": "success",
       "ladder_class": "none",

@@ -17334,6 +17334,36 @@
       "description": "Runtime contract validation refused a value: a FactRefreshStatus answer of the wrong shape (a row before the first cycle, an instance twice or without a waiting key, a key twice or outside the fact key families, a reason that is not an info or a warning or that names another instance, key or package, or more than 256 instances or keys), or a receipt carrying it that is not completed (Workflow #384 D2-S5).",
       "common_causes": "A Runtime defect, or a peer of another build.",
       "handling": "Report the defect with the receipt; the Runtime goes on."
+    },
+    "outcome_code_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "code_name": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes --code was asked for a code that the outcome catalog this build embeds does not list (code_name in actingctl's outcome, unless it is no word a name may hold).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "outcome_catalog_unreadable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.0",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
+      "common_causes": "TBD",
+      "handling": "TBD"
     }
   },
   "locations": {
