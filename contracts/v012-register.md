@@ -1651,6 +1651,25 @@ rows are a tool input and output and an MCP answer. No interface revision of §6
 | PC1 | `actinglab package check --package <path>` answer `{status: "admitted", package_id, entry_task_id}` (`PackageCheckResponse`) | new command and output shape | A5 | A5 | the Runtime's structural admission, `PreparedContainedTask::describe_path` with the 60 s budget of pack admission, so it admits exactly what check-config and the daemon admit and a declared OCR model need not be installed; both names from the descriptor (`TaskPackageDescriptor`, unchanged); a refusal is `package_invalid` (exit 2) with `details.code` the admission's own code and `details.declaration` (`null` unless `resource_declaration_invalid`); reads only (dry run `no_effect`); capability `package check` (`offline`, `read_only`); a flag other than `--package`, a positional argument or a missing `--package` is `validation_failed` (exit 2); a relative path is read below the working directory, as every `--package`; `package preflight` is unchanged |
 | PC2 | MCP `ac_pack_check {package}` → `{status, package_id, entry_task_id}` | changed answer (was `{preflight}`, P4-5) | A5 | A5 | runs `actinglab --json --via mcp package check --package <package>` and answers its data verbatim; tier (observer), input schema and the one overflow rule unchanged; a refusal is `lab_tool_failed` caused by `package_invalid` and by the details as `foreign_other_error`; `ac_binding_draft` keeps running `package preflight` |
 
+### 1.98 Slice A7: the overview shows the last backend self-check; a failed capture open in a preparation is recoverable (#411 A7)
+
+A7 answers the 10-18 incident (#411 comment 6251046694): with the emulator windows closed by
+hand and adb up, every self-check failed its capture open (`capture_backend_open_failed`,
+`nemu_ipc`, no diagnostic category, confirmed disposal), while `actingctl status` still showed
+`emulator_state on` (correct: it is the running state, N1-1) and no ladder started although
+stuck recovery was on. It writes no ledger record, fact, wire shape, configuration key or
+outcome code and changes no interface revision of §6: `actingctl status`,
+`RuntimeInstanceStatus` and `emulator_state` are unchanged (a status member is a runtime-client
+wire change, a later release). [runtime-interface.md](runtime-interface.md) (the `ac_overview`
+row) and [emulator-control.md](emulator-control.md) ("Client and CLI"; "Preparation stages")
+are the contract. A fresh-backend capture failure on the task path (#316-P4,
+[application-lifecycle.md](application-lifecycle.md)) is not changed; it waits for a ruling.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A7-1 | `backend_selfcheck {<entry>: {status, checked_at_unix_ms}}` on each `ac_overview` / `actingctl overview` instance row | output member (apps 41 parity, apps 72) | A7 | A7 | one entry per backend entry (`input`, `capture`, `nemu`) whose `backend.selfcheck.<entry>.status` fact the instance holds, its value verbatim (`passed`, `failed`, `unknown`) with `.checked_at_unix_ms`; read from the RuntimeFactSnapshot the overview already reads, nothing added to the facts; an absent or invalidated entry is omitted, `{}` while none was checked, the member absent only when the snapshot read failed; it changes only when an open is recorded (no poll); never cut by MCP's output budget |
+| A7-2 | the preparation's recoverable check | rule (no shape change) | A7 | A7 (host 105) | a failed capture-backend open (`capture_backend_open_failed`) with confirmed temporary-resource disposal, a successful cleanup and no failed input-parameter observation is recoverable whatever its diagnostic category; the other categories' rule is unchanged; which codes start a ladder stays the configuration's (`preparation_backend`); an unconfirmed disposal (a Nemu worker that timed out) stays outside it |
+
 ### 1.99 Slice A4 (v0.12.1): `actingledger events` reads only its range (#411 A4; coordinator ruling (a) of 2026-10-18)
 
 On an SQLite root the offline `actingledger events` page and `export --performance` open the
