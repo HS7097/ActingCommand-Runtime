@@ -228,7 +228,6 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 - 实例别名含大写字母时，`ac_pause` / `ac_resume` 答 `client_action_invalid`，Lab 工具的操作留痕缺失；请改用 `actingctl pause` / `actingctl resume`。
 - `ac_lab_observe`（以及 `actinglab observe`）的最小输出超过 2048 字节时报错，而不是截断。
-- 大量 Lab 操作之后 `ac_overview` 报 incomplete（`run_status_event_limit_exceeded`）；运行本身不受影响。
 
 ## 构建与运行
 

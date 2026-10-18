@@ -98,14 +98,20 @@ names its packages by `package_id` (`package_label`, `recovery_package_labels`);
 digest is projected.
 
 `recent_runs` reads by run (Workflow #391 item 3): it first lists the runs of the
-window by the facts each run records only a few of, its main admission
-(`task.requested`), its entry facts (`task.entry_preflight`) and its terminal
-(`task.completed`, `task.failed`, `task.cancelled`), one query per type, and never
-reads the instance's other events. It deduplicates their request/run identities
-before selecting the requested 1–10 runs, and orders them by their first fact,
-newest first. A later fact in the time window does not make an older run recent.
-The listing and each projection share one snapshot and the existing 20-second
-budget; reaching that budget returns `incomplete`. MCP `ac_get_run`, `ac_diagnose`
+window by their main admission (`task.requested`), their entry facts
+(`task.entry_preflight`) and their terminal (`task.completed`, `task.failed`,
+`task.cancelled`), one query per type, and never reads the instance's other events.
+It deduplicates their request/run identities before selecting the requested 1–10
+runs, and orders them by their first fact, newest first. A later fact in the time
+window does not make an older run recent. The listing keeps none of these facts
+(Workflow #411 A6): a run's entry gate navigation and its shared interrupts record
+several entry facts each, so it folds each page into the runs as the page arrives and
+holds only the runs. A window's listing facts therefore do not count against the
+16 384-record limit of a run's own read; a listing type is read in at most 1 024 pages
+(`run_status_page_limit_exceeded`), and a listing of more than 81 920 runs fails with
+`run_status_resident_limit_exceeded`; `list_contained_runs` (MCP `ac_runs`,
+`ac_diagnose`) shares the listing. The listing and each projection share one snapshot
+and the existing 20-second budget; reaching that budget returns `incomplete`. MCP `ac_get_run`, `ac_diagnose`
 and the latest-run lookup consume this projection directly. Beside the runs, `ac_diagnose`
 carries at most 10 of the instance's `clock_slots` rows of `actingd suspended` recorded in its
 window, refused and superseded rows first, then deferred and expired rows, then owed ones

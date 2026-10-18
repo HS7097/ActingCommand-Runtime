@@ -19,8 +19,10 @@ const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
 /// The facts a run is listed by (Workflow #391 item 3): its main admission, its entry facts and
 /// its terminal. A run without an entry check starts with its main admission, a run with one
 /// records an entry fact once that check is done, and a run whose first check fails ends with
-/// its terminal; each records only a few of them. Listing by them reads a few events per run,
-/// however many other events its instance records.
+/// its terminal. Listing by them reads none of the instance's other events. A run records one
+/// main admission and one terminal, but its entry gate's navigation and its shared interrupts
+/// record several entry facts (Workflow #373 NAV-5, NAV-6), so a busy window holds more entry
+/// facts than one read keeps (Workflow #411 A6): the listing keeps none of them.
 const RUN_LISTING_EVENT_TYPES: [EventType; 5] = [
     EventType::TaskRequested,
     EventType::TaskEntryPreflight,
@@ -28,6 +30,13 @@ const RUN_LISTING_EVENT_TYPES: [EventType; 5] = [
     EventType::TaskFailed,
     EventType::TaskCancelled,
 ];
+/// The most pages one listing type is read in (Workflow #411 A6), each of up to 256 records:
+/// the listing keeps no record, so it ends at its deadline or at its last page, never at a
+/// record count.
+const MAX_RUN_LISTING_PAGES: usize = 1_024;
+/// The most runs one listing holds (Workflow #411 A6): before it, each listing type was read
+/// into at most `MAX_RUN_SUMMARY_EVENTS` records, so every listing that fitted then fits.
+const MAX_LISTED_RUNS: usize = RUN_LISTING_EVENT_TYPES.len() * MAX_RUN_SUMMARY_EVENTS;
 
 /// Selects one contained run by the request that submitted it or by its run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +217,13 @@ pub struct ContainedRunPage {
 
 struct StatusPages {
     events: Vec<ProjectedEvent>,
+    snapshot: u64,
+    complete: bool,
+}
+
+/// How one listing query ended (Workflow #411 A6): the snapshot it was read at, and whether it
+/// reached its last page before its deadline.
+struct ListingPages {
     snapshot: u64,
     complete: bool,
 }
@@ -452,7 +468,10 @@ impl RuntimeClient {
     /// The runs `window` holds a listing fact of (Workflow #391 item 3), one query per listing
     /// fact type, all at `snapshot` or else at the first query's; each run once, under the
     /// identity checks of a run's own read. A later fact inside the window does not list an
-    /// older run first: the order is by each run's first listing fact in the window.
+    /// older run first: the order is by each run's first listing fact in the window. Each
+    /// page's facts are folded into the runs as the page arrives and none is kept (Workflow
+    /// #411 A6), so however many listing facts the window holds, the listing holds its runs
+    /// only, at most `MAX_LISTED_RUNS` of them.
     fn list_runs(
         &self,
         window: &EventQuery,
@@ -468,41 +487,48 @@ impl RuntimeClient {
         let mut listed = BTreeMap::<RequestId, usize>::new();
         let mut runs_seen = BTreeSet::new();
         for event_type in RUN_LISTING_EVENT_TYPES {
-            let read = self.read_status_pages(
+            let runs = &mut listing.runs;
+            let read = self.visit_listing_pages(
                 EventQuery {
                     event_type: Some(event_type),
                     ..window.clone()
                 },
                 snapshot,
                 deadline,
-                RECENT_RUNS_OPERATION,
+                |event| {
+                    let Some(identity) = run_fact_identity(event)? else {
+                        return Ok(());
+                    };
+                    match listed.get(&identity.request_id) {
+                        Some(index) => {
+                            let run = &mut runs[*index];
+                            if run.identity != identity {
+                                return Err(status_error(ClientCode::RunStatusIdentityMismatch));
+                            }
+                            run.sequence = run.sequence.min(event.sequence);
+                        }
+                        None => {
+                            if !runs_seen.insert(identity.run_id) {
+                                return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
+                            }
+                            if runs.len() == MAX_LISTED_RUNS {
+                                return Err(RuntimeClientError::fatal(
+                                    ClientCode::RunStatusResidentLimitExceeded,
+                                    RECENT_RUNS_OPERATION,
+                                ));
+                            }
+                            listed.insert(identity.request_id, runs.len());
+                            runs.push(ListedRun {
+                                identity,
+                                sequence: event.sequence,
+                            });
+                        }
+                    }
+                    Ok(())
+                },
             )?;
             snapshot = Some(read.snapshot);
             listing.snapshot = read.snapshot;
-            for event in &read.events {
-                let Some(identity) = run_fact_identity(event)? else {
-                    continue;
-                };
-                match listed.get(&identity.request_id) {
-                    Some(index) => {
-                        let run = &mut listing.runs[*index];
-                        if run.identity != identity {
-                            return Err(status_error(ClientCode::RunStatusIdentityMismatch));
-                        }
-                        run.sequence = run.sequence.min(event.sequence);
-                    }
-                    None => {
-                        if !runs_seen.insert(identity.run_id) {
-                            return Err(status_error(ClientCode::RunStatusIdentityAmbiguous));
-                        }
-                        listed.insert(identity.request_id, listing.runs.len());
-                        listing.runs.push(ListedRun {
-                            identity,
-                            sequence: event.sequence,
-                        });
-                    }
-                }
-            }
             if !read.complete {
                 listing.complete = false;
                 break;
@@ -510,6 +536,74 @@ impl RuntimeClient {
         }
         listing.runs.sort_by_key(|run| run.sequence);
         Ok(listing)
+    }
+
+    /// Every page of one listing query on one snapshot (Workflow #411 A6), with the cursor,
+    /// snapshot and order checks of `read_status_pages`. Each record is handed to
+    /// `visit` as its page arrives and is not kept, so the read is bounded by its deadline
+    /// (reaching it ends the read with `complete: false`) and by `MAX_RUN_LISTING_PAGES`, not by
+    /// a record count.
+    fn visit_listing_pages(
+        &self,
+        query: EventQuery,
+        snapshot: Option<u64>,
+        deadline: Option<Instant>,
+        mut visit: impl FnMut(&ProjectedEvent) -> RuntimeClientResult<()>,
+    ) -> RuntimeClientResult<ListingPages> {
+        let invalid = |code| RuntimeClientError::fatal(code, RECENT_RUNS_OPERATION);
+        let mut event_ids = BTreeSet::<EventId>::new();
+        let mut cursor = None;
+        let mut position = snapshot;
+        let mut last_sequence = 0_u64;
+        for _ in 0..MAX_RUN_LISTING_PAGES {
+            let mut request =
+                RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
+                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
+            if cursor.is_none()
+                && let Some(snapshot) = snapshot
+            {
+                request = request
+                    .at_snapshot(snapshot)
+                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
+            }
+            let page =
+                self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
+            let page_position = page.snapshot_ledger_position();
+            if position.is_some_and(|expected| expected != page_position) {
+                return Err(invalid(ClientCode::RunStatusSnapshotChanged));
+            }
+            position = Some(page_position);
+            for event in page.events() {
+                if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
+                    return Err(invalid(ClientCode::RunStatusPaginationInvalid));
+                }
+                last_sequence = event.sequence;
+                visit(event)?;
+            }
+            if !page.has_more() {
+                return Ok(ListingPages {
+                    snapshot: page_position,
+                    complete: true,
+                });
+            }
+            let next = page
+                .next_cursor()
+                .cloned()
+                .ok_or_else(|| invalid(ClientCode::RunStatusPaginationInvalid))?;
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
+            {
+                return Err(invalid(ClientCode::RunStatusPaginationInvalid));
+            }
+            cursor = Some(next);
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Ok(ListingPages {
+                    snapshot: page_position,
+                    complete: false,
+                });
+            }
+        }
+        Err(invalid(ClientCode::RunStatusPageLimitExceeded))
     }
 
     /// The policy task id of the run `identity` names (Workflow #389 MCP-3 ruling): the `task_id`
