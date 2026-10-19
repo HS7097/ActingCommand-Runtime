@@ -744,3 +744,62 @@ fn l4b_a_phased_on_empty_select_step_needs_a_mapping_for_its_own_page() {
         assert_eq!(error.message, "task_phases_outcome_incomplete");
     }
 }
+
+// #411 A17 (requirement 4): the source build refuses a stage start of an entry page set with the
+// detail of the Runtime's admission refusal: the `entry_problem`, the page and, when operations
+// of two stages leave from that page, those stages in declaration order.
+#[test]
+fn a17_a_source_entry_set_refusal_names_the_page_and_its_stages() {
+    let click = json!({"kind": "rect", "x": 40, "y": 600, "width": 120, "height": 60});
+    let bundle = |entry_page: Value, panel_back: bool| {
+        let mut return_operations = vec![json!("back_home")];
+        let mut operations = vec![
+            json!({"id": "open_panel", "from": "home", "to": "panel", "click": click}),
+            json!({"id": "submit", "from": "panel", "to": "result", "click": click}),
+            json!({"id": "back_home", "from": "result", "to": "home", "click": click}),
+        ];
+        if panel_back {
+            return_operations.push(json!("panel_back"));
+            operations
+                .push(json!({"id": "panel_back", "from": "panel", "to": "home", "click": click}));
+        }
+        Bundle {
+            task_id: "fixture".to_string(),
+            dir: PathBuf::from("operations/fixture"),
+            data: json!({
+                "schema_version": "0.9",
+                "task_id": "fixture",
+                "game": "neutral",
+                "server_scope": ["test"],
+                "coordinate_space": {"width": 1280, "height": 720},
+                "entry_page": entry_page,
+                "target_page": "home",
+                "phases": [
+                    {"id": "depart", "operations": ["open_panel"], "target_pages": ["panel"]},
+                    {"id": "business", "operations": ["submit"], "target_pages": ["result"]},
+                    {"id": "return", "operations": return_operations, "target_pages": ["home"]}
+                ],
+                "scheduling_outcome": {"designated_operation": "submit", "mappings": [
+                    {"outcome_key": "returned", "effect": "designated_effect_completed",
+                     "terminal_pages": ["home"]}
+                ]},
+                "operations": operations
+            }),
+        }
+    };
+    for (entry_page, panel_back, message) in [
+        (
+            json!(["home", "other"]),
+            false,
+            "entry_problem=phase_start_missing page_id=other",
+        ),
+        (
+            json!(["home", "panel"]),
+            true,
+            "entry_problem=phase_start_ambiguous page_id=panel phase_ids=business,return",
+        ),
+    ] {
+        let error = validate_phases_bundle(&bundle(entry_page, panel_back)).expect_err(message);
+        assert_eq!(error.message, message);
+    }
+}

@@ -151,10 +151,26 @@ pub fn phase_entry_start(
     phases: &[TaskPhase],
     operations: &[TaskPhaseOperation<'_>],
 ) -> Result<usize, EntryProblem> {
+    match phase_entry_starts(game, page, phases, operations).as_slice() {
+        [index] => Ok(*index),
+        [] => Err(EntryProblem::PhaseStartMissing),
+        _ => Err(EntryProblem::PhaseStartAmbiguous),
+    }
+}
+
+/// Every stage that lists an operation whose `from` is `page`, by index in declaration order
+/// (Workflow #373 NAV-3b, #411 A17): the candidates `phase_entry_start` decides on, so that a
+/// refused stage start can name the stages that start the page.
+pub fn phase_entry_starts(
+    game: &str,
+    page: &str,
+    phases: &[TaskPhase],
+    operations: &[TaskPhaseOperation<'_>],
+) -> Vec<usize> {
     let prefix = format!("{game}/");
     let canonical = |page: &str| page.strip_prefix(&prefix).unwrap_or(page).to_owned();
     let page = canonical(page);
-    let mut starts = phases
+    phases
         .iter()
         .enumerate()
         .filter(|(_, phase)| {
@@ -164,12 +180,8 @@ pub fn phase_entry_start(
                     && canonical(operation.from) == page
             })
         })
-        .map(|(index, _)| index);
-    match (starts.next(), starts.next()) {
-        (Some(index), None) => Ok(index),
-        (None, _) => Err(EntryProblem::PhaseStartMissing),
-        (Some(_), Some(_)) => Err(EntryProblem::PhaseStartAmbiguous),
-    }
+        .map(|(index, _)| index)
+        .collect()
 }
 
 // --- Workflow #373 NAV-3b: entry page sets (end) ---

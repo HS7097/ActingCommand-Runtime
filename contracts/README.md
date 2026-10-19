@@ -274,7 +274,9 @@ matched; static reachability is checked from every such start. A single entry pa
 still starts the first stage. Admission refuses a set with
 `contained_task_entry_pages_invalid` and its `entry_problem` (`empty`, `too_many`,
 `duplicate`, `any_in_set`, `unresolved`, `phase_start_missing`,
-`phase_start_ambiguous`). The `EntryRecognition` record carries `required_pages`
+`phase_start_ambiguous`); for a stage start (`phase_start_missing`,
+`phase_start_ambiguous`) the refusal also names the entry page (`page_id`). The
+`EntryRecognition` record carries `required_pages`
 and, when one matched, `matched_page`.
 
 Phases retain one Task/Run/lease, cumulative steps and the original deadline.

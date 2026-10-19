@@ -30,7 +30,8 @@ use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::SampleRetries;
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
-    EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, validate_entry_page_set,
+    EntryProblem, TaskPhaseEntry, TaskPhaseOperation, phase_entry_start, phase_entry_starts,
+    validate_entry_page_set,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle};
@@ -7340,9 +7341,16 @@ impl TaskProgram {
                 let operations = self.phase_operations()?;
                 pages
                     .iter()
-                    .map(|page| phase_entry_start(&control.game, page, phases, &operations))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(entry_pages_invalid)?
+                    .map(|page| {
+                        phase_entry_start(&control.game, page, phases, &operations).map_err(
+                            |problem| {
+                                let starts =
+                                    phase_entry_starts(&control.game, page, phases, &operations);
+                                phase_start_invalid(problem, page, phases, &starts)
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
             }
             None => vec![0; pages.len()],
         };
@@ -8425,12 +8433,36 @@ enum EntryPageDeclaration {
 }
 
 /// Workflow #373 NAV-3b: the admission refusal of an entry page set, with its `entry_problem`
-/// as the `key=value` detail token.
+/// as the `key=value` detail token and, #411 A17, as its value.
 fn entry_pages_invalid(problem: EntryProblem) -> ContainedTaskError {
-    ContainedTaskError::with_detail(
-        ExecutionKernelCode::ContainedTaskEntryPagesInvalid.code(),
-        format!("entry_problem={problem}"),
-    )
+    let code = ExecutionKernelCode::ContainedTaskEntryPagesInvalid;
+    ContainedTaskError::with_detail(code.code(), format!("entry_problem={problem}"))
+        .with_values(Outcome::new(code).entry_problem(problem))
+}
+
+/// #411 A17: the refusal of a phased route's stage start at `page`, the resolved entry page, with
+/// `entry_problem` and `page_id` as values. The detail names the page too and, when more than
+/// one stage starts it, those stages' ids in declaration order (`starts`, developer text only).
+fn phase_start_invalid(
+    problem: EntryProblem,
+    page: &str,
+    phases: &[TaskPhase],
+    starts: &[usize],
+) -> ContainedTaskError {
+    let code = ExecutionKernelCode::ContainedTaskEntryPagesInvalid;
+    let detail = match problem {
+        EntryProblem::PhaseStartAmbiguous => format!(
+            "entry_problem={problem} page_id={page} phase_ids={}",
+            starts
+                .iter()
+                .map(|index| phases[*index].id.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        _ => format!("entry_problem={problem} page_id={page}"),
+    };
+    ContainedTaskError::with_detail(code.code(), detail)
+        .with_values(Outcome::new(code).entry_problem(problem).page_id(page))
 }
 
 impl PageDeclaration {
