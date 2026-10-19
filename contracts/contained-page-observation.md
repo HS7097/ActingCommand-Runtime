@@ -48,6 +48,18 @@ and omitted actual target evaluations. The public shared projection retains its
 64-item, 32-KiB limits. Min output can omit auxiliary rows and reduce shared
 projection entries, with explicit counts and the persisted source reference.
 
+#411 A21: when rows do not all fit a collection, the Runtime keeps first the
+evidence a recognition requires (the matched page's candidate samples and
+projection, and target-consensus samples), then the rows of explicitly requested
+targets (with the page target evaluations they reuse), then the others in their
+order; the rest is counted as omitted. Kept rows stay in their order, and both
+collections follow this rule, each with its own row sizes. A candidate sample is
+kept only while its projection's failure row still fits after it, so candidate
+samples that do not fit end that projection as `candidate_sample_record_failed`
+(a partial observation). Explicit targets never change the observation's status
+or projection. The observation fails only when the required evidence alone
+exceeds the budget.
+
 The verified catalog includes operation field declarations with or without a
 projection companion. Any personal classification for a target from an operation,
 companion or result restricts its raw observation, including `field=None`. Bound
@@ -61,6 +73,14 @@ the RPC and output processing, and reports reader-close failures. An artifact or
 ledger fatal does not trigger another Lab diagnostic append. Ordinary package,
 recognition and capture failures remain visible. Raw `ObserveReadonly` consumers
 and offline observation retain their existing entry points.
+
+#411 A21: a failed `observe --capture` answers `device_error` (exit 4) with
+`details {error, state, req_id, receipt_state, runtime_outcome, correlation_id,
+hint}`: `error` is the Runtime outcome's code, `state` is `failed`, `req_id` and
+`receipt_state` are the failed receipt's when one was received (absent
+otherwise), `runtime_outcome` is that outcome, `correlation_id` the debug
+session's and `hint` `inspect-runtime-ledger`. A failed terminal ledger append
+keeps its message and carries the same details.
 
 Workflow #410 item 1: every `observe` answer, offline and with `--capture`,
 states the frame's coordinate system as `frame_coordinates {device_pixels:

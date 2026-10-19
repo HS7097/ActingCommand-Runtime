@@ -11,11 +11,14 @@ use actingcommand_contract::page_projection::{
     FrameIdentity, Geometry, MissingTarget, NotEvaluatedReason, PageProjection, Privacy,
     ProjectionInput,
 };
-use actingcommand_contract::{ObservationFacts, PageObservationStatus, PpocrDiagnostics};
+use actingcommand_contract::{
+    ObservationFacts, PageObservationStatus, PpocrDiagnostics, RuntimeContractResult,
+};
 use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
+    CandidateLayout, CandidateProjectionFailure, PackRect, RecognitionEvaluator, RecognitionTarget,
+    TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -312,14 +315,22 @@ impl PreparedPageObservation {
                 .collect(),
         };
         let mut complete = batch_error.is_none() && pages.iter().all(|page| page.result.is_ok());
-        let mut private_facts = ObservationFacts::default();
-        let mut facts = ObservationFacts::default();
-        if !evaluator.pack().target_consensus.is_empty() {
+        // #411 A21: both collections admit the required evidence first, then the rows of the
+        // explicitly requested targets, then the others ([`ObservationFactRows`]).
+        let mut rows = ObservationFactRows::default();
+        // The deferred `target_evaluation` row of each actual page target evaluation, by its
+        // evaluation index; an explicit target that reuses the evaluation requests the row.
+        let mut evaluation_rows = Vec::new();
+        let consensus = !evaluator.pack().target_consensus.is_empty();
+        if consensus {
             let supported = evaluator.target_sample_frames() == 1;
             complete &= supported;
             let row = json!({"kind":"recognition_coverage","provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":if supported { "production_owner" } else { "not_completed" }});
-            private_facts.push(row.clone(), 0).map_err(fact_error)?;
-            facts.push(row, 0).map_err(fact_error)?;
+            if !rows.require(row.clone(), row, 0).map_err(fact_error)? {
+                return Err(fact_error(
+                    "recognition sample evidence exceeds observation budget",
+                ));
+            }
         }
         let mut actual: Vec<(Option<String>, PageTargetEvaluation)> = Vec::new();
         let mut matched_pages = Vec::new();
@@ -349,21 +360,13 @@ impl PreparedPageObservation {
                 }
             }
             let row = json!({"kind":"page_evaluation", "stage":ExecutionKernelLocation::EvaluatePage.as_str(), "outcome":summary, "target_evaluation_count":values.len()});
-            private_facts.push(row.clone(), 0).map_err(|error| {
-                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-            })?;
-            facts.push(redact_row(row, metadata), 0).map_err(|error| {
-                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-            })?;
+            let public = redact_row(row.clone(), metadata);
+            rows.defer(DeferredTier::Other, row, public, 0);
             for (index, value) in values.iter().enumerate() {
                 let row = json!({"kind":"target_evaluation", "stage":ExecutionKernelLocation::EvaluatePageTarget.as_str(), "page_id":page.page_id, "page_index":page.index,
                     "evaluation_index":actual.len() - values.len() + index, "target":value});
-                private_facts.push(row.clone(), 1).map_err(|error| {
-                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                })?;
-                facts.push(redact_row(row, metadata), 1).map_err(|error| {
-                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                })?;
+                let public = redact_row(row.clone(), metadata);
+                evaluation_rows.push(rows.defer(DeferredTier::Other, row, public, 1));
             }
             if let Err(error) = &page.result {
                 let definition = &detector.page_definitions()[page.index];
@@ -388,23 +391,14 @@ impl PreparedPageObservation {
                     let row = json!({"kind":PageProjectionCode::TargetNotEvaluated.as_str(), "stage":ExecutionKernelLocation::EvaluatePageTarget.as_str(), "page_id":page.page_id,
                         "page_index":page.index, "target_id":target, "role":role, "group_index":group, "target_index":index,
                         "state":"not_evaluated", "reason":ExecutionKernelCode::EarlierTargetFailed.as_str()});
-                    private_facts.push(row.clone(), 0).map_err(|error| {
-                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                    })?;
-                    facts.push(row, 0).map_err(|error| {
-                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                    })?;
+                    rows.defer(DeferredTier::Other, row.clone(), row, 0);
                 }
             }
         }
         if let Some(error) = batch_error {
             let row = json!({"kind":"page_batch_failure", "stage":ExecutionKernelLocation::EvaluatePages.as_str(), "cause":error.cause, "unexecuted":error.unexecuted});
-            private_facts.push(row.clone(), 0).map_err(|error| {
-                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-            })?;
-            facts.push(redact_row(row, metadata), 0).map_err(|error| {
-                fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-            })?;
+            let public = redact_row(row.clone(), metadata);
+            rows.defer(DeferredTier::Other, row, public, 0);
         }
         for target in &self.targets {
             let uses = actual
@@ -414,13 +408,13 @@ impl PreparedPageObservation {
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>();
             if !uses.is_empty() {
+                for evaluation in &uses {
+                    if let Some(deferred) = evaluation_rows.get(*evaluation) {
+                        rows.request(*deferred);
+                    }
+                }
                 let row = json!({"kind":"explicit_target_uses", "target_id":target, "evaluation_uses":uses});
-                private_facts.push(row.clone(), 0).map_err(|error| {
-                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                })?;
-                facts.push(row, 0).map_err(|error| {
-                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                })?;
+                rows.defer(DeferredTier::Requested, row.clone(), row, 0);
                 continue;
             }
             // A target which failed in this frame is not called again for projection.
@@ -432,12 +426,7 @@ impl PreparedPageObservation {
                     .is_some_and(|failed| failed.target_id == *target)
             }) {
                 let row = json!({"kind":"explicit_target_uses_failure", "target_id":target});
-                private_facts.push(row.clone(), 0).map_err(|error| {
-                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                })?;
-                facts.push(row, 0).map_err(|error| {
-                    fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                })?;
+                rows.defer(DeferredTier::Requested, row.clone(), row, 0);
                 continue;
             }
             match context.evaluate_target(target) {
@@ -454,24 +443,16 @@ impl PreparedPageObservation {
                         skipped: None,
                     };
                     let row = json!({"kind":"explicit_target", "stage":ExecutionKernelLocation::EvaluateRequestedTarget.as_str(), "target":evaluated});
-                    private_facts.push(row.clone(), 1).map_err(|error| {
-                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                    })?;
-                    facts.push(redact_row(row, metadata), 1).map_err(|error| {
-                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                    })?;
+                    let public = redact_row(row.clone(), metadata);
+                    rows.defer(DeferredTier::Requested, row, public, 1);
                     actual.push((None, evaluated));
                 }
                 Err(error) => {
                     ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned());
                     complete = false;
                     let row = json!({"kind":"target_failure", "stage":ExecutionKernelLocation::EvaluateRequestedTarget.as_str(), "target_id":target, "cause":error});
-                    private_facts.push(row.clone(), 0).map_err(|error| {
-                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                    })?;
-                    facts.push(redact_row(row, metadata), 0).map_err(|error| {
-                        fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone())
-                    })?;
+                    let public = redact_row(row.clone(), metadata);
+                    rows.defer(DeferredTier::Requested, row, public, 0);
                 }
             }
         }
@@ -483,16 +464,22 @@ impl PreparedPageObservation {
                 .iter()
                 .filter(|layout| layout.page_id == matched_pages[0])
             {
+                // #411 A21: a sample is admitted only while the row this projection ends with when
+                // a sample does not fit still fits after it, so such a projection is recorded.
+                let reserve = projection_failure_row(
+                    layout,
+                    &CandidateProjectionFailure::recording_failed(""),
+                );
                 let projected = context.project_candidates_with_samples(&layout.id, &[&scene], &mut |target, result, started, ended| {
                     match result {
                         Ok(value) => ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned()),
                         Err(error) => ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned()),
                     }
                     let row = json!({"kind":"candidate_sample", "target_id":target, "evaluation":result, "elapsed_us":crate::observe_instant_span(started, ended)});
-                    let before = private_facts.omitted_count;
-                    private_facts.push(row.clone(), 1).map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.to_string()))?;
-                    facts.push(redact_row(row, metadata), 1).map_err(|error| actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.to_string()))?;
-                    if private_facts.omitted_count != before { return Err(actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed("candidate sample evidence exceeds observation budget")); }
+                    let public = redact_row(row.clone(), metadata);
+                    if !rows.require_before(row, public, 1, &reserve).map_err(|error| CandidateProjectionFailure::recording_failed(error.to_string()))? {
+                        return Err(CandidateProjectionFailure::recording_failed("candidate sample evidence exceeds observation budget"));
+                    }
                     Ok(())
                 });
                 let (private, public) = match projected {
@@ -512,14 +499,11 @@ impl PreparedPageObservation {
                     }
                     Err(error) => {
                         complete = false;
-                        let row = json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
+                        let row = projection_failure_row(layout, &error);
                         (row.clone(), row)
                     }
                 };
-                let before = private_facts.omitted_count;
-                private_facts.push(private, 0).map_err(fact_error)?;
-                facts.push(public, 0).map_err(fact_error)?;
-                if private_facts.omitted_count != before {
+                if !rows.require(private, public, 0).map_err(fact_error)? {
                     return Err(fact_error(
                         "candidate projection evidence exceeds observation budget",
                     )
@@ -528,20 +512,26 @@ impl PreparedPageObservation {
             }
         }
         ppocr_diagnostics.extend(sample_reports.borrow().iter().cloned());
+        // With target consensus the recognition samples are required evidence; without it no
+        // recognition requires them.
+        let mut samples_fit = sample_facts.borrow().omitted_count == 0;
         for row in &sample_facts.borrow().rows {
-            private_facts.push(row.clone(), 1).map_err(fact_error)?;
-            facts
-                .push(redact_row(row.clone(), metadata), 1)
-                .map_err(fact_error)?;
+            let public = redact_row(row.clone(), metadata);
+            if consensus {
+                samples_fit &= rows.require(row.clone(), public, 1).map_err(fact_error)?;
+            } else {
+                rows.defer(DeferredTier::Other, row.clone(), public, 1);
+            }
         }
-        if !evaluator.pack().target_consensus.is_empty()
-            && (private_facts.omitted_count > 0 || sample_facts.borrow().omitted_count > 0)
-        {
+        if consensus && !samples_fit {
             return Err(
                 fact_error("recognition sample evidence exceeds observation budget")
                     .with_ppocr_diagnostics(ppocr_diagnostics),
             );
         }
+        let (private_facts, facts) = rows
+            .finish()
+            .map_err(|error| fact_error(error).with_ppocr_diagnostics(ppocr_diagnostics.clone()))?;
         let status = if !complete {
             PageObservationStatus::Partial
         } else {
@@ -698,6 +688,194 @@ fn fact_error(error: impl ToString) -> OnlineObservationError {
         ExecutionKernelLocation::EncodeObservationFact.location(),
         error,
     )
+}
+
+/// The row a candidate layout's failed projection is recorded with.
+fn projection_failure_row(layout: &CandidateLayout, error: &CandidateProjectionFailure) -> Value {
+    json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}})
+}
+
+/// #411 A21: the tier of a row that waits for the required evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DeferredTier {
+    /// A row of an explicitly requested target, or a page target evaluation such a target
+    /// reuses.
+    Requested,
+    /// Every other row no recognition requires.
+    Other,
+}
+
+/// #411 A21: one fact collection whose rows are admitted out of production order and answered
+/// in it.
+#[derive(Default)]
+struct TieredFacts {
+    /// The admitted rows, in admission order, with the collection's counts.
+    facts: ObservationFacts,
+    /// The production position of each admitted row.
+    positions: Vec<usize>,
+}
+
+impl TieredFacts {
+    /// Tries `row` as [`ObservationFacts::push`] does; whether it was admitted.
+    fn admit(
+        &mut self,
+        position: usize,
+        row: Value,
+        target_count: usize,
+    ) -> RuntimeContractResult<bool> {
+        let admitted = self.facts.rows.len();
+        self.facts.push(row, target_count)?;
+        let kept = self.facts.rows.len() > admitted;
+        if kept {
+            self.positions.push(position);
+        }
+        Ok(kept)
+    }
+
+    /// Whether `row` fits and `reserve` still fits after it once one more row of
+    /// `target_count` evaluations was counted as omitted.
+    fn fits_before(
+        &self,
+        row: &Value,
+        target_count: usize,
+        reserve: &Value,
+    ) -> RuntimeContractResult<bool> {
+        let mut trial = self.facts.clone();
+        let admitted = trial.rows.len();
+        trial.push(row.clone(), target_count)?;
+        trial.omit(target_count);
+        trial.push(reserve.clone(), 0)?;
+        Ok(trial.rows.len() == admitted + 2)
+    }
+
+    /// The collection, its admitted rows in production order.
+    fn finish(self) -> ObservationFacts {
+        let Self { facts, positions } = self;
+        let ObservationFacts {
+            rows,
+            item_count,
+            omitted_count,
+            target_evaluation_count,
+            omitted_target_evaluation_count,
+            truncated,
+        } = facts;
+        let mut ordered = positions.into_iter().zip(rows).collect::<Vec<_>>();
+        ordered.sort_by_key(|(position, _)| *position);
+        ObservationFacts {
+            rows: ordered.into_iter().map(|(_, row)| row).collect(),
+            item_count,
+            omitted_count,
+            target_evaluation_count,
+            omitted_target_evaluation_count,
+            truncated,
+        }
+    }
+}
+
+/// A row that waits for the required evidence, with its controlled and public forms.
+struct DeferredFact {
+    tier: DeferredTier,
+    position: usize,
+    private: Value,
+    public: Value,
+    target_count: usize,
+}
+
+/// #411 A21: the controlled (`private_facts`) and public (`facts`) collections of one
+/// observation. A row a recognition requires (the matched page's candidate evidence and, with
+/// target consensus, the recognition samples and their coverage) is admitted when it is
+/// produced, ahead of every other row; the other rows wait, and are admitted after it: first
+/// those of the explicitly requested targets, then the rest, each in production order, while
+/// each still fits. Both collections keep their admitted rows in production order and count
+/// the omitted ones as [`ObservationFacts::push`] does, so when every row fits they are those
+/// of a collection filled in production order.
+#[derive(Default)]
+struct ObservationFactRows {
+    private: TieredFacts,
+    public: TieredFacts,
+    deferred: Vec<DeferredFact>,
+    produced: usize,
+}
+
+impl ObservationFactRows {
+    fn next_position(&mut self) -> usize {
+        self.produced += 1;
+        self.produced - 1
+    }
+
+    /// A required row; whether both collections hold it.
+    fn require(
+        &mut self,
+        private: Value,
+        public: Value,
+        target_count: usize,
+    ) -> RuntimeContractResult<bool> {
+        let position = self.next_position();
+        let private = self.private.admit(position, private, target_count)?;
+        let public = self.public.admit(position, public, target_count)?;
+        Ok(private && public)
+    }
+
+    /// A required row that is admitted only while `reserve`, a later required row, still fits
+    /// after it in both collections; otherwise both count it as omitted. Whether it was
+    /// admitted.
+    fn require_before(
+        &mut self,
+        private: Value,
+        public: Value,
+        target_count: usize,
+        reserve: &Value,
+    ) -> RuntimeContractResult<bool> {
+        if self.private.fits_before(&private, target_count, reserve)?
+            && self.public.fits_before(&public, target_count, reserve)?
+        {
+            return self.require(private, public, target_count);
+        }
+        self.private.facts.omit(target_count);
+        self.public.facts.omit(target_count);
+        Ok(false)
+    }
+
+    /// A row of `tier`, admitted by [`Self::finish`]; its index for [`Self::request`].
+    fn defer(
+        &mut self,
+        tier: DeferredTier,
+        private: Value,
+        public: Value,
+        target_count: usize,
+    ) -> usize {
+        let position = self.next_position();
+        self.deferred.push(DeferredFact {
+            tier,
+            position,
+            private,
+            public,
+            target_count,
+        });
+        self.deferred.len() - 1
+    }
+
+    /// Moves the waiting row `index` to the requested tier.
+    fn request(&mut self, index: usize) {
+        if let Some(row) = self.deferred.get_mut(index) {
+            row.tier = DeferredTier::Requested;
+        }
+    }
+
+    /// Admits the waiting rows, the requested ones first, and answers
+    /// `(private_facts, facts)`.
+    fn finish(mut self) -> RuntimeContractResult<(ObservationFacts, ObservationFacts)> {
+        let mut deferred = std::mem::take(&mut self.deferred);
+        // A stable sort: each tier keeps its production order.
+        deferred.sort_by_key(|row| row.tier);
+        for row in deferred {
+            self.private
+                .admit(row.position, row.private, row.target_count)?;
+            self.public
+                .admit(row.position, row.public, row.target_count)?;
+        }
+        Ok((self.private.finish(), self.public.finish()))
+    }
 }
 fn role_name(role: PageTargetRole) -> &'static str {
     match role {

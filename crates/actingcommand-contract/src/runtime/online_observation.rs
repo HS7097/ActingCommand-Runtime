@@ -112,6 +112,15 @@ impl ObservationFacts {
         self.truncated = true;
         Ok(())
     }
+    /// #411 A21: counts one row of `target_count` actual target evaluations as omitted without
+    /// trying it, as [`Self::push`] counts a row that does not fit.
+    pub fn omit(&mut self, target_count: usize) {
+        self.item_count += 1;
+        self.target_evaluation_count += target_count;
+        self.omitted_count += 1;
+        self.omitted_target_evaluation_count += target_count;
+        self.truncated = true;
+    }
     pub fn validate(&self) -> RuntimeContractResult<()> {
         if self.rows.len() > MAX_OBSERVATION_FACT_ITEMS
             || self.rows.len().checked_add(self.omitted_count) != Some(self.item_count)

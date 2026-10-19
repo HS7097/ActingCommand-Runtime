@@ -1812,6 +1812,23 @@ other failed record, and the `--record` path's handling of a failure, keep their
 | A19-1 | online `do --capture --after-page` whose wait times out → CLI error `lab_arrival_timeout`, exit 3, `blocked_by: [arrival_page]`, details unchanged; MCP `ac_lab_do` class `safety`, `lab_tool_failed {exit_code: 3}` caused by `lab_arrival_timeout` | changed answer (was `device_error`, exit 4; MCP class `device`) (exec 93) | A19 | A19 | chosen by the failure's stage `arrival` and code `lab_arrival_timeout`; the details are the operation's answer as before, `after_attachment` included; `lab_element_unavailable` stays `capability_insufficient` (exit 3) and any other failure `device_error` (exit 4); a script that tests exit 4 on a timeout reads exit 3 |
 | A19-2 | every online `do` answer has `arrival` as its last member | member order (no member added or removed) (exec 93) | A19 | A19 | success and failure, Min and Normal: `arrival` moves after `after_attachment` (and after `record` on a `--record` answer); its own members stay `status`, `elapsed_ms`, `samples`; every other member keeps its order and value; so a reader that cuts the text, such as MCP's `raw_text` (4096 bytes), keeps `state`, `failure`, `after_attachment` and the arrival's status and elapsed time, and loses samples only |
 
+### 1.123 Slice A21 (0.12.x): admission priority of online observation facts; actinglab observe failure details (#411 A21)
+
+A21: admission priority of online observation facts; actinglab observe failure details. Rule
+and answer details only; no persisted ledger shape, no wire, key or code change. The 256-row /
+64-KiB bound of each fact collection is unchanged; offline `observe` has no fact budget.
+[contained-page-observation.md](contained-page-observation.md) and
+[business-identity-consensus.md](business-identity-consensus.md) are the contract. Existing codes
+only (`observation_fact_failed`, `candidate_sample_record_failed`, `device_error`,
+`lab_tool_failed`); no catalog change. `do --capture`, which evaluates the same observation
+without explicit targets, follows the same rule.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A21-1 | the rows of `facts` and `private_facts` of an online observation | rule (no shape change) (exec 101) | A21 | A21 | rows are admitted by tier, while each fits: (1) the matched page's candidate evidence (`candidate_sample`, `candidate_projection`, `candidate_projection_failure`) and, when the pack declares target consensus, `recognition_coverage` and every `recognition_sample`; (2) `explicit_target`, `explicit_target_uses`, `explicit_target_uses_failure`, `target_failure` and the `target_evaluation` rows an `explicit_target_uses` row names; (3) every other row; kept rows stay in production order and omitted rows are counted as before (`item_count`, `omitted_count`, `target_evaluation_count`, `omitted_target_evaluation_count`, `truncated`); both collections, each with its own row sizes; when every row fits both collections are as before; a candidate sample is kept only while its projection's failure row still fits after it; explicit targets never change `status`, the projection page, the candidate sets or the elements by the budget |
+| A21-2 | the failure of an online observation over the budget | rule (no shape change) (exec 101) | A21 | A21 | only a tier-1 row that does not fit either collection fails: a candidate sample ends its projection with `candidate_sample_record_failed` (partial), a candidate projection row or a consensus sample fails the observation with `observation_fact_failed` (`operation: encode_observation_fact`), with today's cause texts; until now an optional page or target row could crowd out a required one, and the check read the controlled collection only |
+| A21-3 | a failed `actinglab observe --capture` → `device_error`, exit 4, with `details {error, state: "failed", req_id, receipt_state, runtime_outcome, correlation_id, hint: "inspect-runtime-ledger"}` | answer details added (exec 101) | A21 | A21 | `error` the Runtime outcome's code, `req_id` and `receipt_state` from the failed receipt when the client error carries one (absent otherwise), `runtime_outcome` the client error's typed outcome; the failed terminal ledger append keeps its message and gains the same details; the code and exit code are unchanged (lab-recording.md); MCP `ac_lab_observe` then answers `lab_tool_failed {exit_code: 4, req_id}` caused by `device_error` and a `foreign_other_error` holding the details, and records its `client.action` (no MCP change) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
