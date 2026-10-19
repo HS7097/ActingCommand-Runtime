@@ -22,8 +22,8 @@ use super::{
     MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates,
     PageObservation, PostAdmissionOcrCollector, PreparedContainedTask, SampleRetries, StepPacing,
     TaskControl, TaskOperation, TaskProgram, budget_elapsed_since, budget_now,
-    budget_observation_now, pace_pause, paced_step, resolve_page_reference, sample_budget_invalid,
-    selection,
+    budget_observation_now, pace_pause, paced_step, resolve_page_reference, runtime_touch_choice,
+    sample_budget_invalid, selection, step_point_draw,
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
@@ -1311,14 +1311,17 @@ impl PreparedContainedTask {
                     continue;
                 }
             };
-            let action_seed = runtime
-                .action_seed(step_index, &operation.id)
-                .map_err(ContainedTaskRunError::operation::<R>)?;
+            // Workflow #406 T12: the step's seed and the touch keys in effect.
+            let draw = step_point_draw(runtime, step_index, &operation.id)?;
             let click = operation.click.as_ref().ok_or_else(|| {
                 ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
             })?;
-            let (action, sampling) =
-                click.input_action(&self.control.resolution, target.as_ref(), action_seed)?;
+            let (action, sampling) = click.draw_input::<R::Error>(
+                &self.control.resolution,
+                target.as_ref(),
+                draw,
+                &mut runtime_touch_choice(runtime),
+            )?;
             if frame.sampling.is_some()
                 && budget_observation_now(runtime, step_timing.pace()) >= step_timing.deadline()
             {

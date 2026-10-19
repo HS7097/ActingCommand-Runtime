@@ -1465,6 +1465,19 @@ tests = [
 ]
 incident = ["#405"]
 
+# Workflow #406 T12 (0.12.x; register §1.136; no persisted ledger shape: X11 and X12 first written, the landing history memory only, config.parameters.touch a new section fact; actingd-config 7; plan-405-406 Q13, Q15, Q16): the touch section's five keys (touch.sampling.sigma_ratio_milli 1..=1000 default 250, .max_redraws 0..=64 default 8, .candidate_count 1..=16 default 4, touch.history.points_per_box 1..=256 default 16, .max_boxes 1..=65536 default 1024) default from the shipped defaults file, are all settable, and a value outside its range is config_value_invalid (out_of_range) at load, in the section check and in an instruction; the host hands each step the keys in effect, so after an instruction the next run's press is drawn and recorded with the new values; the landing history is per instance and per box (an unused candidate first, then the oldest use; another instance or box starts unused), keeps at most points_per_box pixels per box and max_boxes boxes per instance (the oldest forgotten and unused again), and is empty after the host is closed and started again on the same root
+[[gate]]
+key = "123"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_the_host_hands_the_kernel_the_touch_keys_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_the_landing_history_is_per_instance_and_per_box",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_a_box_keeps_at_most_points_per_box_and_the_oldest_is_forgotten",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_a_restart_starts_with_an_empty_history",
+    "actingcommand-runtime-config::lib::touch_tests::t12_the_touch_section_parses_checks_and_defaults",
+]
+incident = ["#406"]
+
 # Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirements 2-5; register §1.143 M19A-2, M19A-3; no persisted ledger shape; contracts/scheduling/README.md "Why A Candidate Does Not Run"; key assigned by the coordinator): the policy host keeps the latest evaluated cycle's not-run explanation in memory, replaced by every evaluated cycle and empty after a start; per instance with a decision, by alias: its earliest decision wake, its selected task with the decision id and the dispatch state the projection holds when the read is answered (pending before the intent is recorded, then intent, admitted, rejected or completed), every other decision as a candidate row {task_id, state deferred|blocked, eligibility, why = the outcome of its last reason, reasons = its reason codes (last 32) ending with why's, next_wake_unix_ms, since_unix_ms}, due rows first (ranked by total score, then unranked, ties by task id), then the rest by wake (none last), then task id, and one not-running row: the first due row, else due_task_missing naming the instance and its earliest wake; since is the first evaluation of an unbroken run of the same (instance, task, why code), and of the same (instance, task or none, why code) for the not-running row; the read ScheduleExplanation{instance?, candidates} answers it from memory, appends nothing and names no request in the ledger, refuses an unregistered alias instance_unknown and answers without candidate rows (still counted) when candidates is false
 [[gate]]
 key = "126"

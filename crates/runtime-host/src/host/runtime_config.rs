@@ -582,6 +582,24 @@ impl HostShared {
             })
     }
 
+    /// Workflow #406 T12 (plan Q13): the `touch` section in effect, read at each step of a
+    /// contained run (the kernel's `touch_sampling()`) and at each choice of a press's landing
+    /// point.
+    pub(super) fn touch_config(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::TouchConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .touch()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Records one configuration fact, observed now and strictly after the stored record of its
     /// key, ledger-first through [`Self::record_runtime_fact`].
     /// Workflow #389 MCP-9a (register A5): records `config.catalog`, the active policy catalog

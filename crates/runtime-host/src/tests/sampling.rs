@@ -78,33 +78,34 @@ fn direct_runtime_run_derives_sampling_seed_from_issued_run_identity() {
         action_id,
     ));
     assert_eq!(sampling.action_seed(), expected_action_seed);
+    // Workflow #406 T12 (plan Q13, Q14): the Runtime's tap is the least-recent centre-hotspot
+    // draw with the shipped touch keys (250 ‰, 8 redraws, 4 candidates); the host's history of
+    // the instance is empty, so the first candidate lands.
     assert_eq!(
         sampling.algorithm(),
-        InputSamplingAlgorithm::Xorshift64UniformRectV1
+        InputSamplingAlgorithm::CenterHotspotLeastRecentV1
+    );
+    assert_eq!(
+        sampling.parameters(),
+        Some(&actingcommand_contract::InputSamplingParameters {
+            sigma_ratio_milli: 250,
+            max_redraws: 8,
+            candidate_count: Some(4),
+            chosen_candidate: Some(0),
+        })
     );
     assert_eq!(sampling.source_regions().len(), 1);
     assert_eq!(sampling.source_regions()[0].x(), 0);
     assert_eq!(sampling.source_regions()[0].y(), 0);
     assert_eq!(sampling.source_regions()[0].width(), 2);
     assert_eq!(sampling.source_regions()[0].height(), 1);
-    let mut expected_state = if expected_action_seed == 0 {
-        0x9e37_79b9_7f4a_7c15
-    } else {
-        expected_action_seed
-    };
-    let mut next_expected = || {
-        expected_state ^= expected_state << 13;
-        expected_state ^= expected_state >> 7;
-        expected_state ^= expected_state << 17;
-        expected_state
-    };
-    let expected_x = (next_expected() % 2) as i32;
-    next_expected();
+    let candidates =
+        super::gate_406_t12::reference_candidates(expected_action_seed, (0, 0, 2, 1), 250, 8, 4);
     assert_eq!(
         action,
         &InputAction::Tap {
-            x: expected_x,
-            y: 0
+            x: candidates[0].0,
+            y: candidates[0].1
         }
     );
     assert_eq!(

@@ -1396,6 +1396,22 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.action_seed(step_index, operation_label)
     }
 
+    /// Workflow #406 T12: the run's touch keys, as its own steps read them.
+    fn touch_sampling(
+        &mut self,
+    ) -> Result<Option<actingcommand_execution_kernel::TouchSampling>, Self::Error> {
+        self.inner.touch_sampling()
+    }
+
+    /// Workflow #406 T12: the run's instance's landing history chooses, as for its own steps.
+    fn choose_touch_candidate(
+        &mut self,
+        region: &actingcommand_contract::InputSamplingRegion,
+        candidates: &[(i32, i32)],
+    ) -> Result<usize, Self::Error> {
+        self.inner.choose_touch_candidate(region, candidates)
+    }
+
     fn selection_state(
         &mut self,
         request: actingcommand_execution_kernel::SelectionStateRequest,
@@ -4048,6 +4064,35 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         Ok(Some(action_seed))
     }
 
+    /// Workflow #406 T12 (plan Q13, Q14): the `touch.sampling` keys in effect, read at each
+    /// step. The Runtime always has them, so every seeded box point of its runs is a
+    /// centre-hotspot draw.
+    fn touch_sampling(
+        &mut self,
+    ) -> Result<Option<actingcommand_execution_kernel::TouchSampling>, Self::Error> {
+        let touch = self
+            .host
+            .touch_config()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Ok(Some(actingcommand_execution_kernel::TouchSampling {
+            sigma_ratio_milli: touch.sigma_ratio_milli,
+            max_redraws: touch.max_redraws,
+            candidate_count: touch.candidate_count,
+        }))
+    }
+
+    /// Workflow #406 T12 (plan Q15, Q16): the run's instance's landing history chooses where the
+    /// press lands and records it, within the `touch.history` keys in effect.
+    fn choose_touch_candidate(
+        &mut self,
+        region: &actingcommand_contract::InputSamplingRegion,
+        candidates: &[(i32, i32)],
+    ) -> Result<usize, Self::Error> {
+        self.host
+            .choose_touch_candidate(self.instance_alias, region, candidates)
+            .map_err(RequestFailure::poison_without_terminal)
+    }
+
     /// Workflow #308: the instance's fact snapshot and the host clock for one select step. The
     /// context is this instance's alias with the game and server of its configured policy
     /// identity, or of the package's `control.json` when none is configured; the interpreter
@@ -5576,6 +5621,30 @@ pub(crate) fn require_contained_task_sampling_run_seed(
 }
 
 impl HostShared {
+    /// Workflow #406 T12 (plan Q15, Q16): where a single-region press of a run on
+    /// `instance_alias` lands among its `candidates` in the box `region`, chosen by the
+    /// instance's landing history and recorded in it as the newest use, within the
+    /// `touch.history` keys in effect. Policy and direct runs of the instance share the history.
+    /// Its lock is a leaf; it is taken while the step's point is drawn, a stage of the action's
+    /// sampling (`derive_contained_task_action_seed`).
+    pub(super) fn choose_touch_candidate(
+        &self,
+        instance_alias: &str,
+        region: &actingcommand_contract::InputSamplingRegion,
+        candidates: &[(i32, i32)],
+    ) -> RuntimeHostResult<usize> {
+        let touch = self.touch_config()?;
+        let limits = crate::touch_history::TouchHistoryLimits {
+            points_per_box: usize::try_from(touch.points_per_box).unwrap_or(usize::MAX),
+            max_boxes: usize::try_from(touch.max_boxes).unwrap_or(usize::MAX),
+        };
+        Ok(lock(
+            &self.touch_history,
+            HostLocation::DeriveContainedTaskActionSeed,
+        )?
+        .choose(instance_alias, region, candidates, limits))
+    }
+
     #[cfg(test)]
     pub(super) fn consume_contained_task_checkpoint_for_test(
         &self,

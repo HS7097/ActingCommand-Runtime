@@ -1661,3 +1661,18 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_no_list_file_is_written_into_the_repository",
 ]
 incident = ["#411 RV-1"]
+
+# Workflow #406 T12 (0.12.x; register §1.136; no persisted ledger shape: X11 and X12 first written; plan-405-406 Q13 to Q16; Alice 2026-10-13 and 2026-10-14): with the touch keys a runtime hands it at each step (touch_sampling()), the kernel draws every seeded box point as a centre hotspot by the normative steps of "The draw" (twelve 24-bit uniforms per coordinate, the spread sigma_ratio_milli of the box's width and height, a point outside the box drawn again at most max_redraws times, then the centre), matching a reference implementation for fixed seeds and boxes; 10 000 draws in a 200 x 80 box stay inside, centre within 1 % and at least four times as dense in the middle fifth as in the outer tenth; a single-region press (rect, long press box) draws candidate_count candidates and lands where the runtime chooses by the least-recent rule (first unused pixel, else the oldest use, ties to the lowest index), recorded as center_hotspot_least_recent_v1 with all four parameters, one candidate as center_hotspot_normal_v1; a 1 x 1 box presses its point without an error; a drag and the vertical-brake drag record center_hotspot_normal_v1 with their two regions and ask no choice; a runtime without touch keys keeps xorshift64_uniform_rect_v1
+[[gate]]
+key = "110"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_the_hotspot_draw_matches_the_v1_reference",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_hotspot_draws_stay_in_the_box_and_thin_out_towards_the_edge",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_a_draw_that_never_lands_in_the_box_takes_the_centre",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_least_recent_prefers_an_unused_candidate_then_the_oldest_use",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_a_one_point_box_presses_its_point",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_presses_and_drags_record_their_algorithm_and_parameters",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_without_a_touch_sampling_the_kernel_keeps_the_uniform_draw",
+]
+incident = ["#406"]

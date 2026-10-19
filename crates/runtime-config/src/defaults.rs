@@ -7,7 +7,8 @@
 //! own member here (D1b ships the mechanism; D1c adds `recovery_ladder` and `host_claims`;
 //! Workflow #385 P-c adds `performance`; Workflow #386 SR-1 adds `scheduling`; Workflow #383
 //! AO-1 adds `ledger_observer`; Workflow #398 RD-2 adds `device_link`; Workflow #398 RD-5b adds
-//! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`).
+//! `device_state`; Workflow #390 DISC-1 adds `startup_discovery`; Workflow #406 T12 adds
+//! `touch`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
@@ -19,6 +20,7 @@ use crate::resolve::member;
 use crate::scheduling::SchedulingFile;
 use crate::startup_discovery::StartupDiscoveryFile;
 use crate::table::find_row;
+use crate::touch::TouchFile;
 use crate::value::parse_value;
 use actingcommand_contract::FactScalar;
 use serde::Deserialize;
@@ -57,6 +59,8 @@ pub struct DefaultsFile {
     pub device_state: Option<DeviceStateFile>,
     #[serde(default)]
     pub startup_discovery: Option<StartupDiscoveryFile>,
+    #[serde(default)]
+    pub touch: Option<TouchFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.
