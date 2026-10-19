@@ -948,7 +948,10 @@ impl PreparedContainedTask {
             return Ok((project(&self.evaluator, &first.scene, &layout.id)?, None));
         }
         // Workflow #386 SR-1 (scheduling model §2.1): the deadline is compared on the
-        // observation clock; past it the candidate sampling timed out.
+        // observation clock; past it the candidate sampling timed out. #385 P-k (performance
+        // model v1.4.2 §5.2–§5.3): `deadline` is a budget instant of `timing`'s budget clock, and
+        // the pauses between samples last their interval × f.
+        let pace = timing.pace();
         let check_deadline = |now: Instant| {
             if now >= deadline {
                 Err(ContainedTaskError::new(
@@ -965,7 +968,7 @@ impl PreparedContainedTask {
                 deadline.saturating_duration_since(now),
             )
         };
-        check_deadline(runtime.observation_now())?;
+        check_deadline(super::budget_observation_now(runtime, pace))?;
         if layout.has_consensus() {
             // Workflow #386 SR-1 (§2.2): whether the runtime samples is its own answer; the
             // checkpoint only answers cancellation.
@@ -984,23 +987,23 @@ impl PreparedContainedTask {
                     page_recognition_budget_ms(&self.evaluator, &self.detector, None)?
                         .saturating_mul(layout.required_frames().saturating_sub(1) as u64),
                 );
-            let now = runtime.observation_now();
+            let now = super::budget_observation_now(runtime, pace);
             if Duration::from_millis(transaction_ms) > deadline.saturating_duration_since(now) {
                 return Err(insufficient(transaction_ms, now).into());
             }
         }
         let mut frames = Vec::with_capacity(layout.required_frames().saturating_sub(1));
         for _ in 1..layout.required_frames() {
-            check_deadline(runtime.observation_now())?;
+            check_deadline(super::budget_observation_now(runtime, pace))?;
             let interval = Duration::from_millis(u64::from(layout.sample_interval_ms));
-            let now = runtime.observation_now();
+            let now = super::budget_observation_now(runtime, pace);
             if interval > deadline.saturating_duration_since(now) {
                 return Err(insufficient(u64::from(layout.sample_interval_ms), now).into());
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let started = runtime.monotonic_now();
-            runtime.pause(interval);
+            super::pace_pause(runtime, pace, interval);
             let ended = runtime.monotonic_now();
             runtime.observe_task_boundary(super::ContainedTaskBoundaryTiming {
                 boundary,
@@ -1010,7 +1013,7 @@ impl PreparedContainedTask {
                 ended,
                 succeeded: true,
             });
-            check_deadline(runtime.observation_now())?;
+            check_deadline(super::budget_observation_now(runtime, pace))?;
             let frame = self
                 .capture_frame(runtime, None, None, timing, None, Some(deadline))?
                 .ok_or_else(|| ContainedTaskError::new(SELECTION_PAGE_CHANGED))?;
@@ -1039,7 +1042,7 @@ impl PreparedContainedTask {
                 layout.required_frames().saturating_sub(1) as u64
                     * u64::from(layout.sample_interval_ms),
             );
-        let now = runtime.observation_now();
+        let now = super::budget_observation_now(runtime, pace);
         if Duration::from_millis(provider_ms) > deadline.saturating_duration_since(now) {
             return Err(insufficient(provider_ms, now).into());
         }
@@ -1047,7 +1050,10 @@ impl PreparedContainedTask {
         // Workflow #386 SR-1 (§2.1): a candidate recognition that ran past the deadline is the
         // candidate sampling's timeout, not a projection failure.
         let mut deadline_passed = false;
-        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(deadline).project_candidates_with_samples(
+        // #385 P-k: the recognition pack compares its sample deadline with the wall clock, so it
+        // is handed the wall instant the budget deadline falls on.
+        let pack_deadline = super::wall_deadline_now(runtime, pace, deadline);
+        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(pack_deadline).project_candidates_with_samples(
             &layout.id, &scenes, &mut |target, result, started, ended| {
                 let measured = super::ContainedTaskEvaluationTiming {
                     elapsed_us: super::observe_instant_span(started, ended), budget_before: timing.budget_at(started),
@@ -1057,7 +1063,7 @@ impl PreparedContainedTask {
                     recording_error = Some(error);
                     return Err(actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed("runtime rejected candidate sample recording"));
                 }
-                check_deadline(runtime.observation_now()).map_err(|error| {
+                check_deadline(super::budget_observation_now(runtime, pace)).map_err(|error| {
                     deadline_passed = true;
                     actingcommand_recognition_pack::CandidateProjectionFailure::recording_failed(error.code().as_str())
                 })
@@ -1080,7 +1086,7 @@ impl PreparedContainedTask {
                         .unwrap_or_default(),
                 )
         })?;
-        check_deadline(runtime.observation_now())?;
+        check_deadline(super::budget_observation_now(runtime, pace))?;
         Ok((projection, frames.pop()))
     }
 
@@ -1132,7 +1138,8 @@ impl PreparedContainedTask {
         if let Some(required_ms) = sampling_budget {
             // Workflow #386 SR-1 (§2.3): too little time left for the selection ends the run
             // before any capture, with what it needs and what is left.
-            let remaining = deadline.saturating_duration_since(runtime.observation_now());
+            let remaining = deadline
+                .saturating_duration_since(super::budget_observation_now(runtime, timing.pace()));
             if remaining.is_zero() || Duration::from_millis(required_ms) > remaining {
                 return Err(sample_budget_insufficient(
                     ExecutionKernelCode::CandidateSampleBudgetInsufficient,
@@ -1223,7 +1230,7 @@ impl PreparedContainedTask {
             selection: Box::new(record),
             run_ending,
         });
-        let now = runtime.observation_now();
+        let now = super::budget_observation_now(runtime, timing.pace());
         match recorded {
             Err(error) if !run_ending => Err(ContainedTaskRunError::Boundary(error)),
             Ok(()) if result.is_ok() && sampling_budget.is_some() && now >= deadline => {
@@ -1548,7 +1555,9 @@ impl PreparedContainedTask {
             &prepared.policy.record_list_keys(),
         );
         let deadline = timing.deadline();
-        let remaining = deadline.saturating_duration_since(runtime.observation_now());
+        // #385 P-k: the scan's remaining time is budget time.
+        let remaining = deadline
+            .saturating_duration_since(super::budget_observation_now(runtime, timing.pace()));
         let mut session = ScanSession::new(
             scan,
             layout,

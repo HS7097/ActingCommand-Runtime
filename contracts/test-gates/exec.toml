@@ -1425,3 +1425,18 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a17_a_source_entry_set_refusal_names_the_page_and_its_stages",
 ]
 incident = ["#411 A17"]
+
+# #385 P-k1a (v0.12.x; no register section, no persisted structure change; performance model v1.4.2 §5.1-§5.3, §5.5, §5.6): the kernel paces each step by the factor its step_pacing() answer hands it (StepPacing.factor_milli, default 1000), from that answer to the next; every wait lasts its declared value x f / 1000 and every limit is compared on the run's budget clock (wall time x 1000 / f per segment), so a late page or a long run under a factor is waited for and not cut off; at the factor 1000 every wait is the package's value; gesture durations are not scaled
+[[gate]]
+key = "91"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_at_a_factor_of_one_every_wait_is_the_package_value",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_factor_of_two_doubles_every_wait_of_a_page_graph_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_factor_of_two_doubles_every_wait_of_a_linear_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_factor_change_takes_effect_at_the_next_step",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_a_page_that_arrives_late_is_waited_for_under_a_factor",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_the_task_timeout_is_compared_on_the_budget_clock",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk1_gesture_durations_are_not_scaled",
+]
+incident = ["#385 P-k"]
