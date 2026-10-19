@@ -1797,6 +1797,21 @@ written in full (`contract.json`, category, `ladder_class` and values unchanged)
 | A7T-2 | the shipped trigger item `task_capture_backend` | default value (no new key) | A7T | A7T (host 108) | `{"id": "task_capture_backend", "stages": ["task"], "codes": [the four codes]}` after `preparation_backend` in `actingd.defaults.json`, with the trigger defaults (`immediately`, rung 1, cool-down respected); a scheduled run on an instance with stuck recovery on that fails by A7T-1 starts a ladder by it; with the capture self-check failed its `return_home` and `application_restart` rungs are skipped `capture_unavailable` and `emulator_restart` is the first rung tried; a direct run starts none (`rules.direct_runs = exempt`) |
 | A7T-3 | the first capture's ADB probe child | rule (no shape change) | A7T | A7T (host 108) | the one ADB baseline probe of a physical instance's first capture (task deadline) still runs for the four codes; a failed probe with confirmed cleanup invalidates `device.connected`, `application.foreground` and `task.page` with `adb_unreachable` as before; a probe whose adb child is unconfirmed is settled by the #403 rule (`settle_unconfirmed_adb`): the instance is fenced and the run fails nonfatal with `instance_resources_fenced`, and only where no registered instance owns it is the owner retained and the Runtime fatal; the probe's answer no longer decides the capture failure's fatality |
 
+### 1.109 Slice A19 (v0.12.2): a timed-out arrival wait answers "not reached" in its own code; a cut takes samples only (#411 A19)
+
+actinglab answers an online `do --capture --after-page` whose arrival wait times out as it
+answers a navigation step whose page did not arrive: `lab_arrival_timeout`, exit 3, instead of
+`device_error`, exit 4. The call stays a failure with a nonzero CLI result
+([contained-lab-operation.md](contained-lab-operation.md), "Timeout and abort … produce a failed
+receipt and nonzero CLI result"). No code, key, wire, ledger, configuration or interface
+revision (§6) changes; the catalog change is the text of the pending `lab_arrival_timeout`. Every
+other failed record, and the `--record` path's handling of a failure, keep their answers.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A19-1 | online `do --capture --after-page` whose wait times out → CLI error `lab_arrival_timeout`, exit 3, `blocked_by: [arrival_page]`, details unchanged; MCP `ac_lab_do` class `safety`, `lab_tool_failed {exit_code: 3}` caused by `lab_arrival_timeout` | changed answer (was `device_error`, exit 4; MCP class `device`) (exec 93) | A19 | A19 | chosen by the failure's stage `arrival` and code `lab_arrival_timeout`; the details are the operation's answer as before, `after_attachment` included; `lab_element_unavailable` stays `capability_insufficient` (exit 3) and any other failure `device_error` (exit 4); a script that tests exit 4 on a timeout reads exit 3 |
+| A19-2 | every online `do` answer has `arrival` as its last member | member order (no member added or removed) (exec 93) | A19 | A19 | success and failure, Min and Normal: `arrival` moves after `after_attachment` (and after `record` on a `--record` answer); its own members stay `status`, `elapsed_ms`, `samples`; every other member keeps its order and value; so a reader that cuts the text, such as MCP's `raw_text` (4096 bytes), keeps `state`, `failure`, `after_attachment` and the arrival's status and elapsed time, and loses samples only |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

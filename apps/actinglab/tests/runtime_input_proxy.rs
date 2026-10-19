@@ -709,7 +709,7 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
         actingcommand_contract::EffectDisposition::NotPerformed
     );
     state.transition_after_tap.store(true, Ordering::Release);
-    let (_, timeout) = run_actinglab_failure_json(
+    let (timeout_exit, timeout) = run_actinglab_failure_json(
         &config,
         &runtime_root,
         &local,
@@ -733,6 +733,26 @@ fn resource_restore_preserves_native_evidence_and_read_only_source_parsing() {
     let timeout_record = &timeout["error"]["details"];
     assert_eq!(timeout_record["effect"], "performed");
     assert_eq!(timeout_record["arrival"]["status"], "timed_out");
+    // #411 A19 (exec key 93): a timed-out arrival answers "the page did not arrive" in its own
+    // code (exit 3), not device_error, and `arrival` is the last member of its details, after
+    // `after_attachment`.
+    assert_eq!(timeout_exit, 3);
+    assert_eq!(
+        timeout["error"]["code"],
+        actingcommand_contract::codes::SharedCode::LabArrivalTimeout.as_str()
+    );
+    let timeout_members = timeout_record
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(timeout_members.last(), Some(&"arrival"));
+    let attachment_at = timeout_members
+        .iter()
+        .position(|member| *member == "after_attachment")
+        .expect("after_attachment in the details");
+    assert!(attachment_at < timeout_members.len() - 1);
     request_ids.push(timeout_record["req_id"].as_str().unwrap().to_string());
     drop(session);
     drop(client);
