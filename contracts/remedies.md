@@ -234,6 +234,15 @@ For a blocked pair whose key K declares `need` N and `capabilities` C:
 - **Runs without a dispatch** (direct runs, Lab online and offline runs): the overlay holds every
   declared parameter with its declared default. Nothing is recorded for them; the defaults are
   package data, so the run is reproducible from the package.
+- **Lab single-step evaluations** (#411 Lab RP): the kernel's `dry_run_select` and the scan replay
+  (`actinglab replay --select <operation> --scan <file>`) evaluate one select step with the same
+  overlay on the snapshot they evaluate, the declared defaults, observed at the evaluation's
+  instant. The scan replay takes `--parameter <name>=<value>`, repeatable with one flag per
+  distinct name: the value replaces that parameter's default, as a dispatch's chosen value does.
+  A name the package does not declare (any name, on a package that declares none) or a value that
+  is not one of the parameter's declared options is refused (`validation_failed` naming
+  `--parameter`, `argument_problem` `not_recognised`), and a name given twice is `repeated`;
+  neither is ever ignored. A package that declares no parameter evaluates exactly as before.
 - **Never stored.** The overlay appends no record, takes no fact identity, and is not visible to
   `InstanceFactSnapshot` or `ac_facts`.
 - **Reserved prefix.** `PublishFact` / `PublishFacts` of any key under `session.dispatch.` is
@@ -332,7 +341,8 @@ A round stops with one of three codes, each with `remedy_problem`:
   written (the clock-slot rule), so it is written once per round, across restarts too.
 - It is visible in `actingd suspended` (the list `remedies`,
   [policy-suspension.md](policy-suspension.md)), in MCP `ac_diagnose` (the instance's `remedies`
-  rows), in the not-running row once SR-6b has it, and in the clock-slot records: a stop code is a
+  rows), in the not-running row of `ac_overview` and `ac_schedule` (MCP-19; the instance status
+  keeps no such member), and in the clock-slot records: a stop code is a
   persistent gate (`clock_slot_refused`), `policy_remedy_waiting` a waiting gate
   ([scheduling-blackout.md](scheduling-blackout.md)). It never starts the recovery ladder.
 

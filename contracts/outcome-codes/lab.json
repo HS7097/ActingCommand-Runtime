@@ -81,6 +81,20 @@
       "description": "Workflow #396 REC-4: a click of a Lab recording step that follows a template mark (record mark --click-follow, a request's click.follow) does not hold; mark_id is the followed mark and follow_problem says why. A declaration that cannot hold (not_template, not_required, guard_conflict) refuses record mark with this code (exit 3) and nothing is written. A frame of the step on which the click does not hold (primary_mismatch on the primary frame, template_unmatched or click_outside_frame on any live frame) is a refused mark's reason inside record_mark_rejected, with the frame. The stage is record_click_follow_check.",
       "common_causes": "The click follows a color, OCR or check mark, a template that only an any_of check names, or another guard was named; the template matches elsewhere on the primary frame, is not found on a sample frame, or the followed click box leaves a sample frame.",
       "handling": "Follow a required template mark of the step and let it be the guard; crop the template so that its best match on the primary frame is the crop itself; give it a search area that covers every position it moves to, and a click box that stays inside the frame there."
+    },
+    "record_gesture_execution_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "#411 Lab BD: do --capture --record was asked to execute a Lab recording step whose declared gesture a Lab operation cannot press, a single-touch drag with a vertical brake (single_touch_drag_with_vertical_brake_v1); nothing was captured, pressed or recorded (exit 3).",
+      "common_causes": "The open step declares a brake drag; Lab operations press taps, long taps and swipes only, and running one declared operation as the kernel runs it is not available in this version.",
+      "handling": "Reach the screen after the gesture by other means (for example a lab run of a package that performs it), then close the step with record mark --close-step or give its next frame offline; the generated package still declares the gesture."
     }
   },
   "locations": {

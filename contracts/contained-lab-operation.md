@@ -57,6 +57,29 @@ current frame, on which it plans
 B-2). Executing online `do` does not interpret a resource or choose a
 coordinate in the client.
 
+The `--capture` client forms, `do --capture --dry-run`, `ensure --capture` and
+`wait --capture`, decide in the client on Runtime frames, and they take the
+frames target consensus needs (#411 Lab L5c). Each of their observations (do's
+one, ensure's start, every route guard and every arrival poll, and every poll of
+wait) is the package's frame set: F = `target_sample_frames()` read-only Runtime
+captures (2 to 5), the declared `target_sample_interval_ms()` apart (unscaled),
+oldest first, the last the current frame; without target consensus it is one
+capture, as before. Page detection, every target and the destructive check
+evaluate the set as offline `--scene` frames are evaluated
+([business-identity-consensus.md](business-identity-consensus.md)); the click, the
+coordinates, `frame_coordinates`, `frame_age_ms` and the input's frame are the
+current frame's, and `do --capture --dry-run` reports `recognition_coverage` as
+offline `do` does. The client holds no lease across the captures. Through its
+event query it checks, as the Runtime checks a keyless `observe`
+([contained-page-observation.md](contained-page-observation.md)), that no
+`InputIntent` reached the instance from the first capture's request to the last
+capture's terminal event; one did, and the form fails with
+`observation_samples_interrupted` (`device_error`, exit 4, `details.error`)
+before anything is decided on the frames. Frames of different sizes are refused
+with `validation_failed` (exit 2, `argument: --capture`, `argument_problem:
+unusable`, `index`), as offline frames are. A wait poll takes one whole set, so
+an observation takes at most five frames.
+
 ## Runtime ownership
 
 Lab keeps the logical publication's generation reader open until the RPC,

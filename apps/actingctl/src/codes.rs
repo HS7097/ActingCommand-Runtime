@@ -188,6 +188,9 @@ actingcommand_contract::outcome_codes! {
         RuntimePerformanceReported => "runtime_performance_reported": success / none,
         // Workflow #384 D2-S5: `fact-refresh`.
         RuntimeFactRefreshReported => "runtime_fact_refresh_reported": success / none,
+        // Workflow #386 SR-6b, MCP-19 (registered by MCP-19a, emitted from MCP-19b on):
+        // `schedule`.
+        RuntimeScheduleReported => "runtime_schedule_reported": success / none,
         PackageBindingsReported => "package_bindings_reported": success / none,
         StartRuntimeStarted => "start_runtime_started": success / none,
         StartRuntimeRestarted => "start_runtime_restarted": success / none,

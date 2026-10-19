@@ -616,9 +616,13 @@ target record `session.remedy.choices` (an overlaid instance fact) and the confi
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
 record of why it was dispatched, appended after `placement_selected` and
 `rank_assigned`; the selected decision's `reasons` stay equal to its chain. No other
-decision gains a reason. The details below are developer text: they go to the
-developer log and the in-memory decision, and the dispatch events persist only each
-reason's outcome.
+decision gains a reason. The details below are developer text, kept only in the
+in-memory decision; the dispatch events persist each reason's outcome, its code with its
+values. Why a listed candidate did not run is persisted as values (Workflow #411 A26,
+since 0.12.5): `decision_candidate_not_selected` carries `why`, `decision_state` and
+`eligibility`, and `decision_record` carries `omitted_why`. The ranking terms of the
+details (`total`, `behind_by`, `priority`, … `tie_breaker`, and `rank_breakdown`'s) have
+no value keys and stay developer text.
 
 1. `rank_breakdown`: `total=<t> base=<b> priority=<p> aging_ms=<a>
    strategic_milli=<w> urgency_milli=<u> contention=<c> effective=<e>
@@ -652,9 +656,16 @@ reason's outcome.
      the same evaluation. `omitted_why` counts the unlisted ones by their last
      reason code in ascending code order, `none` when none is omitted; the codes
      that would take the detail past 1010 bytes fold into `+<n>more` (`n` codes).
-3. `decision_candidate_not_selected` (value `task_id`), one per listed related
-   candidate, at most eight: those that were ranked first, by total descending,
-   then the others, each by task id.
+   - Value `omitted_why` (optional): the same counts, one record `{why, count}` per
+     code in ascending code order, every code (no fold; a records value keeps 64 and
+     adds `omitted_why_total`); left out when none is omitted.
+3. `decision_candidate_not_selected` (values `task_id`, `why`, `decision_state`,
+   `eligibility`), one per listed related candidate, at most eight: those that were
+   ranked first, by total descending, then the others, each by task id.
+   - `why` (a code) is the `why` of the detail, `decision_state` (vocabulary
+     `decision_state`) its `state`, and `eligibility` (vocabulary `eligibility`:
+     `true`, `false`, `unknown`) the candidate's eligibility, which the detail of a
+     candidate that was not ranked prints.
    - Ranked: `why=<code> state=<state> total=<t> behind_by=<winner total - t>
      priority=… aging_ms=… strategic_milli=… urgency_milli=… contention=…
      effective=… score=… utility=… offset=… target=<s|none> promoted=<0|1>
@@ -698,9 +709,53 @@ would end a decision without a reason is a programming error: the candidate is s
 with the reason `decision_reason_missing` (error; `task_id`, `instance_id`), and the round goes
 on, so the gap is visible instead of silent. The order in which the deferrals of the scheduling
 rules are decided, and so which code a deferred candidate carries, is in
-[`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Evaluations
-stay out of the ledger; a person sees the reason in the instance's not-running row of the status
-and of MCP (slice SR-6b).
+[`scheduling-blackout.md`](../scheduling-blackout.md), "Order of the deferrals". Its last
+position (Workflow #405 D1) is the random delay: on an instance whose
+`scheduling.random_delay.enabled` is true in effect, a candidate that passed every other gate is
+deferred with `dispatch_random_delay_waiting` (info; `instance_id` the alias, `task_id`,
+`due_at_unix_ms`, `random_delay_ms`, `next_eligible_unix_ms` the planned start) until its drawn
+delay has passed, and the intent it is then dispatched with records the delay
+(`policy.dispatch_intent` `random_delay`). Evaluations
+stay out of the ledger; a person sees the reason where the next paragraph says.
+
+**Where a person sees it** (Workflow #386 SR-6b, MCP-19a; [`v012-register.md`](../v012-register.md)
+§1.143). The policy host keeps the latest evaluated cycle's not-run explanation in memory, per
+instance that has a decision in that evaluation, by alias:
+- the instance's earliest decision wake;
+- the decision selected for it: its task, its decision id and the state of its dispatch when the
+  explanation is read (`pending` before its intent is recorded, then `intent`, `admitted`,
+  `rejected` or `completed`, as the dispatch projection holds it; a rejected one did not run
+  either);
+- every other decision as a candidate row `{task_id, state, eligibility, why, reasons,
+  reasons_omitted?, next_wake_unix_ms?, since_unix_ms}`: `state` is `blocked` for a blocked
+  decision and `deferred` for every other (an eligible one that another task outranked waited
+  this round); `why` is the full outcome of its last reason, the code `why=` names in a dispatch
+  decision record; `reasons` are the codes of its reasons in order, the last 32 when there are
+  more (`reasons_omitted` counts the others), so it ends with `why`'s code; the wake is the
+  decision's own. Due rows (eligibility `true`) come first, ranked ones by total score, highest
+  first, then unranked ones, each tie by task id; then the rest by their wake, earliest first and
+  none last, then by task id;
+- one not-running row (scheduling model §8.2 item 4): the first due row's task, `why`, wake and
+  since; with no due row, no task and `why` `due_task_missing` (info; `instance_id` the alias,
+  `next_eligible_unix_ms` the instance's earliest wake when one is known).
+
+A row's `since_unix_ms` is the first evaluation of an unbroken run of evaluations in which the
+same (instance, task) had the same `why` code; the not-running row's, of the same (instance, task
+or none, `why` code). Every evaluated cycle replaces the table, before the host adds its notes to
+the decisions (so `eligible_since_unknown` and `policy_instance_fact_missing` below are not part
+of it); a deferred cycle or a failed evaluation leaves it as it was, and a start begins with none,
+so a run counts from the first evaluation after the start. Nothing of it is written to the ledger
+and no decision reads it. The general read `ScheduleExplanation`
+([`runtime-interface.md`](../runtime-interface.md), "New request kinds") answers it; its outputs
+are MCP-19b's: `actingctl schedule`, MCP `ac_schedule`, the `not_running` row of `ac_overview` and
+the `not_run` rows of `ac_diagnose`.
+
+What the ledger keeps (Workflow #411 A26, since 0.12.5): only a round that dispatches records
+anything, in the reasons of its dispatch events ("Dispatch Decision Record" above). There each
+candidate the record lists carries `why` (that code), `decision_state` and `eligibility` as values
+of `decision_candidate_not_selected`, and `decision_record` counts the candidates it does not
+list by `why` in its value `omitted_why`. Before A26, `why` was only in the developer detail,
+which is not persisted.
 
 Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
 but has not started is withdrawn when its task package is unloaded, and its decision record and
@@ -721,6 +776,11 @@ cycle's decisions after the evaluation: `eligible_since_unknown` ("Settlement Fe
 Eligibility Age" below) and `policy_instance_fact_missing` (value `fact_key`)
 ([`instance-fact-store.md`](../instance-fact-store.md), "Explanation"). These follow the
 evaluator's reasons and do not replace the reason that settled the decision.
+
+A `fact_time_reached` predicate that is false adds its own reason before `trigger_false` when it
+decides the trigger (Workflow #405, "Fact-time wake" below): `fact_time_pending` (info;
+`fact_key`, `next_eligible_unix_ms`) while the time its fact holds plus its offset has not come,
+and `fact_time_unavailable` (info; `fact_key`, `fact_time_problem`) when its fact gives no time.
 
 ## Settlement Feedback And Eligibility Age
 
@@ -943,6 +1003,17 @@ A due clock occurrence that is not dispatched leaves one trace (Workflow #372). 
   - A record is written only while the pair is live: its task is placed on the instance, and its trigger, evaluated with the evaluation's facts once every counted clock is counted due, is true. A follower whose head failed or a task outside its timeline window gets none. A pair that was never dispatched gets none either: R7's grace bounds its first run, and K2's owed record carries `first_run`. While the Runtime runs, the first evaluation after `O + grace_ms` or O′ comes within one cycle; after a Runtime gap, liveness reads the facts at the restart.
   - Each is written once per (pair, O), its `signal_id` `signal:clock_slot:<expired|superseded>:<hex>` with K2's digest, checked against the projection before it is written.
 - **Not recorded.** An occurrence a catalog skips by making its trigger false, and the occurrences of a pair that was never dispatched.
+
+## Fact-time wake (Workflow #405)
+
+A task that is due when earlier work ends, at an instant a package read and published as a fact, names the predicate `{"kind": "fact_time_reached", "scope": …, "fact_key": …, "offset_ms": N, "max_age_ms": M}` (`actingcommand.scheduling.v2` only; [v2/README.md](v2/README.md)). The scheduler wakes at that instant instead of polling.
+
+- **True** when the fact at (`scope`, `fact_key`) exists, its confidence is above 0, it is fresh exactly as for `fact` (observed no longer ago than `max_age_ms` when M is not null, and not past its own `expires_at_unix_ms`), its value is a `timestamp_ms` T, and the evaluation is at or after `T + N`. The sum is signed and never overflows; a sum below 0 counts as 0. While the predicate is true, its freshness is the fact's and it wakes the evaluation one millisecond after that freshness ends, as `fact` does.
+- **False, not reached**, before `T + N`: the predicate adds the info reason `fact_time_pending` {`fact_key`, `next_eligible_unix_ms` = `T + N`} and wakes the evaluation at `T + N`, or one millisecond after the fact's freshness ends when that comes first. A newer reading of the fact wakes the scheduler as every fact publication does, and the next evaluation reads the new time.
+- **False, no time**: the fact is missing, its confidence is 0, it is older than M, it is past its own expiry, or its value is not a `timestamp_ms`. The predicate adds the info reason `fact_time_unavailable` {`fact_key`, `fact_time_problem`: `missing`, `low_confidence`, `stale`, `expired` or `not_a_time`} and no wake. Unlike `fact` it is false, not Unknown: the time is the output of the package that ran the work, which the instance's recognition maintenance package cannot read, so the predicate never asks for a fact refresh ("Fact Refresh") and gives no detection suggestion.
+- **Minimum interval.** Once T + N has passed, the predicate stays true until a newer reading moves the time. The least time between two dispatches of the task is its `cooldown_ms` ("Task Execution Fields"); the predicate has no interval of its own.
+- **Fallback.** A catalog may write the predicate and a clock in one `any`: whichever is true first makes the task due, so the clock still runs it while the fact gives no time. Under `all` and `not` the predicate combines as any other, and every other predicate evaluates as before. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason.
+- It is no counted clock for the clock-slot records (above) and references no outcome key.
 
 ## Runtime Boundary
 

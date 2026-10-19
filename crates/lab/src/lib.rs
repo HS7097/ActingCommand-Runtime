@@ -41,6 +41,9 @@ mod gate_rc2_a10;
 // #411 Lab B-9 (exec key 108): a Lab recording marks a value test.
 #[cfg(test)]
 mod gate_lab_b9;
+// #411 Lab BD (exec key 109): a Lab recording declares a brake drag and generates it.
+#[cfg(test)]
+mod gate_lab_bd;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;
@@ -99,6 +102,8 @@ pub use actingcommand_execution_kernel::{
 };
 // Workflow #308 SEL-L6b: the scan replay of `actinglab replay --frames --select --scan`.
 pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_scan};
+// #411 Lab RP: the run parameters a Lab evaluation reads, given with `--parameter`.
+pub use actingcommand_execution_kernel::GivenParameterProblem;
 
 pub use actingcommand_execution_kernel::{
     DriveNavigationGraph, parse_environment_catalog_value, validate_control_declaration,

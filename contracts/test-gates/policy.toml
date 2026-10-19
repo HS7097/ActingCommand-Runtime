@@ -608,3 +608,38 @@ tests = [
     "actingcommand-policy::lib::tests::gate_411_b15e::b15e_two_allowed_providers_are_ranked_by_the_existing_total",
 ]
 incident = ["#411 B15"]
+
+# Workflow #405 W1 (plan-405-406 brief-W1 requirements 1-7; contracts/scheduling/README.md "Fact-time wake"; register §1.134): the V2 catalog predicate fact_time_reached is true from the time its fact holds plus offset_ms on, with the fact's freshness and wake; before it, false with fact_time_pending and a wake at min(T + offset, freshness end + 1); a missing, zero-confidence, stale, expired or non-time fact is false with fact_time_unavailable and its problem, no suggestion, no fact refresh and no wake; under any with a clock whichever comes first dispatches; a V1 document naming it, offset_ms outside ±86 400 000, max_age_ms 0 or a missing member are refused; the V2 schema carries the Runtime's bounds
+[[gate]]
+key = "53"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_405_w1::w1_a_reached_time_is_true_from_value_plus_offset_and_false_one_ms_before",
+    "actingcommand-policy::lib::tests::gate_405_w1::w1_a_future_time_defers_with_fact_time_pending_and_wakes_at_value_plus_offset",
+    "actingcommand-policy::lib::tests::gate_405_w1::w1_an_unusable_fact_is_false_with_its_problem_and_requests_no_refresh",
+    "actingcommand-policy::lib::tests::gate_405_w1::w1_any_with_a_clock_dispatches_whichever_comes_first",
+    "actingcommand-policy::lib::tests::gate_405_w1::w1_a_v1_catalog_or_out_of_range_members_are_refused",
+    "actingcommand-policy::lib::tests::gate_405_w1::w1_the_v2_schema_declares_fact_time_reached_with_the_runtime_bounds",
+]
+incident = ["#405"]
+
+# Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirement 1; register §1.143 M19A-1; no persisted ledger shape; key assigned by the coordinator; the host half is host 126 and 127): every TaskDecision carries its own wake (next_wake_unix_ms), the value the evaluator computed for it, and the evaluation's wake is the least of the decisions' (here, of two clock tasks not yet due); the member is never serialized, so an evaluation's bytes are unchanged
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_mcp19a::mcp19a_each_decision_carries_its_own_wake",
+    "actingcommand-policy::lib::tests::gate_mcp19a::mcp19a_the_decision_wake_is_not_serialized",
+]
+incident = ["#386 SR-6b", "MCP-19"]
+
+# Workflow #411 A26 (#386 SR-6a; contracts/scheduling/README.md, "Dispatch Decision Record" and "Why A Candidate Does Not Run"; register §1.145): a dispatch decision record persists why each candidate it lists did not run as typed values beside task_id (why, decision_state, eligibility: its decision's last reason, state and eligibility, as the detail prints them), counts the candidates it does not list by why in omitted_why, and a stored record with the new values reads back through the 0.12 reader unchanged
+[[gate]]
+key = "57"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_a26::a26_a_not_selected_candidate_records_its_why_state_and_eligibility",
+    "actingcommand-policy::lib::tests::gate_411_a26::a26_a_decision_record_counts_the_omitted_candidates_by_why",
+    "actingcommand-policy::lib::tests::gate_411_a26::a26_an_earlier_reader_accepts_the_new_values",
+]
+incident = ["#411 A26", "#386 SR-6a"]

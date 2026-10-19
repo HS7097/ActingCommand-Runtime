@@ -118,7 +118,8 @@ record mark [--step <n>] [--frame <png>] [--sample <png>]… [--page <name>]
             [--template <id>=x,y,w,h[@x,y,w,h]]… [--scales <f>,…] [--color <id>=x,y,w,h]… [--reuse <id>]…
             [--forbid <id>]… [--anchor <id> | --no-anchor]
             [--click x,y,w,h | --click-from <id> | --click-follow <id> | --click x,y,w,h --click-follow <id>
-             | --click x,y,w,h --drag-to x,y,w,h --duration-ms <ms> | --long-press x,y,w,h --duration-ms <ms>]
+             | --click x,y,w,h --drag-to x,y,w,h --duration-ms <ms> | --long-press x,y,w,h --duration-ms <ms>
+             | --click x,y,w,h --brake-corner x,y,w,h]
             [--click-guard <id>] [--click-retry <n>]
             [--replace-click] [--remove <id>]… [--optional [--settle-ms <0..60000>] | --not-optional]
             [--dry-run] [--state-dir <dir>]
@@ -232,6 +233,15 @@ gestures (Workflow #390 LAB-2, see "Forbidden marks and anchors" and "Drags and 
  "replace_click":true}
 ```
 
+A drag with a vertical brake (#411 Lab BD, see "Drags and long presses"):
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":3,
+ "click":{"region":{"x":1000,"y":520,"width":60,"height":60},
+          "brake_corner":{"x":200,"y":500,"width":60,"height":60}},
+ "replace_click":true}
+```
+
 `"clear_anchor": true` (`--no-anchor`) clears the step's anchor; `remove` takes a forbidden
 mark off the page again.
 
@@ -257,8 +267,8 @@ Rules:
 - Workflow #390 LAB-2: `--template <id>=x,y,w,h@x,y,w,h` gives the template its search area
   (`search`, the part after `@`) as the request form does; only `--template` takes one
   (`validation_failed`, exit 2). `--forbid`, `--anchor`, `--no-anchor`, `--drag-to`,
-  `--long-press` and `--duration-ms` are described in "Forbidden marks and anchors" and "Drags
-  and long presses".
+  `--long-press`, `--duration-ms` and (#411 Lab BD) `--brake-corner` are described in
+  "Forbidden marks and anchors" and "Drags and long presses".
 - Click: exactly one of a rectangle (`--click`, inside the frame with width and height ≥ 1),
   a mark of the step (`--click-from`, copying the mark's region; for a template that is
   the crop, not the search area; a check or a value test has no region:
@@ -475,8 +485,20 @@ Workflow #390 LAB-2. A step's effect may be a drag or a long press instead of a 
   long press its box and a duration and no `--click` rectangle; neither takes `--click-from` or
   `--click-follow`; every rectangle lies inside the frame. Anything else is `validation_failed`
   (exit 2). Guard, retry and `--replace-click` apply as to a tap.
-- `recording.json` records `click.gesture`: `{"kind": "drag", "to", "duration_ms"}` or
-  `{"kind": "long_press", "duration_ms"}`; `record status` shows it on the click.
+- #411 Lab BD: `--click x,y,w,h --brake-corner x,y,w,h` (`"click": {"region",
+  "brake_corner"}`) declares a single-touch drag with a vertical brake: it presses a point of
+  the click rectangle, moves to a point of the corner box, holds there and brakes 100 px
+  straight up before it lifts, with the Runtime's fixed timings (horizontal move 200 ms, hold
+  at the corner 150 ms, brake 200 ms; 550 ms in all), so it takes no duration. Both boxes lie
+  inside the frame with width and height ≥ 1, and the corner's `y` is at least 100, so that the
+  brake ends inside the frame (pack containment's bound). With `--duration-ms`, `--drag-to`,
+  `--long-press`, `--click-from` or `--click-follow` (or their request members) it is
+  `validation_failed` (exit 2); so is a corner whose `y` is less than 100 or a box outside the
+  frame. Guard, retry and `--replace-click` apply as to a tap. A Lab operation does not press it
+  (see "`--record` on device commands"); the package declares it as the Runtime runs it.
+- `recording.json` records `click.gesture`: `{"kind": "drag", "to", "duration_ms"}`,
+  `{"kind": "long_press", "duration_ms"}` or (#411 Lab BD) `{"kind":
+  "single_touch_drag_with_vertical_brake_v1", "corner"}`; `record status` shows it on the click.
 - Workflow #390 lpbox: the generated `long_press` click declares the box, and the kernel holds a
   point it picks inside the box, as it taps a `rect` click (the `long_press` paragraph of
   [resource-declarations.md](resource-declarations.md)). Every generated click is a box.
@@ -647,6 +669,13 @@ frame attachment or recording persistence. The global parser handles the flag at
   a step without a declared click `record_step_click_missing` (declare the drag with `record
   mark` first). The execution also records `to_point` and `duration_ms`. Without `--record`,
   `do --capture --swipe` is unchanged.
+- #411 Lab BD: a brake drag is not pressed by a Lab operation: `do --capture --record` on its
+  step is refused with `record_gesture_execution_unsupported` (exit 3, `details{step, gesture}`)
+  before any Runtime connection, capture or recording change, whatever `--tap`, `--tap-rect` or
+  `--swipe` it gives, and nothing is recorded. Reach the screen after the gesture by other
+  means, then close its step with an offline frame (`record mark --frame <png>`) or `record mark
+  --close-step`; a device frame before that is `record_step_click_not_executed`, as for any
+  declared click. The package still declares the gesture.
 - observe and do need a carrier package: any admissible package of the same game and
   resolution, including an earlier Lab package.
 - Pause the instance's scheduling for the recording (`actingctl pause --instance <alias>`,
@@ -1001,8 +1030,11 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   REC-4: `{"kind": "target", …}` or `{"kind": "offset", …}` for a click that follows a template,
   see "Following a template"; Workflow #390 LAB-2: `{"kind": "drag", "from", "to",
   "duration_ms"}` with the recorded rectangle and destination for a drag, `{"kind": "long_press",
-  "x", "y", "width", "height", "duration_ms"}` with the recorded click box for a long press,
-  see "Drags and long presses"),
+  "x", "y", "width", "height", "duration_ms"}` with the recorded click box for a long press;
+  #411 Lab BD: `{"kind": "single_touch_drag_with_vertical_brake_v1", "from", "corner",
+  "horizontal_duration_ms": 200, "corner_hold_ms": 150, "brake_distance_px": 100,
+  "brake_duration_ms": 200}` with the recorded rectangle as `from` and the corner box for a
+  brake drag; see "Drags and long presses"),
   `expect_after.timeout_ms` the arrival timeout T (`--arrival-timeout-ms`, default 15000),
   `interval_ms` 500, `post_delay_ms` 200, and `retryable`, `max_attempts`,
   `retry_interval_ms` only when the step declares a retry. Its guard target comes from the
@@ -1031,9 +1063,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   `S·[step 1 is no application entry] + Σ a·(g + w + (b − w)⁺ + p + T) + Σ_app 10000 +
   Σ (a − 1)·(r + S) + Σ_runs max(settle) + 10000` over the steps with an effect, where S is the
   step timeout, a the attempts, g the duration of a drag or long press (Workflow #390 LAB-2; 0
-  for a tap and an application operation), w max(post delay, window minimum), b the window maximum (0
-  without), p the page transition timeout (T without its own, 0 without a page transition), T
-  the arrival timeout (A for an application step), r the retry interval, and max(settle) the
+  for a tap and an application operation; #411 Lab BD: 550 for a brake drag), w max(post delay,
+  window minimum), b the window maximum (0 without), p the page transition timeout (T without
+  its own, 0 without a page transition), T the arrival timeout (A for an application step), r
+  the retry interval, and max(settle) the
   largest `settle_ms` of a run of optional steps: the sums before it count every optional step
   as shown, the longest path, and a run settles at most once, only when it is skipped. Above
   1800000 it is clamped and the warning `task_timeout_clamped` added. The default covers the
@@ -1098,8 +1131,10 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      evaluator matches it (the match box, or its corner plus the scaled offset); the decision
      shown is the primary frame's. Workflow #390 LAB-2: a drag must be a swipe from inside its
      rectangle to inside its destination over its duration, a long press a long tap at its
-     point over its duration. A step 1 that forbids an OCR mark involves OCR as one that requires
-     it does.
+     point over its duration. #411 Lab BD: a brake drag must be the kernel's
+     `SingleTouchDragWithVerticalBrakeV1` with (x1, y1) inside its rectangle, (x2, y2) inside
+     its corner box, x3 = x2 and y3 = y2 − 100, and the four constants (200, 150, 100, 200).
+     A step 1 that forbids an OCR mark involves OCR as one that requires it does.
 
    Anything else is `record_artifact_admission_failed` with the decision.
 4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
@@ -1272,7 +1307,7 @@ equal value is accepted.
 | exit | codes |
 |---|---|
 | 2 | `validation_failed`, `record_flag_unsupported`, `record_flag_takes_no_value`, `record_state_dir_unsupported`, `record_frame_unreadable`, `record_transition_window_invalid`, `record_transition_has_click`, `record_application_action_invalid`, `record_application_with_click`, `record_optional_settle_invalid`, `record_locale_missing`, `record_lab_dir_invalid`, `record_requires_invalid` |
-| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict` |
+| 3 | `record_session_not_active` (Workflow #390 LAB-2: also, with `details.reason: "recording_stopped"`, a change a stopped recording does not take), `record_lab_unavailable`, `record_instance_mismatch`, `record_step_not_found`, `record_step_not_last`, `record_step_frame_missing`, `record_step_frame_conflict`, `record_frame_size_mismatch`, `record_frame_hash_mismatch`, `record_mark_rejected`, `record_mark_id_conflict`, `record_mark_id_reserved`, `record_mark_in_use`, `record_asset_name_conflict`, `record_click_exists`, `record_click_executed`, `record_click_source_invalid`, `record_click_follow_invalid`, `record_click_rect_conflict`, `record_click_outside_step_rect`, `record_step_click_missing`, `record_step_click_not_executed`, `record_gesture_execution_unsupported` (#411 Lab BD), `record_guard_family_invalid`, `record_append_failed_after_input`, `record_transition_without_click`, `record_transition_exists`, `record_to_transition_invalid`, `record_busy`, `record_application_entry_invalid`, `record_application_step_marks_missing`, `record_step_effect_exists`, `record_optional_first_step`, `record_optional_application`; stop: `record_no_steps`, `record_application_entry_not_first`, `record_step_without_recognition`, `record_final_step_has_click`, `record_too_many_steps`, `record_step_after_stop_invalid`, `record_application_without_home`, `record_click_follow_invalid`, `record_optional_first_step`, `record_optional_final_step`, `record_optional_application`, `record_optional_restart_segment_end`, `record_step_self_mismatch`, `record_optional_step_ambiguous`, `record_optional_skip_target_insensitive`, `record_artifact_admission_failed`, `record_requires_conflict`, `record_stop_option_conflict` |
 | 4 | `record_click_indeterminate`, `record_click_performed_with_failure`, `record_application_indeterminate` |
 | 5 | `record_lock_failed`, `record_state_io_failed` (Lab state files cannot be read or written), the state directory cannot be created |
 | 6 | `record_stop_generation_not_implemented` (a build without the package generator; the #336 L4 build also for a recording with optional steps, `details.reason: "optional_steps"`) |

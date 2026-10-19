@@ -2615,6 +2615,8 @@ const RECORD_MARK_SHORTCUT_FLAGS: &[&str] = &[
     "--drag-to",
     "--long-press",
     "--duration-ms",
+    // #411 Lab BD.
+    "--brake-corner",
 ];
 
 /// `record mark`: flags or a `actingcommand.lab-record-mark.v1` request, applied by the Lab
@@ -2768,12 +2770,17 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
             })
         })
         .transpose()?;
+    // #411 Lab BD: a brake drag from `--click` to the corner box `--brake-corner x,y,w,h`.
+    let brake_corner = record_flag_value(flags, "--brake-corner")?
+        .map(|value| parse_record_mark_rect(&value, "--brake-corner"))
+        .transpose()?;
     let click = (click_rect.is_some()
         || click_from.is_some()
         || click_follow.is_some()
         || drag_to.is_some()
         || long_press.is_some()
-        || duration_ms.is_some())
+        || duration_ms.is_some()
+        || brake_corner.is_some())
     .then_some(ClickSpec {
         region: click_rect,
         from: click_from,
@@ -2781,6 +2788,7 @@ fn record_mark_request_from_flags(flags: &FlagArgs) -> CliOutcome<MarkRequest> {
         drag_to,
         long_press,
         duration_ms,
+        brake_corner,
     });
     let retry = number("--click-retry")?.map(|max_attempts| ClickRetry {
         max_attempts,
@@ -3075,5 +3083,34 @@ mod lab2_tests {
         ]))
         .expect_err("a long press takes a box");
         assert_eq!(error.code, "validation_failed", "{}", error.message);
+    }
+
+    // #411 Lab BD (exec key 109; plan-lab-l5 §2 BD R1): `record mark --click x,y,w,h
+    // --brake-corner x,y,w,h` declares the same click as the request form `"click": {"region",
+    // "brake_corner"}`, so both record the same brake drag (the Lab crate's
+    // `bd_a_brake_drag_is_declared_recorded_and_shown` records and shows the request form).
+    #[test]
+    fn bd_the_brake_corner_shortcut_declares_the_request_forms_click() {
+        let shortcut = record_mark_request_from_flags(&flags(&[
+            "--click",
+            "140,130,16,16",
+            "--brake-corner",
+            "40,120,16,16",
+        ]))
+        .expect("request");
+        let request: MarkRequest = serde_json::from_value(json!({
+            "schema_version": LAB_RECORD_MARK_SCHEMA,
+            "click": {
+                "region": {"x": 140, "y": 130, "width": 16, "height": 16},
+                "brake_corner": {"x": 40, "y": 120, "width": 16, "height": 16}
+            }
+        }))
+        .expect("the request form");
+        assert_eq!(shortcut.click, request.click);
+        assert!(
+            request
+                .click
+                .is_some_and(|click| click.brake_corner.is_some())
+        );
     }
 }

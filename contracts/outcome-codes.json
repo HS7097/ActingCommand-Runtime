@@ -1966,6 +1966,38 @@
     "unformatted": {
       "type": "list<path>",
       "description": "The files of a content directory that are not in the canonical serialization, each a /-separated path relative to that directory, not an absolute path (Workflow #411 RV-1)."
+    },
+    "fact_time_problem": {
+      "type": "vocab:fact_time_problem",
+      "description": "Why a fact_time_reached predicate's fact gives no time (Workflow #405)."
+    },
+    "due_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a task first became due for dispatch, in Unix milliseconds (Workflow #405)."
+    },
+    "random_delay_ms": {
+      "type": "duration_ms",
+      "description": "The random delay drawn for a dispatch, in milliseconds (Workflow #405)."
+    },
+    "why": {
+      "type": "code",
+      "description": "Why a candidate that a dispatch decision record names did not run: the last reason of its scheduling decision, the one that settled it, never none (Workflow #411 A26; contracts/scheduling/README.md, \"Why A Candidate Does Not Run\")."
+    },
+    "decision_state": {
+      "type": "vocab:decision_state",
+      "description": "The state of the scheduling decision of a candidate that a dispatch decision record lists (Workflow #411 A26)."
+    },
+    "eligibility": {
+      "type": "vocab:eligibility",
+      "description": "The eligibility of the scheduling decision of a candidate that a dispatch decision record lists: what its trigger and feedback stop decided (Workflow #411 A26)."
+    },
+    "omitted_why": {
+      "type": "records",
+      "fields": {
+        "why": "required",
+        "count": "required"
+      },
+      "description": "The candidates of the same instance that a dispatch decision record does not list, counted by why: one record per code, in ascending code order (Workflow #411 A26)."
     }
   },
   "vocabularies": {
@@ -6030,6 +6062,60 @@
           "description": "interfaces.json does not declare what was written."
         }
       }
+    },
+    "fact_time_problem": {
+      "description": "Why a fact_time_reached predicate's fact gives no time (Workflow #405).",
+      "review": "pending",
+      "tokens": {
+        "missing": {
+          "description": "No fact with this key exists in the predicate's scope."
+        },
+        "low_confidence": {
+          "description": "The fact's confidence is 0."
+        },
+        "stale": {
+          "description": "The fact was observed longer ago than the predicate's max_age_ms."
+        },
+        "expired": {
+          "description": "The fact is past its own expiry."
+        },
+        "not_a_time": {
+          "description": "The fact's value is not a timestamp_ms value."
+        }
+      }
+    },
+    "decision_state": {
+      "description": "The state of a scheduling decision, as a dispatch decision record gives it for each candidate it lists (Workflow #411 A26).",
+      "review": "pending",
+      "tokens": {
+        "eligible": {
+          "description": "Nothing deferred or blocked the candidate this round."
+        },
+        "deferred": {
+          "description": "Something holds the candidate back for now; a later round may run it."
+        },
+        "blocked": {
+          "description": "The candidate cannot run until its inputs change."
+        },
+        "selected": {
+          "description": "The candidate was dispatched this round."
+        }
+      }
+    },
+    "eligibility": {
+      "description": "The eligibility of a scheduling decision, what its trigger and feedback stop decided, as a dispatch decision record gives it for each candidate it lists (Workflow #411 A26).",
+      "review": "pending",
+      "tokens": {
+        "true": {
+          "description": "The trigger passed and the feedback stop did not fire."
+        },
+        "false": {
+          "description": "Not eligible: the trigger is false, the feedback stop fired, or the scope matches no instance."
+        },
+        "unknown": {
+          "description": "Not decided: a predicate is unknown, or the candidate was settled before its trigger was read."
+        }
+      }
     }
   },
   "domains": {
@@ -8860,7 +8946,7 @@
       "runtime-host"
     ],
     "due_task_": [
-      "runtime-host"
+      "contract"
     ],
     "decision_reason_": [
       "policy"
@@ -23284,6 +23370,9 @@
       "uncertain": false,
       "values": {
         "task_id": "required",
+        "why": "required",
+        "decision_state": "required",
+        "eligibility": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -23293,9 +23382,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A dispatch decision record lists another candidate of the same instance (task_id) that was not selected.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A dispatch decision record lists another candidate of the same instance (task_id) that was not selected: why it did not run (the last reason of its decision, the one that settled it, never none), the state of its decision (decision_state) and its eligibility. The values why, decision_state and eligibility are written since 0.12.5 (Workflow #411 A26); the ranking terms of a ranked candidate stay developer text.",
+      "common_causes": "The instance ran another candidate this round (why instance_already_selected), or a deferral or block settled this candidate (its own reason code as why).",
+      "handling": "Nothing to do for the record itself. To find out why a task did not run, read why: it is the code of the condition that held the task back, and that code's own handling applies."
     },
     "decision_reason_missing": {
       "category": "error",
@@ -23330,14 +23419,15 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "omitted_why": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the policy state and the candidates a dispatch decision compared (decision record).",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Scheduling decision reason: the policy state and the candidates a dispatch decision compared (decision record). The record lists at most eight other candidates of the instance, each as decision_candidate_not_selected; omitted_why counts the candidates it does not list by why, and is left out when it lists them all. omitted_why is written since 0.12.5 (Workflow #411 A26).",
+      "common_causes": "A candidate of the instance was dispatched; every selected reason chain ends with its decision record.",
+      "handling": "Nothing to do. Read the listed candidates' why, and omitted_why for the others, to see why they did not run."
     },
     "deferred_append_unconfirmed": {
       "category": "error",
@@ -24189,6 +24279,31 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "dispatch_random_delay_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "due_at_unix_ms": "required",
+        "random_delay_ms": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): the instance has scheduling.random_delay enabled, so a task that passed every other gate waits a random delay before it is dispatched. due_at_unix_ms is the evaluation at which it first passed them; random_delay_ms is the delay drawn between min_ms and max_ms, shortened so that the planned start (next_eligible_unix_ms, due_at_unix_ms + random_delay_ms) stays inside the task's activity window and the freshness of the facts it was decided on. Position 9 of the order of deferrals; a waiting gate for the clock-slot records. The draw lives in memory only: after a restart the task draws again.",
+      "common_causes": "scheduling.random_delay.enabled is true for the instance (its own instance.<id>.scheduling.random_delay.enabled or the section's key).",
+      "handling": "None. The task is dispatched at next_eligible_unix_ms, or as soon as the instance is free after it. Set the instance's scheduling.random_delay.enabled to false to dispatch without a delay."
+    },
     "dll_outside_root": {
       "category": "error",
       "ladder_class": "environment_fault",
@@ -24328,7 +24443,7 @@
     "due_task_missing": {
       "category": "info",
       "ladder_class": "none",
-      "owner": "runtime-host",
+      "owner": "contract",
       "layer": "host",
       "uncertain": false,
       "values": {
@@ -28316,6 +28431,50 @@
       "description": "The Runtime host reports fact store sync failed.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "fact_time_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): a `fact_time_reached` predicate is false because the time its fact holds (a `timestamp_ms` value) plus the predicate's `offset_ms` has not come yet. next_eligible_unix_ms is that instant; the evaluation wakes at it. When the predicate decides the trigger, the decision ends with trigger_false.",
+      "common_causes": "The work the fact describes has not finished yet.",
+      "handling": "None. The task becomes due at next_eligible_unix_ms, or earlier when a newer reading moves the time."
+    },
+    "fact_time_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "fact_time_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): a `fact_time_reached` predicate is false because its fact gives no time: it is missing, its confidence is 0, it is older than the predicate's max_age_ms, it is past its own expiry, or its value is not a timestamp_ms value (fact_time_problem). Unlike a `fact` predicate it is false, not unknown, so no fact refresh is requested; a catalog that also names a clock in an `any` still runs the task at the clock.",
+      "common_causes": "The package that publishes the time has not run since the instance facts were created, or ran longer ago than max_age_ms; the catalog names a key the package does not publish, or the package publishes it with another value type.",
+      "handling": "Check that the package publishes the key as timestamp_ms and that max_age_ms covers the time between its runs. The fallback clock covers the gap."
     },
     "fact_tombstone_compaction_blocked": {
       "category": "error",
@@ -39303,6 +39462,26 @@
       "description": "Runtime contract validation refused a value: invalid saved artifact ocr result.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "invalid_schedule_explanation": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Runtime contract validation refused a value: a ScheduleExplanation answer of the wrong shape (an instance twice or out of alias order, more than 256 instances, more than 1,024 candidates of one instance or a candidates_total below the candidates answered, a candidate whose reason codes are empty, more than 32, or do not end with its why, a not-running row without a task whose why is not due_task_missing or one with a task whose why is due_task_missing, a selected task that is also a candidate), or a receipt carrying it that is not completed (Workflow #386 SR-6b, MCP-19).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
     },
     "invalid_scheduler_config": {
       "category": "error",
@@ -59039,6 +59218,20 @@
       "common_causes": "The click follows a color, OCR or check mark, a template that only an any_of check names, or another guard was named; the template matches elsewhere on the primary frame, is not found on a sample frame, or the followed click box leaves a sample frame.",
       "handling": "Follow a required template mark of the step and let it be the guard; crop the template so that its best match on the primary frame is the crop itself; give it a search area that covers every position it moves to, and a click box that stays inside the frame there."
     },
+    "record_gesture_execution_unsupported": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "lab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "#411 Lab BD: do --capture --record was asked to execute a Lab recording step whose declared gesture a Lab operation cannot press, a single-touch drag with a vertical brake (single_touch_drag_with_vertical_brake_v1); nothing was captured, pressed or recorded (exit 3).",
+      "common_causes": "The open step declares a brake drag; Lab operations press taps, long taps and swipes only, and running one declared operation as the kernel runs it is not available in this version.",
+      "handling": "Reach the screen after the gesture by other means (for example a lab run of a package that performs it), then close the step with record mark --close-step or give its next frame offline; the generated package still declares the gesture."
+    },
     "record_lock_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -63304,6 +63497,20 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A completed receipt of a SafeReset request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the answer."
+    },
+    "request_schedule_explanation_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A completed receipt of a ScheduleExplanation request: the Runtime did what the request asked. Workflow #378 A4: one success code per request kind (Workflow #386 SR-6b and the MCP-19 read add the kind).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
     },
@@ -70407,6 +70614,40 @@
       "description": "A runtime client call failed: runtime result unexpected.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "runtime_schedule_explanation_too_large_for_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A ScheduleExplanation read (Workflow #386 SR-6b, MCP-19) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
+      "common_causes": "The candidates of many instances, or of an instance with very many tasks, were asked for in one read.",
+      "handling": "Ask for one instance at a time, or without candidates; the not-running rows of every instance are small."
+    },
+    "runtime_schedule_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "actingctl schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every candidate that did not run with its why, its reason codes and its next wake, as ac_schedule answers it (Workflow #386 SR-6b, MCP-19).",
+      "common_causes": "The command succeeded.",
+      "handling": "Nothing to do."
     },
     "runtime_scheduling_paused": {
       "category": "success",
@@ -89514,6 +89755,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read runtime status scheduling pause."
     },
+    "read_schedule_explanation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A Runtime host operation or stage: read the latest policy evaluation's not-running rows and the candidates that did not run from the policy host's memory (Workflow #386 SR-6b, MCP-19)."
+    },
     "read_scheduled_policy_outcome": {
       "owner": "runtime-host",
       "layer": "host",
@@ -91915,6 +92164,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: runtime request id reused."
+    },
+    "runtime_schedule_explanation": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A runtime client operation: why each candidate of the latest policy evaluation did not run (ScheduleExplanation, Workflow #386 SR-6b, MCP-19)."
     },
     "runtime_state_observation_kind": {
       "owner": "runtime-host",

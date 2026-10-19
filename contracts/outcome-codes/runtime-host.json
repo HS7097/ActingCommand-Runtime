@@ -71,6 +71,31 @@
       "common_causes": "A stuck-recovery ladder, a startup package, an operator command or a direct task run holds the instance, or waits for it, when a dispatch is due.",
       "handling": "Nothing to repair. The candidate runs after the holder releases the instance; actingctl status shows lease_active and queued_request_count meanwhile."
     },
+    "dispatch_random_delay_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "due_at_unix_ms": "required",
+        "random_delay_ms": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): the instance has scheduling.random_delay enabled, so a task that passed every other gate waits a random delay before it is dispatched. due_at_unix_ms is the evaluation at which it first passed them; random_delay_ms is the delay drawn between min_ms and max_ms, shortened so that the planned start (next_eligible_unix_ms, due_at_unix_ms + random_delay_ms) stays inside the task's activity window and the freshness of the facts it was decided on. Position 9 of the order of deferrals; a waiting gate for the clock-slot records. The draw lives in memory only: after a restart the task draws again.",
+      "common_causes": "scheduling.random_delay.enabled is true for the instance (its own instance.<id>.scheduling.random_delay.enabled or the section's key).",
+      "handling": "None. The task is dispatched at next_eligible_unix_ms, or as soon as the instance is free after it. Set the instance's scheduling.random_delay.enabled to false to dispatch without a delay."
+    },
     "held_timeout": {
       "category": "error",
       "ladder_class": "none",
@@ -20205,28 +20230,6 @@
       "common_causes": "A client wrote a number or a text, or attached invalidation events.",
       "handling": "Publish a boolean record without invalidate_on."
     },
-    "due_task_missing": {
-      "category": "info",
-      "ladder_class": "none",
-      "owner": "runtime-host",
-      "layer": "host",
-      "uncertain": false,
-      "values": {
-        "instance_id": "required",
-        "next_eligible_unix_ms": "optional",
-        "operation": "optional",
-        "runtime_code": "optional",
-        "host_halted": "optional",
-        "receipt_state": "optional",
-        "request_id": "optional"
-      },
-      "review": "pending",
-      "status": "active",
-      "since": "0.12.0",
-      "description": "The instance has no task due in this evaluation; its not-running row names the earliest wake (next_eligible_unix_ms) when one is known.",
-      "common_causes": "Every task of the instance ran or waits for its next occurrence.",
-      "handling": "Nothing to repair."
-    },
     "policy_cost_commit_waiting": {
       "category": "info",
       "ladder_class": "none",
@@ -21745,6 +21748,26 @@
       "description": "A FactRefreshStatus read (Workflow #384 D2-S5) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "runtime_schedule_explanation_too_large_for_frame": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A ScheduleExplanation read (Workflow #386 SR-6b, MCP-19) whose reply receipt would exceed the host's maximum_frame_bytes is refused (receipt state denied) instead of failing the frame write.",
+      "common_causes": "The candidates of many instances, or of an instance with very many tasks, were asked for in one read.",
+      "handling": "Ask for one instance at a time, or without candidates; the not-running rows of every instance are small."
     },
     "policy_remedy_round_closed": {
       "category": "info",
@@ -28696,6 +28719,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read what the fact refresh's transition recorder holds as waited for (Workflow #384 D2-S5)."
+    },
+    "read_schedule_explanation": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A Runtime host operation or stage: read the latest policy evaluation's not-running rows and the candidates that did not run from the policy host's memory (Workflow #386 SR-6b, MCP-19)."
     },
     "record_fact_refresh_transitions": {
       "owner": "runtime-host",

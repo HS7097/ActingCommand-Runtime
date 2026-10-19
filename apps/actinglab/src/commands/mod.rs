@@ -27,6 +27,10 @@ pub(crate) use environment_report::env_needs_detection_json;
 pub(crate) use environment_report::{
     attach_env_resolved, record_env_needs_detection, record_env_resolved,
 };
+// #411 Lab L5c: production code decides on frame sets (`detect_current_page_over`); the
+// readers' tests detect one frame.
+#[cfg(test)]
+pub(crate) use navigation_recovery::detect_current_page;
 #[cfg(test)]
 pub(crate) use navigation_recovery::parse_navigation_input;
 #[cfg(test)]
@@ -34,11 +38,11 @@ pub(crate) use navigation_recovery::stale_capture_recovery_json;
 pub(crate) use navigation_recovery::{
     ControlPoint, DestructiveClick, NavigationClick, NavigationEdge, NavigationGraph,
     NavigationRow, PageDetectionOutcome, SemanticInput, canonical_navigation_page,
-    destructive_frame_regions, destructive_frame_regions_over, detect_current_page,
-    detect_current_page_over, evaluate_target_over, find_navigation_route, navigation_edge_json,
-    page_detection_json, parse_control_point, parse_navigation_click, parse_navigation_graph_value,
-    parse_navigation_row, parse_navigation_tap_rect, parse_point_pair, point_json, rect_center,
-    rect_json, rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
+    destructive_frame_regions_over, detect_current_page_over, evaluate_target_over,
+    find_navigation_route, navigation_edge_json, page_detection_json, parse_control_point,
+    parse_navigation_click, parse_navigation_graph_value, parse_navigation_row,
+    parse_navigation_tap_rect, parse_point_pair, point_json, rect_center, rect_json,
+    rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
     reject_destructive_overlap_on_frame, required_string_field, required_value_field,
     run_current_page, run_detect_page, run_is_visible, run_locate, run_navigate, run_recognize,
     run_session_recover, run_tap_target, semantic_input_json, target_eval_json,

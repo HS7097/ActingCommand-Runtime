@@ -247,6 +247,9 @@ mod gate_398_rd4;
 mod gate_398_rd5b;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
+// Workflow #405 D1 (host key 122), register §1.135: once an instance has its random delay
+// enabled, every task the scheduler dispatches there first waits a random time.
+mod gate_405_d1;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;
@@ -271,9 +274,18 @@ mod gate_411_b15w2;
 // #411 Lab L5a (host key 120), register §1.130: every online Lab observation takes the frames its
 // package's target consensus needs, as one transaction.
 mod gate_411_lab_l5;
+// #411 Lab L5b (host key 121), register §1.130: `observe --capture` projects a multi-frame
+// candidate layout over its own series.
+mod gate_411_lab_l5b;
+// Workflow #406 T12 (host key 123), register §1.136: the touch keys in effect and the landing
+// history of single-region presses.
+mod gate_406_t12;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
+// Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
+// not-run explanation in the policy host's memory and its read.
+mod gate_mcp19a;
 mod gate_p0;
 mod home_entry;
 mod input;

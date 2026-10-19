@@ -1445,3 +1445,72 @@ tests = [
     "actingcommand-runtime-host::lib::host::recovery_ladder::tests::a24_failure_burst_window_does_not_depend_on_arrival_order",
 ]
 incident = ["#411 A24"]
+
+# #411 Lab L5b (v0.12.x; register §1.130 L5-6 to L5-8; no persisted ledger shape; no outcome code; coordinator decisions Q2 and Q5 of 2026-10-19; key assigned by the coordinator): when observe --capture is complete and recognises one page, each candidate layout of that page that needs F_l > 1 frames takes F_l - 1 further page transactions, the layout's interval apart (unscaled), each on the same single page and frame size, else its row is candidate_projection_failure with candidate_sample_page_or_geometry_changed and the observation is partial; the layout is projected over the current frame and each further transaction's current frame with coverage {F_l, F_l, production_owner}, the observation's frame and every other row staying its own transaction's; an observation takes at most 25 frames, each admitted series counted whole, a layout beyond them projected over the current frame alone and refused with candidate_samples_unavailable (a partial observation); the input check runs from the first capture to the last of the series (observation_samples_interrupted); the client's receipt wait allows for the package's largest series
+[[gate]]
+key = "121"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_observe_projects_a_multi_frame_layout_over_its_own_series",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_a_series_frame_on_another_page_fails_that_layout",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_layouts_beyond_25_frames_are_refused_unavailable",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5b::l5b_an_input_during_the_series_fails_the_observation",
+]
+incident = ["#411 Lab L5b"]
+
+# Workflow #405 D1 (0.12.5; register §1.135 D1-1 to D1-6; no persisted ledger shape, X14's first writer; contracts/scheduling-blackout.md "Order of the deferrals" position 9, contracts/scheduling/README.md "Why A Candidate Does Not Run", contracts/runtime-config.md; key assigned by the coordinator): once an instance has its random delay enabled (each member the instance's own key or the section's), every task the scheduler dispatches there first waits a random time: a pair that passed positions 1 to 8 draws due_at = the evaluation time and a delay within [min_ms, max_ms], cut at the activity window's last millisecond and at the facts freshness (0 when nothing is left), and waits with dispatch_random_delay_waiting and a wake at its planned start; every due pair and a dependency follow-up draw their own; the draw is kept through earlier gates and a refused admission, ended by an admitted dispatch, a not-eligible evaluation, the instance's delay turned off (released at the next evaluation) or a restart; the intent dispatched under it records random_delay, the admitted, rejected and completed records never; a direct run starts at once; the code is a waiting gate for the clock-slot records
+[[gate]]
+key = "122"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::d1_an_instances_delay_in_effect_takes_each_member_from_itself_or_the_section",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_disabled_instance_dispatches_at_once_without_a_delay_member",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_an_enabled_instance_waits_its_drawn_delay_and_records_it_on_the_intent",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_each_due_task_and_a_dependency_follow_up_draw_their_own_delay",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_the_delay_is_cut_at_the_window_end_and_at_the_facts_freshness",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_held_instance_keeps_the_draw_and_turning_the_delay_off_releases_it",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_false_trigger_ends_the_draw_and_the_next_due_draws_anew",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_rejected_admission_keeps_the_draw",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_restart_draws_anew",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_direct_run_on_a_waiting_instance_starts_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_waiting_clock_slot_is_not_refused",
+]
+incident = ["#405"]
+
+# Workflow #406 T12 (0.12.x; register §1.136; no persisted ledger shape: X11 and X12 first written, the landing history memory only, config.parameters.touch a new section fact; actingd-config 7; plan-405-406 Q13, Q15, Q16): the touch section's five keys (touch.sampling.sigma_ratio_milli 1..=1000 default 250, .max_redraws 0..=64 default 8, .candidate_count 1..=16 default 4, touch.history.points_per_box 1..=256 default 16, .max_boxes 1..=65536 default 1024) default from the shipped defaults file, are all settable, and a value outside its range is config_value_invalid (out_of_range) at load, in the section check and in an instruction; the host hands each step the keys in effect, so after an instruction the next run's press is drawn and recorded with the new values; the landing history is per instance and per box (an unused candidate first, then the oldest use; another instance or box starts unused), keeps at most points_per_box pixels per box and max_boxes boxes per instance (the oldest forgotten and unused again), and is empty after the host is closed and started again on the same root
+[[gate]]
+key = "123"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_the_host_hands_the_kernel_the_touch_keys_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_the_landing_history_is_per_instance_and_per_box",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_a_box_keeps_at_most_points_per_box_and_the_oldest_is_forgotten",
+    "actingcommand-runtime-host::lib::tests::gate_406_t12::t12_a_restart_starts_with_an_empty_history",
+    "actingcommand-runtime-config::lib::touch_tests::t12_the_touch_section_parses_checks_and_defaults",
+]
+incident = ["#406"]
+
+# Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirements 2-5; register §1.143 M19A-2, M19A-3; no persisted ledger shape; contracts/scheduling/README.md "Why A Candidate Does Not Run"; key assigned by the coordinator): the policy host keeps the latest evaluated cycle's not-run explanation in memory, replaced by every evaluated cycle and empty after a start; per instance with a decision, by alias: its earliest decision wake, its selected task with the decision id and the dispatch state the projection holds when the read is answered (pending before the intent is recorded, then intent, admitted, rejected or completed), every other decision as a candidate row {task_id, state deferred|blocked, eligibility, why = the outcome of its last reason, reasons = its reason codes (last 32) ending with why's, next_wake_unix_ms, since_unix_ms}, due rows first (ranked by total score, then unranked, ties by task id), then the rest by wake (none last), then task id, and one not-running row: the first due row, else due_task_missing naming the instance and its earliest wake; since is the first evaluation of an unbroken run of the same (instance, task, why code), and of the same (instance, task or none, why code) for the not-running row; the read ScheduleExplanation{instance?, candidates} answers it from memory, appends nothing and names no request in the ledger, refuses an unregistered alias instance_unknown and answers without candidate rows (still counted) when candidates is false
+[[gate]]
+key = "126"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_a_candidate_that_did_not_run_shows_its_why_reasons_and_wake",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_with_nothing_due_the_row_is_due_task_missing_with_the_earliest_wake",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_since_holds_while_the_why_holds_and_restarts_when_it_changes",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_the_read_is_memory_only_and_refuses_an_unknown_alias",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_the_selected_dispatch_state_follows_the_projection",
+]
+incident = ["#386 SR-6b", "MCP-19"]
+
+# Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirements 5 and 6; register §1.143 M19A-3, §3 W5 under runtime-client 2; no persisted ledger shape; key assigned by the coordinator): the request kind ScheduleExplanation is a general read that records nothing (interface row General, Read, no G14 copy), its completed receipt carries request_schedule_explanation_completed and an empty alias is refused with the existing alias code; the answer's validation refuses invalid_schedule_explanation an instance twice, reason codes that do not end with the row's why, more than 32 reason codes, a candidates_total below the rows answered, a not-running row without a task whose why is not due_task_missing (contract-owned since this slice) or one with a task whose why is due_task_missing, and a receipt carrying the answer that is not completed; a reply receipt past the host's maximum_frame_bytes is refused runtime_schedule_explanation_too_large_for_frame (denied) while the same read without candidates completes
+[[gate]]
+key = "127"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_the_answer_shape_is_validated",
+    "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_the_read_is_a_general_read_with_its_receipt_code",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_a_reply_past_one_frame_is_refused",
+    "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_a_not_running_row_has_no_task_exactly_when_its_why_is_due_task_missing",
+]
+incident = ["#386 SR-6b", "MCP-19"]

@@ -34,8 +34,8 @@ use actingcommand_contract::{
     PerformanceContext, PolicyAdmissionRecord, PolicyConditionSettlement,
     PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode,
-    RuntimeRequest, TaskId,
+    PolicyRandomDelay, PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId,
+    RuntimeErrorCode, RuntimeRequest, TaskId,
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
@@ -266,6 +266,9 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) fact_refresh: FactRefreshContext<'a>,
     /// Workflow #411 B15 R4: the remedy keys in effect as the cycle starts.
     pub(crate) remedy: &'a crate::remedy::RemedyContext,
+    /// Workflow #405 D1: the random delay in effect for each instance of the snapshot, by alias,
+    /// as the cycle starts.
+    pub(crate) random_delay: &'a BTreeMap<String, actingcommand_runtime_config::RandomDelay>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -817,6 +820,218 @@ impl EligibilityAges {
     }
 }
 
+/// Workflow #405 D1: one (task, instance alias) pair's random delay, drawn at the first
+/// evaluation at which the pair passed every other gate of the eligibility closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RandomDelayEntry {
+    due_at_unix_ms: u64,
+    delay_ms: u64,
+    planned_start_unix_ms: u64,
+    /// The latest instant the delay may reach: the earliest of the intent's facts freshness and
+    /// the last millisecond of its activity window, when either is known.
+    allowed_until_unix_ms: Option<u64>,
+}
+
+/// Workflow #405 D1 (`scheduling-blackout.md`, "Order of the deferrals", position 9; register
+/// §1.135): the random delays drawn per (task, instance alias) pair. Memory only: a host starts
+/// with none, so a pair draws again after a restart (register X14). An entry is kept while an
+/// earlier gate defers its pair or the pair waits, and ends when the pair's latest admitted
+/// dispatch is at or after its `due_at`, when an evaluation leaves the pair not eligible, when
+/// an evaluation passes its allowed period, when its instance's delay is off, and when the active
+/// catalog generation changes. A rejected admission does not end it.
+#[derive(Debug, Default)]
+struct RandomDelayTable {
+    /// The active catalog generation the entries were drawn under.
+    catalog_hash: Option<String>,
+    entries: BTreeMap<(String, String), RandomDelayEntry>,
+}
+
+impl RandomDelayTable {
+    /// Ends the entries an evaluation at `now_unix_ms` under the catalog `catalog_hash` no
+    /// longer keeps, before its eligibility closure reads them: every entry when the generation
+    /// changed; an entry whose instance has the delay off (or is not in `delays`), whose pair's
+    /// latest admitted dispatch (`tasks`) is at or after its `due_at`, or whose allowed period
+    /// ended before `now_unix_ms`.
+    fn prune(
+        &mut self,
+        catalog_hash: &str,
+        delays: &BTreeMap<String, actingcommand_runtime_config::RandomDelay>,
+        tasks: &[TaskRuntimeSnapshot],
+        now_unix_ms: u64,
+    ) {
+        if self.catalog_hash.as_deref() != Some(catalog_hash) {
+            self.entries.clear();
+            self.catalog_hash = Some(catalog_hash.to_owned());
+        }
+        self.entries.retain(|(task_id, alias), entry| {
+            let enabled = delays.get(alias).is_some_and(|delay| delay.enabled);
+            let dispatched = tasks.iter().any(|state| {
+                state.task_id == *task_id
+                    && state.instance_id == *alias
+                    && state
+                        .last_dispatched_unix_ms
+                        .is_some_and(|at| at >= entry.due_at_unix_ms)
+            });
+            let allowed = entry
+                .allowed_until_unix_ms
+                .is_none_or(|until| now_unix_ms <= until);
+            enabled && !dispatched && allowed
+        });
+    }
+
+    /// Position 9 of the eligibility closure, for a candidate that passed positions 1 to 8:
+    /// with the instance's delay off, eligible as before; with it on, the pair's entry, drawn now
+    /// when it has none, decides: a planned start after `now_unix_ms` defers the candidate with
+    /// `dispatch_random_delay_waiting` and a wake at the planned start (a fact refresh in its
+    /// refresh form, the gate named, no limit); a planned start at or before it is eligible.
+    fn gate(
+        &mut self,
+        intent: &DispatchIntent,
+        delay: Option<&actingcommand_runtime_config::RandomDelay>,
+        cycle_seed: u64,
+        profiles: &[ActivityProfile],
+        now_unix_ms: u64,
+        fact_refresh: bool,
+    ) -> RuntimeHostResult<CandidateEligibility> {
+        let Some(delay) = delay.filter(|delay| delay.enabled) else {
+            return Ok(CandidateEligibility::Eligible);
+        };
+        let key = (intent.task_id.clone(), intent.instance_id.clone());
+        let entry = match self.entries.get(&key).copied() {
+            Some(entry) => entry,
+            None => {
+                let entry = draw_random_delay(intent, delay, cycle_seed, profiles, now_unix_ms)?;
+                self.entries.insert(key, entry);
+                entry
+            }
+        };
+        if entry.planned_start_unix_ms <= now_unix_ms {
+            return Ok(CandidateEligibility::Eligible);
+        }
+        let reason = DecisionReason {
+            outcome: Outcome::new(HostCode::DispatchRandomDelayWaiting)
+                .instance_id(intent.instance_id.as_str())
+                .task_id(intent.task_id.as_str())
+                .due_at_unix_ms(entry.due_at_unix_ms)
+                .random_delay_ms(entry.delay_ms)
+                .next_eligible_unix_ms(entry.planned_start_unix_ms),
+            detail: format!(
+                "Runtime random delay: due_at_unix_ms={}; random_delay_ms={}; next_eligible_unix_ms={}",
+                entry.due_at_unix_ms, entry.delay_ms, entry.planned_start_unix_ms
+            ),
+        };
+        let next_wake_unix_ms = Some(entry.planned_start_unix_ms);
+        Ok(if fact_refresh {
+            CandidateEligibility::Refresh {
+                reason,
+                next_wake_unix_ms,
+                gate: HostCode::DispatchRandomDelayWaiting.code(),
+                limit: None,
+            }
+        } else {
+            CandidateEligibility::Deferred {
+                reason,
+                next_wake_unix_ms,
+            }
+        })
+    }
+
+    /// After an evaluation: a pair keeps its entry only when the evaluation left it eligible and
+    /// not blocked (selected, eligible or deferred by a gate); a false or unknown trigger, a
+    /// feedback stop, a placement block or a pair the evaluation no longer decides ends it.
+    fn retain_eligible(&mut self, evaluation: &PolicyEvaluation) {
+        let eligible = evaluation
+            .decisions
+            .iter()
+            .filter(|decision| {
+                decision.eligibility == EligibilityState::True
+                    && decision.state != SchedulingDecisionState::Blocked
+            })
+            .filter_map(|decision| {
+                Some((decision.task_id.as_str(), decision.instance_id.as_deref()?))
+            })
+            .collect::<BTreeSet<_>>();
+        self.entries
+            .retain(|(task_id, alias), _| eligible.contains(&(task_id.as_str(), alias.as_str())));
+    }
+
+    /// The random delay `intent` was dispatched under: its pair's entry, when the intent's
+    /// evaluation found its planned start reached.
+    fn dispatched(&self, intent: &DispatchIntent) -> Option<PolicyRandomDelay> {
+        self.entries
+            .get(&(intent.task_id.clone(), intent.instance_id.clone()))
+            .filter(|entry| {
+                entry.planned_start_unix_ms <= intent.prerequisites.evaluated_at_unix_ms
+            })
+            .map(|entry| PolicyRandomDelay {
+                due_at_unix_ms: entry.due_at_unix_ms,
+                planned_start_unix_ms: entry.planned_start_unix_ms,
+                delay_ms: entry.delay_ms,
+            })
+    }
+}
+
+/// Workflow #405 D1: the draw of `intent`'s pair at `now_unix_ms`, its `due_at`. The drawn delay
+/// is `min_ms` plus a value uniform in `0..=max_ms - min_ms`, from the first eight bytes of the
+/// SHA-256 of `cycle seed NUL task NUL alias NUL due_at` (as `sampled_interval` draws an activity
+/// interval); it is cut so that the planned start stays at or before the allowed period's end
+/// (the earliest of the intent's facts freshness and the last millisecond of the activity window
+/// open at `now_unix_ms`), 0 when nothing is left.
+fn draw_random_delay(
+    intent: &DispatchIntent,
+    delay: &actingcommand_runtime_config::RandomDelay,
+    cycle_seed: u64,
+    profiles: &[ActivityProfile],
+    now_unix_ms: u64,
+) -> RuntimeHostResult<RandomDelayEntry> {
+    let digest = Sha256::digest(
+        format!(
+            "{cycle_seed}\0{}\0{}\0{now_unix_ms}",
+            intent.task_id, intent.instance_id
+        )
+        .as_bytes(),
+    );
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    // The pair is checked whenever the configuration is loaded or changed (`min_ms <= max_ms`).
+    let width = delay.max_ms.saturating_sub(delay.min_ms).saturating_add(1);
+    let drawn = delay
+        .min_ms
+        .saturating_add(u64::from_be_bytes(bytes) % width);
+    let window = profiles
+        .iter()
+        .find(|profile| profile.id == intent.prerequisites.activity_profile_id)
+        .map(|profile| activity_window_at(profile, now_unix_ms))
+        .transpose()
+        .map_err(|_| {
+            fatal(
+                HostCode::PolicyActivityDayOverflow,
+                HostLocation::ResolveActivityWindow,
+            )
+        })?
+        .flatten();
+    let window_last = window.and_then(|window| window.until_unix_ms.checked_sub(1));
+    let allowed_until_unix_ms = match (intent.prerequisites.facts_fresh_until_unix_ms, window_last)
+    {
+        (Some(fresh), Some(last)) => Some(fresh.min(last)),
+        (fresh, last) => fresh.or(last),
+    };
+    let delay_ms =
+        allowed_until_unix_ms.map_or(drawn, |until| drawn.min(until.saturating_sub(now_unix_ms)));
+    let planned_start_unix_ms = now_unix_ms.checked_add(delay_ms).ok_or_else(|| {
+        fatal(
+            HostCode::PolicyTimeOverflow,
+            HostLocation::EvaluatePolicyCycle,
+        )
+    })?;
+    Ok(RandomDelayEntry {
+        due_at_unix_ms: now_unix_ms,
+        delay_ms,
+        planned_start_unix_ms,
+        allowed_until_unix_ms,
+    })
+}
+
 /// Per instance, the highest `effective_milli` and the longest `aging_ms` over the ranked
 /// Eligible or Selected decisions of one evaluation; an instance without one is absent.
 fn instance_arbitration_ranks(
@@ -892,6 +1107,11 @@ pub(crate) struct PolicyHost {
     /// runs of tasks that declare a remedy, and the remedy signals recorded. Memory only; the
     /// runs of the remedy journal are `seen_dispatches`.
     remedies: crate::remedy::RemedyState,
+    /// Workflow #405 D1: the random delays drawn per pair. Memory only; a host starts with none.
+    random_delays: RandomDelayTable,
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-2): the latest evaluated cycle's
+    /// not-run explanation. Memory only; a host starts with none.
+    explanation: crate::schedule_explanation::ScheduleExplanationTable,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -926,6 +1146,8 @@ impl PolicyHost {
             confirmed_run_admissions: BTreeMap::new(),
             quarantined_dispatches: BTreeSet::new(),
             remedies: crate::remedy::RemedyState::default(),
+            random_delays: RandomDelayTable::default(),
+            explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1378,6 +1600,49 @@ impl PolicyHost {
         &self.lineage
     }
 
+    /// Workflow #405 D1 (register X14): the random delay each of `intents` (a cycle's pending
+    /// intents, read right after its evaluation) was dispatched under, by decision id; an
+    /// intent of an instance with the delay off has none.
+    pub(crate) fn dispatch_random_delays(
+        &self,
+        intents: &[DispatchIntent],
+    ) -> BTreeMap<String, PolicyRandomDelay> {
+        intents
+            .iter()
+            .filter_map(|intent| {
+                self.random_delays
+                    .dispatched(intent)
+                    .map(|delay| (intent.decision_id.clone(), delay))
+            })
+            .collect()
+    }
+
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
+    /// explanation for `instance` (every instance when absent), with the selected decision's
+    /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
+    /// recorded.
+    pub(crate) fn schedule_explanation(
+        &self,
+        instance: Option<&str>,
+        candidates: bool,
+    ) -> actingcommand_contract::RuntimeScheduleExplanation {
+        use actingcommand_contract::ScheduleDispatchState;
+        self.explanation
+            .answer(instance, candidates, |decision_id| {
+                match self
+                    .seen_dispatches
+                    .get(decision_id)
+                    .map(|dispatch| dispatch.lifecycle)
+                {
+                    None => ScheduleDispatchState::Pending,
+                    Some(DispatchLifecycle::Intent) => ScheduleDispatchState::Intent,
+                    Some(DispatchLifecycle::Admitted) => ScheduleDispatchState::Admitted,
+                    Some(DispatchLifecycle::Rejected) => ScheduleDispatchState::Rejected,
+                    Some(DispatchLifecycle::Completed) => ScheduleDispatchState::Completed,
+                }
+            })
+    }
+
     pub(crate) fn evaluate(
         &mut self,
         facts: &EvaluationFacts,
@@ -1396,6 +1661,7 @@ impl PolicyHost {
             pack_admission,
             fact_refresh,
             remedy,
+            random_delay,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -1434,6 +1700,14 @@ impl PolicyHost {
             )
         })?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
+        // Workflow #405 D1: the random delays this evaluation no longer keeps end before its
+        // closure reads them.
+        self.random_delays.prune(
+            active.generation.catalog_hash(),
+            random_delay,
+            &facts.tasks,
+            time.unix_ms,
+        );
         // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun.
         let immediate_retries = self
             .control
@@ -1498,7 +1772,16 @@ impl PolicyHost {
                     time.unix_ms,
                     Some(suspension_lift),
                 ) {
-                    Ok(_) => Ok(CandidateEligibility::Eligible),
+                    // Workflow #405 D1 (`scheduling-blackout.md`, "Order of the deferrals",
+                    // position 9): an instance with the random delay on waits its pair's delay.
+                    Ok(_) => self.random_delays.gate(
+                        intent,
+                        random_delay.get(&intent.instance_id),
+                        seed,
+                        &active.compiled.catalog().activity.profiles,
+                        time.unix_ms,
+                        refresh,
+                    ),
                     Err(error) if is_availability_denial(&error) => {
                         let rejection = error.policy_rejection();
                         deferrals.note_budget(&rejection);
@@ -1594,8 +1877,13 @@ impl PolicyHost {
         )?;
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
+        self.random_delays.retain_eligible(&evaluation);
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
+        // Workflow #386 SR-6b, MCP-19a (register §1.143): the not-run explanation of this
+        // evaluation, before the host adds its notes to the decisions.
+        self.explanation
+            .record(&evaluation, active.compiled.catalog_hash(), time.unix_ms);
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
         }

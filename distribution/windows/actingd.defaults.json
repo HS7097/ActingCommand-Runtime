@@ -404,5 +404,16 @@
   "startup_discovery": {
     "attempts": 25,
     "retry_interval_ms": 10000
+  },
+  "touch": {
+    "sampling": {
+      "sigma_ratio_milli": 250,
+      "max_redraws": 8,
+      "candidate_count": 4
+    },
+    "history": {
+      "points_per_box": 16,
+      "max_boxes": 1024
+    }
   }
 }

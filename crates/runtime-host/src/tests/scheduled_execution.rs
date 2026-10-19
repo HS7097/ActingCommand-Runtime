@@ -263,9 +263,20 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
             _ => None,
         })
         .expect("durable sampled effect intent");
+    // Workflow #406 T12 (plan Q13): a scheduled run's tap is the least-recent centre-hotspot
+    // draw with the shipped touch keys; the instance's history is empty, so the first lands.
     assert_eq!(
         sampling.algorithm(),
-        InputSamplingAlgorithm::Xorshift64UniformRectV1
+        InputSamplingAlgorithm::CenterHotspotLeastRecentV1
+    );
+    assert_eq!(
+        sampling.parameters(),
+        Some(&actingcommand_contract::InputSamplingParameters {
+            sigma_ratio_milli: 250,
+            max_redraws: 8,
+            candidate_count: Some(4),
+            chosen_candidate: Some(0),
+        })
     );
     assert_eq!(sampling.source_regions().len(), 1);
     assert_eq!(sampling.source_regions()[0].width(), 2);

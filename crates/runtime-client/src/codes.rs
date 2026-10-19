@@ -250,6 +250,9 @@ actingcommand_contract::outcome_locations! {
         RuntimePerformanceStatus => "runtime_performance_status",
         // Workflow #384 D2-S5: the fact refresh's waiting keys (register §1.68).
         RuntimeFactRefreshStatus => "runtime_fact_refresh_status",
+        // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register
+        // §1.143).
+        RuntimeScheduleExplanation => "runtime_schedule_explanation",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",

@@ -14,13 +14,13 @@ use actingcommand_contract::page_projection::{
     ProjectionInput,
 };
 use actingcommand_contract::{
-    MAX_OBSERVATION_FRAMES, ObservationFacts, ObservationFramePlan, PageObservationStatus,
-    PpocrDiagnostics, RuntimeContractResult,
+    MAX_OBSERVATION_FRAMES, MAX_OBSERVATION_SERIES_FRAMES, ObservationFacts, ObservationFramePlan,
+    ObservationSeriesPlan, PageObservationStatus, PpocrDiagnostics, RuntimeContractResult,
 };
-use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
+use actingcommand_page_detector::{PageDetector, PageTargetEvaluation, PageTargetRole};
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
-    CandidateProjectionFailure, PackRect, RecognitionEvaluator, RecognitionTarget,
+    CandidateLayout, CandidateProjectionFailure, PackRect, RecognitionEvaluator, RecognitionTarget,
     TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde_json::{Value, json};
@@ -85,6 +85,7 @@ pub struct PreparedPageObservation {
     elements: Vec<ObservationElement>,
     targets: Vec<String>,
     frame_plan: ObservationFramePlan,
+    series_plan: ObservationSeriesPlan,
 }
 
 /// #411 Lab L5: what an online observation is for. `observe` inspects the page and projects the
@@ -112,6 +113,114 @@ pub fn observation_frame_plan(
             ExecutionKernelCode::ObservationResourcesInvalid.code(),
             ExecutionKernelLocation::LoadObservationResources.location(),
             "target consensus frame count out of range",
+        )
+    })
+}
+
+/// #411 Lab L5b: where an `observe` takes the further page transactions of its page's candidate
+/// layout series. The host supplies it; the kernel decides what is taken and when.
+pub trait ObservationFrameSource {
+    /// Why the source took no transaction; the observation ends with it at once.
+    type Error;
+
+    /// Captures one further page transaction of the observation: the frames its package's
+    /// target consensus needs ([`PreparedPageObservation::frame_plan`]), PNG-encoded, oldest
+    /// first, the last its current frame.
+    fn capture(&mut self) -> Result<Vec<Vec<u8>>, Self::Error>;
+
+    /// Waits `ms` milliseconds, a layout's declared interval, before its next transaction.
+    fn pause(&mut self, ms: u64);
+}
+
+/// #411 Lab L5b: why an observation that takes candidate layout series ended without an answer.
+#[derive(Debug)]
+pub enum ObservationSeriesError<E> {
+    /// The observation failed as [`PreparedPageObservation::evaluate_frames`] fails.
+    Observation(OnlineObservationError),
+    /// The frame source took no transaction; the PP-OCR reports of the evaluations made before
+    /// travel with its error.
+    Source {
+        error: E,
+        ppocr_diagnostics: PpocrDiagnostics,
+    },
+}
+
+impl<E> From<OnlineObservationError> for ObservationSeriesError<E> {
+    fn from(error: OnlineObservationError) -> Self {
+        Self::Observation(error)
+    }
+}
+
+/// The source of an observation that takes no series.
+enum NoFrameSource {}
+
+impl ObservationFrameSource for NoFrameSource {
+    type Error = std::convert::Infallible;
+
+    fn capture(&mut self) -> Result<Vec<Vec<u8>>, Self::Error> {
+        match *self {}
+    }
+
+    fn pause(&mut self, _ms: u64) {
+        match *self {}
+    }
+}
+
+/// #411 Lab L5b: the candidate layouts of `page_id` whose series an `observe` takes, in catalog
+/// order, with the frames the observation then takes. Its transactions take `transaction`
+/// frames; a layout that needs F_l > 1 frames gets its series, F_l - 1 further transactions,
+/// while the whole series still fits [`MAX_OBSERVATION_SERIES_FRAMES`] after the observation's
+/// own transaction and the series admitted before it, and a later layout is still tried. Each
+/// admitted series counts whole, so which layouts get one depends on the package alone.
+fn admitted_series<'a>(
+    evaluator: &'a RecognitionEvaluator,
+    page_id: &str,
+    transaction: usize,
+) -> (Vec<&'a CandidateLayout>, usize) {
+    let mut taken = transaction;
+    let mut admitted = Vec::new();
+    for layout in evaluator
+        .pack()
+        .candidate_layouts
+        .iter()
+        .filter(|layout| layout.page_id == page_id && layout.required_frames() > 1)
+    {
+        let series = (layout.required_frames() - 1).saturating_mul(transaction);
+        if taken.saturating_add(series) <= MAX_OBSERVATION_SERIES_FRAMES {
+            taken += series;
+            admitted.push(layout);
+        }
+    }
+    (admitted, taken)
+}
+
+/// #411 Lab L5b: the most frames and the longest waits one `observe` of the package takes over
+/// its pages: its transaction (`transaction`) and, on each page, the series [`admitted_series`]
+/// admits, each further transaction the layout's interval after the frame before it.
+fn observation_series_plan(
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    transaction: ObservationFramePlan,
+) -> Result<ObservationSeriesPlan, OnlineObservationError> {
+    let own = ObservationSeriesPlan::from(transaction);
+    let (mut frames, mut wait_ms) = (own.frames(), own.wait_ms());
+    for page_id in detector.page_ids() {
+        let (admitted, taken) = admitted_series(evaluator, page_id, transaction.frames());
+        let waits =
+            admitted.iter().fold(own.wait_ms(), |total, layout| {
+                let further = u64::try_from(layout.required_frames() - 1).unwrap_or(u64::MAX);
+                total.saturating_add(further.saturating_mul(
+                    u64::from(layout.sample_interval_ms).saturating_add(own.wait_ms()),
+                ))
+            });
+        frames = frames.max(taken);
+        wait_ms = wait_ms.max(waits);
+    }
+    ObservationSeriesPlan::new(frames, wait_ms).ok_or_else(|| {
+        OnlineObservationError::new(
+            ExecutionKernelCode::ObservationResourcesInvalid.code(),
+            ExecutionKernelLocation::LoadObservationResources.location(),
+            "candidate layout series frame count out of range",
         )
     })
 }
@@ -282,17 +391,26 @@ impl PreparedPageObservation {
             });
         }
         let frame_plan = observation_frame_plan(evaluator)?;
+        let series_plan = observation_series_plan(evaluator, detector, frame_plan)?;
         Ok(Self {
             bundle,
             elements,
             targets: targets.to_vec(),
             frame_plan,
+            series_plan,
         })
     }
 
     /// #411 Lab L5: the frames each online observation of this package takes.
     pub fn frame_plan(&self) -> ObservationFramePlan {
         self.frame_plan
+    }
+
+    /// #411 Lab L5b: the most frames and the longest waits one online `observe` of this package
+    /// takes, its transaction and its page's candidate layout series
+    /// ([`Self::evaluate_with_series`]); the Lab's client allows for them.
+    pub fn series_plan(&self) -> ObservationSeriesPlan {
+        self.series_plan
     }
 
     /// Workflow #336 PKG-S2 (option 丙): the package's `package_id` as its control declares
@@ -330,13 +448,97 @@ impl PreparedPageObservation {
     /// are evaluated over the whole set, so target consensus aggregates its declared frames as
     /// a task's observation does; geometry, the RGB8 hash and every candidate layout come from
     /// the current frame. Frames of different sizes fail the observation with
-    /// `recognition_sample_geometry_changed`.
+    /// `recognition_sample_geometry_changed`. It takes no candidate layout series, so in
+    /// inspect mode the recognition pack refuses a layout that needs more frames
+    /// (`candidate_samples_unavailable`).
     pub fn evaluate_frames(
         &self,
         frames: &[&[u8]],
         frame: FrameIdentity,
         mode: ObservationMode,
     ) -> Result<EvaluatedPageObservation, OnlineObservationError> {
+        self.evaluate_observation(frames, frame, mode, None::<&mut NoFrameSource>)
+            .map_err(|error| match error {
+                ObservationSeriesError::Observation(error) => error,
+                ObservationSeriesError::Source { error, .. } => match error {},
+            })
+    }
+
+    /// #411 Lab L5b: an `observe` (inspect mode) over its transaction's `frames`, as
+    /// [`Self::evaluate_frames`]. When it is complete and recognises exactly one page, each
+    /// candidate layout of that page that needs F_l > 1 frames and whose series fits the
+    /// observation's 25 frames (each admitted series counted whole) gets it from `source`: F_l - 1 further page transactions, the layout's
+    /// `sample_interval_ms` (unscaled) apart, after the current frame. Each must show the same
+    /// single page on the same frame size, else the layout's row is a
+    /// `candidate_projection_failure` with `candidate_sample_page_or_geometry_changed` and the
+    /// observation is partial; the layout is projected over the current frame and each further
+    /// transaction's current frame, as a select step projects it, with coverage
+    /// `{F_l, F_l, production_owner}`. A layout the bound leaves out is projected over the
+    /// current frame alone, which the recognition pack refuses. The observation's frame,
+    /// projection, elements, fields, explicit targets and every other row are its transaction's.
+    pub fn evaluate_with_series<S: ObservationFrameSource>(
+        &self,
+        frames: &[&[u8]],
+        frame: FrameIdentity,
+        source: &mut S,
+    ) -> Result<EvaluatedPageObservation, ObservationSeriesError<S::Error>> {
+        self.evaluate_observation(frames, frame, ObservationMode::Inspect, Some(source))
+    }
+
+    /// #411 Lab L5b: whether a further transaction of a layout's series shows the observation's
+    /// page alone on its frame size: every frame of `current`'s size, and page detection over
+    /// the transaction (target consensus as in the observation) complete with exactly `page_id`
+    /// matched. The detection's PP-OCR reports go to `reports`.
+    fn shows_page(
+        &self,
+        transaction: &[Scene],
+        page_id: &str,
+        current: &Scene,
+        reports: &mut PpocrDiagnostics,
+    ) -> bool {
+        if transaction
+            .iter()
+            .any(|frame| frame.width() != current.width() || frame.height() != current.height())
+        {
+            return false;
+        }
+        let loaded = self.bundle.loaded_bundle();
+        let evaluator = loaded.evaluator().expect("admitted evaluator");
+        let detector = loaded.detector().expect("admitted detector");
+        let frames = transaction.iter().collect::<Vec<_>>();
+        let Ok(context) = evaluator.scene_context_with_samples(&frames) else {
+            return false;
+        };
+        match detector.evaluate_all_outcomes_in_context(&context) {
+            Ok(pages) => {
+                reports.extend(pages.iter().flat_map(|page| match &page.result {
+                    Ok(value) => value.ppocr_diagnostics(),
+                    Err(error) => error.ppocr_diagnostics(),
+                }));
+                pages.iter().all(|page| page.result.is_ok())
+                    && pages
+                        .iter()
+                        .filter_map(|page| page.result.as_ref().ok())
+                        .filter(|page| page.matched)
+                        .map(|page| page.page_id.as_str())
+                        .eq([page_id])
+            }
+            Err(error) => {
+                reports.extend(error.ppocr_diagnostics());
+                false
+            }
+        }
+    }
+
+    /// The observation of [`Self::evaluate_frames`] and [`Self::evaluate_with_series`]: with a
+    /// `source`, inspect mode takes the candidate layout series.
+    fn evaluate_observation<S: ObservationFrameSource>(
+        &self,
+        frames: &[&[u8]],
+        frame: FrameIdentity,
+        mode: ObservationMode,
+        mut source: Option<&mut S>,
+    ) -> Result<EvaluatedPageObservation, ObservationSeriesError<S::Error>> {
         let loaded = self.bundle.loaded_bundle();
         let metadata = loaded.projection_metadata().expect("admitted metadata");
         let evaluator = loaded.evaluator().expect("admitted evaluator");
@@ -352,7 +554,8 @@ impl PreparedPageObservation {
             return Err(decode_error(format!(
                 "an observation takes 1..={MAX_OBSERVATION_FRAMES} frames, got {}",
                 frames.len()
-            )));
+            ))
+            .into());
         }
         let scenes = frames
             .iter()
@@ -367,7 +570,8 @@ impl PreparedPageObservation {
                 ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
                 ExecutionKernelLocation::DecodeObservationFrame.location(),
                 "the frames of one observation differ in size",
-            ));
+            )
+            .into());
         }
         let scene_set = scenes.iter().collect::<Vec<_>>();
         let sample_facts = std::cell::RefCell::new(ObservationFacts::default());
@@ -427,9 +631,9 @@ impl PreparedPageObservation {
             complete &= supported;
             let row = json!({"kind":"recognition_coverage","provided_frames":scenes.len(),"required_frames":evaluator.target_sample_frames(),"aggregation":if supported { "production_owner" } else { "not_completed" }});
             if !rows.require(row.clone(), row, 0).map_err(fact_error)? {
-                return Err(fact_error(
-                    "recognition sample evidence exceeds observation budget",
-                ));
+                return Err(
+                    fact_error("recognition sample evidence exceeds observation budget").into(),
+                );
             }
         }
         let mut actual: Vec<(Option<String>, PageTargetEvaluation)> = Vec::new();
@@ -558,6 +762,9 @@ impl PreparedPageObservation {
         }
         if complete && matched_pages.len() == 1 {
             let mut public_sets = Vec::new();
+            // #411 Lab L5b: the layouts whose series this observation takes, given a source.
+            let (admitted, _) =
+                admitted_series(evaluator, &matched_pages[0], self.frame_plan.frames());
             for layout in evaluator
                 .pack()
                 .candidate_layouts
@@ -573,26 +780,132 @@ impl PreparedPageObservation {
                         return Err(fact_error(
                             "candidate projection evidence exceeds observation budget",
                         )
-                        .with_ppocr_diagnostics(ppocr_diagnostics));
+                        .with_ppocr_diagnostics(ppocr_diagnostics)
+                        .into());
                     }
                     continue;
                 }
-                let failure_row = |error: &CandidateProjectionFailure| json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
+                // #411 Lab L5b: an `observe` given a source takes an admitted layout's series:
+                // F_l - 1 further page transactions, the layout's interval (unscaled) apart, each
+                // showing the observation's page alone on its frame size, as a select step
+                // takes its layout's frames.
+                let mut further = Vec::new();
+                let mut changed = false;
+                let series = match source.as_deref_mut() {
+                    Some(source) if admitted.iter().any(|admitted| admitted.id == layout.id) => {
+                        for _ in 1..layout.required_frames() {
+                            source.pause(u64::from(layout.sample_interval_ms));
+                            let pngs = match source.capture() {
+                                Ok(pngs) => pngs,
+                                Err(error) => {
+                                    ppocr_diagnostics
+                                        .extend(sample_reports.borrow().iter().cloned());
+                                    return Err(ObservationSeriesError::Source {
+                                        error,
+                                        ppocr_diagnostics,
+                                    });
+                                }
+                            };
+                            if pngs.len() != self.frame_plan.frames() {
+                                return Err(decode_error(format!(
+                                    "a further transaction takes {} frames, got {}",
+                                    self.frame_plan.frames(),
+                                    pngs.len()
+                                ))
+                                .with_ppocr_diagnostics(ppocr_diagnostics)
+                                .into());
+                            }
+                            let mut transaction = Vec::with_capacity(pngs.len());
+                            for png in &pngs {
+                                match Scene::from_png(png) {
+                                    Ok(decoded) => transaction.push(decoded),
+                                    Err(error) => {
+                                        return Err(decode_error(error.to_string())
+                                            .with_ppocr_diagnostics(ppocr_diagnostics)
+                                            .into());
+                                    }
+                                }
+                            }
+                            if !self.shows_page(
+                                &transaction,
+                                &matched_pages[0],
+                                scene,
+                                &mut ppocr_diagnostics,
+                            ) {
+                                changed = true;
+                                break;
+                            }
+                            further.extend(transaction.pop());
+                        }
+                        true
+                    }
+                    _ => false,
+                };
+                // The frames the projection is given: the current frame, then each further
+                // transaction's current frame.
+                let provided = 1 + further.len();
+                let failure_row = |code: Code, item: &str| json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":code.as_str(), "item":item, "coverage":{"provided_frames":provided,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
+                if changed {
+                    complete = false;
+                    let row = failure_row(
+                        ExecutionKernelCode::CandidateSamplePageOrGeometryChanged.code(),
+                        "frame",
+                    );
+                    if !rows.require(row.clone(), row, 0).map_err(fact_error)? {
+                        return Err(fact_error(
+                            "candidate projection evidence exceeds observation budget",
+                        )
+                        .with_ppocr_diagnostics(ppocr_diagnostics)
+                        .into());
+                    }
+                    continue;
+                }
                 // #411 A21: a sample is admitted only while the row this projection ends with when
                 // a sample does not fit still fits after it, so such a projection is recorded.
-                let reserve = failure_row(&CandidateProjectionFailure::recording_failed(""));
-                let projected = context.project_candidates_with_samples(&layout.id, &[scene], &mut |target, result, started, ended| {
-                    match result {
-                        Ok(value) => ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned()),
-                        Err(error) => ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned()),
+                let reserved = CandidateProjectionFailure::recording_failed("");
+                let reserve = failure_row(reserved.code(), reserved.item());
+                let mut record =
+                    |target: &str,
+                     result: &actingcommand_recognition_pack::RecognitionPackResult<
+                        TargetEvaluation,
+                    >,
+                     started: std::time::Instant,
+                     ended: std::time::Instant|
+                     -> Result<(), CandidateProjectionFailure> {
+                        match result {
+                            Ok(value) => {
+                                ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned())
+                            }
+                            Err(error) => {
+                                ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned())
+                            }
+                        }
+                        let row = json!({"kind":"candidate_sample", "target_id":target, "evaluation":result, "elapsed_us":crate::observe_instant_span(started, ended)});
+                        let public = redact_row(row.clone(), metadata);
+                        if !rows
+                            .require_before(row, public, 1, &reserve)
+                            .map_err(|error| {
+                                CandidateProjectionFailure::recording_failed(error.to_string())
+                            })?
+                        {
+                            return Err(CandidateProjectionFailure::recording_failed(
+                                "candidate sample evidence exceeds observation budget",
+                            ));
+                        }
+                        Ok(())
+                    };
+                let projected = match further.last() {
+                    // As a select step: the series' last frame is the projection's scene.
+                    Some(last) if series => {
+                        let frames = std::iter::once(scene)
+                            .chain(further.iter())
+                            .collect::<Vec<_>>();
+                        evaluator
+                            .scene_context(last)
+                            .project_candidates_with_samples(&layout.id, &frames, &mut record)
                     }
-                    let row = json!({"kind":"candidate_sample", "target_id":target, "evaluation":result, "elapsed_us":crate::observe_instant_span(started, ended)});
-                    let public = redact_row(row.clone(), metadata);
-                    if !rows.require_before(row, public, 1, &reserve).map_err(|error| CandidateProjectionFailure::recording_failed(error.to_string()))? {
-                        return Err(CandidateProjectionFailure::recording_failed("candidate sample evidence exceeds observation budget"));
-                    }
-                    Ok(())
-                });
+                    _ => context.project_candidates_with_samples(&layout.id, &[scene], &mut record),
+                };
                 let (private, public) = match projected {
                     Ok(projected) => {
                         let (public, _) = projected
@@ -603,14 +916,21 @@ impl PreparedPageObservation {
                         public_sets.push(public.clone());
                         actingcommand_contract::validate_candidate_sets_budget(&public_sets)
                             .map_err(fact_error)?;
-                        (
+                        let mut pair = (
                             json!({"kind":"candidate_projection", "projection":projected}),
                             json!({"kind":"candidate_projection", "projection":public}),
-                        )
+                        );
+                        // #411 Lab L5b: a layout projected over its series covers its frames.
+                        if series {
+                            let coverage = json!({"provided_frames":provided,"required_frames":layout.required_frames(),"aggregation":"production_owner"});
+                            pair.0["coverage"] = coverage.clone();
+                            pair.1["coverage"] = coverage;
+                        }
+                        pair
                     }
                     Err(error) => {
                         complete = false;
-                        let row = failure_row(&error);
+                        let row = failure_row(error.code(), error.item());
                         (row.clone(), row)
                     }
                 };
@@ -618,7 +938,8 @@ impl PreparedPageObservation {
                     return Err(fact_error(
                         "candidate projection evidence exceeds observation budget",
                     )
-                    .with_ppocr_diagnostics(ppocr_diagnostics));
+                    .with_ppocr_diagnostics(ppocr_diagnostics)
+                    .into());
                 }
             }
         }
@@ -637,7 +958,8 @@ impl PreparedPageObservation {
         if consensus && !samples_fit {
             return Err(
                 fact_error("recognition sample evidence exceeds observation budget")
-                    .with_ppocr_diagnostics(ppocr_diagnostics),
+                    .with_ppocr_diagnostics(ppocr_diagnostics)
+                    .into(),
             );
         }
         let (private_facts, facts) = rows

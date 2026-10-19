@@ -27,7 +27,8 @@ use super::store::{
     write_content_addressed,
 };
 use crate::LabOcr;
-use actingcommand_contract::{LabError, LabResult};
+use crate::codes::LabCode;
+use actingcommand_contract::{LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -1573,9 +1574,88 @@ pub(crate) fn apply_marks(
     })
 }
 
-/// Workflow #390 LAB-2: the click declaration names a drag or a long press.
+/// Workflow #390 LAB-2: the click declaration names a drag or a long press, or (#411 Lab BD) a
+/// brake drag.
 fn gesture_declared(spec: &ClickSpec) -> bool {
-    spec.drag_to.is_some() || spec.long_press.is_some() || spec.duration_ms.is_some()
+    spec.drag_to.is_some()
+        || spec.long_press.is_some()
+        || spec.duration_ms.is_some()
+        || spec.brake_corner.is_some()
+}
+
+/// #411 Lab BD: a single-touch drag with a vertical brake from the click rectangle `region` to
+/// the corner box `brake_corner`, both inside the frame with width and height >= 1 and the corner
+/// at least the brake distance (100 px) below the top, so the brake ends inside the frame (pack
+/// containment's bound). Its timings are the Runtime's fixed ones, so it takes no duration, and
+/// it is no drag, long press, source-mark click or followed click.
+fn brake_drag_declaration(
+    spec: &ClickSpec,
+    corner: RecordRect,
+    size: Option<RecordSize>,
+) -> LabResult<(RecordRect, ClickGesture)> {
+    let conflicting = [
+        ("duration_ms", spec.duration_ms.is_some()),
+        ("drag_to", spec.drag_to.is_some()),
+        ("long_press", spec.long_press.is_some()),
+        ("from", spec.from.is_some()),
+        ("follow", spec.follow.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(member, given)| given.then_some(member))
+    .collect::<Vec<_>>();
+    if let Some(first) = conflicting.first() {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                "a brake drag (--brake-corner) takes --click x,y,w,h and its corner only; its \
+                 timings are fixed, and it takes no --duration-ms, --drag-to, --long-press, \
+                 --click-from or --click-follow",
+            ),
+            json!({
+                "argument": first,
+                "argument_problem": "conflicting",
+                "arguments": conflicting
+                    .iter()
+                    .map(|member| json!({"argument": member, "argument_problem": "conflicting"}))
+                    .collect::<Vec<_>>()
+            }),
+        ));
+    }
+    let Some(from) = spec.region else {
+        return Err(invalid(
+            "validation_failed",
+            "a brake drag needs --click x,y,w,h, the rectangle it presses in",
+        ));
+    };
+    let inside = |rect: RecordRect| size.is_some_and(|size| rect_inside(rect, size));
+    if !inside(from) || !inside(corner) {
+        return Err(invalid(
+            "validation_failed",
+            "a brake drag's click rectangle and corner must lie inside the frame with width and \
+             height >= 1",
+        ));
+    }
+    if corner.y < SEGMENTED_SWIPE_BRAKE_DISTANCE_PX {
+        return Err(with_details(
+            invalid(
+                "validation_failed",
+                format!(
+                    "a brake drag's corner must start at y >= {SEGMENTED_SWIPE_BRAKE_DISTANCE_PX}, \
+                     the brake distance, so that the brake ends inside the frame; got y {}",
+                    corner.y
+                ),
+            ),
+            json!({
+                "argument": "brake_corner",
+                "argument_problem": "out_of_range",
+                "range_min": SEGMENTED_SWIPE_BRAKE_DISTANCE_PX
+            }),
+        ));
+    }
+    Ok((
+        from,
+        ClickGesture::SingleTouchDragWithVerticalBrakeV1 { corner },
+    ))
 }
 
 /// Workflow #390 LAB-2: a drag (`region` to `drag_to`) or a long press (Workflow #390 lpbox: the
@@ -1602,6 +1682,10 @@ fn gesture_declaration(
         }
         Ok(duration_ms)
     };
+    // #411 Lab BD: a brake drag.
+    if let Some(corner) = spec.brake_corner {
+        return brake_drag_declaration(spec, corner, size);
+    }
     let source_free = spec.from.is_none() && spec.follow.is_none();
     match (spec.region, spec.drag_to, spec.long_press, spec.duration_ms) {
         (Some(from), Some(to), None, Some(duration_ms)) if source_free => {
@@ -2677,7 +2761,9 @@ fn point_inside(point: RecordPoint, rect: RecordRect) -> bool {
 /// A drag goes from a point of its rectangle to a point of `to` (their centers, or `--swipe`'s
 /// points, which must lie inside them, with the declared duration); a long press holds the
 /// center of its click box (Workflow #390 lpbox), the box being recorded around that point.
-/// `--tap` and `--tap-rect` press a tap and are refused here.
+/// `--tap` and `--tap-rect` press a tap and are refused here. #411 Lab BD: a brake drag is not
+/// pressed by a Lab operation (`record_gesture_execution_unsupported`), before anything else is
+/// checked; its step is closed offline or with `--close-step`.
 fn plan_gesture(
     recording: &LabRecording,
     index: u32,
@@ -2685,6 +2771,9 @@ fn plan_gesture(
     gesture: ClickGesture,
     request: &super::model::PlanClickRequest,
 ) -> LabResult<super::model::ClickPlan> {
+    if let ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. } = gesture {
+        return Err(gesture_execution_unsupported(index, gesture));
+    }
     let conflict = |message: String, details: Value| {
         with_details(blocked("record_click_rect_conflict", message), details)
     };
@@ -2741,6 +2830,10 @@ fn plan_gesture(
                 json!({"step": index, "gesture": gesture}),
             ));
         }
+        // #411 Lab BD: refused above, before `--tap` and `--swipe` are looked at.
+        (ClickGesture::SingleTouchDragWithVerticalBrakeV1 { .. }, _) => {
+            return Err(gesture_execution_unsupported(index, gesture));
+        }
     };
     Ok(super::model::ClickPlan {
         record_id: recording.record_id.clone(),
@@ -2753,6 +2846,24 @@ fn plan_gesture(
         gesture: Some(gesture),
         to_point: Some(to_point),
     })
+}
+
+/// #411 Lab BD: a step whose declared gesture a Lab operation cannot press (a brake drag); the
+/// refusal comes before any Runtime request, capture or recording change.
+fn gesture_execution_unsupported(index: u32, gesture: ClickGesture) -> LabError {
+    with_details(
+        blocked(
+            LabCode::RecordGestureExecutionUnsupported.as_str(),
+            format!(
+                "step {index} declares a {}, which a Lab operation does not press; reach the \
+                 screen after it by other means, then close the step with `record mark \
+                 --close-step` or give its next frame with `record mark --frame <png>`; the \
+                 generated package still declares the gesture",
+                gesture.kind()
+            ),
+        ),
+        json!({"step": index, "gesture": gesture}),
+    )
 }
 
 /// Records the Runtime outcome of a planned click on its step.

@@ -518,4 +518,17 @@ outcome_keys! {
     found_after_first: boolean,
     unformatted: list(path),
     // ---- Workflow #411 RV-1: end ----
+    // ---- Workflow #405 W1 (fact-time wake, contracts/scheduling/README.md): begin ----
+    fact_time_problem: vocab(fact_time_problem),
+    // ---- Workflow #405 W1: end ----
+    // ---- Workflow #405 D1 (the scheduler random delay, scheduling-blackout.md): begin ----
+    due_at_unix_ms: unix_ms,
+    random_delay_ms: duration_ms,
+    // ---- Workflow #405 D1: end ----
+    // ---- Workflow #411 A26 (why a listed candidate did not run, persisted): begin ----
+    why: code,
+    decision_state: vocab(decision_state),
+    eligibility: vocab(eligibility),
+    omitted_why: records(why, count),
+    // ---- Workflow #411 A26: end ----
 }

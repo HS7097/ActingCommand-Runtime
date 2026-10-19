@@ -32,12 +32,12 @@ const WIDTH: u32 = 64;
 const HEIGHT: u32 = 96;
 // The cards' names, top to bottom, and the identities they map to.
 const NAMES: [&str; 6] = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
-const MEMBERS: [&str; 6] = [
+pub(super) const MEMBERS: [&str; 6] = [
     "member-a", "member-b", "member-c", "member-d", "member-e", "member-f",
 ];
 // The fact the scan's policy gates on, published at `PUBLISHED_AT` and fresh for a minute.
 const FACT_KEY: &str = "session.example.enabled";
-const PUBLISHED_AT: u64 = 1_000_000;
+pub(super) const PUBLISHED_AT: u64 = 1_000_000;
 const MAX_AGE_MS: u64 = 60_000;
 
 // Deterministic pixel noise: a shifted copy of it correlates with it near zero.
@@ -72,7 +72,7 @@ fn level(card: u32) -> u8 {
 }
 
 // The list with its start and end marks.
-fn list(start: bool, end: bool) -> Frame {
+pub(super) fn list(start: bool, end: bool) -> Frame {
     image(WIDTH, HEIGHT, |x, y| {
         match (x, y) {
             (0, 0) => return [255, 0, 0],
@@ -162,7 +162,7 @@ impl VisionProvider for CardNames {
 
 // A prepared task whose one select step `pick` scans the list page over the card layout; its
 // policy keeps a card only while the instance fact `FACT_KEY` is true and at most a minute old.
-fn scan_task() -> PreparedContainedTask {
+pub(super) fn scan_task() -> PreparedContainedTask {
     let pack: RecognitionPack = serde_json::from_value(json!({
         "schema_version": "0.7",
         "game": "neutral",
@@ -288,7 +288,7 @@ fn scan_task() -> PreparedContainedTask {
 }
 
 // The scan over the card list (SEL-L3's): one drag forward, no rewind.
-fn card_scan() -> ScanDeclaration {
+pub(super) fn card_scan() -> ScanDeclaration {
     serde_json::from_value(json!({
         "identity_feature": "member",
         "axis": "vertical",
@@ -320,7 +320,7 @@ fn card_scan() -> ScanDeclaration {
 }
 
 // The fact snapshot a Runtime answered for the instance, read at `read_at_unix_ms`.
-fn snapshot_facts(read_at_unix_ms: u64) -> OfflineReplayFacts {
+pub(super) fn snapshot_facts(read_at_unix_ms: u64) -> OfflineReplayFacts {
     let record = FactRecord {
         scope: FactScope::Instance {
             instance_id: "instance-a".to_owned(),
@@ -356,7 +356,7 @@ fn snapshot_facts(read_at_unix_ms: u64) -> OfflineReplayFacts {
 
 // A recorded forward run of the whole list: the dispatched frame at the list's start and its
 // settle capture, one drag the list absorbs at its end, and the end frame's settle capture.
-fn forward_run() -> Vec<Frame> {
+pub(super) fn forward_run() -> Vec<Frame> {
     vec![
         list(true, false),
         list(true, false),
@@ -381,6 +381,7 @@ fn l6b_t1_a_scan_select_replays_over_a_saved_forward_run_with_the_given_facts() 
         &scan,
         forward_run(),
         &snapshot_facts(PUBLISHED_AT + 500),
+        &task.default_run_parameters(),
     )
     .expect("the replayed scan covers the list");
     assert_eq!(fresh.coverage, ScanCoverageState::Complete);
@@ -410,8 +411,15 @@ fn l6b_t1_a_scan_select_replays_over_a_saved_forward_run_with_the_given_facts() 
             now_unix_ms: PUBLISHED_AT,
         },
     ] {
-        let dropped = replay_scan(&task, "pick", &scan, forward_run(), &facts)
-            .expect("the replayed scan covers the list");
+        let dropped = replay_scan(
+            &task,
+            "pick",
+            &scan,
+            forward_run(),
+            &facts,
+            &task.default_run_parameters(),
+        )
+        .expect("the replayed scan covers the list");
         assert_eq!(dropped.coverage, ScanCoverageState::Complete);
         assert!(dropped.members.is_empty(), "{:?}", dropped.members);
         assert_eq!(
@@ -440,6 +448,7 @@ fn l6b_t2_a_recording_that_stops_before_the_list_ends_fails_typed() {
         &card_scan(),
         vec![list(true, false), list(true, false)],
         &snapshot_facts(PUBLISHED_AT + 500),
+        &task.default_run_parameters(),
     )
     .expect_err("the sequence holds no frame after the drag");
     assert_eq!(
@@ -480,6 +489,7 @@ fn gate_l6b_a_scan_the_evaluator_aborts_in_a_viewport_replays_aborted_never_cove
         &card_scan(),
         forward_run(),
         &snapshot_facts(PUBLISHED_AT + MAX_AGE_MS + 1),
+        &task.default_run_parameters(),
     )
     .expect("the evaluator's abort is the replayed scan's result, not a failure");
 

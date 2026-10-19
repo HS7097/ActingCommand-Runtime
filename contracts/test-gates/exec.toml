@@ -1661,3 +1661,55 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_no_list_file_is_written_into_the_repository",
 ]
 incident = ["#411 RV-1"]
+
+# #411 Lab BD (v0.12.x; register §1.133 BD-1 to BD-4; Lab file format, no persisted ledger shape; one outcome code, record_gesture_execution_unsupported; plan-lab-l5 §2 BD R1 to R5 with coordinator decision Q6; related: exec 72, 76, 108): a Lab recording declares a single-touch drag with a vertical brake with record mark --click x,y,w,h --brake-corner x,y,w,h or the request's click {region, brake_corner}, the two forms giving the same click; recording.json keeps it as click.gesture {kind: single_touch_drag_with_vertical_brake_v1, corner} on the click rectangle, and the mark output and record status show it; a corner whose y is below 100, a box outside the frame, and the gesture with duration_ms, drag_to, long_press, from or follow are refused with validation_failed (exit 2) and nothing is written; do --capture --record on its step is refused by the plan with record_gesture_execution_unsupported (exit 3, details step and gesture) whatever point, rectangle or swipe it gives, before any Runtime request, and the recording is unchanged; a device frame on the step is record_step_click_not_executed and an offline frame closes it; record stop declares the step's click as {kind: single_touch_drag_with_vertical_brake_v1, from: the click rectangle, corner, horizontal_duration_ms 200, corner_hold_ms 150, brake_distance_px 100, brake_duration_ms 200}, counts 550 ms for it in the task timeout, records the gesture in the provenance and the kernel admits the package; its first decision is the kernel's brake drag of step_01_click from inside the click rectangle into the corner box, x3 = x2 and y3 = y2 - 100, with the four constants, and anything else is record_artifact_admission_failed
+[[gate]]
+key = "109"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::gate_lab_bd::bd_a_brake_drag_is_declared_recorded_and_shown",
+    "actingcommand-actinglab::bin:actinglab::commands::session_record::lab2_tests::bd_the_brake_corner_shortcut_declares_the_request_forms_click",
+    "actingcommand-lab::lib::gate_lab_bd::bd_declarations_the_runtime_refuses_are_refused",
+    "actingcommand-lab::lib::gate_lab_bd::bd_do_capture_record_refuses_the_gesture_before_any_runtime_request",
+    "actingcommand-lab::lib::gate_lab_bd::bd_the_step_closes_offline_and_the_package_declares_and_simulates_the_gesture",
+]
+incident = ["#411 Lab BD"]
+
+# Workflow #406 T12 (0.12.x; register §1.136; no persisted ledger shape: X11 and X12 first written; plan-405-406 Q13 to Q16; Alice 2026-10-13 and 2026-10-14): with the touch keys a runtime hands it at each step (touch_sampling()), the kernel draws every seeded box point as a centre hotspot by the normative steps of "The draw" (twelve 24-bit uniforms per coordinate, the spread sigma_ratio_milli of the box's width and height, a point outside the box drawn again at most max_redraws times, then the centre), matching a reference implementation for fixed seeds and boxes; 10 000 draws in a 200 x 80 box stay inside, centre within 1 % and at least four times as dense in the middle fifth as in the outer tenth; a single-region press (rect, long press box) draws candidate_count candidates and lands where the runtime chooses by the least-recent rule (first unused pixel, else the oldest use, ties to the lowest index), recorded as center_hotspot_least_recent_v1 with all four parameters, one candidate as center_hotspot_normal_v1; a 1 x 1 box presses its point without an error; a drag and the vertical-brake drag record center_hotspot_normal_v1 with their two regions and ask no choice; a runtime without touch keys keeps xorshift64_uniform_rect_v1
+[[gate]]
+key = "110"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_the_hotspot_draw_matches_the_v1_reference",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_hotspot_draws_stay_in_the_box_and_thin_out_towards_the_edge",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_a_draw_that_never_lands_in_the_box_takes_the_centre",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_least_recent_prefers_an_unused_candidate_then_the_oldest_use",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_a_one_point_box_presses_its_point",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_presses_and_drags_record_their_algorithm_and_parameters",
+    "actingcommand-execution-kernel::lib::contained_task::gate_406_t12::t12_without_a_touch_sampling_the_kernel_keeps_the_uniform_draw",
+]
+incident = ["#406"]
+
+# #411 Lab L5c (v0.12.x; register §1.141 L5C-1 to L5C-5; no persisted ledger shape, no outcome code; coordinator decisions Q8 (a) and Q2 of the L5 plan; related: exec 100, 107, host 120): the Lab's --capture client forms take the frames target consensus needs; do --capture --dry-run, ensure --capture (its start, every route guard and every arrival poll) and wait --capture (every poll) take F = target_sample_frames() read-only Runtime captures the declared interval apart, oldest first, the last the current frame, and decide on them as on offline --scene frames, so a target consensus of k = 2 of 3 is recognised on (A, B, A) and not on (B, B, A) and do's target and click are the current frame's, with recognition_coverage {provided_frames, required_frames, aggregation: production_owner} on do's answer; each wait poll takes one whole set; an input on the instance between the first capture's request and the last capture fails the set with observation_samples_interrupted (device_error, details.error) through the client's event query, and a quiet set passes; a package without target consensus takes one capture per observation and its answers carry no recognition_coverage
+[[gate]]
+key = "114"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_do_capture_dry_run_takes_the_consensus_frames",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_ensure_and_wait_capture_sample_frame_sets",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_an_input_between_client_captures_fails_the_observation",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l5c::l5c_a_package_without_consensus_captures_one_frame_as_before",
+]
+incident = ["#411 Lab L5c"]
+
+# #411 Lab RP (v0.12.x; register §1.142; no persisted ledger shape; contracts/remedies.md section 4, contracts/selection-graph.md "Offline"; related: host 114 (B15 R5), exec 69 (SEL-L6b)): the Lab's single-step select evaluations read the run parameters as a run does: dry_run_select and the scan replay (replay_scan) read session.dispatch.parameter.<name> through R5's overlay, the package's declared defaults without given values (the dry run selects and the scan keeps the members by the default) and a given value in place of its default; actinglab replay --select --scan refuses a --parameter whose name the package does not declare (also on a package that declares none), whose value is not one of its declared options or that is not <name>=<value> as not_recognised, a name given twice as repeated and --parameter on a whole replay as conflicting, each validation_failed naming --parameter; a package that declares no parameter evaluates exactly as over the given facts, and a parameter given to it is refused
+[[gate]]
+key = "115"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_single_step_select_reads_the_declared_default",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_given_parameter_replaces_the_default",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_rp::lab_rp_an_undeclared_or_invalid_parameter_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_lab_rp::lab_rp_a_package_without_parameters_is_unchanged",
+]
+incident = ["#411 Lab RP"]

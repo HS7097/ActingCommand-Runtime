@@ -199,6 +199,13 @@ pub(super) struct ActingdConfigFile {
     /// default.
     #[serde(default)]
     startup_discovery: Option<actingcommand_runtime_config::StartupDiscoveryFile>,
+    /// Workflow #406 T12: how a box press's point is drawn and how long its landing points are
+    /// remembered (`touch.*`), each member optional; the defaults file holds every default.
+    // Interface anchor `actingd-config` revision 7 (contracts/component-interfaces.md): a Runtime
+    // before T12 refuses a file that names the section, because the file denies unknown members;
+    // a file that does not name it keeps its revision.
+    #[serde(default)]
+    touch: Option<actingcommand_runtime_config::TouchFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1403,6 +1410,8 @@ impl ActingdConfigFile {
             "device_state": serde_json::to_value(&self.device_state)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "startup_discovery": serde_json::to_value(&self.startup_discovery)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "touch": serde_json::to_value(&self.touch)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self

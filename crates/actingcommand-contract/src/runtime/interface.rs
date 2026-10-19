@@ -213,6 +213,7 @@ runtime_operation_kinds! {
     InstanceFactSnapshot,
     PerformanceStatus,
     FactRefreshStatus,
+    ScheduleExplanation,
     ConfigureMonitor,
     ClearMonitor,
     AcquireLease,
@@ -288,6 +289,7 @@ impl RuntimeOperationKind {
             | Self::InstanceFactSnapshot
             | Self::PerformanceStatus
             | Self::FactRefreshStatus
+            | Self::ScheduleExplanation
             | Self::ProjectInterface
             | Self::QueryEvents
             | Self::SubscribeEvents
@@ -382,6 +384,8 @@ impl RuntimeOperationKind {
             Self::PerformanceStatus => Some(ReceiptCode::PerformanceStatusCompleted.code()),
             // Workflow #384 D2-S5 (register §1.68).
             Self::FactRefreshStatus => Some(ReceiptCode::FactRefreshStatusCompleted.code()),
+            // Workflow #386 SR-6b, MCP-19a (register §1.143).
+            Self::ScheduleExplanation => Some(ReceiptCode::ScheduleExplanationCompleted.code()),
             Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
             Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
             Self::CancelContainedTask => Some(ReceiptCode::CancelContainedTaskCompleted.code()),
@@ -491,6 +495,7 @@ impl RuntimeOperation {
             Self::InstanceFactSnapshot { .. } => Kind::InstanceFactSnapshot,
             Self::PerformanceStatus => Kind::PerformanceStatus,
             Self::FactRefreshStatus => Kind::FactRefreshStatus,
+            Self::ScheduleExplanation { .. } => Kind::ScheduleExplanation,
             Self::ConfigureMonitor { .. } => Kind::ConfigureMonitor,
             Self::ClearMonitor { .. } => Kind::ClearMonitor,
             Self::AcquireLease { .. } => Kind::AcquireLease,
@@ -611,6 +616,9 @@ mod tests {
             // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general
             // read from memory that records nothing (UIM §2.3, the D2 S5 transition query).
             K::FactRefreshStatus => (General, Some(Read), false),
+            // Workflow #386 SR-6b, MCP-19a (register §1.143, §3 W5): the latest evaluation's
+            // not-run explanation, a general read from memory that records nothing.
+            K::ScheduleExplanation => (General, Some(Read), false),
             K::ProjectInterface => (General, Some(Read), false),
             K::QueryEvents => (General, Some(Read), false),
             K::SubscribeEvents => (General, Some(Read), false),

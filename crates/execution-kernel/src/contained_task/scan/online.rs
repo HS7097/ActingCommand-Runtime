@@ -22,8 +22,9 @@ use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
-    PageObservation, PreparedContainedTask, TaskOperation, budget_observation_now, pace_pause,
-    sample_geometry_matches, sampled_drag_with_pause_and_brake, sampled_swipe, sampled_tap,
+    PageObservation, PointDraw, PreparedContainedTask, TaskOperation, budget_observation_now,
+    drawn_tap, pace_pause, runtime_touch_choice, sample_geometry_matches,
+    sampled_drag_with_pause_and_brake, sampled_swipe,
 };
 use crate::{InputFrameContext, ObservedFrame};
 use actingcommand_contract::codes::SharedCode;
@@ -74,7 +75,9 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     /// The guard was judged on the latest frame (SEL-L4b: `Confirm` judges it before the
     /// viewport reads the frame).
     guarded: bool,
-    action_seed: Option<u64>,
+    /// The step's draw (Workflow #406 T12: its seed and touch keys); each drag mixes its index
+    /// into the seed.
+    draw: PointDraw,
     replay: bool,
 }
 
@@ -87,12 +90,7 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
         scan: &'s ScanDeclaration,
         layout: &'s CandidateLayout,
         first: &'s PageObservation,
-        (step_index, timing, deadline, action_seed): (
-            u32,
-            ContainedTaskTimingContext,
-            Instant,
-            Option<u64>,
-        ),
+        (step_index, timing, deadline, draw): (u32, ContainedTaskTimingContext, Instant, PointDraw),
         replay: bool,
     ) -> Self {
         let started = budget_observation_now(runtime, timing.pace());
@@ -110,7 +108,7 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
             latest: None,
             guard: None,
             guarded: false,
-            action_seed,
+            draw,
             replay,
         }
     }
@@ -381,7 +379,11 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             .into());
         }
         let resolution = &self.task.control.resolution;
-        let seed = self.action_seed.map(|seed| drag_seed(seed, drag.index));
+        let draw = self.draw.with_seed(
+            self.draw
+                .action_seed
+                .map(|seed| drag_seed(seed, drag.index)),
+        );
         let (action, sampling) = match drag.input {
             ScanInput::Drag {
                 from,
@@ -390,7 +392,7 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             } => {
                 from.validate(resolution)?;
                 to.validate(resolution)?;
-                sampled_swipe(from, to, duration_ms, seed)?
+                sampled_swipe(from, to, duration_ms, draw)?
             }
             ScanInput::HeldDrag {
                 from,
@@ -405,7 +407,7 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
                     (from, to, duration_ms),
                     pause_ms,
                     brake.map(|brake| (brake.displacement, brake.duration_ms)),
-                    seed,
+                    draw,
                 )?;
                 // The brake's end follows from the drag's end; it lies on the screen too, and
                 // the action keeps its contract.
@@ -425,7 +427,7 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             }
             ScanInput::Tap { rect } => {
                 rect.validate(resolution)?;
-                sampled_tap(rect, seed)?
+                drawn_tap::<R::Error>(rect, draw, &mut runtime_touch_choice(&mut *self.runtime))?
             }
         };
         let guard = self.guard.clone().ok_or_else(|| {
@@ -546,12 +548,17 @@ pub fn dry_run_scan(
 /// `selection_fact_context_mismatch`) and keeps the rows of the record lists the step's sealed
 /// policy declares. The scan then runs as [`dry_run_scan`]: a move it holds no frame for fails
 /// `selection_scan_replay_frame_missing`, never passes.
+///
+/// #411 Lab RP (contracts/remedies.md section 4): the snapshot also holds `run_parameters`, as a
+/// run's select step reads them (the package's declared defaults, or given values replacing
+/// them, [`PreparedContainedTask::given_run_parameters`]), overlaid before it is checked.
 pub fn replay_scan(
     task: &PreparedContainedTask,
     operation_id: &str,
     scan: &ScanDeclaration,
     frames: Vec<Frame>,
     facts: &crate::OfflineReplayFacts,
+    run_parameters: &crate::RunParameters,
 ) -> Result<ScanDryRun, ContainedTaskError> {
     let prepared = task
         .program
@@ -572,7 +579,7 @@ pub fn replay_scan(
                 format!("operation={operation_id} is not a select step"),
             )
         })?;
-    let (snapshot, now_unix_ms) = match facts {
+    let (mut snapshot, now_unix_ms) = match facts {
         crate::OfflineReplayFacts::Empty { now_unix_ms } => (
             crate::offline::empty_offline_snapshot(crate::SelectionStateRequest {
                 step_index: 0,
@@ -587,6 +594,7 @@ pub fn replay_scan(
             read_at_unix_ms,
         } => (snapshot.clone(), *read_at_unix_ms),
     };
+    run_parameters.overlay(&mut snapshot, now_unix_ms);
     if now_unix_ms == 0 || snapshot.validate().is_err() {
         return Err(ContainedTaskError::with_detail(
             ExecutionKernelCode::SelectionStateUnavailable.code(),
@@ -690,7 +698,7 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
         scan,
         layout,
         &first,
-        (0, timing, deadline, None),
+        (0, timing, deadline, PointDraw::uniform(None)),
         replay,
     );
     let end = session.run(&mut source)?;

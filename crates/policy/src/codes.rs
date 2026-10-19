@@ -181,6 +181,16 @@ actingcommand_contract::outcome_codes! {
         /// `run_parameters`; R2; the channel Workflow #411 B8 shares).
         PolicyDispatchParameters => "policy_dispatch_parameters": info / none,
         // ---- Workflow #411 B15 R0: end ----
+        // ---- Workflow #405 W1 (fact-time wake, `contracts/scheduling/README.md`, "Fact-time
+        // wake"): begin ----
+        /// Info. A `fact_time_reached` predicate is false because the time its fact holds plus
+        /// its `offset_ms` has not come yet; the evaluation wakes at that instant (keys
+        /// `fact_key`, `next_eligible_unix_ms`).
+        FactTimePending => "fact_time_pending": info / none,
+        /// Info. A `fact_time_reached` predicate is false because its fact gives no time; no
+        /// fact refresh is requested (keys `fact_key`, `fact_time_problem`).
+        FactTimeUnavailable => "fact_time_unavailable": info / none,
+        // ---- Workflow #405 W1: end ----
     }
 }
 
@@ -228,3 +238,55 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- Workflow #384 D2-S4: end ----
+
+// ---- Workflow #405 W1: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a `fact_time_reached` predicate's fact gives no time (the vocabulary
+    /// `fact_time_problem`).
+    pub enum FactTimeProblem: "fact_time_problem" {
+        /// No fact with this key exists in the predicate's scope.
+        Missing => "missing",
+        /// The fact's confidence is 0.
+        LowConfidence => "low_confidence",
+        /// The fact was observed longer ago than the predicate's `max_age_ms`.
+        Stale => "stale",
+        /// The fact is past its own expiry.
+        Expired => "expired",
+        /// The fact's value is not a `timestamp_ms` value.
+        NotATime => "not_a_time",
+    }
+}
+// ---- Workflow #405 W1: end ----
+
+// ---- Workflow #411 A26 (why a listed candidate did not run, persisted): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// The state of a scheduling decision (the vocabulary `decision_state`): the state a
+    /// dispatch decision record gives each candidate it lists (`decision_candidate_not_selected`).
+    pub(crate) enum DecisionStateToken: "decision_state" {
+        /// Nothing deferred or blocked the candidate this round.
+        Eligible => "eligible",
+        /// Something holds the candidate back for now; a later round may run it.
+        Deferred => "deferred",
+        /// The candidate cannot run until its inputs change.
+        Blocked => "blocked",
+        /// The candidate was dispatched this round.
+        Selected => "selected",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// The eligibility of a scheduling decision (the vocabulary `eligibility`): what its trigger
+    /// and feedback stop decided, as a dispatch decision record gives it for each candidate it
+    /// lists (`decision_candidate_not_selected`).
+    pub(crate) enum EligibilityToken: "eligibility" {
+        /// The trigger passed and the feedback stop did not fire.
+        True => "true",
+        /// Not eligible: the trigger is false, the feedback stop fired, or the scope matches no
+        /// instance.
+        False => "false",
+        /// Not decided: a predicate is unknown, or the candidate was settled before its
+        /// trigger was read.
+        Unknown => "unknown",
+    }
+}
+// ---- Workflow #411 A26: end ----

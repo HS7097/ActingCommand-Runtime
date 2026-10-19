@@ -86,7 +86,8 @@ at assembly; allowed only on a discovery-bound instance, `start_emulator_require
 options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
 only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
-`startup_discovery` section below (default `file`, not settable, read once at assembly). A
+`startup_discovery` section below (default `file`, not settable, read once at assembly).
+Workflow #406 T12's rows: the `touch` section below (default `file`, settable). A
 manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -303,7 +304,13 @@ bytes, no control character) and an instruction with `config_value_invalid` (`se
 default `section:scheduling.random_delay.<member>`. The pair in effect (each side the
 instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_value_invalid`
 (`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
-against the other. No slice reads them before #405.
+against the other. The scheduler reads them from #405 D1 on: at every policy cycle it reads, for
+each instance of the snapshot, the pair in effect (each member the instance's own key, otherwise
+the section's), and an instance whose `enabled` is true in effect delays every task the policy
+dispatches to it ([scheduling-blackout.md](scheduling-blackout.md), "Order of the deferrals",
+position 9). Every member is settable while the Runtime runs; a change applies to the draws made
+after it (a draw already made keeps its delay), and `enabled = false` releases the instance's
+waiting tasks at the next evaluation.
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
@@ -461,6 +468,29 @@ The defaults wait 24 times 10 s, about four minutes, which covers a normal cold 
 emulator (about three minutes) with room to spare; each attempt itself takes at most
 MuMuManager's 10 s timeout. A value outside its range refuses a start and `check-config` as
 `config_value_invalid` (`out_of_range`, with `range_min` and `range_max`) for its key.
+
+## The `touch` section (Workflow #406)
+
+Workflow #406 T12 (plan Q13; [v012-register.md](v012-register.md) §1.136;
+[resource-declarations.md](resource-declarations.md), "Touch sampling"): how a box press's point
+is drawn around the box's center and how long the Runtime remembers where its presses landed.
+Host-wide. The host reads every key at each step of a run and at each choice of a landing point,
+so an instruction may change each while the Runtime runs and takes effect at the next step.
+`actingd-config` revision 7 ([component-interfaces.md](component-interfaces.md)) adds the
+section; a file that does not name it keeps its revision.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `touch.sampling.sigma_ratio_milli` | integer `1..=1000`, the spread of a centre-hotspot draw in thousandths of the box's width and of its height | `250` (the box's edge lies two spreads from its center) | yes |
+| `touch.sampling.max_redraws` | integer `0..=64`, how often a draw outside the box is drawn again before the center is taken | `8` | yes |
+| `touch.sampling.candidate_count` | integer `1..=16`, the candidates of a single-region press (`1`: one point, no least-recent choice) | `4` | yes |
+| `touch.history.points_per_box` | integer `1..=256`, the most landing pixels one box remembers (the newest) | `16` | yes |
+| `touch.history.max_boxes` | integer `1..=65536`, the most boxes one instance remembers (the box unused longest is forgotten) | `1024` | yes |
+
+A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
+`range_max`) for its key at start, in `check-config` and in `ConfigureSettings`; a value that is
+no integer is `wrong_type`. The rows are those of `config.parameters.touch`. The landing history
+itself is memory only and never recorded.
 
 ## Facts
 

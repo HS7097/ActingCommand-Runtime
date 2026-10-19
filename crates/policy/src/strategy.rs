@@ -1132,7 +1132,8 @@ fn rewrite_predicate_task_ids(predicate: &mut PredicateSpec, mapping: &BTreeMap<
         | PredicateSpec::TimelineActive { .. }
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
-        | PredicateSpec::RecordDeadline { .. } => {}
+        | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. } => {}
     }
 }
 
@@ -1441,7 +1442,9 @@ fn require_game_predicate_scopes(predicate: &PredicateSpec, game_id: &str) -> St
             Ok(())
         }
         PredicateSpec::Not { predicate } => require_game_predicate_scopes(predicate, game_id),
-        PredicateSpec::Fact { scope, .. } | PredicateSpec::RecordDeadline { scope, .. } => {
+        PredicateSpec::Fact { scope, .. }
+        | PredicateSpec::RecordDeadline { scope, .. }
+        | PredicateSpec::FactTimeReached { scope, .. } => {
             require_game_scope(scope, game_id, "template fact predicate")
         }
         PredicateSpec::Clock { .. }

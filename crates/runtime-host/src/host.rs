@@ -218,6 +218,8 @@ mod runtime_config;
 mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
+// Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
+mod schedule_explanation_read;
 mod scheduling_pause;
 mod signatures;
 // Workflow #373 NAV-6: the standard-pack root reader and the shared interrupt pages of a run.
@@ -1652,6 +1654,7 @@ impl RuntimeHost {
             queue_order_locks: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             observe_marks: Mutex::new(observation::ObserveMarks::default()),
+            touch_history: Mutex::new(crate::touch_history::TouchHistory::default()),
             contained_runs: Mutex::new(BTreeMap::new()),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
@@ -3943,6 +3946,22 @@ impl RuntimeHost {
         Ok(lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?.remedy_table_for_test())
     }
 
+    /// Workflow #406 T12, test only: the landing points `instance_alias` keeps for the box
+    /// `region`, oldest use first.
+    #[cfg(test)]
+    pub(crate) fn touch_history_points_for_test(
+        &self,
+        instance_alias: &str,
+        region: &actingcommand_contract::InputSamplingRegion,
+    ) -> RuntimeHostResult<Vec<(i32, i32)>> {
+        let shared = self.shared_ref(HostLocation::DeriveContainedTaskActionSeed)?;
+        Ok(lock(
+            &shared.touch_history,
+            HostLocation::DeriveContainedTaskActionSeed,
+        )?
+        .points(instance_alias, region))
+    }
+
     #[cfg(test)]
     pub(crate) fn override_next_policy_outcome_projection_position_for_test(
         &self,
@@ -4518,6 +4537,10 @@ struct HostShared {
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     /// Workflow #375 R5c: the latest observe frame per instance and origin.
     observe_marks: Mutex<observation::ObserveMarks>,
+    /// Workflow #406 T12 (plan Q16): per instance and per box, where single-region presses
+    /// landed and when (memory only; empty after a restart). A leaf lock: nothing else is taken
+    /// while it is held.
+    touch_history: Mutex<crate::touch_history::TouchHistory>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
     // persisted as `host.scheduling_pause`).

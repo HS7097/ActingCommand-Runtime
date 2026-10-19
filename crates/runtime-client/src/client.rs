@@ -1289,6 +1289,40 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads why each candidate of the latest policy evaluation did not run
+    /// (`ScheduleExplanation`, Workflow #386 SR-6b, MCP-19a; register §1.143, §3 W5): per
+    /// instance its not-running row, its selected task and, when `candidates` asks for them, every
+    /// candidate that did not run with its why, its reason codes and its wake. `instance` names
+    /// one registered instance alias (every instance when absent). Read-only: the Runtime reads
+    /// and records nothing in the ledger. An answer that names another instance is an unexpected
+    /// result.
+    pub fn schedule_explanation(
+        &self,
+        instance: Option<&str>,
+        candidates: bool,
+    ) -> RuntimeClientResult<actingcommand_contract::RuntimeScheduleExplanation> {
+        const OPERATION: Location = ClientLocation::RuntimeScheduleExplanation.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::ScheduleExplanation {
+                instance: instance.map(str::to_owned),
+                candidates,
+            },
+        )? {
+            RuntimeResult::ScheduleExplanation { explanation }
+                if instance.is_none_or(|wanted| {
+                    explanation
+                        .instances
+                        .iter()
+                        .all(|entry| entry.instance_alias == wanted)
+                }) =>
+            {
+                Ok(*explanation)
+            }
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     pub fn configure_monitor(
         &self,
         instance_alias: &str,
@@ -5494,6 +5528,18 @@ impl RuntimeDebugSession {
             },
             profile,
         )
+    }
+
+    /// #411 Lab L5c: one page of the shared ledger view as [`RuntimeClient::query_event_page`]
+    /// reads it, not bound to this session's correlation: the Lab's `--capture` client forms
+    /// look for an input any client or task gave the instance between their captures.
+    pub fn query_event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> RuntimeClientResult<RuntimeEventQueryPage> {
+        self.client.query_event_page(query, profile, page)
     }
 }
 

@@ -128,7 +128,10 @@ projection element has no input ([page-projection.md](page-projection.md),
 its edge in `actions` with `input: null`; and no route passes it, as none passes a page set. As a
 destructive page operation it covers the boxes its touch stops in: `from_rect`, `corner_rect`, and
 `corner_rect` moved up by `brake_distance_px`, where the brake releases the touch. A package run
-performs it as before.
+performs it as before. #411 Lab BD: a Lab recording can declare the gesture
+([lab-recording.md](lab-recording.md), "Drags and long presses"), and `record stop` generates it in
+its source form; executing it from the Lab is not available in this version
+(`record_gesture_execution_unsupported`).
 
 Workflow #390 lpbox (coordinator ruling 6 of wave 16, from Alice's rule of 10-09 that pack taps
 use click boxes, never fixed points): a `long_press` (alias `long_tap`) click, in a task
@@ -136,13 +139,51 @@ operation and in a navigation edge, is either a click box `{"kind", "x", "y", "w
 "height", "duration_ms"}` or, as before, a point `{"kind", "x", "y", "duration_ms"}`. A box
 names both `width` and `height` (one without the other is `MissingField` at the absent one),
 each at least 1, and lies inside the task's resolution. The kernel holds a point of the box for
-`duration_ms`, drawn with the step's action seed as a `rect` click's tap point is, and records
-the seed and the box as the effect intent's one sampling region (`xorshift64_uniform_rect_v1`);
-without a seed it holds the box's center. A point long press holds its point and records no
-sampling. Drive navigation and actinglab's navigation tools hold a box's center, as they tap a
-`rect` click's; a guard synthesized from the click takes the box as its `expected_rect`. The
-whole box must be harmless on every frame the press can fire on: an author sizes it to the
-pressed control, and declares a point only for a target without a stable extent.
+`duration_ms`, drawn with the step's action seed as a `rect` click's tap point is (Workflow #406
+T12: as "Touch sampling" below says), and records the seed and the box as the effect intent's
+one sampling region; without a seed it holds the box's center. A point long press holds its
+point and records no sampling. Drive navigation and actinglab's navigation tools hold a box's
+center, as they tap a `rect` click's; a guard synthesized from the click takes the box as its
+`expected_rect`. The whole box must be harmless on every frame the press can fire on: an author
+sizes it to the pressed control, and declares a point only for a target without a stable extent.
+
+**Touch sampling** (Workflow #406 T12; Alice 2026-10-13 「…默认都是中心热点…」 and 2026-10-14
+「…我们选择距离上一次被选择的点击点最久的一个就行…」; [v012-register.md](v012-register.md) §1.136).
+Every box a package run presses is drawn around its center from the step's action seed, so a
+replay from the seed draws the same points. The box `x, y, width, height` has the center
+`(x + width / 2, y + height / 2)`, the point an unseeded press takes. With the configuration's
+`touch.sampling` keys ([runtime-config.md](runtime-config.md), "The `touch` section"), one
+centre-hotspot point is drawn as follows, all arithmetic in 128-bit integers, divisions
+truncating toward zero, and every draw continuing the state of the action's earlier ones (the
+state starts as `xorshift64_uniform_rect_v1`'s: the seed, or `0x9e3779b97f4a7c15` for the seed
+0, and each value is the next xorshift64 output):
+
+- a standard normal value × 1000 is `((2·s − 12·(2^24 − 1)) · 1000) / (2·2^24)`, where `s` is
+  the sum of twelve values, each the next output shifted right by 40 (24 bits);
+- two such values `zx`, `zy` give `px = cx + zx · sigma_ratio_milli · width / 1 000 000` and
+  `py = cy + zy · sigma_ratio_milli · height / 1 000 000`; a point with `x ≤ px < x + width` and
+  `y ≤ py < y + height` is taken, otherwise a new pair is drawn, at most `max_redraws` times
+  more, and after the last the center is taken.
+
+A single-region press (a `rect`, `specific_rect`, `long_press` box, `target` or `offset` click,
+a select step's confirmed candidate, a scan's page flip, a `linear_steps` step) draws
+`candidate_count` such points as its candidates, in order, and lands on the first whose pixel
+its box's landing history does not hold, else on the one whose pixel was used longest ago, ties
+to the first: `center_hotspot_least_recent_v1`, whose evidence names the spread, the redraws,
+the candidate count and the chosen candidate (0-based). With `candidate_count` 1 it draws one
+point and makes no choice: `center_hotspot_normal_v1`, which names the spread and the redraws.
+A box whose candidates are one pixel (a 1 × 1 box) presses it, with no error and no code. A drag
+(`drag`, `single_touch_drag_with_vertical_brake_v1`, a scan's drags) draws one point in each of
+its two boxes, in order, with `center_hotspot_normal_v1` and no landing history. The landing
+history is the Runtime's, in memory only: per instance and per box (its sampling region's `x`,
+`y`, `width` and `height`), the pixels pressed there, ordered by the instance's uses, at most
+`touch.history.points_per_box` per box (the newest; a forgotten pixel counts as unused) and
+`touch.history.max_boxes` boxes per instance (the box unused longest is forgotten). A choice is
+a use when it is made. The policy runs and the direct runs of an instance share it; it is never
+recorded and is empty after a restart, and nothing of it is reported to the scheduler. A `point`
+click and a `target_center` click press their point, as before. A runtime without the touch
+configuration (the Lab's offline runs and its presses until #406 T4) draws each box uniformly
+with `xorshift64_uniform_rect_v1` or presses its center, as before.
 
 Workflow #390 LAB-2 item 7: both navigation input readers, the kernel's drive reader and
 actinglab's, read an `offset` click `{"kind": "offset", "target_id", "offset": {"x", "y",

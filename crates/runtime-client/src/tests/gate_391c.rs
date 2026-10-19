@@ -110,6 +110,20 @@ fn gate_recent_runs_of_an_instance_with_more_lab_events_than_one_read_keeps_come
             .into(),
         ));
     }
+    // #411 A24b: the scripted ledger's upper time bound is exclusive, as in the contract: an
+    // event recorded at the bound is not selected, one recorded before it is.
+    let bounded = &events[0];
+    assert_eq!(
+        [bounded.timestamp_unix_ms, bounded.timestamp_unix_ms + 1].map(|to| matches(
+            &EventQuery {
+                to_timestamp_unix_ms: Some(to),
+                ..EventQuery::default()
+            },
+            bounded,
+        )),
+        [false, true],
+        "the scripted ledger's upper time bound is not exclusive"
+    );
 
     let root = TempDir::new().expect("tempdir");
     let server = scripted_runtime(&root, move |listener, owner_epoch| {
@@ -270,6 +284,7 @@ fn event_page(
 
 /// Whether `event` matches `query`. This ledger serves the time and sequence bounds, one event
 /// type or a set of them and the run links; a query with any other filter is refused.
+/// #411 A24b: the upper time bound is exclusive, as in the contract and the ledger's own query.
 fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
     let unserved = EventQuery {
         from_timestamp_unix_ms: None,
@@ -297,7 +312,7 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
         .is_none_or(|from| event.timestamp_unix_ms >= from)
         && query
             .to_timestamp_unix_ms
-            .is_none_or(|to| event.timestamp_unix_ms <= to)
+            .is_none_or(|to| event.timestamp_unix_ms < to)
         && query
             .from_sequence
             .is_none_or(|from| event.sequence >= from)

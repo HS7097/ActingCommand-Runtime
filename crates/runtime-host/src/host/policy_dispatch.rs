@@ -10,7 +10,7 @@ use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
     BackendObservationStatus, BackendOpenEntry, InstancePauseStage, InstancePauseState, OwnerEpoch,
-    SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
+    PolicyRandomDelay, SchedulingDrainSummary, SchedulingPauseExpectation, SchedulingPauseReason,
     SchedulingPauseScope, SchedulingPauseState, SchedulingResumeCaptureCheck,
     SchedulingResumeSelfCheck, SchedulingResumeTouchCheck,
 };
@@ -197,6 +197,9 @@ struct TrustedPolicyDispatch {
     /// Workflow #369 W-1: the intent's instance view of the evaluation's inputs
     /// (`dispatch_view_identity`).
     view_identity: String,
+    /// Workflow #405 D1 (register X14): the random delay the intent was dispatched under, which
+    /// its `policy.dispatch_intent` record carries; `None` for an instance with the delay off.
+    random_delay: Option<PolicyRandomDelay>,
 }
 
 /// Workflow #369 W-1 (model-369 v3.1 §3.3: "Other instances are evaluated and run in the same
@@ -300,7 +303,8 @@ pub(super) struct TrustedPolicyDispatchStore {
 
 impl TrustedPolicyDispatchStore {
     /// Records the cycle's pending intents with the instance view of each in the evaluation's
-    /// `facts` and `resources` (`dispatch_view_identity`).
+    /// `facts` and `resources` (`dispatch_view_identity`) and (Workflow #405 D1) the random delay
+    /// each was dispatched under (`random_delays`, by decision id).
     fn record_cycle(
         &mut self,
         cycle: &PolicyCycle,
@@ -308,6 +312,7 @@ impl TrustedPolicyDispatchStore {
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
         pool_scopes: &BTreeMap<String, actingcommand_policy::ScopeSelector>,
+        random_delays: &BTreeMap<String, PolicyRandomDelay>,
     ) -> RuntimeHostResult<()> {
         let Some(evaluation) = &cycle.evaluation else {
             return Ok(());
@@ -333,6 +338,7 @@ impl TrustedPolicyDispatchStore {
                     pool_scopes,
                     &intent.instance_id,
                 )?,
+                random_delay: random_delays.get(&intent.decision_id).copied(),
             };
             if let Some(existing) = self.entries.get(&intent.decision_id) {
                 if existing.intent != trusted.intent
@@ -905,7 +911,10 @@ impl HostShared {
             .collect::<Vec<_>>();
         let remedy_context =
             self.remedy_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
-        let (mut cycle, eligibility_unknown_pairs, pool_scopes) = {
+        // Workflow #405 D1: each instance's random delay in effect as this cycle starts.
+        let random_delay_context =
+            self.random_delay_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
             let cycle = policy.evaluate(
@@ -929,6 +938,7 @@ impl HostShared {
                         instance_facts_loaded_at_unix_ms: self.instance_facts_loaded_at_unix_ms,
                     },
                     remedy: &remedy_context,
+                    random_delay: &random_delay_context,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -936,7 +946,9 @@ impl HostShared {
             } else {
                 BTreeSet::new()
             };
-            (cycle, unknown, catalog_pool_scopes(&policy))
+            // Workflow #405 D1: the random delay each pending intent was dispatched under.
+            let random_delays = policy.dispatch_random_delays(&cycle.pending_dispatch_intents);
+            (cycle, unknown, catalog_pool_scopes(&policy), random_delays)
         };
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
@@ -999,6 +1011,7 @@ impl HostShared {
             &facts,
             &resources,
             &pool_scopes,
+            &random_delays,
         )?;
         Ok(cycle)
     }
@@ -1800,13 +1813,23 @@ impl HostShared {
                 Some(action_id),
             ));
             let data = policy_event_data(intent, reason_chain)?;
+            // Workflow #405 D1 (register X14): the intent of a pair dispatched under a random
+            // delay records it; the admitted, rejected and completed records never do.
+            let intent_draft = match trusted.random_delay {
+                Some(random_delay) => PolicyPayloadDraft::dispatch_intent_with_random_delay(
+                    data.clone(),
+                    random_delay,
+                    AuditInput::new(),
+                ),
+                None => PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
+            };
             let event = self.events.draft(
                 EventSeverity::Info,
                 EventSource::Scheduler,
                 OriginModule::Policy,
                 EventActor::Scheduler,
                 links.clone(),
-                PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
+                intent_draft,
             )?;
             let event = self.events.sanitize(event)?;
             let plan = CriticalEventPlan::new(CriticalOperation::PolicyDispatch, event)
@@ -3083,6 +3106,7 @@ fn attach_unknown_priority_offset_task_reasons(
                      ignored"
                     ),
                 }],
+                next_wake_unix_ms: None,
             });
     }
 }

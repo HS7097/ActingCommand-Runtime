@@ -10,16 +10,16 @@ use crate::{
     ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
     MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CANONICAL_INTEGER, MAX_CLOCK_DRIFT_MS,
     MAX_CONTINUED_TASK_IDS, MAX_DEFER_AGING_CAP_MS, MAX_DEFER_FOR_MS, MAX_DST_OFFSET_MINUTES,
-    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
-    MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH,
-    MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK, MAX_TASKS,
-    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES, MAX_VALUATION_BASE_WEIGHT_MILLI,
-    MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES, MAX_VALUATION_UNIT_BYTES,
-    MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER, MIN_DST_OFFSET_MINUTES,
-    MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef,
-    PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ResourceEffectSpec,
-    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TaskSpec,
-    TimelineDocument,
+    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE,
+    MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS,
+    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_REFERENCES_PER_TASK,
+    MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES,
+    MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES,
+    MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
+    MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_UTC_OFFSET_MINUTES,
+    MetricRef, MissedSlotRule, ObservationRef, PoolProjection, PoolSpec, PoolValuation,
+    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
+    ScopeSelector, TaskSpec, TimelineDocument,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -931,6 +931,55 @@ fn validate_predicate_node(
                 ));
             }
         }
+        // Workflow #405 W1: a V2 predicate; `scope` and `fact_key` follow `fact`'s rules.
+        PredicateSpec::FactTimeReached {
+            scope,
+            fact_key,
+            offset_ms,
+            max_age_ms,
+        } => {
+            if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::UnknownField,
+                    format!("{path}/kind"),
+                    "fact_time_reached requires actingcommand.scheduling.v2",
+                    descriptor,
+                ));
+                return;
+            }
+            validate_scope(
+                map,
+                &format!("{path}/scope"),
+                scope,
+                descriptor,
+                diagnostics,
+            );
+            validate_identifier(
+                map,
+                &format!("{path}/fact_key"),
+                fact_key,
+                descriptor,
+                diagnostics,
+            );
+            if !(MIN_FACT_TIME_OFFSET_MS..=MAX_FACT_TIME_OFFSET_MS).contains(offset_ms) {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    format!("{path}/offset_ms"),
+                    format!(
+                        "fact_time_reached offset_ms must be within {MIN_FACT_TIME_OFFSET_MS}..={MAX_FACT_TIME_OFFSET_MS}"
+                    ),
+                    descriptor,
+                ));
+            }
+            if max_age_ms.is_some_and(|value| value == 0 || value > MAX_FACT_MAX_AGE_MS) {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    format!("{path}/max_age_ms"),
+                    format!("fact max_age_ms must be null or within 1..={MAX_FACT_MAX_AGE_MS}"),
+                    descriptor,
+                ));
+            }
+        }
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
@@ -1143,6 +1192,7 @@ fn refuse_missed_under_not(
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
         | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. }
         | PredicateSpec::DependencyCompleted { .. }
         | PredicateSpec::Outcome { .. } => {}
     }

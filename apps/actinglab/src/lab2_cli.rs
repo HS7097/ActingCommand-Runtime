@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CorrelationId, EffectDisposition, EventQuery, InputAction, InputFrameReference, NeedsDetection,
-    ProjectionProfile, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeResult,
+    CorrelationId, EffectDisposition, EventQuery, EventType, InputAction, InputFrameReference,
+    NeedsDetection, ObservationFramePlan, ProjectionProfile, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeResult,
 };
 use actingcommand_lab::{
     AttachFrameRequest, OpaqueJson, record_attach_frame, record_frame_preflight,
@@ -48,10 +49,13 @@ impl Lab2Ids {
     }
 }
 
-struct Lab2Scene {
+/// #411 Lab L5c: visible beside `lab2_cli` for the gate test of the client capture forms'
+/// frame set ([`capture_runtime_frame_set`]).
+pub(super) struct Lab2Scene {
     scene: Scene,
     /// #411 Lab B-2: the earlier frames of an offline `--scene` set, oldest first; `scene` is its
-    /// current frame. Empty for one frame and for a Runtime frame.
+    /// current frame. Empty for one frame. #411 Lab L5c: also the earlier Runtime captures of a
+    /// `--capture` client form's frame set.
     samples: Vec<Scene>,
     backend: String,
     source: Value,
@@ -334,8 +338,9 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         None
     };
     let reader = super::contained_resources::PackageInput::open(flags)?;
-    // #411 Lab L5: the frames the package's target consensus makes the Runtime take.
-    let frames = match super::contained_resources::online_frame_plan(&instance, reader.path()) {
+    // #411 Lab L5: the frames the package's target consensus makes the Runtime take; #411 Lab
+    // L5b: with its pages' candidate layout series.
+    let frames = match super::contained_resources::online_series_plan(&instance, reader.path()) {
         Ok(frames) => frames,
         Err(error) => {
             return super::contained_resources::finish_package_use(Err(error), reader.close());
@@ -481,11 +486,12 @@ fn run_runtime_do(
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Do)?;
     let result = (|| -> CliOutcome<Value> {
-        let loaded_scene = load_runtime_lab2_scene(&session, instance)?;
-        let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
-        let evaluation = evaluator
-            .evaluate_target(&loaded_scene.scene, target)
-            .map_err(|err| CliError::usage(err.to_string()))?;
+        // #411 Lab L5c: the frame set the package's target consensus needs, decided on as the
+        // offline frames are; the click and the coordinates are the current frame's.
+        let loaded_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
+        let frames = loaded_scene.frames();
+        let before = detect_current_page_over(&evaluator, &detector, &frames)?;
+        let evaluation = evaluate_target_over(&evaluator, &frames, target)?;
         if !evaluation.passed {
             return Err(CliError::safety_blocked(
                 "target_not_visible",
@@ -519,7 +525,7 @@ fn run_runtime_do(
                 actual_click.rect,
                 &graph,
                 &evaluator,
-                &[&loaded_scene.scene],
+                &frames,
             )?;
         }
         let point = rect_center(actual_click.rect)?;
@@ -549,8 +555,8 @@ fn run_runtime_do(
         let after = if dry_run {
             before
         } else {
-            let after_scene = load_runtime_lab2_scene(&session, instance)?;
-            detect_current_page(&evaluator, &detector, &after_scene.scene)?
+            let after_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
+            detect_current_page_over(&evaluator, &detector, &after_scene.frames())?
         };
         let mut payload = json!({
             "req_id": session.correlation_id(),
@@ -585,6 +591,11 @@ fn run_runtime_do(
                 loaded_scene.scene.height(),
             ),
         });
+        // #411 Lab L5c: as offline `do` reports its frames (B-2 R4), only for a package that
+        // declares target consensus.
+        if let Some(coverage) = offline_recognition_coverage(&evaluator, frames.len()) {
+            payload["recognition_coverage"] = coverage;
+        }
         attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
         Ok(payload)
     })();
@@ -606,8 +617,9 @@ fn run_runtime_ensure(
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Ensure)?;
     let result = (|| -> CliOutcome<Value> {
         let target_page = canonical_navigation_page(&graph, to);
-        let scene = load_runtime_lab2_scene(&session, instance)?;
-        let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
+        // #411 Lab L5c: the frame set the package's target consensus needs.
+        let scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
+        let start = detect_current_page_over(&evaluator, &detector, &scene.frames())?;
         if start.matched && start.page == target_page {
             return Ok(json!({
                 "req_id": session.correlation_id(),
@@ -754,8 +766,11 @@ fn execute_runtime_navigation_route(
                 &["page_guard"],
             ));
         }
-        let guard_scene = load_runtime_lab2_scene(ctx.session, ctx.instance)?;
-        let guard_page = detect_current_page(ctx.evaluator, ctx.detector, &guard_scene.scene)?;
+        // #411 Lab L5c: the guard is decided on the frame set the package's target consensus
+        // needs; the input names its current frame.
+        let guard_scene = load_runtime_lab2_frames(ctx.session, ctx.instance, ctx.evaluator)?;
+        let guard_frames = guard_scene.frames();
+        let guard_page = detect_current_page_over(ctx.evaluator, ctx.detector, &guard_frames)?;
         if !guard_page.matched || guard_page.page != edge.from_page {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
@@ -767,13 +782,13 @@ fn execute_runtime_navigation_route(
             ));
         }
         let (input, recognition) =
-            resolve_runtime_navigation_edge_input(ctx.evaluator, &guard_scene.scene, &edge)?;
+            resolve_runtime_navigation_edge_input(ctx.evaluator, &guard_frames, &edge)?;
         if !ctx.allow_destructive {
             // Workflow #373 NAV-5 (wave-17 ruling 21): a destructive page operation whose click
             // follows a target covers the box its target matches on the guard frame.
-            let frame_regions = destructive_frame_regions(
+            let frame_regions = destructive_frame_regions_over(
                 ctx.evaluator,
-                &guard_scene.scene,
+                &guard_frames,
                 &edge.from_page,
                 ctx.destructive_clicks,
             )?;
@@ -834,9 +849,11 @@ fn execute_runtime_navigation_route(
     Ok((executed, current_page))
 }
 
+/// #411 Lab L5c: an edge that follows a target evaluates it over the guard's frame set `frames`
+/// (oldest first, the last the current frame), its box the current frame's.
 fn resolve_runtime_navigation_edge_input(
     evaluator: &RecognitionEvaluator,
-    scene: &Scene,
+    frames: &[&Scene],
     edge: &NavigationEdge,
 ) -> CliOutcome<(SemanticInput, Value)> {
     let (target_id, offset) = match &edge.input {
@@ -844,9 +861,7 @@ fn resolve_runtime_navigation_edge_input(
         SemanticInput::TargetOffset { target_id, offset } => (target_id, Some(*offset)),
         _ => return Ok((edge.input.clone(), Value::Null)),
     };
-    let evaluation = evaluator
-        .evaluate_target(scene, target_id)
-        .map_err(|error| CliError::usage(error.to_string()))?;
+    let evaluation = evaluate_target_over(evaluator, frames, target_id)?;
     if !evaluation.passed {
         return Err(CliError::safety_blocked(
             "navigation_target_not_visible",
@@ -921,8 +936,9 @@ fn poll_for_runtime_page(
         if !poll.is_zero() {
             thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
         }
-        let scene = load_runtime_lab2_scene(session, instance)?;
-        let outcome = detect_current_page(evaluator, detector, &scene.scene)?;
+        // #411 Lab L5c: each poll takes one frame set.
+        let scene = load_runtime_lab2_frames(session, instance, evaluator)?;
+        let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page_id {
             return Ok(outcome);
         }
@@ -943,8 +959,9 @@ fn runtime_wait_for_page(
 ) -> CliOutcome<Value> {
     let started = Instant::now();
     loop {
-        let scene = load_runtime_lab2_scene(session, instance)?;
-        let outcome = detect_current_page(evaluator, detector, &scene.scene)?;
+        // #411 Lab L5c: each poll takes one frame set.
+        let scene = load_runtime_lab2_frames(session, instance, evaluator)?;
+        let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
         if outcome.matched && outcome.page == page {
             return Ok(json!({
                 "req_id": session.correlation_id(),
@@ -983,10 +1000,9 @@ fn runtime_wait_for_stable_target(
 ) -> CliOutcome<Value> {
     guard_stable_target(evaluator, target)?;
     let started = Instant::now();
-    let first = load_runtime_lab2_scene(session, instance)?;
-    let mut previous = evaluator
-        .evaluate_target(&first.scene, target)
-        .map_err(|error| CliError::usage(error.to_string()))?;
+    // #411 Lab L5c: the baseline and each poll take one frame set.
+    let first = load_runtime_lab2_frames(session, instance, evaluator)?;
+    let mut previous = evaluate_target_over(evaluator, &first.frames(), target)?;
     if !previous.passed {
         return Err(CliError::safety_blocked(
             "stable_target_not_visible",
@@ -1001,10 +1017,8 @@ fn runtime_wait_for_stable_target(
         })));
     }
     loop {
-        let next_scene = load_runtime_lab2_scene(session, instance)?;
-        let current = evaluator
-            .evaluate_target(&next_scene.scene, target)
-            .map_err(|error| CliError::usage(error.to_string()))?;
+        let next_scene = load_runtime_lab2_frames(session, instance, evaluator)?;
+        let current = evaluate_target_over(evaluator, &next_scene.frames(), target)?;
         if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
             return Ok(json!({
                 "req_id": session.correlation_id(),
@@ -1040,7 +1054,150 @@ fn begin_runtime_debug_session() -> CliOutcome<RuntimeDebugSession> {
         .map_err(|error| CliError::device(error.to_string()))
 }
 
-fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> CliOutcome<Lab2Scene> {
+/// #411 Lab L5c: the frames a `--capture` client form (`do --capture --dry-run`, `ensure
+/// --capture` and `wait --capture`, each of their observations and wait polls) decides on, as
+/// the offline frame set of #411 Lab B-2: the frames the package's target consensus needs
+/// (`target_sample_frames()`, as the kernel's `observation_frame_plan` takes them; one frame
+/// without target consensus), raw Runtime captures `target_sample_interval_ms()` apart
+/// (unscaled, coordinator decision Q2), oldest first, the last the current frame.
+fn load_runtime_lab2_frames(
+    session: &RuntimeDebugSession,
+    instance: &str,
+    evaluator: &RecognitionEvaluator,
+) -> CliOutcome<Lab2Scene> {
+    let plan = ObservationFramePlan::new(
+        evaluator.target_sample_frames(),
+        evaluator.target_sample_interval_ms(),
+    )
+    .ok_or_else(|| CliError::package_invalid("target consensus frame count out of range"))?;
+    capture_runtime_frame_set(session, instance, plan, &mut thread::sleep)
+}
+
+/// #411 Lab L5c: `plan`'s frames, each a read-only Runtime capture of its own, `pause` waiting
+/// the plan's interval between two captures; one frame is the single capture of before, unchanged.
+/// The client holds no lease across the captures, so it checks, as the Runtime checks a keyless
+/// observation transaction (#411 Lab L5a), that no input reached the instance between the first
+/// capture and the last ([`refuse_interrupted_frames`]); frames of different sizes are refused as
+/// offline `--scene` frames are ([`refuse_frames_of_other_sizes`]). Nothing is decided on a
+/// refused set. The gate test presses the instance in `pause`.
+pub(super) fn capture_runtime_frame_set(
+    session: &RuntimeDebugSession,
+    instance: &str,
+    plan: ObservationFramePlan,
+    pause: &mut dyn FnMut(Duration),
+) -> CliOutcome<Lab2Scene> {
+    let (mut current, first) = load_runtime_lab2_scene(session, instance)?;
+    if plan.frames() == 1 {
+        return Ok(current);
+    }
+    let mut samples = Vec::with_capacity(plan.frames() - 1);
+    let mut last = None;
+    for _ in 1..plan.frames() {
+        pause(Duration::from_millis(plan.interval_ms()));
+        let (next, receipt) = load_runtime_lab2_scene(session, instance)?;
+        samples.push(std::mem::replace(&mut current, next).scene);
+        last = Some(receipt);
+    }
+    let last = last.ok_or_else(|| CliError::device("Runtime frame set has no last capture"))?;
+    refuse_interrupted_frames(session, &first, &last)?;
+    refuse_frames_of_other_sizes(&samples, &current.scene)?;
+    current.samples = samples;
+    Ok(current)
+}
+
+/// #411 Lab L5c: the check of #411 Lab L5a (`check_observation_sample_inputs`) through the
+/// client's event query: one query finds the first capture's `capture.requested` event (its
+/// sequence and instance), a second one, limited to one event, an `input.intent` on that instance
+/// from it to the last capture's terminal event. One found: the frames straddle an input and are
+/// not one screen, and the form fails with `observation_samples_interrupted` (`device_error`,
+/// exit 4, `details.error`), as a keyless `observe --capture` fails.
+fn refuse_interrupted_frames(
+    session: &RuntimeDebugSession,
+    first: &RuntimeReceipt,
+    last: &RuntimeReceipt,
+) -> CliOutcome<()> {
+    let page = RuntimeEventQueryPageRequest::new(1, None)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    let requested = session
+        .query_event_page(
+            EventQuery {
+                request_id: Some(first.request_id()),
+                event_type: Some(EventType::CaptureRequested),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Lab,
+            page.clone(),
+        )
+        .map_err(|error| CliError::device(format!("Runtime input check failed: {error}")))?;
+    let Some(requested) = requested.events().first() else {
+        return Err(CliError::device(
+            "Runtime ledger holds no capture request of the frame set's first capture",
+        ));
+    };
+    let (Some(instance_id), Some(terminal)) = (requested.links.instance_id(), last.terminal())
+    else {
+        return Err(CliError::device(
+            "Runtime capture records name no instance or no terminal event",
+        ));
+    };
+    let inputs = session
+        .query_event_page(
+            EventQuery {
+                event_type: Some(EventType::InputIntent),
+                instance_id: Some(*instance_id),
+                from_sequence: Some(requested.sequence),
+                to_sequence: Some(terminal.sequence),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Lab,
+            page,
+        )
+        .map_err(|error| CliError::device(format!("Runtime input check failed: {error}")))?;
+    if inputs.events().is_empty() {
+        return Ok(());
+    }
+    Err(CliError::device(
+        "an input reached the instance between the first and the last capture; the frames are not one screen",
+    )
+    .with_details(json!({
+        "error": "observation_samples_interrupted",
+        "state": "failed",
+        "hint": "pause-instance-scheduling-or-wait-until-idle-then-retry"
+    })))
+}
+
+/// #411 Lab L5c: a frame set shows one screen: the first earlier frame whose size differs from
+/// the current frame's is refused with `validation_failed` (exit 2) as an offline `--scene` frame
+/// is (#411 Lab B-2 R3), `argument_problem` `unusable` with its `index` (0 the oldest), naming
+/// `--capture`, which took it.
+fn refuse_frames_of_other_sizes(samples: &[Scene], current: &Scene) -> CliOutcome<()> {
+    let Some(index) = samples
+        .iter()
+        .position(|scene| scene.width() != current.width() || scene.height() != current.height())
+    else {
+        return Ok(());
+    };
+    let scene = &samples[index];
+    Err(CliError::usage(format!(
+        "Runtime capture {index} is {}x{} and the current frame {}x{}; the frames of a set show one screen",
+        scene.width(),
+        scene.height(),
+        current.width(),
+        current.height()
+    ))
+    .with_details(json!({
+        "argument": "--capture",
+        "argument_problem": "unusable",
+        "index": index
+    })))
+}
+
+/// One read-only Runtime capture and the receipt of its request (#411 Lab L5c: the frame set's
+/// input check reads its request and terminal event).
+fn load_runtime_lab2_scene(
+    session: &RuntimeDebugSession,
+    instance: &str,
+) -> CliOutcome<(Lab2Scene, RuntimeReceipt)> {
     let receipt = session
         .observe_readonly(instance)
         .map_err(|error| CliError::device(error.to_string()))?;
@@ -1071,7 +1228,7 @@ fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> Cli
                 width: observation.width(),
                 height: observation.height(),
             });
-    Ok(Lab2Scene {
+    let loaded = Lab2Scene {
         scene,
         samples: Vec::new(),
         backend,
@@ -1083,7 +1240,8 @@ fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> Cli
         frame_age_ms,
         png,
         input_frame,
-    })
+    };
+    Ok((loaded, receipt))
 }
 
 /// #411 Lab L3: `frame` is the Runtime frame the input was planned on (the capture its guard
@@ -2186,6 +2344,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "--drag-to x,y,w,h",
                 "--long-press x,y,w,h",
                 "--duration-ms <1..60000>",
+                "--brake-corner x,y,w,h",
                 "--click-guard <id>",
                 "--click-retry <2..5>",
                 "--replace-click",

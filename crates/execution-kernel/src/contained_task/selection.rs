@@ -25,9 +25,10 @@ use super::scan::{
 use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
     ContainedTaskRuntime, ContainedTaskRuntimeErrorClass, ContainedTaskTimingContext,
-    ContainedTaskTrace, PageObservation, PreparedContainedTask, Resolution, SampleRetries,
-    TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram, safe_task_local_path,
-    sample_budget_insufficient, sampled_tap, scene_from_frame,
+    ContainedTaskTrace, PageObservation, PointDraw, PreparedContainedTask, Resolution,
+    RunParameters, SampleRetries, TaskControl, TaskIdentityTemplate, TaskOperation, TaskProgram,
+    TouchChoice, drawn_tap, safe_task_local_path, sample_budget_insufficient, scene_from_frame,
+    step_point_draw,
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
@@ -232,8 +233,9 @@ pub(super) struct SelectedCandidate {
     pub(super) frame: PageObservation,
     pub(super) identity: Option<String>,
     /// The step's action seed when the attempt already drew it (a scan's moves are sampled with
-    /// it); the runtime gives a step's seed once, so the selecting tap reuses it.
-    pub(super) action_seed: Option<Option<u64>>,
+    /// it); the runtime gives a step's seed once, so the selecting tap reuses it. Workflow #406
+    /// T12: with the touch keys the scan was handed.
+    pub(super) draw: Option<PointDraw>,
 }
 
 /// How one attempt of a select step ended without a failure (Workflow #308 SEL-L4b).
@@ -251,14 +253,16 @@ pub(super) enum SelectAttempt {
 }
 
 impl SelectedCandidate {
-    /// One tap sampled inside the candidate's click rectangle, as a `rect` click samples one.
-    pub(super) fn input_action(
+    /// One tap sampled inside the candidate's click rectangle, as a `rect` click samples one
+    /// (Workflow #406 T12: drawn by `draw`, landing where `choose` chooses).
+    pub(super) fn draw_input<E>(
         &self,
         resolution: &Resolution,
-        action_seed: Option<u64>,
-    ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+        draw: PointDraw,
+        choose: &mut TouchChoice<'_, E>,
+    ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskRunError<E>> {
         self.click.validate(resolution)?;
-        let (action, sampling) = sampled_tap(self.click, action_seed)?;
+        let (action, sampling) = drawn_tap(self.click, draw, choose)?;
         action.validate().map_err(|_| {
             ContainedTaskError::new(ExecutionKernelCode::ContainedTaskOperationInvalid.code())
         })?;
@@ -1443,7 +1447,7 @@ impl PreparedContainedTask {
                     height: candidate.click.height,
                 },
                 frame,
-                action_seed: None,
+                draw: None,
                 identity: prepared.identity_feature().and_then(|name| {
                     match candidate.features.get(name) {
                         Some(CandidateFeature::Identity { value, .. }) => Some(value.clone()),
@@ -1567,9 +1571,7 @@ impl PreparedContainedTask {
             (first.scene.width(), first.scene.height()),
             remaining,
         )?;
-        let action_seed = runtime
-            .action_seed(step_index, &operation.id)
-            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let draw = step_point_draw(runtime, step_index, &operation.id)?;
         let mut source = RuntimeScanSource::new(
             self,
             runtime,
@@ -1577,7 +1579,7 @@ impl PreparedContainedTask {
             scan,
             layout,
             first,
-            (step_index, timing, deadline, action_seed),
+            (step_index, timing, deadline, draw),
             false,
         );
         let selection = session.select(&mut source, prepared.on_empty_key.is_some());
@@ -1614,7 +1616,7 @@ impl PreparedContainedTask {
                             click,
                             frame,
                             identity: Some(identity),
-                            action_seed: Some(action_seed),
+                            draw: Some(draw),
                         }))
                     })
                     .map_err(ContainedTaskRunError::Task),
@@ -1784,13 +1786,54 @@ fn single_frame_unknown_check(
 /// tool of a later slice uses it). The frame must be recognized as the step's `from` page
 /// (`select_page_mismatch` otherwise). The step's layout is projected on it and the step's
 /// sealed policy, or `policy_override` checked against the same layout, is evaluated with
-/// `facts` at `now_unix_ms`. A dry run's confirmation frame is the same frame, so it matches.
+/// `snapshot` at `now_unix_ms`. A dry run's confirmation frame is the same frame, so it matches.
+///
+/// #411 Lab RP (contracts/remedies.md section 4): the step reads `run_parameters` as a run does,
+/// overlaid on `snapshot` (the package's declared defaults, or given values replacing them,
+/// [`PreparedContainedTask::given_run_parameters`]); the policy evaluates the rows of the record
+/// lists it declares, as the select step's own evaluation does.
 pub fn dry_run_select(
     task: &PreparedContainedTask,
     operation_id: &str,
     frame: &Frame,
-    facts: &SelectionFactSnapshot,
-    now_unix_ms: u64,
+    (snapshot, now_unix_ms): (&InstanceFactSnapshot, u64),
+    run_parameters: &RunParameters,
+    policy_override: Option<&SelectionPolicy>,
+) -> Result<SelectionDryRun, ContainedTaskError> {
+    let mut snapshot = snapshot.clone();
+    run_parameters.overlay(&mut snapshot, now_unix_ms);
+    let sealed = task
+        .program
+        .operations
+        .iter()
+        .find(|operation| operation.id == operation_id)
+        .and_then(|operation| operation.prepared_select.as_deref())
+        .map(|prepared| &prepared.policy);
+    let record_lists = policy_override
+        .or(sealed)
+        .map(SelectionPolicy::record_list_keys)
+        .unwrap_or_default();
+    let facts = SelectionFactSnapshot::from_instance_snapshot_with_lists(
+        &snapshot,
+        now_unix_ms,
+        &record_lists,
+    );
+    dry_run_select_with_facts(
+        task,
+        operation_id,
+        frame,
+        (&facts, now_unix_ms),
+        policy_override,
+    )
+}
+
+/// [`dry_run_select`] over `facts` as they are given, with no run parameters (the step's
+/// evaluation before #411 Lab RP).
+pub(super) fn dry_run_select_with_facts(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    frame: &Frame,
+    (facts, now_unix_ms): (&SelectionFactSnapshot, u64),
     policy_override: Option<&SelectionPolicy>,
 ) -> Result<SelectionDryRun, ContainedTaskError> {
     let operation = task
@@ -2110,13 +2153,22 @@ mod tests {
         // The kernel reports the refusal under its code: a dry run checks the same document,
         // given as an override, against the step's layout.
         let task = select_task(identity_layout("readable_attributes"));
-        let facts = SelectionFactSnapshot::from_fact_records("snapshot-a", 1_000_000, &[]);
+        let snapshot = InstanceFactSnapshot {
+            snapshot_id: "snapshot-a".to_owned(),
+            ledger_position: 1,
+            context: actingcommand_contract::InstanceFactContext {
+                instance_id: "instance-a".to_owned(),
+                server_id: "test".to_owned(),
+                game_id: "neutral".to_owned(),
+            },
+            records: Vec::new(),
+        };
         let error = dry_run_select(
             &task,
             "pick",
             &home_frame(),
-            &facts,
-            1_000_000,
+            (&snapshot, 1_000_000),
+            &task.default_run_parameters(),
             Some(&policy),
         )
         .expect_err("the document does not apply to the layout");

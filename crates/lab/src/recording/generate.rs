@@ -14,7 +14,11 @@ use super::model::{
 };
 use super::store::{blocked, invalid, with_details};
 use crate::codes::ClickFollowProblem;
-use actingcommand_contract::{LabError, LabResult, package_id_names_one_path_segment};
+use actingcommand_contract::{
+    LabError, LabResult, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+    package_id_names_one_path_segment,
+};
 use actingcommand_execution_kernel::{linear_main_interface, prerequisite_package_id_valid};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -964,7 +968,8 @@ fn default_timeout(
             Some(StepTransition::Page { timeout_ms, .. }) => timeout_ms.unwrap_or(arrival_k),
             _ => 0,
         };
-        // Workflow #390 LAB-2: a drag or a long press lasts its duration before the wait.
+        // Workflow #390 LAB-2: a drag or a long press lasts its duration before the wait; #411
+        // Lab BD: a brake drag lasts its fixed 550 ms.
         let gesture = step
             .step
             .click
@@ -1318,7 +1323,8 @@ fn step_provenance(plan: &Plan, step: &PlanStep) -> LabResult<Value> {
         if let (Some(follow), Some(object)) = (&click.follow, provenance.as_object_mut()) {
             object.insert("follow".into(), json!(follow));
         }
-        // Workflow #390 LAB-2: only a drag or a long press records its gesture.
+        // Workflow #390 LAB-2: only a drag or a long press (#411 Lab BD: or a brake drag)
+        // records its gesture.
         if let (Some(gesture), Some(object)) = (&click.gesture, provenance.as_object_mut()) {
             object.insert("gesture".into(), json!(gesture));
         }
@@ -1696,7 +1702,9 @@ fn operation_json(plan: &Plan, index: usize) -> LabResult<Value> {
 /// template it follows (`target`) or that box's corner plus the recorded offset (`offset`).
 /// Never `target_center`, which clicks one fixed point. Workflow #390 LAB-2: a drag is a `drag`
 /// click from the recorded rectangle to its destination, a long press (Workflow #390 lpbox) a
-/// `long_press` click with the recorded rectangle as its click box.
+/// `long_press` click with the recorded rectangle as its click box, and (#411 Lab BD) a brake
+/// drag a `single_touch_drag_with_vertical_brake_v1` click from the recorded rectangle to its
+/// corner box.
 fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
     match click.gesture {
         Some(ClickGesture::Drag { to, duration_ms }) => {
@@ -1715,6 +1723,19 @@ fn click_json(plan: &Plan, click: &StepClick) -> LabResult<Value> {
                 "width": click.rect.width,
                 "height": click.rect.height,
                 "duration_ms": duration_ms
+            }));
+        }
+        // #411 Lab BD: a brake drag is the source form of the click, from the recorded
+        // rectangle to the corner box, with the Runtime's fixed timings.
+        Some(ClickGesture::SingleTouchDragWithVerticalBrakeV1 { corner }) => {
+            return Ok(json!({
+                "kind": "single_touch_drag_with_vertical_brake_v1",
+                "from": rect_json(click.rect),
+                "corner": rect_json(corner),
+                "horizontal_duration_ms": SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+                "corner_hold_ms": SEGMENTED_SWIPE_CORNER_HOLD_MS,
+                "brake_distance_px": SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+                "brake_duration_ms": SEGMENTED_SWIPE_BRAKE_DURATION_MS
             }));
         }
         None => {}

@@ -278,6 +278,12 @@ impl HostShared {
             // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general
             // read from memory that records nothing.
             RuntimeOperation::FactRefreshStatus => self.fact_refresh_status_read(request),
+            // Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluation's not-run
+            // explanation, a general read from the policy host's memory that records nothing.
+            RuntimeOperation::ScheduleExplanation {
+                instance,
+                candidates,
+            } => self.schedule_explanation_read(request, instance.as_deref(), *candidates),
             RuntimeOperation::RuntimeFactSnapshot => {
                 let snapshot = self.runtime_fact_snapshot().map_err(|error| {
                     if error.is_fatal() {

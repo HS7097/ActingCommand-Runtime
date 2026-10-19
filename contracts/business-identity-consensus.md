@@ -211,6 +211,13 @@ few, too many, mismatched sizes or extra frames for a package without multi-fram
 refused with `validation_failed` (`argument: --scene`). Offline frames carry no time, so the
 declared interval is the author's to respect; the frames are taken as one screen, without a page
 check per frame, as replay takes its frames (#411 Lab B-2).
+The Lab's `--capture` client forms (`do --capture --dry-run`, `ensure --capture` and
+`wait --capture`) supply the same frame set from the Runtime: the frames target consensus
+requires, read-only captures the declared interval apart (unscaled), oldest first, the last the
+current frame, for each observation and each wait poll, evaluated as offline frames are; an input
+on the instance between the first and the last capture fails them with
+`observation_samples_interrupted` (#411 Lab L5c,
+[contained-lab-operation.md](contained-lab-operation.md)).
 Online contained observation (observe, and every observation of a Lab `do`) supplies the
 frames target consensus requires, captured as one transaction
 ([contained-page-observation.md](contained-page-observation.md)), and reports
@@ -218,9 +225,12 @@ frames target consensus requires, captured as one transaction
 observations are page observations and, like the kernel's page waits and guards, do not
 project a layout that needs more than one frame (`candidate_projection_skipped`,
 `aggregation: not_requested`), which does not make them partial (#411 Lab L5). Online
-`observe` still projects a candidate layout over its current frame alone, so a layout requiring
-more frames is refused with `candidate_samples_unavailable` and recorded as a partial
-observation with no successful recognition. Public candidate rows use the strictest privacy of
+`observe` projects a candidate layout that needs more frames over its own series: further page
+observations the layout's interval apart, each on the same page and frame size (else
+`candidate_sample_page_or_geometry_changed`), projected as a select step projects them, at most
+25 frames per observation (a layout beyond that is refused with `candidate_samples_unavailable`
+and recorded as a partial observation with no successful recognition) (#411 Lab L5b,
+[contained-page-observation.md](contained-page-observation.md)). Public candidate rows use the strictest privacy of
 their referenced targets; full inputs stay in controlled evidence. Target sampling likewise
 reports required/provided frames and `recognition_coverage`; an observation with fewer frames
 than its target consensus requires has no successful recognition. Required raw sample

@@ -11,13 +11,16 @@ use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
-use crate::scheduling::{FactRefreshConfig, PackAdmissionConfig, RemedyConfig, SchedulingConfig};
+use crate::scheduling::{
+    FactRefreshConfig, PackAdmissionConfig, RandomDelay, RemedyConfig, SchedulingConfig,
+};
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
+use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
     device_link, device_state, host_claims, instance, ledger_observer, performance,
-    recovery_ladder, scheduling, startup_discovery,
+    recovery_ladder, scheduling, startup_discovery, touch,
 };
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
@@ -461,6 +464,12 @@ impl EffectiveConfig {
         StartupDiscoveryConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #406 T12: the `touch` section in effect; the host reads it at each step of a
+    /// run (the kernel's `touch_sampling()`) and at each choice of a press's landing point.
+    pub fn touch(&self) -> Result<TouchConfig, ConfigFailure> {
+        TouchConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -499,6 +508,15 @@ impl EffectiveConfig {
     /// a whole).
     pub fn remedy(&self, instance_id: &str) -> Result<RemedyConfig, ConfigFailure> {
         scheduling::remedy(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// Workflow #405 D1: the random delay in effect for the instance whose registry id is
+    /// `instance_id`: `enabled`, `min_ms` and `max_ms`, each the instance's own
+    /// `instance.<instance_id>.scheduling.random_delay.<member>` when the configuration carries
+    /// it, otherwise the section's `scheduling.random_delay.<member>`; `min_ms` above `max_ms` as
+    /// the pair is in effect is `config_value_invalid` (`section_check`) for the `min_ms` key read.
+    pub fn random_delay(&self, instance_id: &str) -> Result<RandomDelay, ConfigFailure> {
+        scheduling::instance_random_delay(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
     /// The instruction value of `key`, when one is in effect.
@@ -633,6 +651,9 @@ impl EffectiveConfig {
         }
         if sections.contains(startup_discovery::SECTION) {
             self.startup_discovery()?;
+        }
+        if sections.contains(touch::SECTION) {
+            self.touch()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());
