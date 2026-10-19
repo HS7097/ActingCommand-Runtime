@@ -130,7 +130,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
         value_type: ValueType::List,
         range: KeyRange::Any,
         default: DefaultSource::Section(REMEDY_CHOICES),
-        settable: Settable::Yes,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "B15-R4",
         since: "0.12.3",
     },

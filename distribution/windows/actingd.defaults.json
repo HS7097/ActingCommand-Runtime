@@ -323,7 +323,7 @@
       "suspend_codes": ["recognition_sample_budget_invalid"]
     },
     "remedy": {
-      "enabled": true,
+      "enabled": false,
       "max_per_round": 2,
       "choices": []
     }

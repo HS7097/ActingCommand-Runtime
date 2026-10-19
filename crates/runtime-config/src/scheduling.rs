@@ -35,7 +35,8 @@ use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::recovery_ladder::{Listed, listed};
 use crate::table::{
-    DefaultSource, FilePath, KeyName, KeyRange, KeyRow, Settable, ValueType, instance_key,
+    DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
+    instance_key,
 };
 use actingcommand_contract::FactScalar;
 use serde::{Deserialize, Serialize};
@@ -346,12 +347,13 @@ const JOIN_TIMEOUT: KeyRange = KeyRange::Integer {
 };
 /// Workflow #411 B15 R3: the remedy requests per blocked layer and round, `1..=8` (model-b15
 /// §5.2; coordinator decision 5 of 2026-10-19). Schema, not a threshold.
-const REMEDY_REQUESTS: KeyRange = KeyRange::Integer { min: 1, max: 8 };
+const REMEDY_REQUESTS: KeyRange = KeyRange::Integer { min: 0, max: 8 };
 
 /// Workflow #411 B15 R3: a remedy key's row, read by R4 from v0.12.3 on.
 const fn remedy_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
     KeyRow {
         since: "0.12.3",
+        settable: Settable::No(NotSettable::ReadAtAssembly),
         ..row(name, value_type, range, "B15-R4")
     }
 }
@@ -925,7 +927,7 @@ pub(crate) fn remedy(
     let mut remedy = remedy_from(&reader)?;
     let own = instance_key(instance_id, REMEDY_CHOICES);
     if value(&own).is_some() {
-        remedy.rows = remedy_choices(&reader, &own)?;
+        remedy.rows.extend(remedy_choices(&reader, &own)?);
     }
     Ok(remedy)
 }
@@ -968,7 +970,7 @@ pub(crate) fn remedy_choices(
             }
             RemedyChoiceRow::NoRemedy { need } => {
                 declined.insert(need.clone());
-                allowed.contains(need)
+                false
             }
             RemedyChoiceRow::Parameter { .. } => false,
         };
