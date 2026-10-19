@@ -7,13 +7,21 @@ use crate::{
     DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceInfo, DeviceLocation,
     DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     HandshakeInfo, InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend,
-    MinitouchConfig, PreparedSegmentedSwipePlan,
+    MinitouchConfig, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
+    segmented_swipe_capability_error,
 };
 use actingcommand_contract::FencedWrite;
 use actingcommand_contract::outcome::Location;
 use std::time::{Duration, Instant};
 
 const MAX_ADB_INPUT_GESTURE_MS: u64 = 60_000;
+/// Workflow #406 T3 (plan Q18): the lowest Android SDK level whose `input` command takes
+/// `motionevent` (Android 6.0), from which the adb shell input backend performs segmented plans.
+const ADB_MOTIONEVENT_MIN_SDK_LEVEL: u32 = 23;
+/// Workflow #406 T3: the time each command of a motionevent script may take beyond the plan's
+/// own waits (every `input` call starts a process on the device), counted into the timeout of
+/// the script's one adb invocation so that a slow device is not cut off before the release.
+const ADB_MOTIONEVENT_COMMAND_ALLOWANCE_MS: u64 = 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TouchBackendName {
@@ -1086,6 +1094,9 @@ pub struct AdbShellInputBackend {
     serial: String,
     bounds: Option<TouchBounds>,
     connect_geometry: Option<AdbInputConnectGeometry>,
+    /// Workflow #406 T3: the Android SDK level read at connect (`input_sdk_level`); none when
+    /// the device's answer was not a level.
+    input_sdk_level: Option<u32>,
     connected: bool,
     close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
@@ -1103,6 +1114,7 @@ impl std::fmt::Debug for AdbShellInputBackend {
             .field("serial", &self.target.label())
             .field("bounds", &self.bounds)
             .field("connect_geometry", &self.connect_geometry)
+            .field("input_sdk_level", &self.input_sdk_level)
             .field("connected", &self.connected)
             .field("close_result", &self.close_result)
             .finish()
@@ -1120,6 +1132,7 @@ impl AdbShellInputBackend {
             serial,
             bounds: None,
             connect_geometry: None,
+            input_sdk_level: None,
             connected: false,
             close_result: None,
         }
@@ -1129,11 +1142,13 @@ impl AdbShellInputBackend {
         let adb = Adb::new(self.adb_config.clone());
         let serial = self.serial.clone();
         let connect = self.target.connect;
-        self.connect_with_steps(
+        let info = self.connect_with_steps(
             || adb.ensure_device(&serial, connect),
             || adb.screen_size(&serial),
             || read_device_rotation(&adb, &serial),
-        )
+        )?;
+        self.read_input_sdk_level(|| adb.sdk_level(&serial))?;
+        Ok(info)
     }
 
     fn connect_for_fenced_input(&mut self) -> DeviceResult<DeviceInfo> {
@@ -1141,11 +1156,16 @@ impl AdbShellInputBackend {
         let serial = self.serial.clone();
         let ready = adb.ensure_input_device(&serial, self.target.connect);
         let recovery = ready.as_ref().ok().and_then(|ready| ready.recovery.clone());
-        let result = self.connect_with_steps(
-            || ready.map(|ready| ready.state),
-            || adb.screen_size(&serial),
-            || read_device_rotation(&adb, &serial),
-        );
+        let result = self
+            .connect_with_steps(
+                || ready.map(|ready| ready.state),
+                || adb.screen_size(&serial),
+                || read_device_rotation(&adb, &serial),
+            )
+            .and_then(|info| {
+                self.read_input_sdk_level(|| adb.sdk_level(&serial))
+                    .map(|()| info)
+            });
         match result {
             Ok(info) => {
                 self.recovery = recovery;
@@ -1241,6 +1261,109 @@ impl AdbShellInputBackend {
         })
     }
 
+    /// Workflow #406 T3 (plan Q18; location `input_sdk_level`): the connect step after the
+    /// rotation, reading the device's Android SDK level. An adb failure fails the connect as the
+    /// earlier steps do and leaves the backend closed; an answer that is not a decimal level
+    /// leaves the level unread. Segmented plans are performed from level 23 on.
+    fn read_input_sdk_level(
+        &mut self,
+        sdk_level: impl FnOnce() -> DeviceResult<String>,
+    ) -> DeviceResult<()> {
+        self.input_sdk_level = None;
+        match sdk_level() {
+            Ok(answer) => {
+                self.input_sdk_level = answer.trim().parse::<u32>().ok();
+                Ok(())
+            }
+            Err(error) => {
+                self.connected = false;
+                self.bounds = None;
+                self.connect_geometry = None;
+                self.input_parameters = None;
+                let stage = crate::codes::DeviceStage::InputSdkLevel;
+                let severity = error.severity();
+                let source_error = error.to_string();
+                Err(error
+                    .with_severity_and_message(
+                        severity,
+                        format!(
+                            "adb shell input connect failed; child_operation={stage}; source_error={source_error}"
+                        ),
+                    )
+                    .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, stage.location())
+                    .with_diagnostic_context_if_absent(
+                        "adb_shell_input",
+                        stage.location(),
+                        DeviceErrorSensitivity::Internal,
+                    ))
+            }
+        }
+    }
+
+    /// Workflow #406 T3 (plan Q18): the segmented plan `plan` as one `adb shell` invocation of
+    /// `input motionevent` commands, handed to `child` with the invocation's timeout. Refused
+    /// with the segmented swipe capability error, before any command, when the device's SDK
+    /// level is below 23 or was not read; every touch point passes the backend's bounds check
+    /// first, as a swipe's points do.
+    fn segmented_swipe_with_child(
+        &mut self,
+        plan: &PreparedSegmentedSwipePlan,
+        child: impl FnOnce(Duration, &str) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        plan.action().validate()?;
+        if !self.supports_segmented_swipe() {
+            return Err(segmented_swipe_capability_error());
+        }
+        let bounds = self.bounds()?;
+        let mut previous: Option<(i32, i32)> = None;
+        for event in plan.events() {
+            let (SegmentedSwipeEvent::Down(point) | SegmentedSwipeEvent::Move { point, .. }) =
+                event
+            else {
+                continue;
+            };
+            let (x1, y1) = previous.unwrap_or(*point);
+            let action = AdbBoundsAction::Swipe {
+                x1,
+                y1,
+                x2: point.0,
+                y2: point.1,
+            };
+            let (label_x, label_y, coordinate_x, coordinate_y) = if previous.is_none() {
+                (
+                    "motionevent down x",
+                    "motionevent down y",
+                    AdbBoundsCoordinate::StartX,
+                    AdbBoundsCoordinate::StartY,
+                )
+            } else {
+                (
+                    "motionevent move x",
+                    "motionevent move y",
+                    AdbBoundsCoordinate::EndX,
+                    AdbBoundsCoordinate::EndY,
+                )
+            };
+            validate_touch_coordinate(label_x, point.0, bounds.max_x)
+                .map_err(|error| self.bounds_failure(error, action, coordinate_x, bounds))?;
+            validate_touch_coordinate(label_y, point.1, bounds.max_y)
+                .map_err(|error| self.bounds_failure(error, action, coordinate_y, bounds))?;
+            previous = Some(*point);
+        }
+        self.ensure_connected()?;
+        let script = motionevent_script(plan.events());
+        let timeout_ms = script
+            .wait_ms
+            .saturating_add(
+                script
+                    .commands
+                    .saturating_mul(ADB_MOTIONEVENT_COMMAND_ALLOWANCE_MS),
+            )
+            .saturating_add(2_000);
+        let timeout = Duration::from_millis(timeout_ms).max(self.adb_config.command_timeout);
+        child(timeout, &script.text)
+    }
+
     fn ensure_connected(&self) -> DeviceResult<()> {
         if self.connected {
             Ok(())
@@ -1304,6 +1427,66 @@ impl AdbShellInputBackend {
                 action.operation(),
                 DeviceErrorSensitivity::Sensitive,
             )
+    }
+}
+
+/// Workflow #406 T3: a segmented plan as one shell script of `input motionevent` commands.
+struct MotioneventScript {
+    /// `input motionevent DOWN|MOVE|UP x y` and `sleep s.mmm`, joined by `;`.
+    text: String,
+    /// The plan's waits, in milliseconds.
+    wait_ms: u64,
+    /// The `input motionevent` commands.
+    commands: u64,
+}
+
+/// Workflow #406 T3 (plan Q18): `events` as motionevent commands: the press `DOWN`, each move
+/// `MOVE` after a `sleep` of its wait, each hold a `sleep`, and the release `UP` at the last
+/// point the touch reached. A wait of 0 sleeps nowhere.
+fn motionevent_script(events: &[SegmentedSwipeEvent]) -> MotioneventScript {
+    fn sleep(lines: &mut Vec<String>, wait_ms: &mut u64, milliseconds: u64) {
+        if milliseconds > 0 {
+            *wait_ms = wait_ms.saturating_add(milliseconds);
+            lines.push(format!(
+                "sleep {}.{:03}",
+                milliseconds / 1_000,
+                milliseconds % 1_000
+            ));
+        }
+    }
+    let mut lines = Vec::with_capacity(events.len() * 2);
+    let mut wait_ms = 0_u64;
+    let mut commands = 0_u64;
+    let mut current = (0, 0);
+    for event in events {
+        match event {
+            SegmentedSwipeEvent::Down(point) => {
+                current = *point;
+                commands += 1;
+                lines.push(format!("input motionevent DOWN {} {}", point.0, point.1));
+            }
+            SegmentedSwipeEvent::Move {
+                point,
+                delay_before_ms,
+            } => {
+                sleep(&mut lines, &mut wait_ms, *delay_before_ms);
+                current = *point;
+                commands += 1;
+                lines.push(format!("input motionevent MOVE {} {}", point.0, point.1));
+            }
+            SegmentedSwipeEvent::Hold(duration_ms) => {
+                sleep(&mut lines, &mut wait_ms, *duration_ms);
+            }
+            SegmentedSwipeEvent::Up => {
+                commands += 1;
+                lines.push(format!("input motionevent UP {} {}", current.0, current.1));
+            }
+        }
+    }
+    MotioneventScript {
+        text: lines.join(";"),
+        wait_ms,
+        commands,
     }
 }
 
@@ -1396,6 +1579,30 @@ impl InputBackend for AdbShellInputBackend {
         let adb = self.adb_for_duration(duration_ms);
         adb.shell_input_swipe(witness, &self.serial, x1, y1, x2, y2, duration_ms)?;
         Ok(())
+    }
+
+    /// Workflow #406 T3 (plan Q18): from Android SDK level 23 (`input motionevent`), read at
+    /// connect.
+    fn supports_segmented_swipe(&self) -> bool {
+        self.input_sdk_level
+            .is_some_and(|level| level >= ADB_MOTIONEVENT_MIN_SDK_LEVEL)
+    }
+
+    /// Workflow #406 T3 (plan Q18): the path drag and both brake drags as one `adb shell`
+    /// invocation of `input motionevent` commands, the plan's waits as `sleep`s between them.
+    fn segmented_swipe_prepared(
+        &mut self,
+        witness: &FencedWrite,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> DeviceResult<()> {
+        let mut config = self.adb_config.clone();
+        let serial = self.serial.clone();
+        self.segmented_swipe_with_child(plan, move |timeout, script| {
+            config.command_timeout = timeout;
+            Adb::new(config)
+                .shell_input_motionevents(witness, &serial, script)
+                .map(|_| ())
+        })
     }
 
     fn key(&mut self, _witness: &FencedWrite, _key: &str) -> DeviceResult<()> {
@@ -2007,6 +2214,199 @@ mod tests {
 
         assert!(error.message().contains("exceeds touch screen max 1280"));
         assert_eq!(child_calls.get(), 0);
+    }
+
+    // Workflow #406 T3: an adb shell input backend connected to a 1080 × 1920 portrait device
+    // whose Android SDK level reads as `sdk_level`, the connect's last step.
+    fn adb_backend_with_sdk_level(sdk_level: &str) -> AdbShellInputBackend {
+        let mut backend = adb_shell_input_test_backend();
+        backend
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Ok("Physical size: 1080x1920".to_string()),
+                || Ok(DeviceRotation::R0),
+            )
+            .expect("connect");
+        backend
+            .read_input_sdk_level(|| Ok(sdk_level.to_string()))
+            .expect("the SDK level step");
+        backend
+    }
+
+    // Workflow #406 T3 (plan Q18), written from the requirement: a plan's events as the one
+    // shell script adb runs, `;`-separated: the press `input motionevent DOWN x y`, each move
+    // `input motionevent MOVE x y` after `sleep` of its wait in seconds with three decimals, each
+    // hold a `sleep`, the release `input motionevent UP x y` at the last point; no sleep for a
+    // wait of 0.
+    fn expected_motionevents(events: &[SegmentedSwipeEvent]) -> String {
+        let seconds = |ms: u64| format!("sleep {}.{:03}", ms / 1000, ms % 1000);
+        let mut commands = Vec::new();
+        let mut last = None;
+        for event in events {
+            match event {
+                SegmentedSwipeEvent::Down((x, y)) => {
+                    commands.push(format!("input motionevent DOWN {x} {y}"));
+                    last = Some((*x, *y));
+                }
+                SegmentedSwipeEvent::Move {
+                    point: (x, y),
+                    delay_before_ms,
+                } => {
+                    if *delay_before_ms > 0 {
+                        commands.push(seconds(*delay_before_ms));
+                    }
+                    commands.push(format!("input motionevent MOVE {x} {y}"));
+                    last = Some((*x, *y));
+                }
+                SegmentedSwipeEvent::Hold(ms) => {
+                    if *ms > 0 {
+                        commands.push(seconds(*ms));
+                    }
+                }
+                SegmentedSwipeEvent::Up => {
+                    let (x, y) = last.expect("a release after a press");
+                    commands.push(format!("input motionevent UP {x} {y}"));
+                }
+            }
+        }
+        commands.join(";")
+    }
+
+    // The scripts `backend` hands its adb child for `plan`, with their timeouts.
+    fn motionevent_runs(
+        backend: &mut AdbShellInputBackend,
+        plan: &PreparedSegmentedSwipePlan,
+    ) -> (DeviceResult<()>, Vec<(Duration, String)>) {
+        let runs = RefCell::new(Vec::new());
+        let result = backend.segmented_swipe_with_child(plan, |timeout, script| {
+            runs.borrow_mut().push((timeout, script.to_owned()));
+            Ok(())
+        });
+        (result, runs.into_inner())
+    }
+
+    // The plan's waits, the least time the one shell invocation takes.
+    fn plan_wait_ms(plan: &PreparedSegmentedSwipePlan) -> u64 {
+        plan.events()
+            .iter()
+            .map(|event| match event {
+                SegmentedSwipeEvent::Move {
+                    delay_before_ms, ..
+                } => *delay_before_ms,
+                SegmentedSwipeEvent::Hold(ms) => *ms,
+                SegmentedSwipeEvent::Down(_) | SegmentedSwipeEvent::Up => 0,
+            })
+            .sum()
+    }
+
+    // Workflow #406 T3 (brief T3 requirement 4, plan Q18; exec key 111): from Android SDK level
+    // 23 the adb shell input backend performs a path drag as one shell of `input motionevent`
+    // commands, the press, the moves with the plan's waits as sleeps, the holds and the release,
+    // and never as `input swipe`; at level 22 or with an answer that is no level it supports no
+    // segmented plan and refuses one with the segmented swipe capability error before any
+    // command.
+    #[test]
+    fn t3_adb_sends_one_shell_of_motionevents_and_refuses_below_sdk_23() {
+        let plan = crate::prepare_path_drag(crate::PathDragAction {
+            points: vec![(100, 200), (600, 260), (220, 900), (800, 1500)],
+            segment_duration_ms: vec![200, 300, 160],
+            corner_hold_ms: 100,
+        })
+        .expect("a valid path drag");
+        for level in ["23", "34"] {
+            let mut backend = adb_backend_with_sdk_level(level);
+            assert!(backend.supports_segmented_swipe(), "SDK {level}");
+            let (result, runs) = motionevent_runs(&mut backend, &plan);
+            result.unwrap_or_else(|error| panic!("SDK {level}: {error}"));
+            let [(timeout, script)] = runs.as_slice() else {
+                panic!("SDK {level}: one shell invocation, got {runs:?}");
+            };
+            assert_eq!(*script, expected_motionevents(plan.events()), "SDK {level}");
+            let commands = script.split(';').collect::<Vec<_>>();
+            assert_eq!(commands.first(), Some(&"input motionevent DOWN 100 200"));
+            assert_eq!(commands.last(), Some(&"input motionevent UP 800 1500"));
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| **command == "sleep 0.100")
+                    .count(),
+                2,
+                "a hold at each inner corner: {script}"
+            );
+            assert!(
+                commands
+                    .iter()
+                    .all(|command| command.starts_with("input motionevent ")
+                        || command.starts_with("sleep ")),
+                "{script}"
+            );
+            assert!(!script.contains("input swipe"), "{script}");
+            assert!(
+                *timeout >= Duration::from_millis(plan_wait_ms(&plan)),
+                "SDK {level}: {timeout:?}"
+            );
+        }
+        for level in ["22", "", "unknown"] {
+            let mut backend = adb_backend_with_sdk_level(level);
+            assert!(!backend.supports_segmented_swipe(), "SDK {level:?}");
+            let (result, runs) = motionevent_runs(&mut backend, &plan);
+            let error = result.expect_err("refused without motionevent");
+            assert_eq!(
+                error.diagnostic().expect("diagnostic").stage().as_str(),
+                "input_segmented_swipe_capability",
+                "SDK {level:?}"
+            );
+            assert!(runs.is_empty(), "SDK {level:?}: no command, got {runs:?}");
+        }
+    }
+
+    // Workflow #406 T3 (brief T3 requirement 4, decision Q18 (a); host key 124): the
+    // vertical-brake drag, and the drag with a pause and a brake, run on adb shell input from SDK
+    // level 23 as one shell of motionevents, with the corner hold and the pause as sleeps.
+    #[test]
+    fn t3_a_vertical_brake_drag_runs_on_adb_through_motionevents() {
+        let vertical = crate::prepare_segmented_swipe(crate::SegmentedSwipeAction {
+            points: [(900, 1500), (200, 1505), (200, 1405)],
+            horizontal_duration_ms: 200,
+            corner_hold_ms: 150,
+            brake_distance_px: 100,
+            brake_duration_ms: 200,
+            slope_in: 2,
+            slope_out: 0,
+        })
+        .expect("a vertical-brake drag");
+        let paused = crate::prepare_drag_with_pause_and_brake(crate::DragWithPauseAndBrakeAction {
+            points: [(900, 1000), (200, 1000), (200, 900)],
+            drag_duration_ms: 400,
+            pause_ms: 150,
+            brake_duration_ms: 200,
+        })
+        .expect("a drag with a pause and a brake");
+        for (plan, release) in [
+            (&vertical, "input motionevent UP 200 1405"),
+            (&paused, "input motionevent UP 200 900"),
+        ] {
+            let mut backend = adb_backend_with_sdk_level("30");
+            assert!(backend.supports_segmented_swipe());
+            let (result, runs) = motionevent_runs(&mut backend, plan);
+            result.unwrap_or_else(|error| panic!("{}: {error}", plan.action().name()));
+            let [(_, script)] = runs.as_slice() else {
+                panic!("one shell invocation, got {runs:?}");
+            };
+            assert_eq!(*script, expected_motionevents(plan.events()));
+            let commands = script.split(';').collect::<Vec<_>>();
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| command.starts_with("input motionevent DOWN "))
+                    .count(),
+                1,
+                "{script}"
+            );
+            assert_eq!(commands.last(), Some(&release), "{script}");
+            assert!(commands.contains(&"sleep 0.150"), "{script}");
+            assert!(!script.contains("input swipe"), "{script}");
+        }
     }
 
     #[derive(Clone)]

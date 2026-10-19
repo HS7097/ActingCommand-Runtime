@@ -218,6 +218,29 @@ impl DriveSegmentedDrag {
     }
 }
 
+/// Workflow #406 T3: the click kind of a path drag, which the kernel generates as
+/// `InputAction::SingleTouchPathDragV1` inside its box.
+const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
+
+/// Workflow #406 T3: the members of a path drag click in the form source compilation writes it
+/// into the navigation (`box_rect` from the task file's `box`).
+const PATH_DRAG_FIELDS: [&str; 6] = [
+    "kind",
+    "box_rect",
+    "turns",
+    "min_segment_px",
+    "duration_ms",
+    "corner_hold_ms",
+];
+
+/// Workflow #406 T3: a `single_touch_path_drag_v1` click as the navigation readers take it, a
+/// segmented drag as #411 Lab L2 reads the vertical-brake drag. Its points are generated when a
+/// package run performs it, so the reader keeps the box every point lies in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrivePathDrag {
+    pub box_rect: PackRect,
+}
+
 /// #411 Lab L2: a navigation click as the readers take it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriveNavigationClick {
@@ -227,6 +250,8 @@ pub enum DriveNavigationClick {
     /// A segmented drag: the page projection lists its element without an input
     /// (`gesture_not_projectable`) and no route passes it.
     SegmentedDrag(DriveSegmentedDrag),
+    /// Workflow #406 T3: a path drag, read as a segmented drag: no input, no route.
+    PathDrag(DrivePathDrag),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -613,6 +638,10 @@ fn parse_destructive_area(click: &Value) -> Result<DestructiveArea, DriveDecisio
         DriveNavigationClick::SegmentedDrag(drag) => {
             return Ok(DestructiveArea::Boxes(drag.boxes()?));
         }
+        // Workflow #406 T3: a path drag's touch stays in its box.
+        DriveNavigationClick::PathDrag(drag) => {
+            return Ok(DestructiveArea::Boxes(vec![drag.box_rect]));
+        }
         DriveNavigationClick::Input(input) => input,
     };
     Ok(match input {
@@ -660,10 +689,43 @@ fn parse_navigation_edge(value: &Value) -> Result<Option<DriveNavigationEdge>, D
 pub(crate) fn parse_navigation_click(
     value: &Value,
 ) -> Result<DriveNavigationClick, DriveDecisionError> {
-    if value.get("kind").and_then(Value::as_str) == Some(SEGMENTED_DRAG_KIND) {
-        return parse_segmented_drag(value).map(DriveNavigationClick::SegmentedDrag);
+    match value.get("kind").and_then(Value::as_str) {
+        Some(SEGMENTED_DRAG_KIND) => {
+            parse_segmented_drag(value).map(DriveNavigationClick::SegmentedDrag)
+        }
+        Some(PATH_DRAG_KIND) => parse_path_drag(value).map(DriveNavigationClick::PathDrag),
+        _ => parse_navigation_input(value).map(DriveNavigationClick::Input),
     }
-    parse_navigation_input(value).map(DriveNavigationClick::Input)
+}
+
+/// Workflow #406 T3: a path drag in the shape pack containment admits: exactly its six members,
+/// `box_rect` a rectangle of four integers, unsigned `turns`, `min_segment_px`, `duration_ms` and
+/// `corner_hold_ms` within the bounds the kernel checks ([`path_drag_bounds_hold`]).
+fn parse_path_drag(value: &Value) -> Result<DrivePathDrag, DriveDecisionError> {
+    reject_unknown_members(value, "path drag click", &PATH_DRAG_FIELDS)?;
+    let unsigned = |name: &str| -> Result<u64, DriveDecisionError> {
+        required_value_field(value, name)?.as_u64().ok_or_else(|| {
+            DriveDecisionError::invalid(format!("field '{name}' must be an unsigned integer"))
+        })
+    };
+    let rect = required_value_field(value, "box_rect")?;
+    reject_unknown_members(rect, "box_rect", &["x", "y", "width", "height"])?;
+    let box_rect = parse_navigation_rect(rect)?;
+    if box_rect.x < 0
+        || box_rect.y < 0
+        || !crate::contained_task::path_drag_bounds_hold(
+            (box_rect.width, box_rect.height),
+            unsigned("turns")?,
+            unsigned("min_segment_px")?,
+            unsigned("duration_ms")?,
+            unsigned("corner_hold_ms")?,
+        )
+    {
+        return Err(DriveDecisionError::invalid(
+            "path drag click is outside its bounds",
+        ));
+    }
+    Ok(DrivePathDrag { box_rect })
 }
 
 /// #411 Lab L2: a segmented drag in the shape pack containment admits: exactly its seven

@@ -3,7 +3,7 @@
 use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
-use crate::codes::{HostCode, HostLocation, ShapeHostCode};
+use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::INPUT_LIFECYCLE_CLAIM_WAIT_MS;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -24,19 +24,6 @@ impl HostShared {
         ),
         RequestFailure,
     > {
-        // Workflow #406 (register §1.18): this build decodes the single-touch path drag but no
-        // backend performs it before T-3, so the request is refused before any effect.
-        if matches!(action, InputAction::SingleTouchPathDragV1 { .. }) {
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    ShapeHostCode::InputActionUnsupported,
-                    HostLocation::ExecuteInput,
-                    RuntimeErrorCode::InvalidRequest,
-                ),
-                RuntimeReceiptState::Denied,
-                None,
-            ));
-        }
         let RuntimeInputContext {
             run_links,
             source_step_action_id,
@@ -83,13 +70,15 @@ impl HostShared {
             )
             .map_err(RequestFailure::poison_without_terminal)?;
         // Workflow #308 SEL-L3b: the drag with a pause and a brake is a segmented plan too, which
-        // the Nemu input performs as it performs the vertical-brake drag.
+        // the Nemu input performs as it performs the vertical-brake drag; Workflow #406 T3: and
+        // the path drag.
         if input_check.is_some()
             && !matches!(
                 action,
                 InputAction::Tap { .. }
                     | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
                     | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
+                    | InputAction::SingleTouchPathDragV1 { .. }
             )
         {
             return Err(RequestFailure::request(
@@ -1115,8 +1104,11 @@ fn input_execution_plan_record(
     };
     // The execution plan record (`maa_2_0`) is the vertical-brake drag's. Workflow #308 SEL-L3b
     // (register §1.58): the drag with a pause and a brake records none; its plan follows from the
-    // action, which the intent's provenance holds whole.
-    if let actingcommand_device::SegmentedDragAction::PauseAndBrake(_) = plan.action() {
+    // action, which the intent's provenance holds whole. Workflow #406 T3 (plan Q19): nor does
+    // the path drag, whose action holds every point it generated.
+    if let actingcommand_device::SegmentedDragAction::PauseAndBrake(_)
+    | actingcommand_device::SegmentedDragAction::PathDrag(_) = plan.action()
+    {
         return Ok(None);
     }
     let events = plan

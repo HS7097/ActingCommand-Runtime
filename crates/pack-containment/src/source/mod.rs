@@ -1646,6 +1646,17 @@ impl OperationParser {
                 canonical.insert("corner_rect".to_string(), corner);
                 return Ok(Value::Object(canonical));
             }
+            // Workflow #406 T3: a path drag's `box` is compiled to `box_rect`.
+            if click.get("kind").and_then(Value::as_str) == Some(PATH_DRAG_KIND) {
+                let mut canonical = click.as_object().cloned().ok_or_else(|| {
+                    CliError::package_invalid("path drag click must be an object")
+                })?;
+                let rect = canonical
+                    .remove("box")
+                    .ok_or_else(|| CliError::package_invalid("path drag click missing box"))?;
+                canonical.insert("box_rect".to_string(), rect);
+                return Ok(Value::Object(canonical));
+            }
             return Ok(click.clone());
         };
         let target_id = guard
@@ -2139,6 +2150,31 @@ fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<Str
                     operation.get("id").and_then(Value::as_str)
                 ));
             }
+        }
+        // Workflow #406 T3: a source path drag names its `box`; the declaration gate checks the
+        // members' bounds and the box against the coordinate space.
+        Some(PATH_DRAG_KIND) => {
+            if click.contains_key("box_rect") {
+                errors.push(format!(
+                    "{}: op {:?} source path drag click must use box, not box_rect",
+                    path.display(),
+                    operation.get("id").and_then(Value::as_str)
+                ));
+            }
+            require_click_keys(
+                path,
+                operation,
+                click,
+                &[
+                    "box",
+                    "turns",
+                    "min_segment_px",
+                    "duration_ms",
+                    "corner_hold_ms",
+                ],
+                errors,
+                "click",
+            );
         }
         other => errors.push(format!(
             "{}: op {:?} unknown click kind {other:?}",
@@ -4656,11 +4692,29 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
                 required_field(click, "brake_duration_ms")?.clone(),
             ),
         ])),
+        // Workflow #406 T3: a path drag keeps its box, as `box_rect`, and its numbers.
+        Some(PATH_DRAG_KIND) => Ok(ordered_object([
+            ("kind", Value::String(PATH_DRAG_KIND.to_string())),
+            ("box_rect", required_field(click, "box")?.clone()),
+            ("turns", required_field(click, "turns")?.clone()),
+            (
+                "min_segment_px",
+                required_field(click, "min_segment_px")?.clone(),
+            ),
+            ("duration_ms", required_field(click, "duration_ms")?.clone()),
+            (
+                "corner_hold_ms",
+                required_field(click, "corner_hold_ms")?.clone(),
+            ),
+        ])),
         other => Err(CliError::package_invalid(format!(
             "unknown click kind: {other:?}"
         ))),
     }
 }
+
+/// Workflow #406 T3 (plan Q17): the click kind of the path drag the kernel generates in a box.
+const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
 
 /// Workflow #390 lpbox: a long press click that declares a click box (`width` or `height`).
 fn long_press_has_box(click: &Value) -> bool {
@@ -4699,6 +4753,16 @@ fn click_to_guard_rect(click: &Value) -> CliOutcome<Value> {
         }
         Some("single_touch_drag_with_vertical_brake_v1") => {
             let rect = required_field(click, "from")?;
+            Ok(ordered_object([
+                ("x", required_field(rect, "x")?.clone()),
+                ("y", required_field(rect, "y")?.clone()),
+                ("width", required_field(rect, "width")?.clone()),
+                ("height", required_field(rect, "height")?.clone()),
+            ]))
+        }
+        // Workflow #406 T3: a path drag's box.
+        Some(PATH_DRAG_KIND) => {
+            let rect = required_field(click, "box")?;
             Ok(ordered_object([
                 ("x", required_field(rect, "x")?.clone()),
                 ("y", required_field(rect, "y")?.clone()),

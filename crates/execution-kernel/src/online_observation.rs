@@ -379,6 +379,16 @@ impl PreparedPageObservation {
                         .map_err(|_| invalid("declared action geometry invalid"))?;
                     }
                 }
+                // Workflow #406 T3: a path drag's box lies in the coordinate space.
+                DriveNavigationClick::PathDrag(drag) => {
+                    geometry(&DriveSemanticInput::Tap {
+                        rect: drag.box_rect,
+                        point: drive_rect_center(drag.box_rect)
+                            .map_err(|error| invalid(error.message()))?,
+                    })?
+                    .validate(metadata.catalog().width, metadata.catalog().height)
+                    .map_err(|_| invalid("declared action geometry invalid"))?;
+                }
             }
             elements.push(ObservationElement {
                 action: action.clone(),
@@ -987,8 +997,11 @@ impl PreparedPageObservation {
                 continue;
             }
             let resolution = match &element.input {
-                // #411 Lab L2: a segmented drag is listed from the page declaration with no input.
-                DriveNavigationClick::SegmentedDrag(_) => ElementResolution::GestureNotProjectable,
+                // #411 Lab L2: a segmented drag is listed from the page declaration with no input;
+                // Workflow #406 T3: a path drag too.
+                DriveNavigationClick::SegmentedDrag(_) | DriveNavigationClick::PathDrag(_) => {
+                    ElementResolution::GestureNotProjectable
+                }
                 DriveNavigationClick::Input(input) => match input {
                     DriveSemanticInput::TargetCenter { target_id }
                     | DriveSemanticInput::TargetOffset { target_id, .. } => {

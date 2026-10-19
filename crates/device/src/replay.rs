@@ -9,9 +9,9 @@ use actingcommand_contract::FencedWrite;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceError, DeviceResult, DragWithPauseAndBrakeAction, InputBackend,
+    DeviceError, DeviceResult, DragWithPauseAndBrakeAction, InputBackend, PathDragAction,
     PreparedSegmentedSwipePlan, SegmentedDragAction, SegmentedSwipeAction,
-    prepare_drag_with_pause_and_brake,
+    prepare_drag_with_pause_and_brake, prepare_path_drag,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +51,10 @@ pub enum RecordedInputAction {
     SingleTouchDragWithPauseAndBrakeV1 {
         action: DragWithPauseAndBrakeAction,
     },
+    /// Workflow #406 T3: the path drag.
+    SingleTouchPathDragV1 {
+        action: PathDragAction,
+    },
     Key {
         key: String,
     },
@@ -72,6 +76,7 @@ impl RecordedInputAction {
             Self::SingleTouchDragWithPauseAndBrakeV1 { .. } => {
                 "single_touch_drag_with_pause_and_brake_v1"
             }
+            Self::SingleTouchPathDragV1 { .. } => "single_touch_path_drag_v1",
             Self::Key { .. } => "key",
             Self::Text { .. } => "text",
             Self::Reset => "reset",
@@ -94,6 +99,10 @@ impl RecordedInputAction {
             }
             Self::SingleTouchDragWithPauseAndBrakeV1 { action } => {
                 let plan = prepare_drag_with_pause_and_brake(*action)?;
+                backend.segmented_swipe_prepared(witness, &plan)
+            }
+            Self::SingleTouchPathDragV1 { action } => {
+                let plan = prepare_path_drag(action.clone())?;
                 backend.segmented_swipe_prepared(witness, &plan)
             }
             Self::Key { key } => backend.key(witness, key),
@@ -260,6 +269,9 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
             }
             SegmentedDragAction::PauseAndBrake(action) => {
                 RecordedInputAction::SingleTouchDragWithPauseAndBrakeV1 { action }
+            }
+            SegmentedDragAction::PathDrag(action) => {
+                RecordedInputAction::SingleTouchPathDragV1 { action }
             }
         });
         Ok(())

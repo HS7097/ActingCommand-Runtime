@@ -1119,6 +1119,14 @@
       "since": "0.12.0",
       "description": "Device stage: the selected Nemu input capability is unavailable for the operation."
     },
+    "input_sdk_level": {
+      "owner": "device",
+      "layer": "device",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.6",
+      "description": "Step of the adb shell input backend's connect: reading the device's Android SDK level, which decides whether segmented plans can be sent with input motionevent (Workflow #406)."
+    },
     "input_segmented_swipe_capability": {
       "owner": "device",
       "layer": "device",

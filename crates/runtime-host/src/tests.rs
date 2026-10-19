@@ -175,7 +175,8 @@ mod gate_383;
 mod gate_383_ao1;
 // Workflow #383 AO-4q, test row AO4-c: status reads append no ledger record.
 mod gate_383_ao4q;
-// Workflow #383 SH-1, register §1.18: the reserved single-touch path drag is refused.
+// Workflow #383 SH-1, register §1.18: the reserved single-touch path drag was refused; its test
+// retired with Workflow #406 T3 (its replacements are in gate_406_t3).
 mod gate_383_sh1;
 // Workflow #384 D2-S2: reading marks, recognition package bindings and the reader warnings.
 mod gate_384_d2s2;
@@ -280,6 +281,9 @@ mod gate_411_lab_l5b;
 // Workflow #406 T12 (host key 123), register §1.136: the touch keys in effect and the landing
 // history of single-region presses.
 mod gate_406_t12;
+// Workflow #406 T3 (host key 124), register §1.137: a run performs the path drag the kernel
+// generates, on a segmented backend and on the Nemu input.
+mod gate_406_t3;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

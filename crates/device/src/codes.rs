@@ -149,6 +149,9 @@ actingcommand_contract::outcome_locations! {
         CaptureScrcpyStreamState => "capture_scrcpy_stream_state",
         CaptureScrcpyStreamVideoSize => "capture_scrcpy_stream_video_size",
         InputNemuCapability => "input_nemu_capability",
+        /// Workflow #406 T3: the adb shell input backend's connect step reading the device's
+        /// Android SDK level, which decides whether segmented plans go as `input motionevent`.
+        InputSdkLevel => "input_sdk_level",
         InputSegmentedSwipeCapability => "input_segmented_swipe_capability",
         MaatouchHandshakeAborted => "maatouch_handshake_aborted",
         MaatouchHandshakeChannelReceive => "maatouch_handshake_channel_receive",

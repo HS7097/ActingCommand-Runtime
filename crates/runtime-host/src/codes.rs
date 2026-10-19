@@ -2531,7 +2531,8 @@ actingcommand_contract::outcome_codes! {
         /// `instance_id`, `held_ms`, `timeout_ms`; P-h).
         PerfHoldExpired => "perf_hold_expired": info / planned_stop,
         /// Error. An input request names an action this build decodes but does not perform: the
-        /// single-touch path drag is reserved until #406 T-3. Nothing reaches the device.
+        /// single-touch path drag was reserved until #406 T-3. Nothing reaches the device. Since
+        /// T-3 performs the path drag, nothing emits it; it stays registered.
         InputActionUnsupported => "input_action_unsupported": error / none,
     }
 }
