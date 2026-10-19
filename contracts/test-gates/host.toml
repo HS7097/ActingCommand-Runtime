@@ -1379,3 +1379,69 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b15h::b15h_a_blocked_key_the_catalog_does_not_reference_still_opens_a_round",
 ]
 incident = ["#411 B15"]
+
+# Workflow #411 B15 R5 (v0.12.3; register §1.115 B15R-1 to B15R-4; no persisted ledger shape; contracts/remedies.md section 4, contracts/instance-fact-store.md "Run parameters"; key assigned by the coordinator): a policy run whose dispatch chain carries policy_dispatch_parameters holds, in every instance fact snapshot it takes, session.dispatch.parameter.<name> = <value> per run_parameters entry (a string, instance scope, confidence 1000, observed at the dispatch's admission, no expiry), and its select step chooses by the value; a run without a dispatch (a direct run, an offline Lab dry run and replay) holds every parameter the package declares with its declared default; the overlay appends no record and is not in the instance's fact snapshot; a publication of a key under session.dispatch. (an agent's PublishFact and PublishFacts, the Runtime's own path) is refused session_dispatch_key_reserved with fact_key, non-fatal, nothing appended; task.selection_evaluated's input_sha256 covers the overlay, so two runs that differ only in a value differ in it
+[[gate]]
+key = "114"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b15r::b15r_a_policy_run_selects_by_the_value_its_dispatch_carries",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15r::b15r_a_direct_run_selects_by_the_declared_default",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15r::b15r_the_overlay_writes_no_fact_record",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15r::b15r_publishing_a_dispatch_key_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15r::b15r_the_selection_input_hash_differs_between_two_values",
+    "actingcommand-execution-kernel::lib::offline::tests::b15r_an_offline_lab_run_reads_the_declared_defaults",
+]
+incident = ["#411 B15"]
+
+# Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-1 to B15W-3; no persisted ledger shape; model-b15 §5.1; contracts/instance-fact-store.md "Remedy choice facts"; key assigned by the coordinator): session.remedy.choices is a family of its own, never mixed with another in one observation (fact_origin_mixed), taken until U-6 from (agent, adapter), (user, ui) and (cli, cli) and published with the writer's origin; every write is checked before the fact write gate, its scope (instance or game; a server-scoped record is refused with field /scope from every writer, a server id not being game-qualified), its shape and then its names against the packages the active catalog binds on every instance its scope covers, a refusal being session_remedy_choices_invalid (fact_key, field, instance_id) with nothing appended; its source_snapshot_id remedy-choices:<sha256 of scope, rows, observed_at> makes the same rows written later a new version
+[[gate]]
+key = "115"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_a_valid_record_is_published_with_the_writers_origin",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_shape_violations_are_refused_with_their_pointer",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_names_the_bound_packages_do_not_declare_are_refused",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_a_write_mixing_families_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_two_writes_of_the_same_rows_are_two_versions",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w::b15w_a_server_scoped_record_is_refused",
+]
+incident = ["#411 B15"]
+
+# Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-1, B15W2-3; no persisted ledger shape; contracts/policy-suspension.md `remedies`, contracts/remedies.md section 10; key assigned by the coordinator; the MCP half is apps 75): actingd suspended lists under remedies one entry per signal:remedy:stopped: record still in effect or lifted within 48 h of the ledger's latest event, newest first, {code, remedy_problem, task_id, instance_id, outcome_key, need, recorded_sequence, recorded_at_unix_ms} with lifted {sequence, at_unix_ms} once a later signal:remedy:lifted: record of the same round exists; a record whose outcome does not read back is {parse_state: unparsed, signal_id, code} with no warning; check-config builds the remedy table over the bound packages and notes each finding and each configuration row whose names the packages do not declare as policy_remedy_declaration_unusable (capability_unbound with task, key, need, capability, instance and package; choice_invalid naming need only for an undeclared need; parameter_invalid naming the capability and, for an instance's own list, its instance_id), a row's note with a developer detail naming the row; a package whose remedy declarations cannot be read gives no note but the developer line the running Runtime writes for it (actingd remedy_table unreadable code, tasks, path), the configuration valid
+[[gate]]
+key = "116"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_suspended_lists_a_stopped_remedy_until_it_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_an_unreadable_remedy_signal_is_listed_unparsed",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_check_config_notes_an_unbound_capability_and_an_invalid_configuration_row",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_check_config_names_an_unreadable_package",
+]
+incident = ["#411 B15"]
+
+# #411 Lab L5a (v0.12.x; register §1.130 L5-1 to L5-5; no persisted ledger shape; one outcome code; coordinator decisions Q2-Q5 of 2026-10-19; key assigned by the coordinator): every online Lab observation takes the frames its package's target consensus needs as one transaction: observe --capture and each observation of do --capture (before, after, every arrival sample) capture the earlier frames and then the current frame, the declared interval apart (unscaled), the kernel evaluates pages and targets over the set oldest first, recognition_coverage reads provided_frames = required_frames = F with production_owner, and the last frame is the observation's frame; a package without target consensus captures one frame with its records unchanged; frames of different sizes fail the observation with recognition_sample_geometry_changed; a keyless observe whose frames straddle an input on the instance fails with observation_samples_interrupted (receipt failed, nothing recognised); a do's observations are page observations that skip a candidate layout needing more frames (candidate_projection_skipped, not_requested) and stay complete; the shared evidence verifier accepts exactly provided_frames - 1 earlier frames per observation after the lease grant and the previous projection, any other frame being runtime_lab_frame_budget_mismatch; the client's receipt waits add, per observation, F - 1 backend-open allowances and the waits
+[[gate]]
+key = "120"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5::l5_observe_takes_the_consensus_frames_and_recognizes_on_their_agreement",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5::l5_a_package_without_consensus_observes_one_frame_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5::l5_an_input_between_the_sample_frames_fails_the_observation",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5::l5_do_takes_the_transaction_for_its_before_and_arrival_observations_and_its_evidence_verifies",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5::l5_the_verifier_refuses_a_frame_no_observation_accounts_for",
+    "actingcommand-runtime-host::lib::tests::gate_411_lab_l5::l5_do_observations_skip_multi_frame_layouts_and_stay_complete",
+    "actingcommand-execution-kernel::lib::tests::gate_411_lab_l5::l5_frames_of_different_sizes_fail_the_observation",
+    "actingcommand-runtime-client::lib::tests::gate_411_lab_l5::l5_the_client_allows_for_the_transaction",
+]
+incident = ["#411 Lab L5a"]
+
+# #411 A24 (v0.12.x; register §1.139 A24-1, A24-2; no persisted ledger shape; contracts/ledger-observer.md §8.1, policy-suspension.md "clock_slots", emulator-control.md direction ①; key assigned by the coordinator): a ledger record's time is its producer's, not monotonic in sequence; `actingd suspended` settles a clock slot against the ledger's latest time, the maximum timestamp, when the last record by sequence is a run's diagnostic artifact.created stamped earlier; direction ①'s failure-burst window counts the failures within window_ms of its latest failure whatever order they arrived in, the same records in time order and out of it giving the same count and the same burst (item, start rung, first and last failure)
+[[gate]]
+key = "125"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a24::a24_suspension_reference_time_is_the_latest_timestamp",
+    "actingcommand-runtime-host::lib::host::recovery_ladder::tests::a24_failure_burst_window_does_not_depend_on_arrival_order",
+]
+incident = ["#411 A24"]

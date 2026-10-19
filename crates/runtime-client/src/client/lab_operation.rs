@@ -6,7 +6,8 @@ use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
     ContainedLabOperationRequest, ContainedLabOperationResult, LabOperationEvidence,
-    MAX_INPUT_DURATION_MS, verify_lab_operation_evidence,
+    MAX_INPUT_DURATION_MS, MAX_LAB_ARRIVAL_FRAMES, ObservationFramePlan,
+    verify_lab_operation_evidence,
 };
 
 /// Ordinary operation failure is retained in the verified receipt and record.
@@ -30,11 +31,44 @@ impl fmt::Debug for VerifiedLabOperation {
     }
 }
 
+/// The receipt wait of a contained Lab operation: four backend-open allowances (23 with an
+/// arrival condition), the longest input, the arrival wait and the I/O allowance; #411 Lab L5:
+/// and for each observation it can make (two, or 21 with an arrival condition) what its
+/// transaction adds. `None` on overflow.
+pub(crate) fn lab_operation_response_timeout(
+    backend_open: Duration,
+    io_timeout: Duration,
+    request: &ContainedLabOperationRequest,
+    frames: ObservationFramePlan,
+) -> Option<Duration> {
+    let observations = if request.after.is_some() {
+        MAX_LAB_ARRIVAL_FRAMES + 1
+    } else {
+        2
+    };
+    backend_open
+        .checked_mul(if request.after.is_some() { 23 } else { 4 })?
+        .checked_add(Duration::from_millis(MAX_INPUT_DURATION_MS))?
+        .checked_add(Duration::from_millis(
+            request.after.as_ref().map_or(0, |after| after.timeout_ms),
+        ))?
+        .checked_add(io_timeout)?
+        .checked_add(
+            frames
+                .added_allowance(backend_open)?
+                .checked_mul(u32::try_from(observations).ok()?)?,
+        )
+}
+
 impl RuntimeDebugSession {
+    /// `frames`: what the package's target consensus makes each of the operation's observations
+    /// take (#411 Lab L5), as the kernel's `observation_frame_plan` computes it from the package
+    /// sent; the receipt wait allows for it.
     pub fn run_contained_lab_operation(
         &self,
         instance_alias: &str,
         request: ContainedLabOperationRequest,
+        frames: ObservationFramePlan,
     ) -> RuntimeClientResult<VerifiedLabOperation> {
         request
             .validate()
@@ -53,17 +87,13 @@ impl RuntimeDebugSession {
             .ids
             .mint_holder_id()
             .map_err(|_| lab_error(ClientCode::RuntimeLabHolderIssueFailed))?;
-        let timeout = connection
-            .backend_open_timeout
-            .checked_mul(if request.after.is_some() { 23 } else { 4 })
-            .and_then(|timeout| timeout.checked_add(Duration::from_millis(MAX_INPUT_DURATION_MS)))
-            .and_then(|timeout| {
-                timeout.checked_add(Duration::from_millis(
-                    request.after.as_ref().map_or(0, |after| after.timeout_ms),
-                ))
-            })
-            .and_then(|timeout| timeout.checked_add(connection.io_timeout))
-            .ok_or_else(|| lab_error(ClientCode::RuntimeLabOperationTimeoutOverflow))?;
+        let timeout = lab_operation_response_timeout(
+            connection.backend_open_timeout,
+            connection.io_timeout,
+            &request,
+            frames,
+        )
+        .ok_or_else(|| lab_error(ClientCode::RuntimeLabOperationTimeoutOverflow))?;
         drop(connection);
         let receipt = self.client.execute_receipt_with_correlation(
             ClientLocation::RunContainedLabOperation.location(),

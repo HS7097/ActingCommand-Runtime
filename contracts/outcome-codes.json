@@ -1889,6 +1889,83 @@
         "remedy_source": "required"
       },
       "description": "The read-only parameters a dispatch hands to its run, one record each: the name, the resolved value and the source that gave it (Workflow #411 B15)."
+    },
+    "step": {
+      "type": "vocab:resource_verify_step",
+      "description": "The step of actinglab resource verify a result belongs to (Workflow #411 RV-1)."
+    },
+    "step_count": {
+      "type": "integer",
+      "description": "How many steps a run of actinglab resource verify ran (Workflow #411 RV-1)."
+    },
+    "failed_step_count": {
+      "type": "integer",
+      "description": "How many steps of a run of actinglab resource verify failed (Workflow #411 RV-1)."
+    },
+    "git_command": {
+      "type": "vocab:git_command",
+      "description": "The read-only git command that failed (Workflow #411 RV-1)."
+    },
+    "repo": {
+      "type": "path",
+      "description": "The repository checkout a command was given (Workflow #411 RV-1)."
+    },
+    "checkout_problem": {
+      "type": "vocab:checkout_problem",
+      "description": "Why a checkout is not the commit to verify (Workflow #411 RV-1)."
+    },
+    "path_count": {
+      "type": "integer",
+      "description": "How many paths share the problem (Workflow #411 RV-1)."
+    },
+    "first_path": {
+      "type": "path",
+      "relative": true,
+      "description": "The first of those paths, relative to the repository root (Workflow #411 RV-1)."
+    },
+    "dirty_problem": {
+      "type": "vocab:dirty_problem",
+      "description": "How a checkout differs from its commit's tree (Workflow #411 RV-1)."
+    },
+    "base": {
+      "type": "name",
+      "description": "A base revision as it was given (Workflow #411 RV-1)."
+    },
+    "base_problem": {
+      "type": "vocab:base_problem",
+      "description": "Why a base revision is refused (Workflow #411 RV-1)."
+    },
+    "manifest_path": {
+      "type": "path",
+      "description": "A build manifest file (Workflow #411 RV-1)."
+    },
+    "tools_problem": {
+      "type": "vocab:tools_problem",
+      "description": "What the build manifest beside the executable does not confirm (Workflow #411 RV-1)."
+    },
+    "layout_problem": {
+      "type": "vocab:layout_problem",
+      "description": "Which rule of a bundle source a repository breaks (Workflow #411 RV-1)."
+    },
+    "member": {
+      "type": "name",
+      "description": "A JSON member name (Workflow #411 RV-1)."
+    },
+    "bundle_problem": {
+      "type": "vocab:bundle_problem",
+      "description": "How a written bundle differs from its source (Workflow #411 RV-1)."
+    },
+    "readback_problem": {
+      "type": "vocab:readback_problem",
+      "description": "How a written zip reads back (Workflow #411 RV-1)."
+    },
+    "found_after_first": {
+      "type": "boolean",
+      "description": "The failure was found after its step's first failure, by validating each remaining path on its own (Workflow #411 RV-1)."
+    },
+    "unformatted": {
+      "type": "list<path>",
+      "description": "The files of a content directory that are not in the canonical serialization, each a /-separated path relative to that directory, not an absolute path (Workflow #411 RV-1)."
     }
   },
   "vocabularies": {
@@ -5762,6 +5839,195 @@
         },
         "capability_unprovided": {
           "description": "No package of the game root provides the capability (package bundle and standard-pack check)."
+        }
+      }
+    },
+    "resource_verify_step": {
+      "description": "The steps of actinglab resource verify, in the order they run (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "tools": {
+          "description": "The build that runs: its compiled head, its executable's SHA-256 and the build manifest beside it."
+        },
+        "checkout": {
+          "description": "The precondition: the top of the work tree, HEAD, --commit, --base and the commit's clean tree."
+        },
+        "declarations": {
+          "description": "The declaration selection built from Git, read by the reader of resource validate."
+        },
+        "pins": {
+          "description": "The committed package_digest and sha256 members."
+        },
+        "admission": {
+          "description": "The layout of packs/ and every pack admitted as package preflight admits it, with its identity."
+        },
+        "format": {
+          "description": "package fmt --check of every pack directory."
+        },
+        "bundle": {
+          "description": "The bundle, its index and copies, its zip, the read-back and the installed root."
+        }
+      }
+    },
+    "git_command": {
+      "description": "The read-only git command that failed (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "rev_parse": {
+          "description": "git rev-parse (the top level, HEAD, its tree, the base)."
+        },
+        "merge_base": {
+          "description": "git merge-base --is-ancestor."
+        },
+        "status": {
+          "description": "git status --porcelain=v1 -z --untracked-files=all --ignored=matching."
+        },
+        "ls_files": {
+          "description": "git ls-files (the index with its blobs, or a pathspec selection)."
+        },
+        "hash_object": {
+          "description": "git hash-object --no-filters --stdin-paths."
+        },
+        "diff": {
+          "description": "git diff --no-renames --name-status -z, or a status in its answer other than A, D, M or T."
+        }
+      }
+    },
+    "checkout_problem": {
+      "description": "Why a checkout is not the commit to verify (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "not_top_level": {
+          "description": "The path given is not the top of its Git work tree."
+        },
+        "head_not_commit": {
+          "description": "HEAD names no commit or no tree."
+        },
+        "commit_mismatch": {
+          "description": "The commit given is not HEAD."
+        }
+      }
+    },
+    "dirty_problem": {
+      "description": "How a checkout differs from its commit's tree (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "tracked_change": {
+          "description": "git status reports a changed, staged, deleted or unmerged tracked file."
+        },
+        "untracked": {
+          "description": "An untracked file lies anywhere in the work tree."
+        },
+        "ignored_in_read_path": {
+          "description": "An ignored file lies under packs/, regression/ or is a root input."
+        },
+        "blob_mismatch": {
+          "description": "A file the command reads does not hash, without filters, to its committed blob, or is missing."
+        }
+      }
+    },
+    "base_problem": {
+      "description": "Why a base revision is refused (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "unresolved": {
+          "description": "The revision names no commit."
+        },
+        "not_ancestor": {
+          "description": "The commit is not an ancestor of HEAD."
+        }
+      }
+    },
+    "tools_problem": {
+      "description": "What the build manifest beside the executable does not confirm (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "executable_sha256": {
+          "description": "Its actinglab.exe entry names other bytes than the executable's, or it has none; or the executable does not read."
+        },
+        "commit": {
+          "description": "Its commit_sha is not the head the build was compiled from."
+        },
+        "manifest_invalid": {
+          "description": "It does not read as a build manifest with commit_sha and files."
+        }
+      }
+    },
+    "layout_problem": {
+      "description": "Which rule of a bundle source a repository breaks (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "applications_missing": {
+          "description": "applications.json is missing."
+        },
+        "maintenance_missing": {
+          "description": "maintenance.json is missing."
+        },
+        "packs_missing": {
+          "description": "packs/ is missing or holds no pack directory."
+        },
+        "packs_entry_invalid": {
+          "description": "packs/ holds an entry that is neither a pack directory nor packs/README.md."
+        },
+        "pack_name_mismatch": {
+          "description": "The pack's control declares another package_id than its directory name."
+        },
+        "pack_game_mismatch": {
+          "description": "The pack declares another game than applications.json."
+        },
+        "pack_server_undeclared": {
+          "description": "The pack's server is not a server of applications.json."
+        }
+      }
+    },
+    "bundle_problem": {
+      "description": "How a written bundle differs from its source (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "index_schema": {
+          "description": "bundle.json is no bundle v4 index."
+        },
+        "maintenance_differs": {
+          "description": "The index's maintenance is not maintenance.json's."
+        },
+        "applications_differs": {
+          "description": "The bundled applications.json differs from the source's bytes, the index's game from its game, or the game is no directory name."
+        },
+        "source_differs": {
+          "description": "The index's source is not the repository given at HEAD."
+        },
+        "pack_list_differs": {
+          "description": "The indexed packs are not the pack directories of packs/, or an indexed pack's path, server or entry task differs from its source."
+        },
+        "pack_copy_differs": {
+          "description": "A bundled pack does not hold its source's files, byte for byte."
+        },
+        "pack_counts_differ": {
+          "description": "An indexed pack's file_count or byte_count is not its copy's."
+        },
+        "default_package_unmatched": {
+          "description": "A server's default_package_id names not exactly one bundled pack of that server."
+        },
+        "root_file_differs": {
+          "description": "The bundle root holds other entries than applications.json, bundle.json, packs and the root files given, or a root file differs from its source."
+        },
+        "root_files_unread": {
+          "description": "standard-pack check of the installed root read other root files than bundle.json and the root files given, or another number of packs."
+        }
+      }
+    },
+    "readback_problem": {
+      "description": "How a written zip reads back (Workflow #411 RV-1).",
+      "review": "pending",
+      "tokens": {
+        "entry_set_differs": {
+          "description": "The zip reads back as another set of entries."
+        },
+        "bytes_differ": {
+          "description": "An entry reads back as other bytes."
+        },
+        "interfaces_differs": {
+          "description": "interfaces.json does not declare what was written."
         }
       }
     }
@@ -46354,6 +46620,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "observation_samples_interrupted": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "#411 Lab L5: an online Lab observation (actinglab observe --capture) had to take several frames for its package's target consensus, and an input reached the instance between its first and its last capture, so the frames are not one screen; nothing is recognised from them and the observation fails.",
+      "common_causes": "A scheduled task, another Lab request or a script pressed the instance while the observation was taking its frames; a read-only observation holds no lease, so it cannot keep inputs away.",
+      "handling": "Pause the instance's scheduling (actingctl pause --instance <alias>) or wait until it is idle, then observe again; do --capture holds a lease and is not affected."
+    },
     "observation_verified_artifact_mismatch": {
       "category": "error",
       "ladder_class": "none",
@@ -48260,7 +48546,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48274,7 +48562,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48305,7 +48595,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48319,7 +48611,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48336,7 +48630,8 @@
       "values": {
         "package_id": "required",
         "navigation_role": "required",
-        "navigation_problem": "required"
+        "navigation_problem": "required",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -48351,7 +48646,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48365,7 +48662,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48379,7 +48678,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48413,7 +48714,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48483,7 +48786,11 @@
       "owner": "actinglab",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional",
+        "unformatted": "optional",
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -48519,7 +48826,9 @@
         "lease_id": "optional",
         "retry_after_ms": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "path": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -63254,6 +63563,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "resource_check_release_retired": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource check-release is retired: it answered checked whenever --repo was a directory, without checking anything. It is refused (exit 2) and writes nothing (Workflow #411 RV-1).",
+      "common_causes": "A script written for the retired stub.",
+      "handling": "Run actinglab resource verify, which checks a resource repository's commit as its CI does and writes a report."
+    },
     "resource_close_instance_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -63348,7 +63671,11 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "path": "optional",
+        "json_pointer": "optional",
+        "found_after_first": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -64206,6 +64533,234 @@
       "description": "A stored resource target could not be encoded for the resource target view.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "resource_verify_base_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "base": "required",
+        "base_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's --base names no commit (unresolved) or a commit that is not an ancestor of HEAD (not_ancestor), so the diff selection would not be the pull request's. No content step runs (Workflow #411 RV-1).",
+      "common_causes": "The base branch was not fetched; the commit is not based on the current base.",
+      "handling": "Fetch the base, then rebase or merge the commit onto it; the wrapper passes origin/main."
+    },
+    "resource_verify_bundle_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "bundle_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's bundle step: the bundle package bundle wrote under --work is not its source. index_schema: bundle.json is no bundle v4 index; maintenance_differs; applications_differs: the bundled applications.json bytes, the index's game, or a game that is no directory name; source_differs: the index's source is not --source-repository at HEAD; pack_list_differs: the indexed packs are not the pack directories, or a pack's path, server or entry task differs from its source; pack_copy_differs and pack_counts_differ: a copy's files, bytes, file_count or byte_count; default_package_unmatched: a server's default_package_id names not exactly one pack of that server; root_file_differs: the bundle root's entries or a root file's bytes; root_files_unread: standard-pack check of the installed root read other root files or another number of packs (Workflow #411 RV-1).",
+      "common_causes": "A file in a pack directory that package bundle does not copy (it copies control.json and resources/ only); a file changed while the bundle was written; a fault of the bundle writer.",
+      "handling": "Keep a pack's files to control.json and resources/, and run the wrapper again on a clean worktree; report a mismatch the source cannot explain to the Runtime maintainers."
+    },
+    "resource_verify_checkout_dirty": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path_count": "required",
+        "first_path": "required",
+        "dirty_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's checkout precondition: the checkout is not exactly the commit's tree. tracked_change: git status reports a changed, staged, deleted or unmerged tracked file; untracked: an untracked file lies anywhere; ignored_in_read_path: an ignored file lies under packs/ or regression/ or is a root input; blob_mismatch: a file the command reads (the root inputs, packs/** and regression/**) does not hash, without filters, to its blob although git status does not notice (a checkout with line-ending conversion, an assume-unchanged file). One outcome per kind, with the number of paths and the first. No content step runs, because nothing read from such a tree is bound to the commit (Workflow #411 RV-1).",
+      "common_causes": "Uncommitted edits; build or editor files left in the checkout; a checkout made with line-ending conversion.",
+      "handling": "Commit or stash, then run the wrapper, which verifies a clean worktree of the commit (a detached worktree made without conversion)."
+    },
+    "resource_verify_checkout_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "repo": "required",
+        "checkout_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's checkout precondition: --repo is not the top of its Git work tree (not_top_level), HEAD names no commit (head_not_commit), or --commit is not HEAD (commit_mismatch). No content step runs, and the report says so (Workflow #411 RV-1).",
+      "common_causes": "A subdirectory of the checkout was given; an empty repository; the worktree was moved to another commit after the wrapper resolved it.",
+      "handling": "Give the worktree's top directory and the commit it has checked out; the wrapper makes a detached worktree of the commit and passes both."
+    },
+    "resource_verify_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "failed_step_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify ran every step and one or more failed. Each failed step's first failure is a cause, with its step; the report lists every failure of every step, since a step goes on after its first finding where its check can. The command exits 2 and its details are the report (Workflow #411 RV-1).",
+      "common_causes": "A declaration the production parsers refuse, a committed pin member, a pack the loader refuses or named after another package_id, a JSON file not in the canonical serialization, an applications default that names no pack, or a bundle that does not match its source.",
+      "handling": "Read failed_steps and each step's failures in the report and fix the files they name (for a format failure run actinglab package fmt --package packs/<id>), commit, then run the wrapper again, which verifies a clean worktree of the new commit."
+    },
+    "resource_verify_git_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "git_command": "required",
+        "exit_code": "optional",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify ran git (from PATH, read-only plumbing, with GIT_OPTIONAL_LOCKS=0) and git could not start, exited with a code that is no answer of the command, or answered a diff status other than A, D, M or T. The cause is foreign_os_error when git could not start, otherwise foreign_other_error with git's exit code and its stderr as raw_text. In the checkout step it is the precondition's outcome; in a later step it is that step's failure (Workflow #411 RV-1).",
+      "common_causes": "git is not installed or not on PATH; --repo is not inside a Git work tree; the repository is damaged.",
+      "handling": "Install Git for Windows with git on PATH, give the top of a Git work tree as --repo, and read raw_text for git's own message."
+    },
+    "resource_verify_layout_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "layout_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify: the repository is no bundle source (the admission step; maintenance_missing in the bundle step too). applications_missing and maintenance_missing: the root input is missing; packs_missing: packs/ is missing or holds no pack directory; packs_entry_invalid: packs/ holds an entry that is neither a pack directory nor packs/README.md; pack_name_mismatch: the pack's control declares another package_id than its directory name; pack_game_mismatch: it declares another game than applications.json; pack_server_undeclared: its server is not a server of applications.json (Workflow #411 RV-1).",
+      "common_causes": "A file put directly into packs/; a pack directory renamed without its control.json; a pack copied from another repository.",
+      "handling": "Name each pack directory by its package_id, keep only pack directories and README.md in packs/, and declare the pack's game and server in applications.json."
+    },
+    "resource_verify_output_exists": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify was given a --work directory or a --report file that exists, a report whose <report>.part exists, or one whose parent directory does not exist. It refuses before it reads anything and writes no report; nothing is overwritten (Workflow #411 RV-1).",
+      "common_causes": "A run directory reused from an earlier run; a mistyped parent directory.",
+      "handling": "Give a new --work and a new --report under existing directories; the wrapper makes a new run directory for every run. Do not delete an earlier run's output to reuse its name."
+    },
+    "resource_verify_passed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "step_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify ran every step on the commit of a resource repository checkout and every step passed: the build's tools, the checkout precondition (the commit's clean tree), the declarations, the pin check, the admission of every pack, the format check and the bundle with its zip, read-back and installed root (Workflow #411 RV-1, contracts/resource-verify.md). The answer's data and the report file are the report actinglab.resource-verify.v1, bound to the commit, its tree, its base and the build's head and executable SHA-256.",
+      "common_causes": "The commit passes every check the Runtime makes of a resource repository.",
+      "handling": "The repository wrapper checks the report (schema, result, commit, runtime_head and executable_sha256 against the Tools pin) and records it; nothing else is needed."
+    },
+    "resource_verify_pin_committed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "json_pointer": "required",
+        "member": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's pins step: a tracked packs/**/*.json or *procedure-manifest*.json file carries a member named package_digest, or a file under packs/ a member named exactly sha256, at the JSON pointer given; every member is visited, a duplicated member each time. The Runtime names a package by its path and ignores these keys until PKG-S1b refuses them again (contracts/selection-graph.md), so committing one is refused now (Workflow #411 RV-1).",
+      "common_causes": "A file written by an older tool that pinned package digests or per-file hashes.",
+      "handling": "Remove the member at json_pointer from the file named by path and commit."
+    },
+    "resource_verify_readback_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "entry": "required",
+        "readback_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's bundle step: the zip <game>-resources-<sha7>.zip it wrote under --work does not read back as written: entry_set_differs (another set of entries), bytes_differ (an entry's bytes) or interfaces_differs (interfaces.json does not declare what was written) (Workflow #411 RV-1).",
+      "common_causes": "The file was changed while it was written; a fault of the zip writer.",
+      "handling": "Run the wrapper again with a new --work; report a repeated mismatch to the Runtime maintainers."
+    },
+    "resource_verify_report_write_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify could not write its report as <report>.part and rename it to --report; the cause is the OS failure. stdout still carries the whole result, and the details are the report (Workflow #411 RV-1).",
+      "common_causes": "The disk is full; the directory is read-only or locked.",
+      "handling": "Free space or choose a writable directory, then run the wrapper again with a new --report."
+    },
+    "resource_verify_tools_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "manifest_path": "required",
+        "tools_problem": "required",
+        "step": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "actinglab resource verify's tools step: the BUILD-MANIFEST.json beside the running executable names other bytes for actinglab.exe than the executable's, or none (executable_sha256), or another commit than the head this build was compiled from (commit), or it does not read as a build manifest (manifest_invalid). Without a manifest beside the executable the step only reports the build. The other steps still run (Workflow #411 RV-1).",
+      "common_causes": "The executable was replaced or rebuilt after the Tools were unpacked; files of two Tools releases were mixed in one directory.",
+      "handling": "Unpack the pinned Tools release into a new directory and verify it against the pin; the wrapper does this before it runs the command."
     },
     "resource_weights": {
       "category": "info",
@@ -74518,7 +75073,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -78948,7 +79504,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -81915,6 +82472,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: check install selfcheck."
+    },
+    "check_observation_sample_inputs": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.4",
+      "description": "A Runtime host operation or stage: check that no input reached the instance while a keyless online Lab observation took the frames its package's target consensus needs (#411 Lab L5)."
     },
     "check_pack_admission": {
       "owner": "runtime-host",

@@ -993,7 +993,9 @@
         "lease_id": "optional",
         "retry_after_ms": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "path": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3477,7 +3479,11 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "path": "optional",
+        "json_pointer": "optional",
+        "found_after_first": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3977,7 +3983,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -17196,7 +17203,8 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",

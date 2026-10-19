@@ -38,6 +38,9 @@ mod gate_e5_record_stop;
 // #411 A10 (exec key 85): an undecodable Lab recording makes only the Lab part unavailable.
 #[cfg(test)]
 mod gate_rc2_a10;
+// #411 Lab B-9 (exec key 108): a Lab recording marks a value test.
+#[cfg(test)]
+mod gate_lab_b9;
 mod lab_run;
 mod lab_run_api;
 mod ledger_port;

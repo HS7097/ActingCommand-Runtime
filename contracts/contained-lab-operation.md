@@ -50,8 +50,12 @@ InputAction limits and the current frame dimensions; a recognized page is not a
 coordinate prerequisite. Element safety annotations are informational.
 
 Offline `do --scene ... --dry-run`, the existing observation-only planning
-mode, and raw observation remain separate existing entries. Executing online
-`do` does not interpret a resource or choose a coordinate in the client.
+mode, and raw observation remain separate existing entries. Offline
+`do --scene ... --dry-run` takes up to five frames, oldest first, the last the
+current frame, on which it plans
+([business-identity-consensus.md](business-identity-consensus.md); #411 Lab
+B-2). Executing online `do` does not interpret a resource or choose a
+coordinate in the client.
 
 ## Runtime ownership
 
@@ -64,7 +68,13 @@ counts.
 
 The handler acquires one private lease through the existing owner. It captures
 and persists the before frame inside the instance mutex, with validation of the
-request's token before and after capture. It records the fresh projection and
+request's token before and after capture. Each of its observations (before, after,
+every arrival sample) is such a transaction under the same lease and fences
+([contained-page-observation.md](contained-page-observation.md); #411 Lab L5): the
+frames its package's target consensus needs, the declared interval apart, each
+captured and fenced as one frame is, the last the observation's frame. It is a
+page observation: a candidate layout that needs more than one frame is not
+projected (`candidate_projection_skipped`) and does not make it partial. It records the fresh projection and
 prepared selection before calling the existing `HostShared::input` exactly
 once. No outer instance lock or additional destructive-step scope surrounds
 that call. The token validations around capture are lease validation on
@@ -82,8 +92,9 @@ duration, and the existing I/O allowance. The scheduler retains its configured
 lease TTL.
 
 With an arrival condition, input is still performed exactly once. The same
-request/correlation/lease captures and projects up to 20 after frames, with a
-500 ms interval bounded by the remaining RuntimeClock deadline. The first
+request/correlation/lease captures and projects up to 20 after observations,
+each a transaction, with a 500 ms interval bounded by the remaining RuntimeClock
+deadline. The first
 sample can be immediate. Each capture is fenced before and after; target
 recognition also requires a still-valid token after projection. Only a unique,
 complete match of the requested page before the deadline is `reached`.
@@ -161,7 +172,9 @@ At most one before projection, one prepared record, one after projection, and
 one terminal record are stored as DiagnosticJson in single-frame mode. Each is
 at most 256 KiB, giving an aggregate ceiling of 1 MiB. Arrival mode allows at most
 23 such objects (before, up to 20 after, prepared and terminal), totaling at most
-5888 KiB, and at most 21 frames under the existing per-frame budget. The record
+5888 KiB. It stores at most 2·F frames in single-frame mode and 21·F with
+arrival, F the transaction's frame count (1–5), under the existing per-frame
+budget (#411 Lab L5). The record
 contains references to intermediate projections, not their duplicated contents.
 References retain their own ArtifactVerified event returned by append;
 no latest-ledger position is used as a substitute. Existing recognition
@@ -179,7 +192,13 @@ Integrity failure latches the existing client fatal state.
 
 The shared verifier checks every recorded arrival sample's artifact lifecycle,
 hash, frame/projection identity and order, the bounded object set and the final
-condition/result consistency. Offline `resource restore` uses that same
+condition/result consistency. Each observation may be preceded by exactly
+`provided_frames − 1` further verified frames of the request (`provided_frames`
+from its `recognition_coverage` row; none without the row), after the previous
+projection (or the lease grant) and before its own frame; the observation the
+operation failed in may lack its projection, and a transaction it failed in before
+its frame leaves its earlier frames after the last projection, fewer than five in
+either case. Any other frame is `runtime_lab_frame_budget_mismatch` (#411 Lab L5). Offline `resource restore` uses that same
 verification. A requested arrival that did not succeed with a complete chain is
 a `lab_arrival_not_reached` gap and contributes no executable operation. An
 author-supplied target cannot replace an observed page. Original operations

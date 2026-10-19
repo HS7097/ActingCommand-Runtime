@@ -123,6 +123,28 @@ fn verify_lab_artifact(
     Ok(bytes.clone())
 }
 
+/// #411 Lab L5: the frames an observation's transaction took, its `recognition_coverage` row's
+/// `provided_frames` (1..=5); one frame without the row.
+fn transaction_frames(facts: &ObservationFacts) -> RuntimeContractResult<usize> {
+    let mut rows = facts
+        .rows
+        .iter()
+        .filter(|row| row["kind"] == "recognition_coverage");
+    let Some(row) = rows.next() else {
+        return Ok(1);
+    };
+    match row["provided_frames"]
+        .as_u64()
+        .and_then(|frames| usize::try_from(frames).ok())
+        .filter(|frames| (1..=MAX_OBSERVATION_FRAMES).contains(frames))
+    {
+        Some(frames) if rows.next().is_none() => Ok(frames),
+        _ => Err(lab_error(
+            RuntimeContractCode::RuntimeLabFrameBudgetMismatch,
+        )),
+    }
+}
+
 fn verify_lab_projection(
     source: &LabOperationEvidence,
     events: &[ProjectedEvent],
@@ -359,6 +381,33 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
             }
         }
     }
+    // #411 Lab L5: the operation's observations in order, each with its frame, its projection's
+    // sequence and the frames its transaction took: the before observation, then every arrival
+    // sample (the last is the after observation) or, without an arrival condition, the after
+    // observation.
+    let mut observations = Vec::new();
+    if let Some(frame) = &prepared.before_frame {
+        let projection = prepared.before_projection.as_ref();
+        observations.push((
+            frame,
+            projection.map(|projection| projection.projection_sequence),
+            projection
+                .map(|projection| transaction_frames(&projection.facts))
+                .transpose()?,
+        ));
+    }
+    if record.arrival.is_none()
+        && let Some(frame) = &record.after_frame
+    {
+        let projection = record.after_projection.as_ref();
+        observations.push((
+            frame,
+            projection.map(|projection| projection.projection_sequence),
+            projection
+                .map(|projection| transaction_frames(&projection.facts))
+                .transpose()?,
+        ));
+    }
     if let Some(arrival) = &record.arrival {
         for sample in &arrival.samples {
             verify_lab_artifact(
@@ -368,6 +417,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 sample.frame.verified,
                 prepared,
             )?;
+            let mut frames = None;
             if let Some(reference) = &sample.projection {
                 let bytes = verify_lab_artifact(
                     source,
@@ -393,7 +443,16 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
                 };
                 projection.validate()?;
                 verify_lab_projection(source, events, prepared, &sample.frame, &projection)?;
+                frames = Some(transaction_frames(&projection.facts)?);
             }
+            observations.push((
+                &sample.frame,
+                sample
+                    .projection
+                    .as_ref()
+                    .map(|reference| reference.verified.sequence),
+                frames,
+            ));
         }
     }
     let mut frame_ids = BTreeSet::new();
@@ -414,17 +473,96 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
     let frame_artifacts = events
         .iter()
         .filter(|event| event.event_type == EventType::ArtifactVerified)
-        .flat_map(|event| &event.artifacts)
-        .filter(|artifact| artifact.kind == ArtifactKind::CaptureFrame)
+        .flat_map(|event| {
+            event
+                .artifacts
+                .iter()
+                .map(move |artifact| (event, artifact))
+        })
+        .filter(|(_, artifact)| artifact.kind == ArtifactKind::CaptureFrame)
         .collect::<Vec<_>>();
-    if frame_artifacts.len() != frame_ids.len()
-        || frame_artifacts
+    if frame_ids.iter().any(|id| {
+        !frame_artifacts
             .iter()
-            .any(|artifact| !frame_ids.contains(&artifact.artifact_id))
-    {
+            .any(|(_, artifact)| artifact.artifact_id == *id)
+    }) {
         return Err(lab_error(
             RuntimeContractCode::RuntimeLabFrameBudgetMismatch,
         ));
+    }
+    // #411 Lab L5: every other frame of the request is an earlier frame of an observation's
+    // transaction: each observation is preceded by exactly `provided_frames - 1` of them, after
+    // the lease grant and the previous observation's projection and before its own frame. The
+    // observation the operation failed in may lack its projection (a fence after its frame, or
+    // its evaluation), and a transaction it failed in before its frame leaves its earlier frames
+    // after the last observation; such frames are fewer than five. Any other frame does not
+    // belong to the operation.
+    let earlier = frame_artifacts
+        .iter()
+        .filter(|(_, artifact)| !frame_ids.contains(&artifact.artifact_id))
+        .collect::<Vec<_>>();
+    let between = |after: u64, before: u64| {
+        earlier
+            .iter()
+            .filter(|(event, _)| event.sequence > after && event.sequence < before)
+            .count()
+    };
+    let open_failure = record.failure.as_ref().is_some_and(|failure| {
+        matches!(
+            failure.stage,
+            LabOperationStage::BeforeFrame
+                | LabOperationStage::BeforeProjection
+                | LabOperationStage::AfterFrame
+                | LabOperationStage::AfterProjection
+        )
+    });
+    let budget_mismatch = || lab_error(RuntimeContractCode::RuntimeLabFrameBudgetMismatch);
+    let mut accounted = 0;
+    if let Some(grant) = grants.first() {
+        let mut start = grant.sequence;
+        for (index, (frame, projection, frames)) in observations.iter().enumerate() {
+            let count = between(start, frame.verified.sequence);
+            let fits = match frames {
+                Some(frames) => count + 1 == *frames,
+                None => {
+                    count == 0
+                        || (index + 1 == observations.len()
+                            && open_failure
+                            && count < MAX_OBSERVATION_FRAMES)
+                }
+            };
+            if !fits {
+                return Err(budget_mismatch());
+            }
+            accounted += count;
+            start = projection.unwrap_or(frame.verified.sequence);
+        }
+        let trailing = between(start, u64::MAX);
+        if trailing > 0
+            && !(open_failure
+                && trailing < MAX_OBSERVATION_FRAMES
+                && observations
+                    .last()
+                    .is_none_or(|(_, projection, _)| projection.is_some()))
+        {
+            return Err(budget_mismatch());
+        }
+        accounted += trailing;
+    }
+    if accounted != earlier.len() {
+        return Err(budget_mismatch());
+    }
+    for (event, artifact) in earlier {
+        verify_lab_artifact(
+            source,
+            events,
+            artifact,
+            TerminalEvent {
+                sequence: event.sequence,
+                event_id: event.event_id,
+            },
+            prepared,
+        )?;
     }
     if let Some(action) = &prepared.action {
         let projection = prepared

@@ -250,12 +250,27 @@ mod gate_403;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;
+// #411 A24 (host key 125), register §1.139: `actingd suspended` judges clock slots against the
+// ledger's latest time, the maximum timestamp.
+mod gate_411_a24;
 // Workflow #411 B15 R4 (host key 113), register §1.114: the host runs declared remedies (table,
 // journal, plan, admission check, stop, lift and expiry signals).
 mod gate_411_b15h;
 // Workflow #411 B15 R1 (host key 119): kernel admission by path and the metadata reader of the
 // remedy declarations take a package that provides capabilities with parameters.
 mod gate_411_b15p_host;
+// Workflow #411 B15 R5 (host key 114), register §1.115: a run reads its parameters as read-only
+// facts, never stored; `session.dispatch.` is refused to publishers.
+mod gate_411_b15r;
+// Workflow #411 B15 R6 (host key 115), register §1.116: an instance's remedy choices, their
+// family, their write rule and their identity.
+mod gate_411_b15w;
+// Workflow #411 B15 R7 (host key 116), register §1.117: `actingd suspended` lists the stopped
+// remedy rounds; check-config notes the remedies that cannot be used.
+mod gate_411_b15w2;
+// #411 Lab L5a (host key 120), register §1.130: every online Lab observation takes the frames its
+// package's target consensus needs, as one transaction.
+mod gate_411_lab_l5;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

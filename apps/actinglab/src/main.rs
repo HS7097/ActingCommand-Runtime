@@ -53,7 +53,8 @@ use commands::{
 use commands::{
     ControlPoint, DestructiveClick, NavigationClick, NavigationEdge, NavigationGraph,
     NavigationRow, PageDetectionOutcome, SemanticInput, canonical_navigation_page,
-    destructive_frame_regions, detect_current_page, find_navigation_route, navigation_edge_json,
+    destructive_frame_regions, destructive_frame_regions_over, detect_current_page,
+    detect_current_page_over, evaluate_target_over, find_navigation_route, navigation_edge_json,
     page_detection_json, parse_control_point, parse_navigation_click, parse_navigation_graph_value,
     parse_navigation_row, parse_navigation_tap_rect, parse_point_pair, point_json, rect_center,
     rect_json, rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
@@ -193,6 +194,7 @@ pub mod recovery_exec;
 mod replay_cli;
 mod resource_restore;
 mod resource_runtime_support;
+mod resource_verify;
 mod run_summary;
 mod runtime_capture_backend;
 mod runtime_debug;

@@ -332,6 +332,21 @@ impl HostShared {
     ) -> RuntimeHostResult<FactPublication> {
         let result: RuntimeHostResult<FactPublication> =
             (|| {
+                // Workflow #411 B15 R5: `session.dispatch.` holds a run's read-only parameters,
+                // which exist only as an overlay of its snapshots; no origin publishes under it.
+                if let Some(record) = observation.records.iter().find(|record| {
+                    record
+                        .key
+                        .starts_with(actingcommand_execution_kernel::RUN_PARAMETERS_KEY_PREFIX)
+                }) {
+                    let fact_key = record.key.clone();
+                    return Err(RuntimeHostError::request(
+                        crate::codes::RemedyHostCode::SessionDispatchKeyReserved,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+                }
                 // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
                 match purpose {
                     FactPublicationPurpose::Ordinary
@@ -378,15 +393,24 @@ impl HostShared {
                         ));
                     }
                 }
-                // An offset-only observation and a resource target policy keep their request's
-                // origin on the `fact.published` event, so the ledger shows who set them; every
-                // other publication stays a Runtime fact-store event.
+                // Workflow #411 B15 R6 (model-b15 §5.1): a write of the remedy choices is checked
+                // whole before the fact write gate; a refusal appends nothing.
+                for record in &observation.records {
+                    if record.key == actingcommand_contract::REMEDY_CHOICES_FACT_KEY {
+                        self.check_remedy_choices(record)?;
+                    }
+                }
+                // An observation of a family with the origin exception (priority offsets, remedy
+                // choices) and a resource target policy keep their request's origin on the
+                // `fact.published` event, so the ledger shows who set them; every other
+                // publication stays a Runtime fact-store event.
                 let (event_source, event_actor) = match source_request {
                     Some(request)
                         if purpose == FactPublicationPurpose::ResourceTargets
                             || (!observation.records.is_empty()
                                 && observation.records.iter().all(|record| {
-                                    priority_offset_task_id(&record.key).is_some()
+                                    actingcommand_contract::fact_key_family(&record.key)
+                                        .takes_origin_exception()
                                 })) =>
                     {
                         (request.source(), request.actor())
@@ -521,6 +545,28 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    /// Workflow #411 B15 R6 (model-b15 §5.1): the write rule of one `session.remedy.choices`
+    /// record (`crate::remedy_choices`), against the packages the active catalog binds, read
+    /// now, on the instances of the policy inputs its scope covers; a refusal is
+    /// `session_remedy_choices_invalid`. Each lock is released before the next is taken.
+    fn check_remedy_choices(&self, record: &FactRecord) -> RuntimeHostResult<()> {
+        let instances = lock(&self.policy_inputs, ContractLocation::PublishFacts)?
+            .as_ref()
+            .map(|inputs| inputs.facts().instances.clone())
+            .unwrap_or_default();
+        let manifest = lock(&self.procedure_manifest, ContractLocation::PublishFacts)?.clone();
+        let catalog = lock(self.policy()?, ContractLocation::PublishFacts)?.active_loaded();
+        let now_unix_ms = self.clock.sample()?.unix_ms;
+        crate::remedy_choices::check(
+            record,
+            catalog.as_ref().map(|catalog| catalog.compiled()),
+            manifest.as_ref(),
+            &instances,
+            now_unix_ms,
+        )
+        .map_err(crate::remedy_choices::Refusal::into_error)
     }
 
     /// Workflow #384 D2-S3 (D2 model §3.6): `key`'s active record in `scope`, with the ledger

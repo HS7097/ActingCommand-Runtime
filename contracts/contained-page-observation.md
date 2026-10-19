@@ -8,11 +8,19 @@ recognition pack, pages, navigation and optional projection metadata. Observatio
 does not require a task program. Module packages do not supply this observation
 pipeline.
 
-Runtime admits a read-only capture capability, captures one frame, and evaluates
-the existing page detector over that frame. Every actual target result retains its
-page, role, group and target position. Explicit targets reuse all corresponding
-results from this frame; an explicitly requested target with no previous result or
-failure is evaluated once. An ambiguous set of actual results remains ambiguous.
+Runtime admits a read-only capture capability for each frame, captures one
+observation transaction and evaluates the existing page detector over it. Without
+target consensus the transaction is one frame. When the pack's target consensus
+needs F frames (2–5), Runtime captures F − 1 sample frames and then the current
+frame, the declared interval apart, and hands the set to the recognition pack's
+aggregation owner as a task's observation does ([linear-steps.md](linear-steps.md),
+"Target consensus"). It holds no lock while waiting; an input on the instance
+between the first and the last capture fails the observation with
+`observation_samples_interrupted`. The last frame is the observation's frame;
+every frame is persisted by the capture owner under its own frame ID (#411 Lab L5).
+Every actual target result retains its page, role, group and target position.
+Explicit targets reuse all corresponding results from this observation; an
+explicitly requested target with no previous result or failure is evaluated once. An ambiguous set of actual results remains ambiguous.
 Navigation geometry is descriptive and does not grant input authority. This
 operation acquires no input lease and performs no input.
 
@@ -22,7 +30,8 @@ recognition failure terminal. No match uses `PageUnmatched`. The frame's own
 recognition fact remains `FrameDecoded`.
 
 One `DiagnosticJson` artifact binds the request, correlation, instance, expected
-and actual package hashes, original frame reference, RGB8 hash, shared
+and actual package hashes, the current frame's reference (sample frames appear
+only as the RGB8 hashes of the sample rows), RGB8 hash, shared
 `PageProjection` and actual evaluation facts. Page summary rows and target rows
 retain the original evaluation relationships, including results completed before a
 failure. Remaining targets after a page failure carry explicit `not_evaluated` rows
@@ -43,7 +52,8 @@ terminal, and rejects input authority in the observation request's events. Only
 this verified result supplies online Lab page semantics and optional frame bytes.
 
 Each public or controlled raw fact collection has a limit of 256 rows and 64 KiB;
-the enclosing diagnostic artifact is at most 256 KiB. Counts include omitted rows
+the enclosing diagnostic artifact is at most 256 KiB; an observation stores at
+most five frames (#411 Lab L5). Counts include omitted rows
 and omitted actual target evaluations. The public shared projection retains its
 64-item, 32-KiB limits. Min output can omit auxiliary rows and reduce shared
 projection entries, with explicit counts and the persisted source reference.

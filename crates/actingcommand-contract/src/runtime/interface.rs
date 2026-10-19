@@ -468,7 +468,9 @@ impl FactKeyFamily {
     /// family is a general instruction, which the three counters send.
     pub const fn interface_class(self) -> InterfaceClassification {
         match self {
-            Self::PriorityOffset | Self::InstanceInformation => GENERAL_INSTRUCTION,
+            Self::PriorityOffset | Self::RemedyChoices | Self::InstanceInformation => {
+                GENERAL_INSTRUCTION
+            }
         }
     }
 }

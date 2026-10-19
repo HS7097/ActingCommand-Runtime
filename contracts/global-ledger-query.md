@@ -12,6 +12,11 @@ diagnostic code. Events without a diagnostic code do not match a code filter.
 All selected conditions are conjoined. `from_sequence` and `to_sequence` are
 inclusive; `minimum_severity` and `maximum_severity` are inclusive bounds.
 `from_timestamp_unix_ms` is inclusive and `to_timestamp_unix_ms` is exclusive.
+`timestamp_unix_ms` is the producer's capture or occurrence time, not the append
+time, so it is not monotonic in `sequence` (a run's diagnostic
+`artifact.created`/`verified` carry its start time and are appended at its end);
+order by `sequence`, let time bounds filter records but never end a scan, and take
+the latest time as the maximum timestamp, not the last record's. (#411 A24)
 An equal pair of time bounds selects no events. Inverted time or severity bounds
 are rejected by the typed request. Source, module,
 diagnostic code, event type and typed association IDs use exact equality.

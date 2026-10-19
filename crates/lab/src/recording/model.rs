@@ -3,7 +3,9 @@
 //! The Lab recording state (`actingcommand.lab-recording.v1`), the mark request
 //! (`actingcommand.lab-record-mark.v1`) and the outcome views the CLI prints.
 
-use actingcommand_contract::{LabError, LabResult};
+use actingcommand_contract::{
+    LabError, LabResult, OcrUnsignedIntegerFormat, OcrValueTrim, ValueTestOp,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -270,6 +272,8 @@ pub enum MarkFamily {
     ColorDigest,
     Ocr,
     Check,
+    /// #411 Lab B-9: a value test whose sides are inline OCR reads (`value_test`).
+    ValueTest,
 }
 
 impl MarkFamily {
@@ -280,6 +284,7 @@ impl MarkFamily {
             Self::ColorDigest => "color_digest",
             Self::Ocr => "ocr",
             Self::Check => "check",
+            Self::ValueTest => "value_test",
         }
     }
 }
@@ -390,6 +395,94 @@ pub struct OcrSpec {
     pub model_sha256: String,
 }
 
+/// #411 Lab B-9: one side of a value-test mark, an inline OCR read. The package declares it as
+/// the OCR target `<mark id>/left` or `<mark id>/right` with the region, languages, timeout,
+/// minimum confidence and model, and the value test reads that target's text with `trim`,
+/// `value` and `part`. `mul` and `add` are declared on the right side only, and there both.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValueTestSide {
+    pub region: RecordRect,
+    pub languages: Vec<String>,
+    pub timeout_ms: u64,
+    pub minimum_confidence: f64,
+    pub model_ref: String,
+    pub model_sha256: String,
+    pub trim: OcrValueTrim,
+    pub value: ValueTestValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<ValueTestPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mul: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add: Option<i64>,
+}
+
+/// #411 Lab B-9: the value a side reads; without `format` the Runtime parses `ascii_decimal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ValueTestValue {
+    UnsignedInteger {
+        min: u64,
+        max: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<OcrUnsignedIntegerFormat>,
+    },
+}
+
+/// #411 Lab B-9: which part of a `current_capacity` text a side reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueTestPart {
+    Current,
+    Capacity,
+}
+
+/// #411 Lab B-9: the right side `{"const": n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValueTestConst {
+    #[serde(rename = "const")]
+    pub constant: u64,
+}
+
+/// #411 Lab B-9: the right side of a comparison: a constant, or another side with `mul` and
+/// `add`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ValueTestRight {
+    Const(ValueTestConst),
+    Side(Box<ValueTestSide>),
+}
+
+/// #411 Lab B-9: a value-test mark as declared (`recording.json` `value_test`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValueTestSpec {
+    pub left: ValueTestSide,
+    pub op: ValueTestOp,
+    /// Absent exactly for `parses`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<ValueTestRight>,
+}
+
+impl ValueTestSpec {
+    /// The OCR targets the package declares for the sides of the value test `id`, as
+    /// `(target id, side)`: `<id>/left`, and `<id>/right` when the right side is read.
+    pub fn sides(&self, id: &str) -> Vec<(String, &ValueTestSide)> {
+        let mut sides = vec![(value_test_side_id(id, "left"), &self.left)];
+        if let Some(ValueTestRight::Side(right)) = &self.right {
+            sides.push((value_test_side_id(id, "right"), right.as_ref()));
+        }
+        sides
+    }
+}
+
+/// #411 Lab B-9: the id of a value test's side target, `<id>/left` or `<id>/right`.
+pub(crate) fn value_test_side_id(id: &str, side: &str) -> String {
+    format!("{id}/{side}")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordedMark {
@@ -438,6 +531,9 @@ pub struct RecordedMark {
     pub mask: Option<TemplateMaskSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique: Option<TemplateUniqueSpec>,
+    /// #411 Lab B-9: a value-test mark's declaration; such a mark has no `region`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_test: Option<ValueTestSpec>,
     pub self_test: SelfTest,
     pub created_at_unix_ms: u64,
 }
@@ -448,6 +544,16 @@ impl RecordedMark {
             .as_deref()
             .or(self.any_of.as_deref())
             .unwrap_or(&[])
+    }
+
+    /// #411 Lab B-9: every target id the package declares for the mark: its own id and, for a
+    /// value test, the ids of its side targets.
+    pub fn target_ids(&self) -> Vec<String> {
+        let mut ids = vec![self.id.clone()];
+        if let Some(test) = &self.value_test {
+            ids.extend(test.sides(&self.id).into_iter().map(|(id, _)| id));
+        }
+        ids
     }
 
     /// Workflow #396 REC-4: a template mark that declares factors, a mask or uniqueness. Its
@@ -705,6 +811,13 @@ pub struct MarkSpec {
     pub mask: Option<TemplateMaskSpec>,
     #[serde(default)]
     pub unique: Option<TemplateUniqueSpec>,
+    /// #411 Lab B-9: a value-test mark's left side, comparison and right side.
+    #[serde(default)]
+    pub left: Option<ValueTestSide>,
+    #[serde(default)]
+    pub op: Option<ValueTestOp>,
+    #[serde(default)]
+    pub right: Option<ValueTestRight>,
 }
 
 impl MarkSpec {
@@ -735,6 +848,9 @@ impl MarkSpec {
             scales: None,
             mask: None,
             unique: None,
+            left: None,
+            op: None,
+            right: None,
         }
     }
 }
@@ -918,6 +1034,9 @@ pub struct MarkView {
     pub family: MarkFamily,
     pub self_test: MarkStatusView,
     pub margin: Option<SelfTestMargin>,
+    /// #411 Lab B-9: a value-test mark's declaration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_test: Option<ValueTestSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -329,6 +329,9 @@ admitted (its directory missing too) is `admission_failed` for its part; any oth
 registry that fails admission, or whose directory is missing, is `package_invalid` naming its
 directory (exit 2).
 
+`resource verify` runs this check on the installed root it lays out from the bundle
+([resource-verify.md](resource-verify.md), Workflow #411 RV-1).
+
 The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file
 format only and is never recorded in the ledger:
 

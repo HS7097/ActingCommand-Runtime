@@ -62,7 +62,8 @@ pub enum ForensicRuntimeFactsUnavailable {
 /// The phases of one offline runtime fact read, in order (Workflow #395).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForensicFactsPhase {
-    /// Opens the read-only metadata snapshot and reads the event at the position.
+    /// Opens the read-only metadata snapshot and reads the event at the position, and the
+    /// latest time through it (#411 A24).
     Position,
     /// Finds the newest complete runtime fact snapshot set at or before the position.
     SnapshotSet,
@@ -171,7 +172,7 @@ fn read(
             },
         });
     }
-    let mut taken_at_unix_ms = None;
+    let mut position_unix_ms = None;
     let position_query = EventQuery {
         from_sequence: Some(position),
         to_sequence: Some(position),
@@ -184,16 +185,38 @@ fn read(
         position,
         deadline,
         |event| {
-            taken_at_unix_ms = Some(event.timestamp_unix_ms);
+            position_unix_ms = Some(event.timestamp_unix_ms);
             Ok(())
         },
     )?;
-    let taken_at_unix_ms = taken_at_unix_ms.ok_or_else(|| {
+    let position_unix_ms = position_unix_ms.ok_or_else(|| {
         facts_error(
             ForensicsCode::RuntimeFactsPositionMissing.code(),
             "no event at the position",
         )
     })?;
+    // #411 A24: a record's time is its producer's, not monotonic in sequence (a run's diagnostic
+    // `artifact.created` carries the run's start and is appended at its end), so the snapshot is
+    // taken at the latest time through the position, the maximum timestamp: the events through
+    // it stamped after the position's own are read too. The time bound filters; the scan ends
+    // only at the position.
+    let later_query = EventQuery {
+        to_sequence: Some(position),
+        from_timestamp_unix_ms: Some(position_unix_ms.saturating_add(1)),
+        ..EventQuery::default()
+    };
+    let mut taken_at_unix_ms = position_unix_ms;
+    visit(
+        &snapshot,
+        &later_query,
+        ProjectionProfile::Cli,
+        position,
+        deadline,
+        |event| {
+            taken_at_unix_ms = taken_at_unix_ms.max(event.timestamp_unix_ms);
+            Ok(())
+        },
+    )?;
     *phase = ForensicFactsPhase::SnapshotSet;
     let deadline = deadline_of(*phase);
     snapshot.set_read_deadline(deadline);

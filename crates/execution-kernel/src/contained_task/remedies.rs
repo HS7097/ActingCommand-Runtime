@@ -14,6 +14,72 @@ use super::*;
 use actingcommand_contract::{
     ProvidedCapability, ProvidesProblem, RemedyDeclaration, validate_provides,
 };
+// Workflow #411 B15 R5: a run's read-only parameters.
+use actingcommand_contract::{FactContent, FactRecord, FactScope, FactValue, InstanceFactSnapshot};
+use sha2::{Digest, Sha256};
+
+/// Workflow #411 B15 R5 (contracts/remedies.md section 4; contracts/instance-fact-store.md, "Run
+/// parameters"): the key prefix reserved for a run's read-only parameters, shared with Workflow
+/// #411 B8. Nothing may publish a key under it; its records exist only as an overlay of the
+/// instance fact snapshots of one run.
+pub const RUN_PARAMETERS_KEY_PREFIX: &str = "session.dispatch.";
+/// The key of one parameter's record is this prefix followed by the parameter's name.
+const RUN_PARAMETER_KEY_PREFIX: &str = "session.dispatch.parameter.";
+/// `source_detector`, `source_snapshot_id` and `schema_version` of an overlay record.
+const RUN_PARAMETER_DETECTOR: &str = "runtime.run-parameters";
+const RUN_PARAMETER_SNAPSHOT: &str = "run-parameters";
+const RUN_PARAMETER_SCHEMA: &str = "fact.v1";
+
+/// Workflow #411 B15 R5: the read-only parameters one run of a package reads as
+/// `session.dispatch.parameter.<name>` = `<value>`. A policy run reads the values its dispatch
+/// carries (`policy_dispatch_parameters`), observed at the dispatch's admission; a run without a
+/// dispatch reads every parameter the package declares with its declared default, observed when
+/// the snapshot is taken. Nothing is stored: [`Self::overlay`] adds them to one snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunParameters {
+    package_id: String,
+    values: Vec<(String, String)>,
+    admitted_at_unix_ms: Option<u64>,
+}
+
+impl RunParameters {
+    /// Adds one record per parameter to `snapshot`, after the records it holds: the key
+    /// `session.dispatch.parameter.<name>`, the value as a string, the snapshot's instance as its
+    /// scope, confidence 1000, no expiry, observed at the dispatch's admission or, for a run
+    /// without a dispatch, at `now_unix_ms`. The snapshot keeps its identity, the stored
+    /// projection's; a select step's `input_sha256` covers the records added.
+    pub fn overlay(&self, snapshot: &mut InstanceFactSnapshot, now_unix_ms: u64) {
+        if self.values.is_empty() {
+            return;
+        }
+        let observed_at_unix_ms = self.admitted_at_unix_ms.unwrap_or(now_unix_ms);
+        let bundle_hash = format!(
+            "{:x}",
+            Sha256::digest(format!("package:{}", self.package_id).as_bytes())
+        );
+        let scope = FactScope::Instance {
+            instance_id: snapshot.context.instance_id.clone(),
+        };
+        for (name, value) in &self.values {
+            snapshot.records.push(FactRecord {
+                scope: scope.clone(),
+                key: format!("{RUN_PARAMETER_KEY_PREFIX}{name}"),
+                content: FactContent::Inline {
+                    value: FactValue::String(value.clone()),
+                },
+                observed_at_unix_ms,
+                expires_at_unix_ms: None,
+                ttl_policy: None,
+                confidence_milli: 1_000,
+                source_detector: RUN_PARAMETER_DETECTOR.to_owned(),
+                source_snapshot_id: RUN_PARAMETER_SNAPSHOT.to_owned(),
+                schema_version: RUN_PARAMETER_SCHEMA.to_owned(),
+                resource_bundle_hash: bundle_hash.clone(),
+                invalidate_on: Vec::new(),
+            });
+        }
+    }
+}
 
 /// A package's remedy declarations, read from its declarations without preparing it as a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +154,32 @@ impl PreparedContainedTask {
                 )
             })
             .collect()
+    }
+
+    /// Workflow #411 B15 R5: the parameters of a run of this package without a dispatch (a
+    /// direct run, a run the host starts itself, a Lab run): every parameter it declares, with
+    /// its declared default (contracts/remedies.md section 4).
+    pub fn default_run_parameters(&self) -> RunParameters {
+        RunParameters {
+            package_id: self.control.package_id.clone(),
+            values: self.declared_parameter_defaults(),
+            admitted_at_unix_ms: None,
+        }
+    }
+
+    /// Workflow #411 B15 R5: the parameters a policy dispatch of this package carries,
+    /// `(parameter_name, parameter_value)` each, observed at the dispatch's admission
+    /// `admitted_at_unix_ms`.
+    pub fn dispatched_run_parameters(
+        &self,
+        values: Vec<(String, String)>,
+        admitted_at_unix_ms: u64,
+    ) -> RunParameters {
+        RunParameters {
+            package_id: self.control.package_id.clone(),
+            values,
+            admitted_at_unix_ms: Some(admitted_at_unix_ms),
+        }
     }
 }
 

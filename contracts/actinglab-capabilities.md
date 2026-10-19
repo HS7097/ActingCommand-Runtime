@@ -11,6 +11,11 @@ Both `record mark` aliases and the L4 `record stop` aliases declare a `dry_run` 
 `resource catalog`, `package preflight` and `package check` declare `no_effect`. Their metadata
 is shared by capabilities, help and command listing. `package check` (Workflow #411 A5) needs
 `offline` and `read_only` and is `available`.
+`resource verify` (Workflow #411 RV-1, [resource-verify.md](resource-verify.md)) needs `offline`,
+is `available` and declares `refused` (`dry_run_unsupported`); its entry carries one more
+member, `report_schema: "actinglab.resource-verify.v1"`, the schema of the report it writes, so a
+repository wrapper reads from `capabilities` whether the Tools it pins can verify.
+`resource check-release` is `retired`, with `reason_code` `resource_check_release_retired`.
 The six device `--record` forms declare `refused`. Capture and its session alias use
 `dry_run_unsupported`; observe/do with `--capture --record` and both session application
 recording forms use `record_flag_unsupported`, before recording locks or Runtime access.
@@ -22,7 +27,15 @@ reads (#411 Lab L1). Each path (offline with `--scene`; online with `--capture`,
 first refused option as `argument` with its `argument_problem` (`conflicting` when another path
 of the verb reads it, otherwise `unknown`) and every refused option in `arguments`. Global
 options are not verb options. MCP `ac_lab_do` and `ac_lab_observe` take only arguments the CLI
-declares.
+declares. An option a path takes once and that is given more than once is refused the same way,
+with `argument_problem` `repeated`, instead of the last one winning; only the offline paths'
+`--scene` may be given one to five times, oldest first, the last the current frame, as may the
+`--scene` of `recognize`, `detect-page`, `current-page` and `is-visible`
+([business-identity-consensus.md](business-identity-consensus.md); MCP's `sample_scenes` are
+the earlier frames, passed before `scene`'s; #411 Lab B-2). `recognize`, `is-visible`,
+`detect-page` and `current-page` refuse every other repeated option the same way, and
+`tap-target` and `navigate`, which read one frame, every repeated option, `--scene` included,
+each before it reads anything.
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with

@@ -9,6 +9,54 @@ pub const MAX_OBSERVATION_FACT_ITEMS: usize = 256;
 pub const MAX_OBSERVATION_FACT_BYTES: usize = 64 * 1024;
 pub const MAX_OBSERVATION_ARTIFACT_BYTES: usize = 256 * 1024;
 pub const MAX_OBSERVATION_TARGETS: usize = 64;
+/// #411 Lab L5: the most frames one online Lab observation takes; target consensus declares
+/// frames 0..=4.
+pub const MAX_OBSERVATION_FRAMES: usize = 5;
+
+/// #411 Lab L5: the frames one online Lab observation takes for its package's target consensus,
+/// as one transaction: `frames` captures (1..=5), `interval_ms` apart, the last the current
+/// frame. The Lab's client computes it from the package it sends with the kernel's helper and
+/// allows for it; it is a Rust API value and travels on no wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObservationFramePlan {
+    frames: usize,
+    interval_ms: u64,
+}
+
+impl ObservationFramePlan {
+    /// One frame and no wait: a package without target consensus.
+    pub const SINGLE: Self = Self {
+        frames: 1,
+        interval_ms: 0,
+    };
+
+    /// `None` when `frames` is not 1..=5; one frame has no interval.
+    pub fn new(frames: usize, interval_ms: u64) -> Option<Self> {
+        (1..=MAX_OBSERVATION_FRAMES)
+            .contains(&frames)
+            .then_some(Self {
+                frames,
+                interval_ms: if frames == 1 { 0 } else { interval_ms },
+            })
+    }
+
+    pub const fn frames(self) -> usize {
+        self.frames
+    }
+
+    pub const fn interval_ms(self) -> u64 {
+        self.interval_ms
+    }
+
+    /// What the transaction adds to one observation's response allowance: one `backend_open`
+    /// allowance and one interval for every frame before the current one; `None` on overflow.
+    pub fn added_allowance(self, backend_open: std::time::Duration) -> Option<std::time::Duration> {
+        let earlier = u32::try_from(self.frames - 1).ok()?;
+        backend_open
+            .checked_add(std::time::Duration::from_millis(self.interval_ms))?
+            .checked_mul(earlier)
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

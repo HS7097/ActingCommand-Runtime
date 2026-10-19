@@ -89,21 +89,30 @@ pub(super) fn run_preflight(flags: &FlagArgs) -> CliOutcome<Value> {
             )));
         }
     }
-    let resources = super::contained_resources::load(flags, "package-preflight").map_err(|error| {
-        error.with_details(json!({"coverage":{"declaration_parse":"not_completed","package_load":"failed","task_prepare":"not_run","execution":"not_run"}}))
-    })?;
-    let bundle = std::sync::Arc::try_unwrap(resources)
-        .map_err(|_| CliError::package_invalid("preflight package ownership is shared"))?;
-    let prepared = actingcommand_lab::PreparedContainedTask::from_bundle(bundle).map_err(|error| {
-        CliError::package_invalid(format!("{}: {}", error.code(), error.detail().unwrap_or("task preparation failed")))
-            .with_details(json!({"code":error.code().as_str(),"declaration":error.declaration_issue(),"coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"failed","execution":"not_run"}}))
-    })?;
+    let prepared = preflight_admission(flags)?;
     Ok(json!({
         "schema_version":"actingcommand.package-preflight.v1", "status":"prepared", "executed":false,
         "task_id":prepared.task_label(), "package_label":prepared.package_label(),
         "coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"passed","recognition_execution":"not_run","execution":"not_run"},
         "effective_timing":prepared.effective_timing(), "production_global_ledger_written":false
     }))
+}
+
+/// The admission `package preflight` answers for: the package `--package` or `--zip` names,
+/// loaded with every file and asset, then its entry task prepared. Workflow #411 RV-1:
+/// `resource verify` admits every pack with it.
+pub(super) fn preflight_admission(
+    flags: &FlagArgs,
+) -> CliOutcome<actingcommand_lab::PreparedContainedTask> {
+    let resources = super::contained_resources::load(flags, "package-preflight").map_err(|error| {
+        error.with_details(json!({"coverage":{"declaration_parse":"not_completed","package_load":"failed","task_prepare":"not_run","execution":"not_run"}}))
+    })?;
+    let bundle = std::sync::Arc::try_unwrap(resources)
+        .map_err(|_| CliError::package_invalid("preflight package ownership is shared"))?;
+    actingcommand_lab::PreparedContainedTask::from_bundle(bundle).map_err(|error| {
+        CliError::package_invalid(format!("{}: {}", error.code(), error.detail().unwrap_or("task preparation failed")))
+            .with_details(json!({"code":error.code().as_str(),"declaration":error.declaration_issue(),"coverage":{"declaration_parse":"passed","package_load":"passed","task_prepare":"failed","execution":"not_run"}}))
+    })
 }
 
 pub(super) fn run_offline(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {

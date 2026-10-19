@@ -5443,8 +5443,16 @@ const HOST_SPLIT: &[HostModule] = &[
             HostDefinition {
                 name: "HostShared::capture_readonly_observation",
                 visibility: DeclaredVisibility::Super,
-                callers: &["host/observation.rs", "host/online_observation.rs"],
+                callers: &["host/observation.rs"],
                 delegates: &[],
+            },
+            // #411 Lab L5a: the online observation reaches the read-only capture through its
+            // frame transaction.
+            HostDefinition {
+                name: "HostShared::capture_readonly_transaction",
+                visibility: DeclaredVisibility::Super,
+                callers: &["host/online_observation.rs"],
+                delegates: &["capture_readonly_observation"],
             },
         ],
         delegates: &[],
@@ -6360,6 +6368,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_fn("FlagArgs::bool"),
             glue_fn("FlagArgs::optional"),
             glue_fn("FlagArgs::values"),
+            glue_fn("FlagArgs::count"),
             glue_fn("FlagArgs::without_first_positional"),
             glue_fn("FlagArgs::required"),
             glue_fn("FlagArgs::optional_path"),
@@ -6417,6 +6426,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "FlagArgs::values",
                 "fn values(&self, name: &str) -> Vec<String>",
             ),
+            glue_invariant("FlagArgs::count", "fn count(&self, name: &str) -> usize"),
             glue_invariant(
                 "FlagArgs::without_first_positional",
                 "fn without_first_positional(&self) -> Self",

@@ -746,3 +746,32 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_l1::l1_the_tool_schemas_drop_the_removed_arguments",
 ]
 incident = ["#411 Lab L1"]
+
+# Workflow #411 B15 R6 (v0.12.3; register §1.116 B15W-4, B15W-5; no persisted ledger shape; model-b15 §5.1, §7.6; key assigned by the coordinator): actingctl remedy set writes a scope's whole list (instance or game; --server is refused as actingctl_usage_invalid unknown and ac_remedy_set's server as arguments_invalid unknown, a server id not being game-qualified) as a new version, remedy get answers the records that apply with the one in effect, remedy lift republishes the instance's record unchanged or an empty one as a new observation naming the record it replaced, and a refused write prints its denied receipt and exits non-zero; MCP ac_remedy_set (rows or lift) and ac_remedy_get, general tools, write and read the same record and answer what the CLI answers
+[[gate]]
+key = "74"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_get_and_lift_round_trip",
+    "actingcommand-actingctl::gate::remedy_choices::b15w_ac_remedy_set_and_get_write_and_read_the_same_record",
+    "actingcommand-actingctl::gate::remedy_choices::b15w_remedy_set_and_ac_remedy_set_refuse_a_server_scope",
+]
+incident = ["#411 B15"]
+
+# Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-2; no persisted ledger shape; contracts/policy-suspension.md `remedies`; key assigned by the coordinator; the report half is host 116): MCP ac_diagnose (and actingctl diagnose) carries the remedies rows of actingd suspended whose instance_id is the diagnosed instance's alias or id (every row without an instance; an unparsed row names no instance), verbatim, cut for the output budget after packs and before report_warnings, and its description names the list
+[[gate]]
+key = "75"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_411_b15w2::b15w2_ac_diagnose_shows_the_instances_stopped_remedies",
+]
+incident = ["#411 B15"]
+
+# #411 Lab B-2 (v0.12.x; register §1.131 B2-5, no persisted ledger shape; G8 offline; coordinator decision Q1 of 2026-10-19; related: apps 73, 76): MCP ac_lab_observe and ac_lab_do take sample_scenes, a list of 1 to 4 strings none flag-like (the schema says so), the earlier frames of scene's set, and pass them to actinglab as --scene options before scene's, oldest first; sample_scenes without scene answers arguments_invalid {argument: sample_scenes, argument_problem: conflicting} (class usage), an empty or five-item list out_of_range and a flag-like item not_recognised, each before the install is located and before any actinglab child runs
+[[gate]]
+key = "78"
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_lab_b2::b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene",
+]
+incident = ["#411 Lab B-2"]

@@ -332,12 +332,20 @@ of five families:
   Until then the function knows offset and the rest, as the contract does today.
 - U-6 deletes only the by-origin half of today's rule (agent versus person); the
   content rules (offset checks, `session_pack_schedule_invalid` and the like) stay.
-- The remedy choices family (Workflow #411 B15, [remedies.md](remedies.md); written
-  ahead of slice R6) has no code yet either: R6 adds it to the function, with the content
-  rule `session_remedy_choices_invalid`
-  ([instance-fact-store.md](instance-fact-store.md), "Remedy choice facts"). Its writers
-  are actingctl `remedy set|get|lift` and the MCP general tools `ac_remedy_set` and
-  `ac_remedy_get`.
+- The remedy choices family (Workflow #411 B15, [remedies.md](remedies.md)) is built (slice
+  R6): `fact_key_family` returns it for `session.remedy.choices`, with the content rule
+  `session_remedy_choices_invalid` ([instance-fact-store.md](instance-fact-store.md), "Remedy
+  choice facts"). `validate()` refuses any observation whose keys belong to two families as
+  `fact_origin_mixed`; until U-6 a family with the origin exception (offsets, remedy choices)
+  is taken from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`, and its `fact.published`
+  event keeps the writer's origin. Its writers are actingctl `remedy set|get|lift` and the MCP
+  general tools `ac_remedy_set` and `ac_remedy_get`. A record is written at instance or game
+  scope only: the store's `server` scope names a server without its game, so a server record
+  would apply to every game whose instances share that server id. `remedy set` takes
+  `--instance` or `--game` (`--server` is `actingctl_usage_invalid`, `unknown`),
+  `ac_remedy_set` takes `instance` or `game` (`server` is `arguments_invalid`, `unknown`), and
+  the content rule refuses a server-scoped record from every writer
+  (`session_remedy_choices_invalid`, `field` `/scope`).
 - The prefix `session.dispatch.` is reserved for a run's read-only parameters (Workflow
   #411 B15 R5): it is no family, since nothing may write it; `PublishFact` and
   `PublishFacts` of such a key are refused from every origin as
@@ -548,7 +556,7 @@ tool.
 | `ac_emulator_discover` (new) | read (discovery) | `actingctl emulator discover` | as the CLI | general |
 | `ac_monitor_set`, `ac_monitor_clear` (new) | instruction | `actingctl monitor-set`, `monitor-clear` | `instance`, `interval_ms`, `expect`, `recover` ↔ same flags (defaults 30 000 ms, `home`) | general |
 | `ac_task_offset` (new) | instruction | `actingctl task-offset` | as the CLI | general |
-| `ac_lab_observe` | read | actinglab `observe` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`, the preview is a JPEG file answered by its path and scale, never inlined; an exported answer keeps the frame parts inline while they fit) | option one |
+| `ac_lab_observe` | read | actinglab `observe` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`, the preview is a JPEG file answered by its path and scale, never inlined; an exported answer keeps the frame parts inline while they fit); `sample_scenes` (1 to 4) ↔ the earlier `--scene` frames, before `scene`'s (#411 Lab B-2) | option one |
 | `ac_record_start`, `ac_record_mark`, `ac_record_stop`, `ac_record_status` | offline (recording files) | actinglab `record start`, `mark`, `stop`, `status` | unchanged | option one |
 | `ac_binding_draft` | offline | actinglab `record binding-draft` (new composite) | `record_stop`, `record_stop_export` ↔ same flags | option one |
 | `ac_pack_check` | offline | actinglab `package check` (structural admission, M-PKG; #411 A5: answers `{status, package_id, entry_task_id}`) | `package` ↔ `--package` | option one |
@@ -557,7 +565,7 @@ tool.
 | `ac_stop_run` | operation | actinglab `run stop` (new) | `handle` ↔ `--request-id`; `wait_s` ↔ `--wait-s` (0–25); `--cancel-only` while this process's job still runs | option two |
 | `ac_emulator` | operation | actinglab `emulator start`, `stop`, `restart` (new) | `instance`, `action` ↔ `--instance` and the subcommand | option two |
 | `ac_app` (new, #389 MCP-13a; operator before U-3) | operation | actinglab `session app <launch\|restart\|stop\|force-stop>` | `action` ↔ the action word, `instance` ↔ `--instance` (both required); never `--record`; `force-stop` is the same action as `stop`; marked destructive; actinglab's data verbatim and its errors as every Lab tool relays them | option two |
-| `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`; after an action `after_attachment` is the known after page's projection or the after frame's path and preview path, never an image; an exported answer keeps the frame parts inline while they fit) | option two |
+| `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`; after an action `after_attachment` is the known after page's projection or the after frame's path and preview path, never an image; an exported answer keeps the frame parts inline while they fit); `sample_scenes` (1 to 4) ↔ the earlier `--scene` frames, before `scene`'s (#411 Lab B-2) | option two |
 | `ac_ladder_drill` (new, #390 DRILL-1; operator before U-3) | operation | `actingctl ladder-drill` | `instance` ↔ `--instance` (alias, `instance_id` or ADB port), `device` ↔ `--device` (a boolean, absent false); output as the CLI's; marked destructive (a device drill may stop the application or restart the emulator); answers at admission, before the drill climbs | option two |
 
 - `ac_overview` past the output budget (#389 MCP-8, MCP-0 command table §4.9): it cuts one

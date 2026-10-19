@@ -3,8 +3,9 @@
 A Lab recording turns a sequence of real screens into a linear-steps task package: each
 step is one screen with its recognition marks and at most one effect, a click rectangle or
 an application operation (R24), and the last step only recognizes. This contract
-(Workflow #336) covers the recording state, the commands that build it, the five mark
-families with their mark-time self-test, steps and transitions, remediation, application
+(Workflow #336) covers the recording state, the commands that build it, the six mark
+families (#411 Lab B-9 added the value test) with their mark-time self-test, steps and
+transitions, remediation, application
 steps, optional steps, `--record` on the device commands and the recording lock, and then
 the package `record stop` generates, checks and writes ("Package generation").
 
@@ -76,7 +77,9 @@ command deletes nothing and names the files it already wrote.
   self-test's `matched_scales_milli` (see "Following a template", Workflow #396 REC-4); and
   (Workflow #390 LAB-2) a step's `forbidden` and `anchor`, a click's `gesture`, an
   execution's `to_point` and `duration_ms`, and the recording's `amended_at_unix_ms` (see
-  "Forbidden marks and anchors", "Drags and long presses" and "Marking after stop").
+  "Forbidden marks and anchors", "Drags and long presses" and "Marking after stop"). #411 Lab
+  B-9: a value-test mark keeps its declaration in `value_test: {left, op, right?}`, absent on
+  every other mark, and has no `region` (see "Value tests").
 
 ## Commands
 
@@ -129,7 +132,7 @@ record mark --request <file> | --request-json <json>
 ```
 
 The request form (`actingcommand.lab-record-mark.v1`) carries every capability, including
-the color digest, OCR and check families:
+the color digest, OCR, check and value-test families:
 
 ```json
 {"schema_version":"actingcommand.lab-record-mark.v1",
@@ -146,6 +149,31 @@ the color digest, OCR and check families:
  "click":{"from":"ui/start"},"click_guard":null,"retry":null,"replace_click":false,
  "transition":null,"replace_transition":false,"step_action":null,"application":null,
  "optional":null,"optional_settle_ms":null}
+```
+
+A value test (#411 Lab B-9, request form only): a value read at the left region must be at
+least 25000, and a second one at most twice a capacity read at the right region:
+
+```json
+{"schema_version":"actingcommand.lab-record-mark.v1","step":2,
+ "add":[{"id":"value/count","family":"value_test",
+         "left":{"region":{"x":1040,"y":20,"width":120,"height":28},"languages":["en"],
+                 "timeout_ms":1000,"minimum_confidence":0.8,"model_ref":"model",
+                 "model_sha256":"<64 hex>","trim":"whitespace_v1",
+                 "value":{"type":"unsigned_integer","min":0,"max":9999999}},
+         "op":"ge","right":{"const":25000}},
+        {"id":"value/pair","family":"value_test",
+         "left":{"region":{"x":600,"y":20,"width":80,"height":28},"languages":["en"],
+                 "timeout_ms":1000,"minimum_confidence":0.8,"model_ref":"model",
+                 "model_sha256":"<64 hex>","trim":"whitespace_all_v1",
+                 "value":{"type":"unsigned_integer","min":0,"max":999,"format":"current_capacity"},
+                 "part":"current"},
+         "op":"le",
+         "right":{"region":{"x":600,"y":20,"width":80,"height":28},"languages":["en"],
+                  "timeout_ms":1000,"minimum_confidence":0.8,"model_ref":"model",
+                  "model_sha256":"<64 hex>","trim":"whitespace_all_v1",
+                  "value":{"type":"unsigned_integer","min":0,"max":999,"format":"current_capacity"},
+                  "part":"capacity","mul":2,"add":0}}]}
 ```
 
 A page transition after the click of step 3, a window transition, clearing it, and one step
@@ -233,12 +261,13 @@ Rules:
   and long presses".
 - Click: exactly one of a rectangle (`--click`, inside the frame with width and height ≥ 1),
   a mark of the step (`--click-from`, copying the mark's region; for a template that is
-  the crop, not the search area; a check has no region: `record_click_source_invalid`), and a
+  the crop, not the search area; a check or a value test has no region:
+  `record_click_source_invalid`), and a
   template mark of the step the click follows (`--click-follow`, alone or with `--click`; see
   "Following a template"). `follow` with `from` is `validation_failed`.
   A second click needs `--replace-click` (`record_click_exists`); an executed click
   cannot be replaced before `--reopen-step` (`record_click_executed`). `--click-guard`
-  names a template, color, color digest or check mark of the step
+  names a template, color, color digest, check or value-test mark of the step
   (`record_guard_family_invalid`). `--click-retry <n>` declares `{max_attempts n (2..5),
   interval_ms 1000}`; the request form takes any `interval_ms` in 1..5000.
 
@@ -260,7 +289,7 @@ reason}`, or
 {record_id, status, coordinate_space, defaults, open_step,
  steps:[{index, artifact_step|null, page, dropped, converted_to_transition,
          frames[{frame_id, role, sha256, w, h, superseded}],
-         marks[{id, family, self_test{status}, margin}], reused,
+         marks[{id, family, self_test{status}, margin, value_test?}], reused,
          entry: "any" | "page",
          click{rect, source, executed, outcome, attempts, needs_review, gesture?}|null,
          application{action, cli_verb, source, executed, attempts[], needs_review}|null,
@@ -272,7 +301,8 @@ reason}`, or
 
 Workflow #390 LAB-2: `gesture`, `forbidden` and `anchor` are present only on a drag or long
 press, a page that forbids marks and an anchored page; `amended_at_unix_ms` only on a stopped
-recording marked again since its package was generated ("Marking after stop").
+recording marked again since its package was generated ("Marking after stop"). #411 Lab B-9:
+`value_test` is present only on a value-test mark, its declaration ("Value tests").
 
 `click.outcome` is `declared` (no outcome yet), `executed` (Performed) or `indeterminate`
 (the outcome of the last `do --capture --record` is unknown); `attempts` counts the earlier
@@ -300,11 +330,52 @@ samples, not superseded frames). The result is `passed`, `failed` or `not_evalua
 | color_digest | `region`, `columns`, `rows`, `max_mean_milli`, `max_cell?`, `exclude_cells?` (no defaults) | `cells` from the primary frame (`color_digest.v1`); every frame must pass; `margin` = `{mean_milli, max_cell}` limits minus the worst values |
 | ocr | `region`, `languages`, `timeout_ms`, `match_mode` (`exact`/`contains`), `expected`, `case_sensitive`, `minimum_confidence`, `model_ref`, `model_sha256`, all required | the OCR target the package declares for the mark is evaluated on every frame with the Lab's OCR provider (see "OCR in the Lab"); every frame must pass; a provider or evaluation error is `failed` with `self_test_error`. Without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), and not evaluated is never reported as passed |
 | check | `all_of` or `any_of`: 2..8 distinct marks of the step, no checks | derived: all_of fails on any failed member and passes when all pass; any_of passes on any passed member and fails when all fail; otherwise not evaluated |
+| `value_test` | `left`, `op`, `right?` (each side an OCR read: `region`, `languages`, `timeout_ms`, `minimum_confidence`, `model_ref`, `model_sha256`, `trim`, `value`, `part?`; the right side may be `{const}` or a side with `mul` and `add`) | the value test the package declares for the mark is evaluated on every frame with the Lab's OCR provider; every frame must hold; `value_test_unresolved` / `value_test_not_met` are the failure's details; without an OCR model it is `not_evaluated` (`lab_ocr_unavailable`) |
 
 Shape errors (missing or misplaced fields, an invalid grid) are `validation_failed` (exit
 2); a region outside the frame (`region_outside_frame`), an invalid search area
 (`search_invalid`), a check member that is not a mark of the step (`check_member_invalid`)
 and failed self-tests are reasons inside `record_mark_rejected`.
+
+### Value tests
+
+#411 Lab B-9 (Alice 2026-10-19: 「Lab的资源制作应当包含所有可用后端的识别以及触控」). A
+`value_test` mark (request form only, as the color digest, OCR and check families) is the
+value test of task schema `0.9` ([resource-declarations.md](resource-declarations.md),
+section Task schema `0.9` value tests) with its sides read inline: each side is an OCR read of
+its own region. Its members follow the Runtime's rules: `op` is `eq`, `ne`, `lt`, `le`, `gt`,
+`ge` or `parses`; `parses` has no `right` and every other `op` needs one; `right` is `{"const":
+n}` with `0 <= n <= 2^53-1` or a side with `mul` (1 to 1,000,000) and `add` (`-(2^53-1)` to
+`2^53-1`), both required there and refused on `left`; `trim` is `whitespace_v1` or
+`whitespace_all_v1`; `value` is `{"type": "unsigned_integer", "min", "max", "format"?}` with
+`min <= max` and the format `ascii_decimal` by default; `part` (`current` or `capacity`) is
+given exactly when the format is `current_capacity`; each side has non-empty `languages`,
+`timeout_ms > 0`, `minimum_confidence` in 0..=1, a `model_ref` and a lowercase 64-hex
+`model_sha256`. The mark has no `region`, `search`, `threshold` or any other family's field.
+Anything else is `validation_failed` (exit 2); a side region outside the frame is
+`region_outside_frame` inside `record_mark_rejected`.
+
+- **Self-test.** On every live frame of the step the Runtime's evaluator evaluates the mark
+  over a one-test pack (its side OCR targets and the value test) with the Lab's OCR provider,
+  as an OCR mark's self-test does. It is `passed` only when the test holds on every frame; a
+  frame on which it does not hold refuses the batch with reason `self_test_failed` and the
+  details `{frame_id, failure, value_test}`: `failure` is the evaluation's outcome,
+  `value_test_unresolved` (with `value_side` and `value_problem`) or `value_test_not_met` (with
+  `value_op`), and `value_test` its evidence. A provider failure is `self_test_error`. Without
+  an OCR model it is `not_evaluated` (`lab_ocr_unavailable`), never passed. The read texts and
+  values appear only in these details and are not stored.
+- **Recording and use.** `recording.json` keeps the declaration as `value_test: {left, op,
+  right?}`; the mark output and the steps of `record status` show it. A check may name it as a
+  member, and `--click-guard` may name it.
+- **Refusals.** Where the Runtime refuses a value test, the Lab refuses the mark: another page
+  cannot forbid it, directly or through a check (`validation_failed`, details `{mark_id,
+  family}`); it is never an anchor (`anchor_invalid`, `not_own_template`), never a click source
+  (`record_click_source_invalid`: it has no region) and never a followed template
+  (`record_click_follow_invalid`, `not_template`). Its side targets take the ids
+  `<id>/left` and `<id>/right`; a mark whose id or side id another mark id (or side id) of the
+  recording already takes is refused with `record_mark_id_conflict`.
+- **Use.** To act only when a value holds, mark the value test on an optional step's page
+  ("Optional steps").
 
 ### Following a template
 
@@ -363,8 +434,11 @@ marks (`--forbid`, `--anchor` and `--no-anchor` with `--transition` are `validat
 - `--forbid <id>` (`"forbid": [...]`, repeatable) adds a mark the page must not show: an own
   mark of another effective step, as `--reuse` takes one. An id no step has is refused with
   reason `forbidden_source_missing` inside `record_mark_rejected`; a mark the page itself
-  requires (an own or reused mark of the step) is `validation_failed`. `--remove <id>` takes a
-  forbidden mark off the page again.
+  requires (an own or reused mark of the step) is `validation_failed`. #411 Lab B-9: forbidding
+  a value test, or a check with one as member, is `validation_failed` (details `{mark_id,
+  family}`), as the page detector refuses a value test in `forbidden` (a test that cannot read
+  does not pass, which there would let the page match unseen; require the opposite comparison
+  instead). `--remove <id>` takes a forbidden mark off the page again.
 - On every `record mark` of the step, each forbidden mark is evaluated on every live frame of
   the step as its self-test evaluates it (a check from its members on that frame). One that
   passes on a frame refuses the batch with reason `forbidden_mark_passes` and the `frame_id`; an
@@ -376,8 +450,9 @@ marks (`--forbid`, `--anchor` and `--no-anchor` with `--transition` are `validat
 - `--anchor <id>` (`"anchor": "<id>"`) makes an own template mark of the step the page's anchor;
   `--no-anchor` (`"clear_anchor": true`) clears it, and giving both is `validation_failed`. The
   anchor must be an own template mark the page requires: otherwise the batch is refused with
-  reason `anchor_invalid` and `problem` `not_own_template` (a color, color digest, OCR, check or
-  reused mark, or no mark of the step) or `not_required` (a member of an `any_of` check of the
+  reason `anchor_invalid` and `problem` `not_own_template` (a color, color digest, OCR, check,
+  value-test or reused mark, or no mark of the step; a value test is never an anchor) or
+  `not_required` (a member of an `any_of` check of the
   step). The anchor cannot be removed while it anchors the page (`record_mark_in_use`).
 - A step that forbids marks or has an anchor cannot become a transition
   (`record_to_transition_invalid`, reason `page_rule`).
@@ -418,7 +493,8 @@ configuration its installation selects, or, on a single-location root
 and ONNX Runtime is initialised on the first OCR request. The mark
 self-test, `record stop`'s first decision and cross-check, `observe`, `recognize`, `is-visible`,
 `detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
-evaluate OCR targets with it.
+evaluate OCR targets with it. #411 Lab B-9: value-test marks are OCR: their self-test, `record
+stop`'s first decision and cross-check read their sides with the same provider.
 
 #411 Lab L6: the provider serves the root's NN model folders as well, so the same commands
 evaluate NN targets with it; `observe` evaluates an action's NN target when the provider holds
@@ -438,7 +514,8 @@ purpose is to evaluate an OCR target:
   and `observe`, `detect-page` and `current-page` on a page set with such a target, refuse with
   `lab_ocr_unavailable` (exit 3, `blocked_by: ["ocr_model"]`, `details.outcome` the outcome with
   the OCR target as `target_id`) before evaluating anything;
-- an OCR mark's self-test and `record stop`'s first decision report it as their reason;
+- an OCR or value-test mark's self-test and `record stop`'s first decision report it as their
+  reason;
 - an `observe` action whose target is an OCR target or a value test is not evaluated, as before,
   and the output names it in `ocr.not_evaluated`, also beside a provider that serves NN models
   only;
@@ -901,6 +978,15 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   whose target is `page/<page>`; every reference to it in the package (a guard's `target_id`, a
   followed click's `target_id`, a check member, another page's required or forbidden marks) names
   `page/<page>`.
+- #411 Lab B-9: a value-test mark `<id>` is one `ocr_targets[]` entry per side, `<id>/left`
+  and (when the right side reads a value) `<id>/right`, each with the side's region, languages,
+  timeout, minimum confidence and model, `match_mode: "contains"`, `expected` the ten ASCII
+  digits `"0"` to `"9"` and `case_sensitive: false` (the side's own verdict means "a digit was
+  read"; the value test reads its text), and one `checks[]` entry `{"id": "<id>", "value_test":
+  {"left": {"target_id": "<id>/left", "trim", "value", "part"?}, "op", "right"?}}` whose
+  `right` is `{"const"}` or `{"target_id": "<id>/right", "trim", "value", "part"?, "mul",
+  "add"}`. The page rule requires the value test as any own mark (not as a member of an
+  `any_of` check); the side targets are never in a page rule.
 - `control.json`: `Lab-1y.control.v2`, `execution_mode: "linear_steps"`, the package id, game,
   server, resolution (the recording's frame size), `entry_task_id` (the task id),
   `prerequisite_package_id` with `--requires`, `timeout_ms`, `step_timeout_ms` and `max_steps`
@@ -925,7 +1011,10 @@ Numbers in page and operation ids have one width: two digits, or the digits of n
   followed template that is not a required template mark of the page is refused with
   `record_click_follow_invalid`. The guard's `expected_rect` is
   the template's search area, the color or digest region, or the bounding box of the check's
-  members. A page with only OCR marks gives no guard and `unguarded_trusted_coordinate: true`.
+  members. #411 Lab B-9: a value test named by `--click-guard` guards as a check does,
+  `"check": "<id>"`, with `expected_rect` the bounding box of its sides' regions (a value-test
+  member of a check counts with that box). A page with only OCR marks gives no guard and
+  `unguarded_trusted_coordinate: true`.
 - An application step's operation is `step_ii_app`: `application: {"action"}`,
   `expect_after.timeout_ms` the application arrival timeout A
   (`--application-arrival-timeout-ms`, default 90000), `post_delay_ms` 1000, no guard and no
@@ -997,8 +1086,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
      `first_decision{status:"not_evaluated", reason:"lab_application_effect_offline",
      refusal}`; when step 1 is a click, the warning `first_decision_not_evaluated` says its
      click was not simulated;
-   - without an OCR model, a step 1 that involves OCR (an OCR mark or a check with an OCR
-     member among its required marks, which includes a trusted-coordinate step) is not
+   - without an OCR model, a step 1 that involves OCR (an OCR or, #411 Lab B-9, value-test
+     mark, or a check with such a member, among its required marks, which includes a
+     trusted-coordinate step) is not
      simulated: `first_decision{status:"not_evaluated", reason:"lab_ocr_unavailable"}` and the
      warning `first_decision_not_evaluated`; with one it is simulated like any other step;
    - otherwise step 1's primary frame must give `would_click` of `step_01_click` with the
@@ -1014,7 +1104,9 @@ guard execution still requires the corresponding frames, provider and Runtime ev
    Anything else is `record_artifact_admission_failed` with the decision.
 4. **Cross-check.** Every target is evaluated on its own with the admitted evaluator, OCR
    with the Lab's OCR provider; without an OCR model OCR is not called and counts as
-   undetermined. A check is derived from its members. A page matches
+   undetermined. #411 Lab B-9: a value test is OCR: without a model it is undetermined, never
+   passed, and with one the admitted evaluator evaluates it as the Runtime does. A check is
+   derived from its members. A page matches
    when every required target passes and (Workflow #390 LAB-2) no forbidden target passes, does
    not when a required one fails or a forbidden one passes (`record_step_self_mismatch` names it
    in `forbidden_passed`), and is undetermined otherwise.

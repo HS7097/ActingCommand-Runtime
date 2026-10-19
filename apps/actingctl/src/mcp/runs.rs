@@ -207,8 +207,8 @@ impl Diagnosis {
             // suspended and clock_slots_total points there (#372 K3, K4). Then what another tool can read again: the errors page
             // (ac_events), then the runs, oldest first (ac_get_run / ac_events). The other rows
             // of the actingd suspended report have no other MCP route, so they go last:
-            // repeating, lift, suspended, the suspended task packages (Workflow #386 SR-3), then
-            // the report's warnings.
+            // repeating, lift, suspended, the suspended task packages (Workflow #386 SR-3), the
+            // stopped remedy rounds (Workflow #411 B15 R7), then the report's warnings.
             if kept.failures_grouped > 0 {
                 kept.failures_grouped -= 1;
             } else if kept.runs_grouped > 0 {
@@ -227,6 +227,8 @@ impl Diagnosis {
                 kept.suspended -= 1;
             } else if kept.packs > 0 {
                 kept.packs -= 1;
+            } else if kept.remedies > 0 {
+                kept.remedies -= 1;
             } else if kept.report_warnings > 0 {
                 kept.report_warnings -= 1;
             } else {

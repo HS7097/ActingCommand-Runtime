@@ -14,7 +14,8 @@ use actingcommand_contract::page_projection::{
     ProjectionInput,
 };
 use actingcommand_contract::{
-    ObservationFacts, PageObservationStatus, PpocrDiagnostics, RuntimeContractResult,
+    MAX_OBSERVATION_FRAMES, ObservationFacts, ObservationFramePlan, PageObservationStatus,
+    PpocrDiagnostics, RuntimeContractResult,
 };
 use actingcommand_page_detector::{PageTargetEvaluation, PageTargetRole};
 use actingcommand_recognition::Scene;
@@ -83,6 +84,36 @@ pub struct PreparedPageObservation {
     bundle: ExternallyVerifiedBundle,
     elements: Vec<ObservationElement>,
     targets: Vec<String>,
+    frame_plan: ObservationFramePlan,
+}
+
+/// #411 Lab L5: what an online observation is for. `observe` inspects the page and projects the
+/// matched page's candidate layouts as before; a Lab `do`'s before, after and arrival
+/// observations are page observations, which, like the kernel's page waits and guards, do not
+/// project a layout that needs more than one frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationMode {
+    Inspect,
+    Page,
+}
+
+/// #411 Lab L5: the frames one online observation of `evaluator`'s package takes, its target
+/// consensus's frame count and interval (unscaled): the host captures them and the Lab's client
+/// allows for them. One frame without target consensus.
+pub fn observation_frame_plan(
+    evaluator: &RecognitionEvaluator,
+) -> Result<ObservationFramePlan, OnlineObservationError> {
+    ObservationFramePlan::new(
+        evaluator.target_sample_frames(),
+        evaluator.target_sample_interval_ms(),
+    )
+    .ok_or_else(|| {
+        OnlineObservationError::new(
+            ExecutionKernelCode::ObservationResourcesInvalid.code(),
+            ExecutionKernelLocation::LoadObservationResources.location(),
+            "target consensus frame count out of range",
+        )
+    })
 }
 
 pub struct EvaluatedPageObservation {
@@ -250,11 +281,18 @@ impl PreparedPageObservation {
                 input,
             });
         }
+        let frame_plan = observation_frame_plan(evaluator)?;
         Ok(Self {
             bundle,
             elements,
             targets: targets.to_vec(),
+            frame_plan,
         })
+    }
+
+    /// #411 Lab L5: the frames each online observation of this package takes.
+    pub fn frame_plan(&self) -> ObservationFramePlan {
+        self.frame_plan
     }
 
     /// Workflow #336 PKG-S2 (option 丙): the package's `package_id` as its control declares
@@ -278,22 +316,60 @@ impl PreparedPageObservation {
             .contains(page_id)
     }
 
+    /// The one-frame observation: [`Self::evaluate_frames`] over `png` alone, inspecting.
     pub fn evaluate(
         &self,
         png: &[u8],
         frame: FrameIdentity,
     ) -> Result<EvaluatedPageObservation, OnlineObservationError> {
+        self.evaluate_frames(&[png], frame, ObservationMode::Inspect)
+    }
+
+    /// #411 Lab L5: one observation over the frames of its transaction, oldest first, the last
+    /// the current frame (`frame` is its identity). Pages, explicit targets, elements and fields
+    /// are evaluated over the whole set, so target consensus aggregates its declared frames as
+    /// a task's observation does; geometry, the RGB8 hash and every candidate layout come from
+    /// the current frame. Frames of different sizes fail the observation with
+    /// `recognition_sample_geometry_changed`.
+    pub fn evaluate_frames(
+        &self,
+        frames: &[&[u8]],
+        frame: FrameIdentity,
+        mode: ObservationMode,
+    ) -> Result<EvaluatedPageObservation, OnlineObservationError> {
         let loaded = self.bundle.loaded_bundle();
         let metadata = loaded.projection_metadata().expect("admitted metadata");
         let evaluator = loaded.evaluator().expect("admitted evaluator");
         let detector = loaded.detector().expect("admitted detector");
-        let scene = Scene::from_png(png).map_err(|error| {
+        let decode_error = |cause: String| {
             OnlineObservationError::new(
                 ExecutionKernelCode::ObservationFrameInvalid.code(),
                 ExecutionKernelLocation::DecodeObservationFrame.location(),
-                error,
+                cause,
             )
-        })?;
+        };
+        if frames.is_empty() || frames.len() > MAX_OBSERVATION_FRAMES {
+            return Err(decode_error(format!(
+                "an observation takes 1..={MAX_OBSERVATION_FRAMES} frames, got {}",
+                frames.len()
+            )));
+        }
+        let scenes = frames
+            .iter()
+            .map(|png| Scene::from_png(png).map_err(|error| decode_error(error.to_string())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let scene = scenes.last().expect("one frame at least");
+        if scenes
+            .iter()
+            .any(|sample| sample.width() != scene.width() || sample.height() != scene.height())
+        {
+            return Err(OnlineObservationError::new(
+                ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
+                ExecutionKernelLocation::DecodeObservationFrame.location(),
+                "the frames of one observation differ in size",
+            ));
+        }
+        let scene_set = scenes.iter().collect::<Vec<_>>();
         let sample_facts = std::cell::RefCell::new(ObservationFacts::default());
         let sample_reports = std::cell::RefCell::new(PpocrDiagnostics::new());
         let mut sample_recorder =
@@ -319,7 +395,8 @@ impl PreparedPageObservation {
                 Ok(())
             };
         let context = evaluator
-            .scene_context(&scene)
+            .scene_context_with_samples(&scene_set)
+            .map_err(|error| decode_error(error.to_string()))?
             .with_sample_recorder(&mut sample_recorder);
         let (pages, batch_error) = match detector.evaluate_all_outcomes_in_context(&context) {
             Ok(pages) => (pages, None),
@@ -345,9 +422,10 @@ impl PreparedPageObservation {
         let mut evaluation_rows = Vec::new();
         let consensus = !evaluator.pack().target_consensus.is_empty();
         if consensus {
-            let supported = evaluator.target_sample_frames() == 1;
+            // #411 Lab L5: the transaction supplies the frames target consensus requires.
+            let supported = scenes.len() >= evaluator.target_sample_frames();
             complete &= supported;
-            let row = json!({"kind":"recognition_coverage","provided_frames":1,"required_frames":evaluator.target_sample_frames(),"aggregation":if supported { "production_owner" } else { "not_completed" }});
+            let row = json!({"kind":"recognition_coverage","provided_frames":scenes.len(),"required_frames":evaluator.target_sample_frames(),"aggregation":if supported { "production_owner" } else { "not_completed" }});
             if !rows.require(row.clone(), row, 0).map_err(fact_error)? {
                 return Err(fact_error(
                     "recognition sample evidence exceeds observation budget",
@@ -486,11 +564,24 @@ impl PreparedPageObservation {
                 .iter()
                 .filter(|layout| layout.page_id == matched_pages[0])
             {
+                // #411 Lab L5: a page observation does not project a layout that needs more
+                // than one frame, as the kernel projects layouts only in select steps; the
+                // skipped layout does not make the observation partial.
+                if mode == ObservationMode::Page && layout.required_frames() > 1 {
+                    let row = json!({"kind":"candidate_projection_skipped", "layout_id":layout.id, "coverage":{"provided_frames":scenes.len(),"required_frames":layout.required_frames(),"aggregation":"not_requested"}});
+                    if !rows.require(row.clone(), row, 0).map_err(fact_error)? {
+                        return Err(fact_error(
+                            "candidate projection evidence exceeds observation budget",
+                        )
+                        .with_ppocr_diagnostics(ppocr_diagnostics));
+                    }
+                    continue;
+                }
                 let failure_row = |error: &CandidateProjectionFailure| json!({"kind":"candidate_projection_failure", "layout_id":layout.id, "code":error.code().as_str(), "item":error.item(), "coverage":{"provided_frames":1,"required_frames":layout.required_frames(),"aggregation":"not_completed"}});
                 // #411 A21: a sample is admitted only while the row this projection ends with when
                 // a sample does not fit still fits after it, so such a projection is recorded.
                 let reserve = failure_row(&CandidateProjectionFailure::recording_failed(""));
-                let projected = context.project_candidates_with_samples(&layout.id, &[&scene], &mut |target, result, started, ended| {
+                let projected = context.project_candidates_with_samples(&layout.id, &[scene], &mut |target, result, started, ended| {
                     match result {
                         Ok(value) => ppocr_diagnostics.extend(value.ppocr_diagnostics().iter().cloned()),
                         Err(error) => ppocr_diagnostics.extend(error.ppocr_diagnostics().iter().cloned()),

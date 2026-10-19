@@ -17,7 +17,7 @@ use actingcommand_contract::{
     LabOperationRecord, LabOperationStage, MAX_LAB_ARRIVAL_FRAMES, ONLINE_OBSERVATION_SCHEMA,
     PageObservationStatus,
 };
-use actingcommand_execution_kernel::PreparedPageObservation;
+use actingcommand_execution_kernel::{ObservationMode, PreparedPageObservation};
 
 impl HostShared {
     pub(super) fn run_contained_lab_operation(
@@ -130,8 +130,19 @@ impl HostShared {
             token = Some(acquired);
             let held = token.as_ref().expect("lease acquired");
             stage = LabOperationStage::BeforeFrame;
-            let (frame, fence) =
-                self.capture_lab_operation_frame(request, held, connection_id, run_links)?;
+            // #411 Lab L5: the before observation is one transaction of the frames the
+            // package's target consensus needs, the last its frame.
+            let LabObservationTransaction {
+                samples,
+                frame,
+                fence,
+            } = self.capture_lab_operation_transaction(
+                request,
+                held,
+                connection_id,
+                run_links,
+                observer.frame_plan(),
+            )?;
             prepared.before_frame = Some(LabOperationFrame {
                 observation: frame.observation.clone(),
                 verified: frame.verified,
@@ -143,6 +154,7 @@ impl HostShared {
                 original,
                 request,
                 &observer,
+                &samples,
                 &frame,
                 resolved.instance_id(),
             )?;
@@ -318,11 +330,17 @@ impl HostShared {
                             }
                         }
                         // Re-fence the original token, including any safe-boundary transfer.
-                        let (frame, fence) = self.capture_lab_operation_frame(
+                        // #411 Lab L5: each after observation is one transaction.
+                        let LabObservationTransaction {
+                            samples,
+                            frame,
+                            fence,
+                        } = self.capture_lab_operation_transaction(
                             request,
                             held,
                             connection_id,
                             run_links,
+                            observer.frame_plan(),
                         )?;
                         record.after_frame = Some(LabOperationFrame {
                             observation: frame.observation.clone(),
@@ -342,6 +360,7 @@ impl HostShared {
                             original,
                             request,
                             &observer,
+                            &samples,
                             &frame,
                             resolved.instance_id(),
                         )?);
@@ -731,16 +750,53 @@ impl HostShared {
         Ok((completed, fence))
     }
 
+    /// #411 Lab L5: one observation transaction of the operation under its lease: the plan's
+    /// earlier frames, then the observation's frame, the plan's interval apart. Each capture is
+    /// fenced before and after as a single frame is; no owner or instance lock is held while
+    /// waiting. Answers the earlier frames, oldest first, the observation's frame and its
+    /// fence; a fence that fails after an earlier frame ends the transaction.
+    fn capture_lab_operation_transaction(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        connection_id: ConnectionId,
+        run_links: Option<RuntimeRunLinks>,
+        plan: actingcommand_contract::ObservationFramePlan,
+    ) -> Result<LabObservationTransaction, RequestFailure> {
+        let mut samples = Vec::with_capacity(plan.frames() - 1);
+        for _ in 1..plan.frames() {
+            let (sample, fence) =
+                self.capture_lab_operation_frame(request, token, connection_id, run_links)?;
+            fence?;
+            samples.push(sample);
+            self.kernel_pause(Duration::from_millis(plan.interval_ms()));
+        }
+        let (frame, fence) =
+            self.capture_lab_operation_frame(request, token, connection_id, run_links)?;
+        Ok(LabObservationTransaction {
+            samples,
+            frame,
+            fence,
+        })
+    }
+
     fn evaluate_lab_operation_frame(
         &self,
         original: &RuntimeRequest,
         request: &ValidatedRuntimeRequest<'_>,
         observer: &PreparedPageObservation,
+        samples: &[CompletedReadonlyObservation],
         captured: &CompletedReadonlyObservation,
         instance_id: InstanceId,
     ) -> Result<ContainedPageObservation, RequestFailure> {
-        let png = read_projected_verified(self.artifacts.root(), captured.observation.artifact())
-            .map_err(observation_artifact_failure)?;
+        let mut pngs = Vec::with_capacity(samples.len() + 1);
+        for frame in samples.iter().chain(std::iter::once(captured)) {
+            pngs.push(
+                read_projected_verified(self.artifacts.root(), frame.observation.artifact())
+                    .map_err(observation_artifact_failure)?,
+            );
+        }
+        let frames = pngs.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let recognition_id = self
             .events
             .issuer()
@@ -755,8 +811,8 @@ impl HostShared {
             links.clone(),
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
-        let evaluated = observer.evaluate(
-            &png,
+        let evaluated = observer.evaluate_frames(
+            &frames,
             FrameIdentity {
                 kind: FrameKind::Artifact,
                 sha256: captured
@@ -769,6 +825,8 @@ impl HostShared {
                 width: captured.observation.width(),
                 height: captured.observation.height(),
             },
+            // #411 Lab L5: a Lab operation's observations are page observations.
+            ObservationMode::Page,
         );
         let evaluated = self.archive_online_ppocr_result(
             evaluated,
@@ -845,6 +903,14 @@ impl HostShared {
             projection_event_id: *verified.event_id(),
         })
     }
+}
+
+/// #411 Lab L5: one observation transaction of a Lab operation: its earlier frames, oldest first,
+/// the observation's frame, and whether the token was still valid after that frame's capture.
+struct LabObservationTransaction {
+    samples: Vec<CompletedReadonlyObservation>,
+    frame: CompletedReadonlyObservation,
+    fence: Result<(), RequestFailure>,
 }
 
 /// A failed stage of a Lab operation: its record entry, and the host's failure as the receipt

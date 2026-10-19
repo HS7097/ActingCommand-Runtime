@@ -251,6 +251,33 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
             option_env!("ACTINGCOMMAND_RUNTIME_HEAD"),
         ));
     }
+    // Workflow #411 B15 R7 (model-b15 §9.1, §13): the remedy table built offline over
+    // `policy.procedure_manifest`; each of its findings, and each configuration row whose names
+    // the bound packages do not declare, is a `policy_remedy_declaration_unusable` note, a row's
+    // also a developer line naming it; each package the table cannot read is the developer line
+    // the running Runtime writes for it. The configuration stays valid. Nothing is written.
+    if let Some(policy) = policy.as_ref() {
+        let lists = remedy_choice_lists(&checked.manifest).map_err(|failure| {
+            staged(
+                ActingdError::refused(failure.failure_code(), failure.outcome()),
+                ActingdLocation::ConfigAssemble,
+            )
+        })?;
+        let remedies = actingcommand_runtime_host::remedy_declaration_notes(
+            &checked.host,
+            &policy.catalog,
+            &lists,
+        );
+        for line in &remedies.unreadable {
+            write_stderr(&format!("{line}\n"));
+        }
+        for note in remedies.notes {
+            if let Some(detail) = &note.detail {
+                write_stderr(&developer_line(&note.outcome, Some(detail)));
+            }
+            notes.push(note.outcome);
+        }
+    }
     // Workflow #361 C3: the plan startup would make, from the ledger read-only.
     let previewing = std::time::Instant::now();
     let preview = preview_policy_catalog_transition(&CatalogPreviewRequest {
@@ -611,6 +638,44 @@ fn summarize(
         )
     })?;
     Ok((report, notes))
+}
+
+/// Workflow #411 B15 R7: the remedy choice lists of the configuration: the section's
+/// (`scheduling.remedy.choices`), then each instance's own list the file sets
+/// (`instance.<instance id>.scheduling.remedy.choices`), in manifest order. An instance without
+/// its own list takes the section's, which is checked once.
+fn remedy_choice_lists(
+    manifest: &RuntimeConfigManifest,
+) -> Result<
+    Vec<actingcommand_runtime_host::RemedyChoiceList>,
+    actingcommand_runtime_config::ConfigFailure,
+> {
+    let effective = actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)?;
+    let mut lists = vec![actingcommand_runtime_host::RemedyChoiceList {
+        instance_id: None,
+        rows: effective.scheduling()?.remedy.rows,
+    }];
+    for parameter in &manifest.parameters {
+        if parameter.source != actingcommand_contract::ConfigParameterSource::Explicit {
+            continue;
+        }
+        let Some((row, Some(instance_id))) = actingcommand_runtime_config::find_row(&parameter.key)
+        else {
+            continue;
+        };
+        if row.name
+            != actingcommand_runtime_config::KeyName::PerInstance(
+                actingcommand_runtime_config::scheduling::REMEDY_CHOICES,
+            )
+        {
+            continue;
+        }
+        lists.push(actingcommand_runtime_host::RemedyChoiceList {
+            instance_id: Some(instance_id.to_owned()),
+            rows: effective.remedy(instance_id)?.rows,
+        });
+    }
+    Ok(lists)
 }
 
 /// One manifest parameter by key; `None` when the manifest does not carry it.

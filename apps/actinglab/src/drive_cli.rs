@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::lab2_cli::refuse_repeated_options;
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, finish_semantic_result_with_ledger,
     parse_optional_duration_ms, read_user_config, reject_legacy_session_routing,
@@ -9,9 +10,15 @@ use actingcommand_lab::{NavigateRequest, TapTargetRequest};
 use serde::Serialize;
 use serde_json::Value;
 
+/// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): `tap-target` and `navigate` read one
+/// frame and take every option once, `--scene` included; an option given twice is refused as
+/// `repeated` before anything is read, never last-wins.
+const ONE_FRAME_REPEATS: &[&str] = &[];
+
 pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    refuse_repeated_options(&flags, "tap-target", ONE_FRAME_REPEATS)?;
     let target = target_argument(&flags, "tap-target")?;
     let mut ledger = semantic_ledger_context("tap-target", global, args);
     let result = (|| -> CliOutcome<Value> {
@@ -40,6 +47,7 @@ pub(super) fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutc
 pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    refuse_repeated_options(&flags, "navigate", ONE_FRAME_REPEATS)?;
     let to = flags.required("--to")?;
     let mut ledger = semantic_ledger_context("navigate", global, args);
     let result = (|| -> CliOutcome<Value> {

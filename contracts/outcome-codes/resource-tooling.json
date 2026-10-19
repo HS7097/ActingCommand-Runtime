@@ -931,7 +931,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -945,7 +947,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -959,7 +963,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -973,7 +979,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -987,7 +995,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1001,7 +1011,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1015,7 +1027,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1029,7 +1043,9 @@
       "owner": "resource-tooling",
       "layer": "process",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "step": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
@@ -1046,7 +1062,8 @@
       "values": {
         "package_id": "required",
         "navigation_role": "required",
-        "navigation_problem": "required"
+        "navigation_problem": "required",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",

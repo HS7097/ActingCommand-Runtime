@@ -72,9 +72,12 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         request
             .validate()
             .map_err(|error| CliError::usage(error.code().as_str()))?;
+        // #411 Lab L5: the frames the package's target consensus makes each of the operation's
+        // observations take.
+        let frames = super::super::contained_resources::online_frame_plan(&instance, path)?;
         let session = begin_runtime_debug_session()?;
         let verified = session
-            .run_contained_lab_operation(&instance, request)
+            .run_contained_lab_operation(&instance, request, frames)
             .map_err(|error| CliError::device(error.to_string()))?;
         let operation = verified.operation();
         let record = &operation.record;

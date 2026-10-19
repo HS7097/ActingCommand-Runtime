@@ -539,8 +539,13 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   entered from each count once. A failure counts at its first matching record; the item's `count`-th
   failure within its `window_ms` registers a burst, and every window of the instance starts
   empty again, while the failures already counted stay counted, so their later records do not
-  count again. An item that names both `environment_fault` and `stability_warning` (as the
-  default `stability_burst` does) counts failures of the two classes in one window. Not counted:
+  count again. #411 A24: a record's time is its producer's, not its commit time, so records can
+  arrive out of time order (a run's diagnostic stream failure carries the stream's start and is
+  committed at the run's end); a window counts the failures whose times lie within `window_ms`
+  of its latest failure, whatever order their records were committed in, and a burst's first
+  and last failure are the earliest and latest of those. An item that names both
+  `environment_fault` and `stability_warning` (as the default `stability_burst` does) counts
+  failures of the two classes in one window. Not counted:
   a record without an outcome (a backend open observation carries none: an open failure counts
   through the preparation, capture, input or task record that carries it); the records of an
   instance a ladder climbs on (its own work); while `rules.direct_runs` is `exempt`, every record

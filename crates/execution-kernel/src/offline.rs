@@ -6,7 +6,8 @@ use crate::codes::ExecutionKernelCode;
 use crate::{
     ContainedTaskCode, ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
     ContainedTaskRuntime, ContainedTaskTrace, InputFrameContext, ObservedFrame,
-    PreparedContainedTask, ResourceReadingProblem, SelectionState, SelectionStateRequest,
+    PreparedContainedTask, ResourceReadingProblem, RunParameters, SelectionState,
+    SelectionStateRequest,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Detail, Outcome};
@@ -161,7 +162,12 @@ fn simulate(
     frames: Vec<Frame>,
     now_unix_ms: Option<u64>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    let mut runtime = OfflineRuntime::new(frames, now_unix_ms, task.has_select_steps());
+    let mut runtime = OfflineRuntime::new(
+        frames,
+        now_unix_ms,
+        task.has_select_steps(),
+        task.default_run_parameters(),
+    );
     let decision = if runtime.frames.is_empty() {
         OfflineDecision::Refused {
             code: SharedCode::OfflineFixtureMissing.code().into(),
@@ -316,10 +322,18 @@ struct OfflineRuntime {
     retains_last_frame: bool,
     last_frame: Option<Frame>,
     confirmation_repeats_last_frame: bool,
+    /// Workflow #411 B15 R5: a select step's snapshot also holds the package's declared
+    /// parameter defaults (an offline run has no dispatch).
+    run_parameters: RunParameters,
 }
 
 impl OfflineRuntime {
-    fn new(frames: Vec<Frame>, now_unix_ms: Option<u64>, retains_last_frame: bool) -> Self {
+    fn new(
+        frames: Vec<Frame>,
+        now_unix_ms: Option<u64>,
+        retains_last_frame: bool,
+        run_parameters: RunParameters,
+    ) -> Self {
         Self {
             frames: frames.into(),
             capture_count: 0,
@@ -330,6 +344,7 @@ impl OfflineRuntime {
             retains_last_frame,
             last_frame: None,
             confirmation_repeats_last_frame: false,
+            run_parameters,
         }
     }
 }
@@ -384,8 +399,10 @@ impl ContainedTaskRuntime for OfflineRuntime {
         };
         self.selection_now_unix_ms = Some(now_unix_ms);
         self.confirmation_repeats_last_frame = true;
+        let mut snapshot = empty_offline_snapshot(request);
+        self.run_parameters.overlay(&mut snapshot, now_unix_ms);
         Ok(SelectionState::Snapshot {
-            snapshot: empty_offline_snapshot(request),
+            snapshot,
             now_unix_ms,
         })
     }
@@ -753,7 +770,7 @@ where
         &mut self,
         request: SelectionStateRequest,
     ) -> Result<SelectionState, Self::Error> {
-        let (snapshot, now_unix_ms) = match &self.facts {
+        let (mut snapshot, now_unix_ms) = match &self.facts {
             OfflineReplayFacts::Empty { now_unix_ms } => {
                 (empty_offline_snapshot(request), *now_unix_ms)
             }
@@ -762,6 +779,11 @@ where
                 read_at_unix_ms,
             } => (snapshot.clone(), *read_at_unix_ms),
         };
+        // Workflow #411 B15 R5: a replayed run has no dispatch; it reads the package's declared
+        // parameter defaults.
+        self.task
+            .default_run_parameters()
+            .overlay(&mut snapshot, now_unix_ms);
         self.selection_now_unix_ms = Some(now_unix_ms);
         Ok(SelectionState::Snapshot {
             snapshot,
@@ -1243,6 +1265,189 @@ mod tests {
             prepare_error(&missing_recovery).code().as_str(),
             "contained_task_recovery_missing"
         );
+    }
+
+    // Workflow #411 B15 R5 (host gate key 114; register §1.115; contracts/remedies.md section 4):
+    // an offline Lab run has no dispatch, so its select step's snapshot holds every parameter the
+    // package declares with its declared default. The package provides `cap_x` with `param_p`
+    // (options `opt_1` and `opt_2`, default `opt_2`); its select step's policy reads
+    // `session.dispatch.parameter.param_p`, admits the first slot for `opt_1` and the second for
+    // `opt_2`, and aborts when the value is unknown. The dry run would tap the second slot and
+    // the replay's decision selects it.
+    #[test]
+    fn b15r_an_offline_lab_run_reads_the_declared_defaults() {
+        const NOW_UNIX_MS: u64 = 1_000_000;
+        let task = prepare(&parameter_package());
+
+        let simulated = simulate_contained_task_at(&task, vec![home_frame(true)], NOW_UNIX_MS)
+            .expect("offline simulation");
+        assert!(
+            matches!(
+                &simulated.decision,
+                OfflineDecision::WouldClick {
+                    action: InputAction::Tap { x: 1, y: 0 },
+                    ..
+                }
+            ),
+            "{:?}",
+            simulated.decision
+        );
+
+        let frames = [home_frame(true), home_frame(true), result_frame()];
+        let replayed = replay_contained_task(
+            &task,
+            frames.into_iter().map(Ok::<_, std::convert::Infallible>),
+            OfflineReplayFacts::Empty {
+                now_unix_ms: NOW_UNIX_MS,
+            },
+        )
+        .expect("the replay gives a result");
+        let selected = replayed
+            .steps
+            .iter()
+            .filter_map(|step| step.selection.as_ref())
+            .map(|selection| selection.selected.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(selected, [vec!["choices#01".to_owned()]], "{replayed:?}");
+    }
+
+    // The provider package of `b15r_an_offline_lab_run_reads_the_declared_defaults`: frames are
+    // 2x1, the first pixel the page (red `home`, white `result`), the second green; the feature
+    // `first` of the two fixed slots passes on the first slot only.
+    fn parameter_package() -> Vec<u8> {
+        let fact = json!({"source": "fact", "fact_key": "session.dispatch.parameter.param_p"});
+        let reads = |option: &str, first: bool| {
+            json!({"kind": "all", "of": [
+                {"kind": "string_in", "value": fact.clone(), "allowed": [option]},
+                {"kind": "boolean_equals", "value": {"source": "field", "field": "first"},
+                 "expected": first}
+            ]})
+        };
+        let color = |id: &str, x: u32, expected: [u8; 3]| {
+            json!({"type": "color", "id": id,
+                   "region": {"x": x, "y": 0, "width": 1, "height": 1}, "expected": expected})
+        };
+        let slot = |x: u32, target: &str| {
+            json!({"rect": {"x": x, "y": 0, "width": 1, "height": 1},
+                   "click": {"x": x, "y": 0, "width": 1, "height": 1},
+                   "targets": {"first": target}})
+        };
+        let layout = json!({
+            "id": "choices",
+            "page_id": "neutral/home",
+            "kind": "fixed_slots",
+            "features": [{"name": "first", "value": "passed"}],
+            "slots": [slot(0, "slot/first"), slot(1, "slot/second")]
+        });
+        zip_entries(&[
+            (
+                "control.json",
+                json!({
+                    "schema_version": "Lab-1y.control.v2",
+                    "package_id": "neutral.test.param",
+                    "execution_mode": "navigable_route",
+                    "game": "neutral",
+                    "server": "test",
+                    "resolution": {"width": 2, "height": 1},
+                    "entry_task_id": "task",
+                    "capture_interval_ms": 1,
+                    "step_timeout_ms": 5000,
+                    "timeout_ms": 20000,
+                    "max_steps": 2,
+                    "provides": [{"capability": "cap_x", "parameters": [
+                        {"name": "param_p", "options": ["opt_1", "opt_2"], "default": "opt_2"}
+                    ]}]
+                }),
+            ),
+            (
+                "resources/manifest.json",
+                json!({"schema_version": "0.3", "entry_task_id": "task"}),
+            ),
+            (
+                "resources/operations/task/task.json",
+                json!({
+                    "schema_version": "0.9",
+                    "task_id": "task",
+                    "game": "neutral",
+                    "server_scope": ["test"],
+                    "coordinate_space": {"width": 2, "height": 1},
+                    "target_page": "result",
+                    "candidate_layouts": [layout.clone()],
+                    "operations": [{
+                        "id": "pick",
+                        "from": "home",
+                        "to": "result",
+                        "expect_after": {"page_id": "result"},
+                        "guard": {
+                            "page_id": "home",
+                            "target_id": "guard/ready",
+                            "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                            "color_probe": "guard/ready"
+                        },
+                        "select": {"layout_id": "choices",
+                                   "policy": {"path": "policies/by_parameter.json"}},
+                        "retryable": false
+                    }]
+                }),
+            ),
+            (
+                "resources/operations/task/policies/by_parameter.json",
+                json!({
+                    "schema_version": "actingcommand.selection-policy.v1",
+                    "policy_id": "by-parameter",
+                    "applies_to": {
+                        "candidate_layout_id": "choices",
+                        "outcome_keys": {"selected": "slot_selected", "empty": "slot_empty",
+                                         "insufficient": "slot_insufficient",
+                                         "ambiguous": "slot_ambiguous",
+                                         "unknown": "slot_unknown"}
+                    },
+                    "fields": [{"name": "first", "value_type": {"type": "boolean"}}],
+                    "facts": [{"fact_key": "session.dispatch.parameter.param_p",
+                               "value_type": {"type": "enum_string",
+                                              "allowed": ["opt_1", "opt_2"]},
+                               "max_age_ms": 86_400_000, "minimum_confidence_milli": 1000}],
+                    "gates": [{"gate_id": "by_parameter",
+                               "predicate": {"kind": "any",
+                                             "of": [reads("opt_1", true), reads("opt_2", false)]},
+                               "on_unknown": {"kind": "abort_evaluation"}}],
+                    "scoring": [],
+                    "selection": {"mode": "exactly_one", "required_count": 1},
+                    "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+                }),
+            ),
+            (
+                "resources/recognition/neutral.test.pack.json",
+                json!({
+                    "schema_version": "0.7",
+                    "game": "neutral",
+                    "server": "test",
+                    "coordinate_space": {"width": 2, "height": 1},
+                    "defaults": {"color_max_distance": 0.0},
+                    "targets": [
+                        color("page/home", 0, [255, 0, 0]),
+                        color("page/result", 0, [255, 255, 255]),
+                        color("guard/ready", 1, [0, 255, 0]),
+                        color("slot/first", 1, [0, 255, 0]),
+                        color("slot/second", 1, [0, 0, 255])
+                    ],
+                    "candidate_layouts": [layout]
+                }),
+            ),
+            (
+                "resources/recognition/neutral.test.pages.json",
+                json!({"schema_version": "0.3", "pages": [
+                    {"id": "neutral/home", "required": ["page/home"], "optional": [],
+                     "forbidden": []},
+                    {"id": "neutral/result", "required": ["page/result"], "optional": [],
+                     "forbidden": []}
+                ]}),
+            ),
+        ])
+    }
+
+    fn result_frame() -> Frame {
+        solid_frame([255, 255, 255], [0, 255, 0])
     }
 
     #[derive(Clone, Copy)]

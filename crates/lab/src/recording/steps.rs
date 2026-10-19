@@ -19,7 +19,7 @@ use super::model::{
     LAB_RECORDING_DEFAULT_TEMPLATE_THRESHOLD, LAB_RECORDING_MAX_GESTURE_MS, LAB_RECORDING_SCHEMA,
     LabRecording, MarkFamily, MarkSpec, OpaqueJson, RecordPoint, RecordRect, RecordSize,
     RecordedFrame, RecordedMark, RecordingDefaults, RecordingStep, SelfTestStatus, StepApplication,
-    StepClick, StepOptional, StepTransition,
+    StepClick, StepOptional, StepTransition, ValueTestRight, value_test_side_id,
 };
 use super::store::{
     LabFile, OldRecordView, blocked, create_recording, invalid, lab_dir, load_lab, now_unix_ms,
@@ -596,16 +596,45 @@ pub(crate) fn arrive(
     }
 }
 
-/// Every mark id in use: own marks of effective steps and the marks of their transitions.
-fn ids_in_use(recording: &LabRecording) -> BTreeSet<String> {
+/// Every mark id in use: own marks of effective steps and the marks of their transitions, except
+/// the `released` ones. #411 Lab B-9: a value test's side target ids are in use too.
+fn ids_in_use(recording: &LabRecording, released: &BTreeSet<String>) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     for step in recording.steps.iter().filter(|step| step.is_effective()) {
-        ids.extend(step.marks.iter().map(|mark| mark.id.clone()));
-        if let Some(StepTransition::Page { marks, .. }) = &step.transition {
-            ids.extend(marks.iter().map(|mark| mark.id.clone()));
+        let transition_marks = match &step.transition {
+            Some(StepTransition::Page { marks, .. }) => marks.as_slice(),
+            _ => &[][..],
+        };
+        for mark in step.marks.iter().chain(transition_marks) {
+            if !released.contains(&mark.id) {
+                ids.extend(mark.target_ids());
+            }
         }
     }
     ids
+}
+
+/// #411 Lab B-9: the target ids a new mark gives the package: its id and, for a value test, its
+/// side target ids.
+fn spec_target_ids(spec: &MarkSpec) -> Vec<String> {
+    let mut ids = vec![spec.id.clone()];
+    if spec.family == MarkFamily::ValueTest {
+        ids.push(value_test_side_id(&spec.id, "left"));
+        if matches!(spec.right, Some(ValueTestRight::Side(_))) {
+            ids.push(value_test_side_id(&spec.id, "right"));
+        }
+    }
+    ids
+}
+
+/// #411 Lab B-9: a value test, or a check with one as member: the page detector refuses it in
+/// `forbidden`.
+fn tests_values(recording: &LabRecording, mark: &RecordedMark) -> bool {
+    mark.family == MarkFamily::ValueTest
+        || mark.check_members().iter().any(|member| {
+            find_step_mark(recording, member)
+                .is_some_and(|member| member.family == MarkFamily::ValueTest)
+        })
 }
 
 fn template_assets(recording: &LabRecording) -> BTreeMap<String, String> {
@@ -814,11 +843,8 @@ fn add_marks(
         .cache
         .get(primary_sha)
         .ok_or_else(|| invalid("validation_failed", "primary frame was not loaded"))?;
-    let mut in_use = ids_in_use(&session.recording);
-    for id in released {
-        in_use.remove(id);
-    }
-    in_use.extend(batch.own.iter().map(|mark| mark.id.clone()));
+    let mut in_use = ids_in_use(&session.recording, released);
+    in_use.extend(batch.own.iter().flat_map(RecordedMark::target_ids));
     let mut assets = template_assets(&session.recording);
     assets.retain(|_, id| !released.contains(id));
     let now = now_unix_ms();
@@ -832,6 +858,22 @@ fn add_marks(
                 ),
                 json!({"id": spec.id}),
             ));
+        }
+        // #411 Lab B-9: a value test's side targets share the package's id space.
+        for target_id in spec_target_ids(spec).into_iter().skip(1) {
+            if !in_use.insert(target_id.clone()) {
+                return Err(with_details(
+                    blocked(
+                        "record_mark_id_conflict",
+                        format!(
+                            "value test '{}' declares the OCR target '{target_id}', an id already \
+                             used in this recording",
+                            spec.id
+                        ),
+                    ),
+                    json!({"id": spec.id, "target_id": target_id}),
+                ));
+            }
         }
         let prepared = match prepare_mark(
             spec,
@@ -1051,6 +1093,23 @@ fn forbidden_after(
                 ));
             }
             Some(step) if step.index != target => {
+                // #411 Lab B-9: a value test that cannot read does not pass, which in `forbidden`
+                // would let the page match unseen; the Runtime refuses it there, directly or
+                // through a check.
+                if let Some(mark) = step.marks.iter().find(|mark| &mark.id == id)
+                    && tests_values(&session.recording, mark)
+                {
+                    return Err(with_details(
+                        invalid(
+                            "validation_failed",
+                            format!(
+                                "mark '{id}' tests a value; a page cannot forbid a value test: \
+                                 require the opposite comparison instead"
+                            ),
+                        ),
+                        json!({"mark_id": id, "family": mark.family.as_str()}),
+                    ));
+                }
                 if !list.contains(id) {
                     list.push(id.clone());
                 }
@@ -1670,10 +1729,14 @@ fn apply_click(
                         )
                     })?;
                     let region = mark.region.filter(|_| mark.family != MarkFamily::Check);
+                    // #411 Lab B-9: a value test has no region either.
                     let Some(region) = region else {
                         return Err(blocked(
                             "record_click_source_invalid",
-                            format!("click source '{id}' is a check and has no region"),
+                            format!(
+                                "click source '{id}' is a {} mark and has no region",
+                                mark.family.as_str()
+                            ),
                         ));
                     };
                     (region, "from_mark", Some(id.clone()), None)
@@ -1699,12 +1762,13 @@ fn apply_click(
                     format!("click guard '{id}' is not a mark of this step"),
                 )
             })?;
+            // #411 Lab B-9: a value test guards the click as a check does.
             if mark.family == MarkFamily::Ocr {
                 return Err(blocked(
                     "record_guard_family_invalid",
                     format!(
                         "click guard '{id}' is an OCR mark; a guard must be a template, color, \
-                         color_digest or check mark"
+                         color_digest, check or value_test mark"
                     ),
                 ));
             }

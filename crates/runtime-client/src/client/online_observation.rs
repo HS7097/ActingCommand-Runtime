@@ -5,8 +5,8 @@ use crate::codes::{ClientCode, ClientLocation};
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     ContainedObservationEvidence, ContainedObservationRequest, ContainedPageObservation,
-    InstanceId, ONLINE_OBSERVATION_SCHEMA, PageObservationStatus, RecognitionPayload,
-    RecognitionVerdict,
+    InstanceId, ONLINE_OBSERVATION_SCHEMA, ObservationFramePlan, PageObservationStatus,
+    RecognitionPayload, RecognitionVerdict,
 };
 
 /// Constructed only after the receipt, native lifecycle and both artifact hashes agree.
@@ -32,11 +32,25 @@ impl fmt::Debug for VerifiedPageObservation {
     }
 }
 
+/// #411 Lab L5: the receipt wait of a contained observation: one backend-open allowance for the
+/// current frame, and for every earlier frame of its transaction one more and the interval;
+/// `None` on overflow.
+pub(crate) fn observe_response_timeout(
+    backend_open: Duration,
+    frames: ObservationFramePlan,
+) -> Option<Duration> {
+    backend_open.checked_add(frames.added_allowance(backend_open)?)
+}
+
 impl RuntimeDebugSession {
+    /// `frames`: what the package's target consensus makes the observation take (#411 Lab L5),
+    /// as the kernel's `observation_frame_plan` computes it from the package sent; the receipt
+    /// wait allows for it.
     pub fn observe_contained_page(
         &self,
         instance_alias: &str,
         request: ContainedObservationRequest,
+        frames: ObservationFramePlan,
     ) -> RuntimeClientResult<VerifiedPageObservation> {
         request
             .validate()
@@ -48,10 +62,13 @@ impl RuntimeDebugSession {
             .find(|instance| instance.instance_alias() == instance_alias)
             .ok_or_else(|| observation_error(ClientCode::RuntimeObservationInstanceUnknown))?
             .instance_id();
-        let timeout = self
-            .client
-            .connection(ClientLocation::ObserveContainedPage.location())?
-            .backend_open_timeout;
+        let timeout = observe_response_timeout(
+            self.client
+                .connection(ClientLocation::ObserveContainedPage.location())?
+                .backend_open_timeout,
+            frames,
+        )
+        .ok_or_else(|| observation_error(ClientCode::RuntimeObservationRequestInvalid))?;
         let receipt = self.client.execute_receipt_with_correlation(
             ClientLocation::ObserveContainedPage.location(),
             RuntimeOperation::ObserveContainedPage {

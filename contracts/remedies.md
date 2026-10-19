@@ -153,10 +153,11 @@ serializes byte for byte as before.
 
 ### 3.1 The target record `session.remedy.choices`
 
-An instance fact of the `session.` family, one record per scope (`instance`, `server` or `game`),
-written by a person or an agent ([instance-fact-store.md](instance-fact-store.md), "Remedy choice
-facts", owns the key, its write rule, its writers and its capacity). Its value is a `record_list`
-of rows whose fields are strings:
+An instance fact of the `session.` family, one record per scope (`instance` or `game`; never
+`server`, whose id is not game-qualified), written by a person or an agent
+([instance-fact-store.md](instance-fact-store.md), "Remedy choice facts", owns the key, its write
+rule, its writers and its capacity). Its value is a `record_list` of rows whose fields are
+strings:
 
 ```text
 {row: "allow", need, capability}                  this source allows capability for need
@@ -164,10 +165,10 @@ of rows whose fields are strings:
 {row: "parameter", capability, parameter, value}  this source sets a parameter's value
 ```
 
-The most specific record that applies to an instance applies as a whole (instance over server
-over game), as for the pack schedule. A write that breaks the shape, or names a need, capability,
-parameter or option that the packages bound to an instance the scope covers do not declare, is
-refused as `session_remedy_choices_invalid` (`fact_key`, `field`, and `instance_id` for a meaning
+The most specific record that applies to an instance applies as a whole (instance over game), as
+for the pack schedule. A write that breaks the shape (a server scope included), or names a need,
+capability, parameter or option that the packages bound to an instance the scope covers do not
+declare, is refused as `session_remedy_choices_invalid` (`fact_key`, `field`, and `instance_id` for a meaning
 error). Unknown names are refused, never ignored. It is a separate record from
 `session.resource_targets`: a remedy choice gates (no choice stops the task) and carries
 permissions with parameter values, while resource targets only score.
@@ -195,7 +196,7 @@ key.
 For a blocked pair whose key K declares `need` N and `capabilities` C:
 
 1. **Allowed set.** The first source that names N decides it entirely:
-   1. the target record that applies to the instance (instance over server over game, as a
+   1. the target record that applies to the instance (instance over game, as a
       whole): its `allow` rows of N, or its `none` row of N;
    2. the configuration list in effect for the instance: its rows of N;
    3. the mapping's `default`;

@@ -773,6 +773,9 @@ actingcommand_contract::outcome_codes! {
         ObservationPathNotAbsolute => "observation_path_not_absolute": error / none,
         ObservationRecognitionIdIssueFailed => "observation_recognition_id_issue_failed": error / none,
         ObservationResultInvalid => "observation_result_invalid": error / none,
+        /// #411 Lab L5: an input reached the instance while a keyless online Lab observation took
+        /// the frames its package's target consensus needs, so the frames are not one screen.
+        ObservationSamplesInterrupted => "observation_samples_interrupted": error / none,
         ObservationVerifiedArtifactMismatch => "observation_verified_artifact_mismatch": error / none,
         ObservationVerifiedEventMissing => "observation_verified_event_missing": error / none,
         OutcomeKeyTooLongForSettlement => "outcome_key_too_long_for_settlement": error / none,
@@ -2284,6 +2287,9 @@ actingcommand_contract::outcome_locations! {
         DeviceLinkRun => "device_link_run",
         // Workflow #411 A22: the check of a direct run's recovery binding in its preparation.
         CheckRecoveryBinding => "check_recovery_binding",
+        // #411 Lab L5: the check that no input reached the instance while a keyless online Lab
+        // observation took its frames.
+        CheckObservationSampleInputs => "check_observation_sample_inputs",
     }
 }
 

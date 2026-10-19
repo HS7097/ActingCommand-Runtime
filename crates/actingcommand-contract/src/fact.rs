@@ -24,6 +24,13 @@ pub const PRIORITY_OFFSET_KEY_SUFFIX: &str = ".priority_offset";
 /// record-list fact under this key, written only by `ApplyResourceTargets`; an ordinary fact
 /// publication or a configured or caller-supplied fact of this key is refused.
 pub const RESOURCE_TARGETS_FACT_KEY: &str = "session.resource_targets";
+/// Workflow #411 B15 R6: the instance's remedy choices (`contracts/instance-fact-store.md`,
+/// "Remedy choice facts"), one inline record-list fact per scope (instance or game; never
+/// server, whose id is not game-qualified), written by a person or an agent and checked by the
+/// Runtime's write rule.
+pub const REMEDY_CHOICES_FACT_KEY: &str = "session.remedy.choices";
+/// Workflow #411 B15 R6: the prefix of a remedy choice record's `source_snapshot_id`.
+pub const REMEDY_CHOICES_SNAPSHOT_PREFIX: &str = "remedy-choices:";
 
 /// The `<task_id>` of a `session.task.<task_id>.priority_offset` key; `None` for any other key.
 /// The task identifier's own charset is checked by the Runtime when the offset is published.
@@ -41,24 +48,64 @@ pub fn priority_offset_fact_key(task_id: &str) -> String {
 /// Workflow #389 section 2.6: the static family of a fact key, read from the key's spelling alone.
 /// A `PublishFact` or `PublishFacts` request belongs to the interface block of its keys'
 /// family (`FactKeyFamily::interface_class`); `RuntimeRequest::validate` already refuses an
-/// observation that mixes an offset with other keys (`fact_origin_mixed`). The scheduling
-/// rules' pack schedule (SR-11) and feature lock (SR-5a) families join this function with
-/// their slices.
+/// observation that mixes keys of two families (`fact_origin_mixed`). The scheduling rules'
+/// pack schedule (SR-11) and feature lock (SR-5a) families join this function with their
+/// slices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FactKeyFamily {
     /// `session.task.<task_id>.priority_offset`, a manual priority offset.
     PriorityOffset,
+    /// Workflow #411 B15 R6: `session.remedy.choices`, an instance's remedy choices.
+    RemedyChoices,
     /// Every other key: the instance information an agent or a person writes.
     InstanceInformation,
+}
+
+impl FactKeyFamily {
+    /// Whether, until Workflow #389 U-6, the family takes the origin exception: besides an agent
+    /// (`(agent, adapter)`), a person (`(user, ui)`) or the operator (`(cli, cli)`) may write it,
+    /// and its `fact.published` event keeps the writer's origin.
+    pub const fn takes_origin_exception(self) -> bool {
+        matches!(self, Self::PriorityOffset | Self::RemedyChoices)
+    }
 }
 
 /// The family of one fact key (Workflow #389 section 2.6).
 pub fn fact_key_family(key: &str) -> FactKeyFamily {
     if priority_offset_task_id(key).is_some() {
         FactKeyFamily::PriorityOffset
+    } else if key == REMEDY_CHOICES_FACT_KEY {
+        FactKeyFamily::RemedyChoices
     } else {
         FactKeyFamily::InstanceInformation
     }
+}
+
+/// Workflow #411 B15 R6 (model-b15 §5.1): the `source_snapshot_id` of a remedy choice record,
+/// `remedy-choices:<sha256 hex>` over its scope, its rows (each row's members in key order, the
+/// rows in the order given) and its observation time, so every write, the same rows included,
+/// is a new version.
+pub fn remedy_choices_snapshot_id(
+    scope: &FactScope,
+    rows: &[BTreeMap<String, FactScalar>],
+    observed_at_unix_ms: u64,
+) -> Result<String, SanitizationError> {
+    Ok(format!(
+        "{REMEDY_CHOICES_SNAPSHOT_PREFIX}{}",
+        remedy_choices_digest(scope, rows, observed_at_unix_ms)?
+    ))
+}
+
+fn remedy_choices_digest(
+    scope: &FactScope,
+    rows: &[BTreeMap<String, FactScalar>],
+    observed_at_unix_ms: u64,
+) -> Result<String, SanitizationError> {
+    use sha2::{Digest, Sha256};
+    let identity = serde_json::to_vec(&(scope, rows, observed_at_unix_ms)).map_err(|_| {
+        SanitizationError::new(SanitizationCode::InvalidFactRecord, "remedy_choices")
+    })?;
+    Ok(format!("{:x}", Sha256::digest(identity)))
 }
 
 /// Workflow #375 R5c: the `source_detector` prefix of a resource reading the Runtime took.
@@ -163,6 +210,37 @@ impl FactRecord {
             confidence_milli: 1_000,
             source_detector: source_detector.to_owned(),
             source_snapshot_id: format!("snapshot:priority-offset:{digest}"),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: digest,
+            invalidate_on: Vec::new(),
+        };
+        record.validate()?;
+        Ok(record)
+    }
+
+    /// Workflow #411 B15 R6 (model-b15 §5.1): one scope's remedy choices without expiry, the
+    /// inline record list `rows` under `session.remedy.choices`, full confidence, no
+    /// invalidating events, its snapshot identity [`remedy_choices_snapshot_id`]. Whether the
+    /// rows follow the write rule is the Runtime's check; this only builds the record.
+    pub fn remedy_choices(
+        scope: FactScope,
+        rows: Vec<BTreeMap<String, FactScalar>>,
+        observed_at_unix_ms: u64,
+        source_detector: &str,
+    ) -> Result<Self, SanitizationError> {
+        let digest = remedy_choices_digest(&scope, &rows, observed_at_unix_ms)?;
+        let record = Self {
+            scope,
+            key: REMEDY_CHOICES_FACT_KEY.to_owned(),
+            content: FactContent::Inline {
+                value: FactValue::RecordList(rows),
+            },
+            observed_at_unix_ms,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli: 1_000,
+            source_detector: source_detector.to_owned(),
+            source_snapshot_id: format!("{REMEDY_CHOICES_SNAPSHOT_PREFIX}{digest}"),
             schema_version: "fact.v1".to_owned(),
             resource_bundle_hash: digest,
             invalidate_on: Vec::new(),
