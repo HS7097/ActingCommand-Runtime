@@ -359,8 +359,9 @@ jobs:
       # Workflow #378 A8b (model-378 §9 G10, review L14): a release stops before it builds when
       # the commit it releases lacks the release's outcome-code snapshot
       # contracts/outcome-codes/released/<X.Y.Z>.json, holds a settled entry without text or,
-      # from v0.12.1 on, a pending entry. A dry run checks the same; a release candidate
-      # (vX.Y.Z-rc.N) needs only the settled text.
+      # from v0.13.0 on, a pending entry (a 0.12.Z final may carry pending entries; coordinator
+      # decision of 2026-10-19). A dry run checks the same; a release candidate (vX.Y.Z-rc.N)
+      # needs only the settled text.
       - name: Outcome catalog release gate (G10)
         if: ${{ inputs.release_tag }}
         shell: pwsh

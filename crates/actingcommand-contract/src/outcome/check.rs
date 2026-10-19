@@ -54,7 +54,7 @@ impl CatalogIndex {
 }
 
 /// The keys every code accepts as optional while its entry is pending (Workflow #378 A3; the
-/// settlement in v0.12.1 lists them per code): the location keys (`operation`, `stage`,
+/// settlement, due by v0.13.0, lists them per code): the location keys (`operation`, `stage`,
 /// `boundary`), which say where a result arose, which every result may say (spec section 6),
 /// and `runtime_code`, the Runtime error code a receipt projects, which a `runtime.failed`
 /// record's outcome carries whatever the failure's code (M378 section 8.1). Workflow #378 A6a
