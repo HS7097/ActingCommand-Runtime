@@ -1832,6 +1832,63 @@
     "handle": {
       "type": "token",
       "description": "A device's handle in adb's device list, <transport>:<transport_id>: the adb server's session number for the device, never a device value (Workflow #398 RD-1c)."
+    },
+    "need": {
+      "type": "token",
+      "description": "An opaque need a package's remedy declares, a token ^[a-z][a-z0-9_]{0,63}$ the Runtime only compares for equality (Workflow #411 B15)."
+    },
+    "capability": {
+      "type": "token",
+      "description": "An opaque capability a package provides or a remedy names, compared for equality only (Workflow #411 B15)."
+    },
+    "capabilities_allowed": {
+      "type": "list<token>",
+      "description": "The capabilities the deciding source allows for a need, intersected with the remedy's declared capabilities (Workflow #411 B15)."
+    },
+    "capabilities_declared": {
+      "type": "list<token>",
+      "description": "The capabilities a remedy declares for its need (Workflow #411 B15)."
+    },
+    "remedy_source": {
+      "type": "vocab:remedy_source",
+      "description": "The source that decided a remedy's allowed capabilities or a parameter's value: the target record, the configuration or the package default (Workflow #411 B15)."
+    },
+    "remedy_problem": {
+      "type": "vocab:remedy_problem",
+      "description": "Why a remedy cannot be used, or why a blocked task stopped for a person (Workflow #411 B15)."
+    },
+    "remedy_depth": {
+      "type": "integer",
+      "description": "The layer of a remedy chain, 1 to 3; layer 1 is the remedy of the round's root blocked task (Workflow #411 B15)."
+    },
+    "decision_id": {
+      "type": "id",
+      "description": "A policy dispatch decision's identifier; for a remedy, the decision of the blocked run that opened the round (Workflow #411 B15)."
+    },
+    "irreversible": {
+      "type": "boolean",
+      "description": "True when a provider of the capability on the instance declares it irreversible (Workflow #411 B15)."
+    },
+    "remedy_inputs_digest": {
+      "type": "hash",
+      "description": "The SHA-256 over the inputs of a remedy decision on one instance: the versions of the target records that apply, the configuration rows in effect, the remedy table entries of the blocked mapping and of every provider of its capabilities, and the active catalog hash; a different value lifts a stop. It hashes declarations and versions, never a package's content (Workflow #411 B15)."
+    },
+    "parameter_name": {
+      "type": "token",
+      "description": "A parameter a provider package declares for a capability (Workflow #411 B15)."
+    },
+    "parameter_value": {
+      "type": "token",
+      "description": "A parameter's value: one of the options its provider package declares (Workflow #411 B15)."
+    },
+    "run_parameters": {
+      "type": "records",
+      "fields": {
+        "parameter_name": "required",
+        "parameter_value": "required",
+        "remedy_source": "required"
+      },
+      "description": "The read-only parameters a dispatch hands to its run, one record each: the name, the resolved value and the source that gave it (Workflow #411 B15)."
     }
   },
   "vocabularies": {
@@ -5651,6 +5708,60 @@
         },
         "message": {
           "description": "The host message probe."
+        }
+      }
+    },
+    "remedy_source": {
+      "description": "The source that decided a remedy's allowed capabilities or a parameter's value, in the order the Runtime consults them (Workflow #411 B15).",
+      "review": "pending",
+      "tokens": {
+        "target": {
+          "description": "The instance's target record session.remedy.choices (instance, server or game scope), written by a person or an agent."
+        },
+        "configuration": {
+          "description": "The configuration rows in effect for the instance: scheduling.remedy.choices, or the instance's own list."
+        },
+        "package": {
+          "description": "The package's declared default: the mapping's remedy default or the provider's parameter default."
+        }
+      }
+    },
+    "remedy_problem": {
+      "description": "Why a remedy cannot be used, or why a blocked task stopped for a person (Workflow #411 B15).",
+      "review": "pending",
+      "tokens": {
+        "no_choice": {
+          "description": "No target record, configuration row or package default names the need."
+        },
+        "choice_none": {
+          "description": "The deciding source says no remedy for the need (a none row)."
+        },
+        "choice_invalid": {
+          "description": "A choice names a capability the remedy does not list or leaves nothing allowed, or a configuration row names a need or capability no bound package declares."
+        },
+        "parameter_invalid": {
+          "description": "A chosen parameter is not declared by the provider, or its value is not one of the provider's options."
+        },
+        "capability_unbound": {
+          "description": "No catalog task on the instance is bound to a package that provides the capability."
+        },
+        "cycle": {
+          "description": "The remedy's providers lie on a cycle of blocked and provider tasks or packages, or are already in the chain."
+        },
+        "parameters_mismatch": {
+          "description": "Providers of one capability declare different parameters."
+        },
+        "provider_unavailable": {
+          "description": "Every provider is paused, its package suspended, or it is disabled for the instance by an override or a placement refusal."
+        },
+        "round_limit": {
+          "description": "A layer used scheduling.remedy.max_per_round requests and the block remained."
+        },
+        "depth_limit": {
+          "description": "A provider at the third layer of the chain ended blocked again."
+        },
+        "capability_unprovided": {
+          "description": "No package of the game root provides the capability (package bundle and standard-pack check)."
         }
       }
     }
@@ -48232,6 +48343,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "package_bundle_remedy_invalid": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "remedy_problem": "required",
+        "need": "optional",
+        "capability": "optional",
+        "outcome_key": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md, contracts/package-reference.md): a package's remedy cannot be served inside its game root (remedy_problem capability_unprovided: no package of the root provides the capability a remedy names; cycle: the packages' remedies and provided capabilities form a cycle, one entry per package on it; parameters_mismatch: two providers of one capability declare different parameters). need, capability and outcome_key name the remedy where they apply. package bundle and actinglab standard-pack check list one entry in warnings per finding; nothing is refused, and the Runtime stops such a remedy for a person at run time.",
+      "common_causes": "A provider package not written yet or not listed in bundle.json.",
+      "handling": "Add or fix the provider package, or remove the capability from the remedy."
+    },
     "package_bundle_write_failed": {
       "category": "error",
       "ladder_class": "none",
@@ -51355,6 +51486,27 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_dispatch_parameters": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "run_parameters": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md, section 4): the read-only parameters this policy dispatch hands to its run: run_parameters holds one record per parameter the task's package declares, with the value resolved from the target record, the configuration or the package default and the source that gave it. The run reads each as the instance fact session.dispatch.parameter.<parameter_name> in its snapshots, an overlay that is never stored. Shared with Workflow #411 B8, which adds its own values to this reason.",
+      "common_causes": "The task's package declares parameters (or a catalog opts in to Workflow #411 B8's values).",
+      "handling": "None."
+    },
     "policy_dispatch_sequence_conflict": {
       "category": "error",
       "ladder_class": "none",
@@ -52954,6 +53106,285 @@
       "description": "The diagnostic code of a ledger diagnostic record: policy rejected.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "policy_remedy_declaration_unusable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "remedy_problem": "required",
+        "task_id": "optional",
+        "outcome_key": "optional",
+        "need": "optional",
+        "capability": "optional",
+        "instance_id": "optional",
+        "package_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): an actingd check-config note: a remedy a bound package declares cannot be used as configured (remedy_problem capability_unbound: its capability has no provider task; cycle: it lies on a cycle of blocked and provider tasks; parameters_mismatch: its providers disagree on their parameters), or a configuration row names a need, capability, parameter or option the packages do not declare (choice_invalid, parameter_invalid). Which values are present depends on what the finding concerns: a finding on a blocked mapping names all of task_id, outcome_key and need (and package_id, and capability when it concerns one); a configuration row with an unknown need names need only of the three; a parameter row names none of the three, and capability when the row names one, while the developer detail names the row. instance_id is present for a per-instance configuration list. The outcome stays check_config_passed and nothing is written.",
+      "common_causes": "A provider package missing from the catalog (a note on the blocked mapping, with task_id, outcome_key and need); a configuration written for other packages (a note on the row: need for an unknown need, none of the three for a parameter row).",
+      "handling": "With task_id, outcome_key and need: bind a provider task, break the cycle or align the providers of that blocked mapping; until then a blocked task with this remedy stops for a person. With need only, or none of the three: fix the configuration row the need or the developer detail names (scheduling.remedy.choices, or the instance's list when instance_id is present)."
+    },
+    "policy_remedy_exhausted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "remedy_problem": "required",
+        "remedy_inputs_digest": "required",
+        "count": "required",
+        "limit_count": "required",
+        "remedy_depth": "required",
+        "remedy_source": "optional",
+        "capability": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a blocked task stopped and waits for a person: its remedies ran as often as the round allows (remedy_problem round_limit: count reached limit_count, scheduling.remedy.max_per_round, in one layer) or the chain reached three layers (depth_limit: a provider at remedy_depth 3 ended blocked again), and the block remained. Written once per round as a goal_missed planning signal (signal:remedy:stopped:); the task stays deferred at position 8a until remedy_inputs_digest changes or a person lifts it. Never the recovery ladder.",
+      "common_causes": "The remedy does not free enough; a provider is itself blocked by another need at the third layer.",
+      "handling": "Look at the instance; change the choice or the packages, or fix it by hand and lift (actingctl remedy lift)."
+    },
+    "policy_remedy_expired": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "window_end_unix_ms": "required",
+        "gate_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a remedy round ended with the activity window of its blocked run (window_end_unix_ms) before the remedy was served; the blocked task and its chain follow their own trigger rules again, and the next window's run opens a new round if the block remains. gate_code names the gate that held the provider back, when known. Written once per round as a goal_missed planning signal (signal:remedy:expired:).",
+      "common_causes": "The provider stayed behind a budget, window, blackout or pacing gate until the window ended.",
+      "handling": "None, if it is rare; otherwise widen the provider's window or budget."
+    },
+    "policy_remedy_lifted": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "remedy_inputs_digest": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a stopped blocked task was released because the inputs of its remedy decision changed (remedy_inputs_digest differs from the stop's: a target record, the configuration rows, a package's remedy or provides declarations, the provider task set or the active catalog) or a person lifted it; it follows its own trigger rules again. Written once per round as a goal_missed planning signal (signal:remedy:lifted:).",
+      "common_causes": "A choice was written or lifted; the configuration, a package's declarations or the catalog changed.",
+      "handling": "None."
+    },
+    "policy_remedy_requested": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "capability": "required",
+        "capabilities_allowed": "required",
+        "capabilities_declared": "required",
+        "remedy_source": "required",
+        "remedy_depth": "required",
+        "count": "required",
+        "limit_count": "required",
+        "irreversible": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a task is treated as triggered and past its cooldown and is promoted because its package provides a capability (capability) that a blocked task on the same instance needs; task_id names the blocked task, decision_id its round and outcome_key and need its blocked result. capabilities_allowed is the set the deciding source (remedy_source: the target record, the configuration or the package default) allows, capabilities_declared the remedy's declared set; remedy_depth is the chain layer (1 to 3); count is this request's number in the layer and limit_count scheduling.remedy.max_per_round; irreversible is true when a provider of the capability on the instance declares it so. One reason per blocked pair the dispatch serves, at most 16, in the provider's decision and dispatch chain.",
+      "common_causes": "Another task's run ended on an outcome that declares this need, and the target record, the configuration or the package default allows this capability.",
+      "handling": "None."
+    },
+    "policy_remedy_retry": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "outcome_key": "required",
+        "capability": "required",
+        "remedy_depth": "required",
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a blocked task (task_id) is run again once, ahead of its trigger and cooldown and promoted, because the remedy it needed has run: capability names the capability whose provider served it, decision_id the round, outcome_key the blocked result and remedy_depth the layer; count and limit_count are the layer's requests used and scheduling.remedy.max_per_round. The retry is an ordinary policy dispatch; a retry that fails is an ordinary failure and closes the round.",
+      "common_causes": "A provider task of the need's allowed capabilities succeeded after the block.",
+      "handling": "None."
+    },
+    "policy_remedy_round_closed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a remedy request or retry was not admitted because its round (decision_id; task_id the round's blocked task) was resolved, stopped or expired, or its layer already served, after the evaluation that chose it. The intent is refused as policy.dispatch_rejected: no lease and no run.",
+      "common_causes": "The remedy was served by another run between evaluation and admission.",
+      "handling": "None."
+    },
+    "policy_remedy_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "remedy_problem": "required",
+        "remedy_inputs_digest": "required",
+        "remedy_source": "optional",
+        "capability": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a blocked task stopped and waits for a person: a remedy is allowed, but no task can serve it on this instance (remedy_problem capability_unbound: no catalog task on the instance is bound to a package that provides the capability; cycle: every provider lies on a refused cycle or is already in the chain; parameters_mismatch: the providers of the capability declare different parameters; provider_unavailable: every provider pair is paused, its package suspended, or it is disabled for the instance by an override or a placement refusal). Written once per round as a goal_missed planning signal (signal:remedy:stopped:); the task stays deferred at position 8a until remedy_inputs_digest changes or a person lifts it. Never the recovery ladder.",
+      "common_causes": "The catalog has no task bound to a package that provides the capability; a provider package was unloaded or paused after repeated failures.",
+      "handling": "Add or fix the provider task or package (the stop lifts when the declarations or the catalog change), or allow another capability."
+    },
+    "policy_remedy_unchosen": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "decision_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "remedy_problem": "required",
+        "remedy_inputs_digest": "required",
+        "remedy_source": "optional",
+        "capability": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a blocked task stopped and waits for a person: no source allows a usable remedy for its need (remedy_problem no_choice: no target record, configuration row or package default names it; choice_none: the deciding source says none; choice_invalid: the choice names a capability the remedy does not list or leaves nothing allowed; parameter_invalid: a chosen parameter value is not one of the provider's declared options). remedy_source names the deciding source and capability the capability concerned, when there is one. Written once per round as a goal_missed planning signal (signal:remedy:stopped:); the task stays deferred at position 8a, across windows and restarts, until remedy_inputs_digest changes or a person lifts it. Never the recovery ladder.",
+      "common_causes": "No target record and no configuration row for the need and no package default; a target record written for older packages.",
+      "handling": "Write the need's choice (actingctl remedy set, ac_remedy_set) or the configuration rows (scheduling.remedy.choices); or fix the game by hand and lift (actingctl remedy lift). Any change of the choices lifts the stop."
+    },
+    "policy_remedy_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "task_id": "required",
+        "instance_id": "required",
+        "outcome_key": "required",
+        "need": "required",
+        "decision_id": "required",
+        "gate_code": "optional",
+        "next_eligible_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/remedies.md): a task is held because its latest policy run on the instance ended on an outcome key (outcome_key) whose package declares a remedy for a need (need), and the remedy has not been served yet; the task is retried once after it. decision_id names the round (the blocked run's decision). The pair is deferred at position 8a of the order of deferrals with no wake of its own; gate_code and next_eligible_unix_ms say what holds the remedy's provider back, when known. For the clock-slot records it is a waiting gate.",
+      "common_causes": "The remedy's provider task is waiting for its own gate (budget, activity window, blackout, pacing, a held instance) or is running.",
+      "handling": "None; the hold ends when the remedy is served, when the round stops, or at the end of the activity window."
     },
     "policy_rerun_exhausted": {
       "category": "warning",
@@ -72986,6 +73417,27 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "session_dispatch_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/instance-fact-store.md, Run parameters): a client tried to publish a fact under session.dispatch. (fact_key), the prefix the Runtime uses for a run's read-only parameters; the publication is refused before the fact write gate, from every origin, and nothing is appended. Not fatal. Shared with Workflow #411 B8.",
+      "common_causes": "A script that copies a run's snapshot back.",
+      "handling": "Use another key."
+    },
     "session_feature_fact_invalid": {
       "category": "error",
       "ladder_class": "none",
@@ -73028,6 +73480,29 @@
       "description": "A session.pack.schedule record breaks the pack schedule rules (field points at the offending member): its value is not a record_list of package_id, from_unix_ms, until_unix_ms and schedulable rows, a row ends at or before it starts, or two rows of one package overlap. The publication request is refused. Not fatal.",
       "common_causes": "A client wrote overlapping periods for one package or swapped from and until.",
       "handling": "Write the scope's whole list again with non-overlapping rows."
+    },
+    "session_remedy_choices_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "field": "required",
+        "instance_id": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.3",
+      "description": "Workflow #411 B15 (contracts/instance-fact-store.md, Remedy choice facts): a write of session.remedy.choices was refused before the fact write gate and nothing was appended: a row breaks the format (field points at the row and member: an unknown row kind, a missing or extra field, a name that is not a token, a duplicate row, none together with allow for one need, more than 256 rows, a scope other than instance, server or game, invalidate_on events), or it names a need, capability, parameter or option that the packages bound to an instance the scope covers do not declare (instance_id names that instance). Not fatal.",
+      "common_causes": "A typo; choices written for packages that are not installed.",
+      "handling": "Fix the row that field points at; the valid names are the bound packages' remedy and provides declarations."
     },
     "session_timeout": {
       "category": "warning",
