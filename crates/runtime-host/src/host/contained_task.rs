@@ -189,7 +189,8 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) executed_steps: Option<u32>,
     /// Workflow #411 A23: the steps the run's own package dispatched, without those of its
     /// prerequisite, return-home, navigation, entry recovery and interrupt layers; they choose
-    /// the final-page rule of the scheduling outcome, `None` by the run's total. In memory only.
+    /// the final-page rule of the scheduling outcome (with `None` the run's total chooses it).
+    /// In memory only.
     pub(super) own_executed_steps: Option<u32>,
     /// A failed or cancelled run's failure: the terminal's outcome (ledger revision 3; the
     /// terminal's severity is its category, so no separate severity is kept).

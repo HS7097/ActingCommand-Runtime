@@ -280,12 +280,11 @@ fn a23_a_zero_input_fields_package_after_its_prerequisite_records_its_fields_out
     root.write_bundle();
     let package_path = temp.path().join("fields.zip");
     fs::write(&package_path, fields_package()).expect("write fields package");
-    let vision = Arc::new(FakeVisionProvider::default());
     let host = RuntimeHost::start(
         config(&temp).with_standard_packs_root(Some(root.root.clone())),
         Arc::new(
             FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state))
-                .with_vision_provider(vision.clone()),
+                .with_vision_provider(Arc::new(FakeVisionProvider::default())),
         ),
     )
     .expect("runtime host");
