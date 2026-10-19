@@ -283,7 +283,7 @@ fn ocr_fields(
         ));
     }
     actingcommand_lab::observation_fields(&view.metadata, &evaluations, |target_id| {
-        matches!(evaluator.target_kind(target_id), Ok(TargetKind::Ocr))
+        matches!(evaluator.target_kind(target_id), Ok(TargetKind::Nn))
     })
 }
 
@@ -388,7 +388,7 @@ fn resolve_target(
         // Workflow #396 LAB-3: without an OCR model an action's OCR target stays not evaluated,
         // as before; `observe` reports it under `lab_ocr_unavailable` (`build`). Workflow #396
         // REC-6: so does a value test, which reads OCR targets.
-        TargetKind::Ocr | TargetKind::ValueTest if ocr.ocr_provider().is_none() => {
+        TargetKind::Ocr | TargetKind::ValueTest if ocr.provider().is_none() => {
             ElementResolution::NotEvaluated {
                 target_id: target_id.to_owned(),
                 reason: NotEvaluatedReason::DynamicTarget,
@@ -455,7 +455,7 @@ fn holds_nn_model(evaluator: &RecognitionEvaluator, target_id: &str, ocr: &LabOc
     };
     evaluator.pack().targets.iter().any(|target| {
         matches!(target, RecognitionTarget::Nn(nn) if nn.id == target_id
-            && provider.require_nn_model(&nn.model_ref, &nn.model_sha256).is_ok())
+            && provider.require_nn_model(&nn.model_ref, &nn.model_sha256).is_err())
     })
 }
 

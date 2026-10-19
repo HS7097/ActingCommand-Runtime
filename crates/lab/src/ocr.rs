@@ -201,7 +201,7 @@ impl LabOcr {
                 Outcome::new(VisionListingCode::VisionModelsEmpty),
             );
         }
-        if listing.ocr.is_empty() && listing.nn.is_empty() {
+        if listing.ocr.is_empty() {
             let cause = Outcome::new(LabCode::LabOcrModelMissing).path(&models);
             return Self::unavailable(Some(root), cause);
         }

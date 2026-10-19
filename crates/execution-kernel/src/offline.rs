@@ -868,9 +868,7 @@ where
             }
             // #411 Lab L6: the frame handed to recognition is the one the run captured last; its
             // readings are joined before the run ends, in hand-off order.
-            ContainedTaskTrace::ResourceReadingFrame { .. } => {
-                self.reading_frames.push_back(self.frames_read);
-            }
+            ContainedTaskTrace::ResourceReadingFrame { .. } => {}
             ContainedTaskTrace::ResourceReadings {
                 readings,
                 unresolved,
