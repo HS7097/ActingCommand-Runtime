@@ -3,10 +3,12 @@
 // Workflow #411 B15 R1 (contracts/remedies.md sections 2.2 and 2.4; model-b15 sections 4.2 and
 // 4.4; exec key 95): a package's `control.json` may declare what it `provides`, each capability
 // with the parameters whose options and default state its scope. Kernel admission takes such a
-// package; the host reads its declarations by path without preparing it; a prepared package
-// answers the default of every parameter it declares. A `provides` that breaks a rule is refused
-// as `contained_task_control_invalid` with the rule as its `reason`, and so is a package that
-// provides a capability one of its own remedies names.
+// package; a prepared package answers the default of every parameter it declares. A `provides`
+// that breaks a rule is refused as `contained_task_control_invalid` with the rule as its
+// `reason`, and so is a package that provides a capability one of its own remedies names. Every
+// package here is built in memory; the readers that take a package by its path (`describe_path`
+// and `read_remedy_declarations`) are tested in runtime-host (`tests/gate_411_b15p_host.rs`,
+// host key 119).
 //
 // A synthetic `neutral` game, server `test`, 16x9: page `home` is told by a blue first pixel and
 // page `page_b` by a red one; the package's one operation goes from `home` to `page_b`, where its
@@ -14,10 +16,7 @@
 
 use super::tests::admission_deadline;
 use super::*;
-use actingcommand_contract::{ProvidedCapability, RemedyDeclaration};
 use serde_json::{Value, json};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 const LABEL: &str = "b15p-test";
 const PACKAGE_ID: &str = "neutral.test.provider";
@@ -90,42 +89,25 @@ fn task(remedy: Option<Value>) -> Value {
     })
 }
 
-// One source package directory under the system's temporary directory, named for its test.
-struct Package {
-    path: PathBuf,
-}
-
-impl Package {
-    fn write(name: &str, control: &Value, task: &Value) -> Self {
-        let path =
-            std::env::temp_dir().join(format!("actingcommand-b15p-{}-{name}", std::process::id()));
-        for (file, value) in [
-            ("control.json", control.clone()),
-            (
-                "resources/operations/resources.json",
-                json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
-            ),
-            ("resources/operations/task/task.json", task.clone()),
-        ] {
-            let file = path.join(file);
-            fs::create_dir_all(file.parent().expect("a package file's directory"))
-                .expect("package directory");
-            fs::write(
-                file,
-                serde_json::to_vec_pretty(&value).expect("package JSON"),
-            )
-            .expect("package file");
-        }
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn remove(self) {
-        fs::remove_dir_all(&self.path).expect("remove the package directory");
-    }
+// The content table of the package's source directory, in memory: its control declaration, its
+// resource list and its one task.
+fn entries(control: &Value, task: &Value) -> BTreeMap<String, Vec<u8>> {
+    [
+        ("control.json", control.clone()),
+        (
+            "resources/operations/resources.json",
+            json!({"schema_version": "1.0", "resources": [], "resource_count": 0}),
+        ),
+        ("resources/operations/task/task.json", task.clone()),
+    ]
+    .into_iter()
+    .map(|(path, value)| {
+        (
+            path.to_owned(),
+            serde_json::to_vec_pretty(&value).expect("package JSON"),
+        )
+    })
+    .collect()
 }
 
 // Two capabilities, the second irreversible with the two parameters that state its scope.
@@ -146,75 +128,6 @@ fn remedy() -> Value {
 
 fn refusal(error: &ContainedTaskError) -> (&str, Option<&str>) {
     (error.code().as_str(), error.detail())
-}
-
-// Requirements 2 and 5: a package that provides two capabilities, one irreversible with its
-// parameters, and declares a remedy is admitted by kernel admission; the metadata reader, which
-// admits it by its path without preparing it, answers its package id, its remedy with the
-// mapping's key and every capability it provides with its marker and parameters, as declared.
-#[test]
-fn b15p_provides_with_parameters_is_admitted_and_read_without_preparing() {
-    let package = Package::write("read", &control(Some(provides())), &task(Some(remedy())));
-
-    let descriptor =
-        PreparedContainedTask::describe_path(LABEL, package.path(), admission_deadline())
-            .unwrap_or_else(|error| panic!("kernel admission refused the package: {error}"));
-    assert_eq!(descriptor.package_id(), PACKAGE_ID);
-
-    let read = PreparedContainedTask::read_remedy_declarations(
-        LABEL,
-        package.path(),
-        admission_deadline(),
-    )
-    .unwrap_or_else(|error| panic!("the reader refused the package: {error}"));
-    let declared: RemedyDeclaration = serde_json::from_value(remedy()).expect("the remedy");
-    let provided: Vec<ProvidedCapability> =
-        serde_json::from_value(provides()).expect("the capabilities");
-    assert_eq!(
-        read,
-        RemedyDeclarations {
-            package_id: PACKAGE_ID.to_owned(),
-            remedies: vec![("blocked_k".to_owned(), declared)],
-            provides: provided,
-        }
-    );
-    let (reversible, irreversible) = (&read.provides[0], &read.provides[1]);
-    assert_eq!(
-        (reversible.capability(), reversible.irreversible()),
-        ("cap_x", false)
-    );
-    assert!(reversible.parameters().is_empty());
-    assert_eq!(
-        (irreversible.capability(), irreversible.irreversible()),
-        ("cap_y", true)
-    );
-    let strings = |values: &[&str]| -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    };
-    assert_eq!(
-        irreversible
-            .parameters()
-            .iter()
-            .map(|parameter| (
-                parameter.name().to_owned(),
-                parameter.options().to_vec(),
-                parameter.default_option().to_owned()
-            ))
-            .collect::<Vec<(String, Vec<String>, String)>>(),
-        [
-            (
-                "param_p".to_owned(),
-                strings(&["opt_1", "opt_2"]),
-                "opt_2".to_owned()
-            ),
-            (
-                "param_q".to_owned(),
-                strings(&["opt_3", "opt_4", "opt_5"]),
-                "opt_3".to_owned()
-            ),
-        ]
-    );
-    package.remove();
 }
 
 // Requirement 2: each rule of `provides` refuses the control declaration with
@@ -403,17 +316,13 @@ fn b15p_a_package_providing_its_own_remedy_capability_is_refused() {
 #[test]
 fn b15p_declared_parameter_defaults_are_answered_by_a_prepared_task() {
     let prepare = |name: &str, provides: Option<Value>| {
-        let package = Package::write(name, &control(provides), &task(Some(remedy())));
-        let bundle = ExternallyVerifiedBundle::load_metadata_path(
+        PreparedContainedTask::load_content_entries(
             LABEL,
-            package.path(),
+            entries(&control(provides), &task(Some(remedy()))),
+            None,
             admission_deadline(),
         )
-        .unwrap_or_else(|error| panic!("{name}: containment refused the package: {error}"));
-        let prepared = PreparedContainedTask::from_bundle(bundle)
-            .unwrap_or_else(|error| panic!("{name}: preparation refused the package: {error}"));
-        package.remove();
-        prepared
+        .unwrap_or_else(|error| panic!("{name}: admission refused the package: {error}"))
     };
 
     let declaring = prepare("defaults", Some(provides()));
