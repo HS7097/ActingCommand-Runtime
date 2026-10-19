@@ -1602,6 +1602,8 @@ pub const ADB_READ_ONLY: &[&str] = &[
     "ensure_device",
     "ensure_device_until",
     "screen_size",
+    // Workflow #406 T3: the Android SDK level the adb shell input backend reads at connect.
+    "sdk_level",
     "foreground_package",
     "screencap",
     "run",
