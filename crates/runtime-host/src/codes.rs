@@ -1126,6 +1126,9 @@ actingcommand_contract::outcome_codes! {
         InstanceFactSnapshotTooLargeForFrame => "instance_fact_snapshot_too_large_for_frame": error / none,
         // Workflow #384 D2-S5: a fact refresh status read whose reply exceeds one IPC frame.
         RuntimeFactRefreshStatusTooLargeForFrame => "runtime_fact_refresh_status_too_large_for_frame": error / none,
+        // Workflow #386 SR-6b, MCP-19a: a schedule explanation read whose reply exceeds one IPC
+        // frame.
+        RuntimeScheduleExplanationTooLargeForFrame => "runtime_schedule_explanation_too_large_for_frame": error / none,
         RuntimeFactStale => "runtime_fact_stale": error / none,
         RuntimeFactStoreDesync => "runtime_fact_store_desync": error / none,
         RuntimeFrameEncodeFailed => "runtime_frame_encode_failed": error / none,
@@ -1906,6 +1909,8 @@ actingcommand_contract::outcome_locations! {
         ReadPerformanceStatus => "read_performance_status",
         // Workflow #384 D2-S5.
         ReadFactRefreshStatus => "read_fact_refresh_status",
+        // Workflow #386 SR-6b, MCP-19a.
+        ReadScheduleExplanation => "read_schedule_explanation",
         ReadPerformanceWorkloads => "read_performance_workloads",
         ReadPinnedPolicyCatalog => "read_pinned_policy_catalog",
         ReadPolicyAdmissionTime => "read_policy_admission_time",
@@ -2465,9 +2470,6 @@ actingcommand_contract::outcome_codes! {
         /// Error. A `session.feature.*` record breaks the feature-lock fact rules; the request
         /// is refused (keys `fact_key`; SR-5a).
         SessionFeatureFactInvalid => "session_feature_fact_invalid": error / none,
-        /// Info. An instance has no due task; its not-running row names the earliest wake
-        /// (keys `instance_id`, and `next_eligible_unix_ms` when known; SR-6).
-        DueTaskMissing => "due_task_missing": info / none,
         /// Info. A candidate with an entry-cost step waits because the instance's pacing stage
         /// is above the entry-cost stage limit (keys `instance_id`, `pacing_stage`, and
         /// `next_eligible_unix_ms` when known; SR-10).

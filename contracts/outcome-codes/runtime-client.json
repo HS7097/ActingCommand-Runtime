@@ -3772,6 +3772,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A runtime client operation: what the fact refresh waits for (FactRefreshStatus, Workflow #384 D2-S5)."
+    },
+    "runtime_schedule_explanation": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "A runtime client operation: why each candidate of the latest policy evaluation did not run (ScheduleExplanation, Workflow #386 SR-6b, MCP-19)."
     }
   }
 }

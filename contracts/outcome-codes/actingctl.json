@@ -2907,6 +2907,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "runtime_schedule_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "actingctl schedule: the latest policy evaluation's explanation (ScheduleExplanation) was printed: per instance its not-running row, its selected task and every candidate that did not run with its why, its reason codes and its next wake, as ac_schedule answers it (Workflow #386 SR-6b, MCP-19).",
+      "common_causes": "The command succeeded.",
+      "handling": "Nothing to do."
+    },
     "actingctl_capability_gap_recorded": {
       "category": "success",
       "ladder_class": "none",

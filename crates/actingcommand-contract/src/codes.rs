@@ -186,6 +186,8 @@ crate::outcome_codes! {
         PerformanceStatusCompleted => "request_performance_status_completed": success / none,
         // Workflow #384 D2-S5 (register §1.68).
         FactRefreshStatusCompleted => "request_fact_refresh_status_completed": success / none,
+        // Workflow #386 SR-6b, MCP-19a (register §1.143).
+        ScheduleExplanationCompleted => "request_schedule_explanation_completed": success / none,
     }
 }
 
@@ -695,6 +697,20 @@ crate::outcome_codes! {
         InvalidPerformanceStatus => "invalid_performance_status": error / none,
         // Workflow #384 D2-S5: a `FactRefreshStatus` answer of the wrong shape.
         InvalidFactRefreshStatus => "invalid_fact_refresh_status": error / none,
+        // Workflow #386 SR-6b, MCP-19a: a `ScheduleExplanation` answer of the wrong shape.
+        InvalidScheduleExplanation => "invalid_schedule_explanation": error / none,
+    }
+}
+
+crate::outcome_codes! {
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143): the reason of an instance's not-running
+    /// row when it has no due task. The host emits it in the `ScheduleExplanation` answer and
+    /// the answer's validation recognises it, so the contract registers it (moved from the
+    /// runtime-host registry while pending, never emitted before).
+    pub enum ScheduleExplanationRowCode {
+        /// Info. An instance has no due task; its not-running row names the earliest wake
+        /// (keys `instance_id`, and `next_eligible_unix_ms` when known; SR-6).
+        DueTaskMissing => "due_task_missing": info / none,
     }
 }
 

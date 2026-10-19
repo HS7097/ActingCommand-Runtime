@@ -3952,6 +3952,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "RunContainedTask",
     "RuntimeFactSnapshot",
     "SafeReset",
+    // Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluation's not-run
+    // explanation, a general read from memory like Status.
+    "ScheduleExplanation",
     "Status",
     "SubscribeEvents",
     "UnloadPack",
@@ -5580,6 +5583,9 @@ const HOST_SPLIT: &[HostModule] = &[
     host_module("runtime_config", &["HostShared"]),
     host_module("runtime_facts", &["HostShared"]),
     host_module("saved_artifact_ocr", &["HostShared"]),
+    // Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluation's not-run
+    // explanation, read from the policy host's memory; it appends nothing.
+    host_module("schedule_explanation_read", &["HostShared"]),
     host_module("scheduling_pause", &["HostShared"]),
     host_module("signatures", &["HostShared"]),
     // Workflow #373 NAV-6: the standard-pack root reader and a run's shared interrupt pages.

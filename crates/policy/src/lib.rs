@@ -38,6 +38,8 @@ mod tests {
     mod gate_411_b15e;
     mod gate_d2_s1;
     mod gate_d2_s4;
+    // Workflow #386 SR-6b, MCP-19a (policy key 56): each decision's own wake, never serialized.
+    mod gate_mcp19a;
     mod gate_p1;
     mod gate_p2a;
     mod gate_p2b;

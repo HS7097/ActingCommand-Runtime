@@ -375,6 +375,11 @@ pub struct TaskDecision {
     pub rank: Option<TaskRank>,
     pub detection_suggestions: Vec<DetectionSuggestion>,
     pub reasons: Vec<DecisionReason>,
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-1): this decision's own wake, one of
+    /// the values the evaluation's `next_wake_unix_ms` is the least of. Never serialized, so an
+    /// evaluation's bytes are unchanged; a decision read back has none.
+    #[serde(skip)]
+    pub next_wake_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1501,7 +1506,7 @@ impl TaskWork {
     }
 }
 
-/// The record is dropped: the decision shape is unchanged.
+/// The record is dropped and the wake kept unserialized: the decision shape is unchanged.
 impl From<TaskWork> for TaskDecision {
     fn from(value: TaskWork) -> Self {
         Self {
@@ -1512,6 +1517,7 @@ impl From<TaskWork> for TaskDecision {
             rank: value.rank,
             detection_suggestions: value.suggestions,
             reasons: value.reasons,
+            next_wake_unix_ms: value.next_wake_unix_ms,
         }
     }
 }

@@ -705,8 +705,39 @@ deferred with `dispatch_random_delay_waiting` (info; `instance_id` the alias, `t
 `due_at_unix_ms`, `random_delay_ms`, `next_eligible_unix_ms` the planned start) until its drawn
 delay has passed, and the intent it is then dispatched with records the delay
 (`policy.dispatch_intent` `random_delay`). Evaluations
-stay out of the ledger; a person sees the reason in the instance's not-running row of the status
-and of MCP (slice SR-6b).
+stay out of the ledger; a person sees the reason where the next paragraph says.
+
+**Where a person sees it** (Workflow #386 SR-6b, MCP-19a; [`v012-register.md`](../v012-register.md)
+§1.143). The policy host keeps the latest evaluated cycle's not-run explanation in memory, per
+instance that has a decision in that evaluation, by alias:
+- the instance's earliest decision wake;
+- the decision selected for it: its task, its decision id and the state of its dispatch when the
+  explanation is read (`pending` before its intent is recorded, then `intent`, `admitted`,
+  `rejected` or `completed`, as the dispatch projection holds it; a rejected one did not run
+  either);
+- every other decision as a candidate row `{task_id, state, eligibility, why, reasons,
+  reasons_omitted?, next_wake_unix_ms?, since_unix_ms}`: `state` is `blocked` for a blocked
+  decision and `deferred` for every other (an eligible one that another task outranked waited
+  this round); `why` is the full outcome of its last reason, the code `why=` names in a dispatch
+  decision record; `reasons` are the codes of its reasons in order, the last 32 when there are
+  more (`reasons_omitted` counts the others), so it ends with `why`'s code; the wake is the
+  decision's own. Due rows (eligibility `true`) come first, ranked ones by total score, highest
+  first, then unranked ones, each tie by task id; then the rest by their wake, earliest first and
+  none last, then by task id;
+- one not-running row (scheduling model §8.2 item 4): the first due row's task, `why`, wake and
+  since; with no due row, no task and `why` `due_task_missing` (info; `instance_id` the alias,
+  `next_eligible_unix_ms` the instance's earliest wake when one is known).
+
+A row's `since_unix_ms` is the first evaluation of an unbroken run of evaluations in which the
+same (instance, task) had the same `why` code; the not-running row's, of the same (instance, task
+or none, `why` code). Every evaluated cycle replaces the table, before the host adds its notes to
+the decisions (so `eligible_since_unknown` and `policy_instance_fact_missing` below are not part
+of it); a deferred cycle or a failed evaluation leaves it as it was, and a start begins with none,
+so a run counts from the first evaluation after the start. Nothing of it is written to the ledger
+and no decision reads it. The general read `ScheduleExplanation`
+([`runtime-interface.md`](../runtime-interface.md), "New request kinds") answers it; its outputs
+are MCP-19b's: `actingctl schedule`, MCP `ac_schedule`, the `not_running` row of `ac_overview` and
+the `not_run` rows of `ac_diagnose`.
 
 Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
 but has not started is withdrawn when its task package is unloaded, and its decision record and

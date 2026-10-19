@@ -622,3 +622,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_405_w1::w1_the_v2_schema_declares_fact_time_reached_with_the_runtime_bounds",
 ]
 incident = ["#405"]
+
+# Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirement 1; register §1.143 M19A-1; no persisted ledger shape; key assigned by the coordinator; the host half is host 126 and 127): every TaskDecision carries its own wake (next_wake_unix_ms), the value the evaluator computed for it, and the evaluation's wake is the least of the decisions' (here, of two clock tasks not yet due); the member is never serialized, so an evaluation's bytes are unchanged
+[[gate]]
+key = "56"
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_mcp19a::mcp19a_each_decision_carries_its_own_wake",
+    "actingcommand-policy::lib::tests::gate_mcp19a::mcp19a_the_decision_wake_is_not_serialized",
+]
+incident = ["#386 SR-6b", "MCP-19"]

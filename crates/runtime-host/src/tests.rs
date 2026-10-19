@@ -277,6 +277,9 @@ mod gate_411_lab_l5;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
+// Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
+// not-run explanation in the policy host's memory and its read.
+mod gate_mcp19a;
 mod gate_p0;
 mod home_entry;
 mod input;

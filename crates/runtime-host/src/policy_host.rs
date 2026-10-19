@@ -1109,6 +1109,9 @@ pub(crate) struct PolicyHost {
     remedies: crate::remedy::RemedyState,
     /// Workflow #405 D1: the random delays drawn per pair. Memory only; a host starts with none.
     random_delays: RandomDelayTable,
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-2): the latest evaluated cycle's
+    /// not-run explanation. Memory only; a host starts with none.
+    explanation: crate::schedule_explanation::ScheduleExplanationTable,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1144,6 +1147,7 @@ impl PolicyHost {
             quarantined_dispatches: BTreeSet::new(),
             remedies: crate::remedy::RemedyState::default(),
             random_delays: RandomDelayTable::default(),
+            explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
         };
         host.recover_dispatches(ledger)?;
         host.recover_planning_signals(ledger)?;
@@ -1613,6 +1617,32 @@ impl PolicyHost {
             .collect()
     }
 
+    /// Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluated cycle's not-run
+    /// explanation for `instance` (every instance when absent), with the selected decision's
+    /// dispatch state as the dispatch projection holds it now: `pending` before its intent is
+    /// recorded.
+    pub(crate) fn schedule_explanation(
+        &self,
+        instance: Option<&str>,
+        candidates: bool,
+    ) -> actingcommand_contract::RuntimeScheduleExplanation {
+        use actingcommand_contract::ScheduleDispatchState;
+        self.explanation
+            .answer(instance, candidates, |decision_id| {
+                match self
+                    .seen_dispatches
+                    .get(decision_id)
+                    .map(|dispatch| dispatch.lifecycle)
+                {
+                    None => ScheduleDispatchState::Pending,
+                    Some(DispatchLifecycle::Intent) => ScheduleDispatchState::Intent,
+                    Some(DispatchLifecycle::Admitted) => ScheduleDispatchState::Admitted,
+                    Some(DispatchLifecycle::Rejected) => ScheduleDispatchState::Rejected,
+                    Some(DispatchLifecycle::Completed) => ScheduleDispatchState::Completed,
+                }
+            })
+    }
+
     pub(crate) fn evaluate(
         &mut self,
         facts: &EvaluationFacts,
@@ -1850,6 +1880,10 @@ impl PolicyHost {
         self.random_delays.retain_eligible(&evaluation);
         self.arbitration
             .extend(instance_arbitration_ranks(&evaluation));
+        // Workflow #386 SR-6b, MCP-19a (register §1.143): the not-run explanation of this
+        // evaluation, before the host adds its notes to the decisions.
+        self.explanation
+            .record(&evaluation, active.compiled.catalog_hash(), time.unix_ms);
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
         }

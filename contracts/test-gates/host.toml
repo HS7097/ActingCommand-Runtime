@@ -1464,3 +1464,28 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_405_d1::d1_a_waiting_clock_slot_is_not_refused",
 ]
 incident = ["#405"]
+
+# Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirements 2-5; register §1.143 M19A-2, M19A-3; no persisted ledger shape; contracts/scheduling/README.md "Why A Candidate Does Not Run"; key assigned by the coordinator): the policy host keeps the latest evaluated cycle's not-run explanation in memory, replaced by every evaluated cycle and empty after a start; per instance with a decision, by alias: its earliest decision wake, its selected task with the decision id and the dispatch state the projection holds when the read is answered (pending before the intent is recorded, then intent, admitted, rejected or completed), every other decision as a candidate row {task_id, state deferred|blocked, eligibility, why = the outcome of its last reason, reasons = its reason codes (last 32) ending with why's, next_wake_unix_ms, since_unix_ms}, due rows first (ranked by total score, then unranked, ties by task id), then the rest by wake (none last), then task id, and one not-running row: the first due row, else due_task_missing naming the instance and its earliest wake; since is the first evaluation of an unbroken run of the same (instance, task, why code), and of the same (instance, task or none, why code) for the not-running row; the read ScheduleExplanation{instance?, candidates} answers it from memory, appends nothing and names no request in the ledger, refuses an unregistered alias instance_unknown and answers without candidate rows (still counted) when candidates is false
+[[gate]]
+key = "126"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_a_candidate_that_did_not_run_shows_its_why_reasons_and_wake",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_with_nothing_due_the_row_is_due_task_missing_with_the_earliest_wake",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_since_holds_while_the_why_holds_and_restarts_when_it_changes",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_the_read_is_memory_only_and_refuses_an_unknown_alias",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_the_selected_dispatch_state_follows_the_projection",
+]
+incident = ["#386 SR-6b", "MCP-19"]
+
+# Workflow #386 SR-6b, MCP-19a (brief-MCP19a requirements 5 and 6; register §1.143 M19A-3, §3 W5 under runtime-client 2; no persisted ledger shape; key assigned by the coordinator): the request kind ScheduleExplanation is a general read that records nothing (interface row General, Read, no G14 copy), its completed receipt carries request_schedule_explanation_completed and an empty alias is refused with the existing alias code; the answer's validation refuses invalid_schedule_explanation an instance twice, reason codes that do not end with the row's why, more than 32 reason codes, a candidates_total below the rows answered, a not-running row without a task whose why is not due_task_missing (contract-owned since this slice) or one with a task whose why is due_task_missing, and a receipt carrying the answer that is not completed; a reply receipt past the host's maximum_frame_bytes is refused runtime_schedule_explanation_too_large_for_frame (denied) while the same read without candidates completes
+[[gate]]
+key = "127"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_the_answer_shape_is_validated",
+    "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_the_read_is_a_general_read_with_its_receipt_code",
+    "actingcommand-runtime-host::lib::tests::gate_mcp19a::mcp19a_a_reply_past_one_frame_is_refused",
+    "actingcommand-contract::lib::runtime::schedule_explanation::tests::mcp19a_a_not_running_row_has_no_task_exactly_when_its_why_is_due_task_missing",
+]
+incident = ["#386 SR-6b", "MCP-19"]
