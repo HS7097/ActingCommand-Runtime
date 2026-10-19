@@ -1029,7 +1029,19 @@ fn a24_write_failure_gap_starts_at_the_latest_time() {
     let ledger = root
         .open(root.plan(5, &reports().0))
         .expect("the next start imports the verified part");
-    let gaps = gap_payloads(&after(&ledger, head));
+    // An incomplete dump does not complete its epoch, so this start also writes its
+    // `tail_unconfirmed` gap (`contracts/ledger-observer.md` §9.4, §10); the dump's gap is the
+    // one of a dump kind.
+    let gaps = gap_payloads(&after(&ledger, head))
+        .into_iter()
+        .filter(|gap| {
+            matches!(
+                gap.gap_kind(),
+                actingcommand_contract::LedgerGapKind::DumpIncomplete
+                    | actingcommand_contract::LedgerGapKind::DumpInvalid
+            )
+        })
+        .collect::<Vec<_>>();
     assert_eq!(gaps.len(), 1, "one dump gap");
     assert_eq!(
         gaps[0].gap_kind(),
