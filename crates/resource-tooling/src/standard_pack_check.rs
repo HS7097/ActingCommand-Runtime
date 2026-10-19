@@ -254,9 +254,7 @@ fn navigation_check(
         resolutions: BTreeMap::new(),
     };
     let Some(pages) = &root.pages else {
-        for package_id in root.registry.package_ids() {
-            packages.admit_listed(package_id)?;
-        }
+        // A25 red proof, mutation 1 (do not merge): without `pages.json` no package is admitted.
         return Ok(Vec::new());
     };
     let listed = pages
