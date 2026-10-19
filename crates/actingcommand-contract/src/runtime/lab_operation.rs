@@ -40,13 +40,18 @@ pub enum LabOperationSelection {
 }
 
 impl LabOperationSelection {
+    /// #411 Lab L3: explicit coordinates are a tap, a long tap or a swipe, the gestures the kernel
+    /// presses for a pack's tap, long press and drag.
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::Element { id } if !id.is_empty() && id.len() <= 2048 && !id.contains('\0') => {
                 Ok(())
             }
             Self::Coordinates {
-                action: action @ (InputAction::Tap { .. } | InputAction::Swipe { .. }),
+                action:
+                    action @ (InputAction::Tap { .. }
+                    | InputAction::LongTap { .. }
+                    | InputAction::Swipe { .. }),
             } => action.validate(),
             _ => Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidLabOperationSelection,
@@ -99,6 +104,18 @@ impl LabOperationSelection {
                         let (rect, point) = point(x, y)?;
                         Geometry::Tap { rect, point }
                     }
+                    // #411 Lab L3: a long tap is the projection's long press, a drag that does
+                    // not move: one point in one rectangle, held over the duration.
+                    InputAction::LongTap { x, y, duration_ms } => {
+                        let (rect, point) = point(x, y)?;
+                        Geometry::Drag {
+                            from_rect: rect,
+                            to_rect: rect,
+                            from: point,
+                            to: point,
+                            duration_ms,
+                        }
+                    }
                     InputAction::Swipe {
                         x1,
                         y1,
@@ -135,10 +152,25 @@ impl LabOperationSelection {
                 RuntimeContractError::new(RuntimeContractCode::LabCoordinatesOutOfFrame)
             })
         };
+        // #411 Lab L3: the Runtime presses a selection as the kernel presses a pack's click. A drag
+        // that does not move (`from` equal to `to` in the same rectangle, the readers' form of a
+        // long press) is a long tap at that point over its duration; every other drag is one
+        // swipe. The Runtime's preparation and the evidence verifier both resolve by this rule.
         let action = match geometry {
             Geometry::Tap { point, .. } => InputAction::Tap {
                 x: coordinate(point.x)?,
                 y: coordinate(point.y)?,
+            },
+            Geometry::Drag {
+                from_rect,
+                to_rect,
+                from,
+                to,
+                duration_ms,
+            } if from == to && from_rect == to_rect => InputAction::LongTap {
+                x: coordinate(from.x)?,
+                y: coordinate(from.y)?,
+                duration_ms,
             },
             Geometry::Drag {
                 from,

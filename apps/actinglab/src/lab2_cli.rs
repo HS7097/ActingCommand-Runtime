@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CorrelationId, EffectDisposition, EventQuery, InputAction, NeedsDetection, ProjectionProfile,
-    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeResult,
+    CorrelationId, EffectDisposition, EventQuery, InputAction, InputFrameReference, NeedsDetection,
+    ProjectionProfile, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeResult,
 };
 use actingcommand_lab::{
     AttachFrameRequest, OpaqueJson, record_attach_frame, record_frame_preflight,
@@ -54,6 +54,9 @@ struct Lab2Scene {
     source: Value,
     frame_age_ms: u64,
     png: Option<Vec<u8>>,
+    /// #411 Lab L3: the Runtime frame the scene was captured as, which an input planned on it
+    /// names (`input_with_frame`); none for a scene file.
+    input_frame: Option<InputFrameReference>,
 }
 
 struct WaitIds<'a> {
@@ -446,6 +449,7 @@ fn run_runtime_do(
                     x: point.x,
                     y: point.y,
                 },
+                loaded_scene.input_frame,
             )?;
             (
                 serde_json::to_value(action_id)
@@ -697,7 +701,14 @@ fn execute_runtime_navigation_route(
             )?;
         }
         let runtime_action = runtime_input_action(&input)?;
-        let action_id = execute_runtime_debug_input(ctx.session, ctx.instance, runtime_action)?;
+        // #411 Lab L3: the input names the frame its guard was decided on, which a Nemu-input
+        // instance requires (as online `do` passes its before frame).
+        let action_id = execute_runtime_debug_input(
+            ctx.session,
+            ctx.instance,
+            runtime_action,
+            guard_scene.input_frame,
+        )?;
         let arrived = poll_for_runtime_page(
             ctx.session,
             ctx.instance,
@@ -778,7 +789,17 @@ fn resolve_runtime_navigation_edge_input(
     ))
 }
 
+/// #411 Lab L3: a route presses its edge as the kernel presses a pack's click: a long press (the
+/// reader's drag that does not move, [`SemanticInput::long_press`]) is a long tap at its point over
+/// its duration, every other drag one swipe.
 fn runtime_input_action(input: &SemanticInput) -> CliOutcome<InputAction> {
+    if let Some((point, duration_ms)) = input.long_press() {
+        return Ok(InputAction::LongTap {
+            x: point.x,
+            y: point.y,
+            duration_ms,
+        });
+    }
     match input {
         SemanticInput::Tap { point, .. } => Ok(InputAction::Tap {
             x: point.x,
@@ -954,6 +975,18 @@ fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> Cli
     let backend = frame.backend_name.as_str().to_string();
     let png = frame.original_png.clone();
     let scene = scene_from_frame(&frame)?;
+    // #411 Lab L3: the frame reference the Runtime committed for this observation, as the host
+    // names an online `do`'s before frame.
+    let input_frame =
+        observation
+            .artifact()
+            .frame_id()
+            .copied()
+            .map(|frame_id| InputFrameReference {
+                frame_id,
+                width: observation.width(),
+                height: observation.height(),
+            });
     Ok(Lab2Scene {
         scene,
         backend,
@@ -964,18 +997,22 @@ fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> Cli
         }),
         frame_age_ms,
         png,
+        input_frame,
     })
 }
 
+/// #411 Lab L3: `frame` is the Runtime frame the input was planned on (the capture its guard
+/// used); the Runtime resolves it before it presses, and a Nemu-input instance requires it.
 fn execute_runtime_debug_input(
     session: &RuntimeDebugSession,
     instance: &str,
     action: InputAction,
+    frame: Option<InputFrameReference>,
 ) -> CliOutcome<actingcommand_contract::ActionId> {
     let token = session
         .acquire_lease(instance)
         .map_err(|error| CliError::device(error.to_string()))?;
-    let input = session.input(&token, action);
+    let input = session.input_with_frame(&token, action, frame);
     let release = session.release_lease(&token);
     match (input, release) {
         (Ok(receipt), Ok(())) => match receipt.result() {
@@ -2275,6 +2312,7 @@ fn load_lab2_scene(_global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2
             }),
             frame_age_ms: 0,
             png: Some(png),
+            input_frame: None,
         });
     }
     Err(CliError::usage(

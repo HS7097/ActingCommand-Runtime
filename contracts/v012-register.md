@@ -1900,6 +1900,26 @@ is the existing `validation_failed` (exit 2) and MCP's the existing `arguments_i
 | L1-5 | MCP `ac_lab_do` without `priority`, `lease_id`, `no_wait`, `recovery_timeout_ms`, `recovery_poll_ms`; `ac_lab_observe` without `require_fresh` | removed tool arguments: `arguments_invalid {argument, argument_problem: unknown}` (class `usage`) (apps 76) | Lab L1 | Lab L1 | refused before the install is located and before any actinglab child runs (the schema's `additionalProperties: false`) |
 | L1-6 | MCP `ac_lab_do` with `capture: true`, `dry_run` not `true`, and `destructive` or `allow_destructive` `true` | changed answer: `arguments_invalid {argument, argument_problem: conflicting}` (class `usage`) (was passed to actinglab and ignored) (apps 76) | Lab L1 | Lab L1 | before any child, nothing recorded; offline, with `dry_run` or with both `false` the call goes on; any other path conflict is actinglab's refusal relayed as `lab_tool_failed` caused by `validation_failed` (the descriptions say so) |
 
+### 1.119 Slice Lab L3 (v0.12.x): the Lab presses gestures as the kernel does (#411 Lab L3; G3, G4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
+
+A long press is sent as one `InputAction::LongTap` wherever the Lab presses, as the kernel presses a
+pack's `long_press` click, instead of a swipe that does not move; and `ensure --capture` names the
+Runtime frame its guard used with each input, as online `do` names its before frame. No persisted
+ledger shape: no ledger record, wire shape, configuration key, outcome code or interface revision
+(§6) changes. `LabOperationSelection::Coordinates` already decodes `long_tap` (request v4); only
+its validation widens, and the persisted prepared record keeps its shape (its `geometry` stays a
+`drag`, its `action` is a long tap). [contained-lab-operation.md](contained-lab-operation.md),
+[lab-recording.md](lab-recording.md) ("`--record` on device commands") and
+[resource-declarations.md](resource-declarations.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L3-1 | `LabOperationSelection::Coordinates { action }` | accepted value widened: `long_tap` beside `tap` and `swipe` (exec 97) | Lab L3 | Lab L3 | it resolves to the geometry `drag` with `from` equal to `to` (a 1x1 rectangle at the point at both ends) and to the long tap itself; `key`, `text`, `reset` and the segmented drags stay `invalid_lab_operation_selection` |
+| L3-2 | the action a resolved Lab selection presses | rule (no shape change) (exec 97) | Lab L3 | Lab L3 | a `drag` geometry whose `from` equals `to` in the same rectangle is `LongTap` at that point over `duration_ms`, every other drag one `Swipe`; the Runtime's preparation and the evidence verifier resolve by this rule; a pack `drag` with two equal rectangles and `do --capture --swipe x,y,x,y,ms` press a long tap too (on adb the same command) |
+| L3-3 | the input of `do --capture --record` on a long-press step | rule (no shape change) (exec 97) | Lab L3 | Lab L3 | a long tap at the planned point (the centre of its click box) over the declared duration, where it was a swipe that does not move; a drag stays one swipe and a tap a tap; the click record (`to_point`, `duration_ms`) is unchanged |
+| L3-4 | the input a Lab route presses for a navigation edge | rule (no shape change) (exec 97) | Lab L3 | Lab L3 | a `long_press` edge is a long tap at the point the reader holds (a box's centre), any other drag one swipe: `ensure --capture`, `navigate` (the kernel drive input `resolved_input_action`, which only the Lab uses) and `session recover` |
+| L3-5 | the input request of an `ensure --capture` route | `frame` set (an existing optional member of the Runtime input request) (exec 97) | Lab L3 | Lab L3 | the frame reference (`frame_id`, `width`, `height`) of the observation its edge's guard was decided on, the Runtime's last committed frame; an instance whose input is `nemu_ipc` presses the tap instead of refusing it `nemu_input_frame_required`; on any other instance the Runtime resolves the frame first (`input_frame_unavailable` if another capture committed a later frame in between) |
+
 ### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
 
 A Lab recording names the backend that captured a Runtime frame, and the offline capability
