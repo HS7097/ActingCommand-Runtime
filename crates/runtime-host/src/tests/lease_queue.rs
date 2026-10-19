@@ -414,6 +414,117 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 }
 
+/// One-off red proof (never merged): the expiry-transfer test with its first poll's receipt held
+/// back by the Runtime's poll hook, standing in for the runner stall of CI run 39202589530.
+/// `fixed` false: the test as it was (2 s receipts, 2 s transfer bound); the hold lasts until the
+/// client's own read gives up. `fixed` true: the test as fixed (10 s); the hold lasts until a
+/// read with the old 2 s budget gives up.
+fn one_off_expiry_transfer_with_a_held_receipt(fixed: bool) {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let provider = Arc::new(FakeProvider::one(
+        "node.a",
+        instance_id(),
+        Arc::clone(&state),
+    ));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            }),
+        provider,
+    )
+    .expect("runtime host");
+    let mut first = TestClient::connect(&host);
+    let mut second = TestClient::connect(&host);
+    if fixed {
+        first.set_receipt_read_timeout();
+        second.set_receipt_read_timeout();
+    }
+    let bound = Duration::from_secs(if fixed { 10 } else { 2 });
+    let (_, expired_token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 1_000);
+    let queued_request_id = status.request_id();
+    clock.advance(250);
+    let control = host
+        .pause_queue_operation_after_snapshot_for_test(
+            QueueOperationTestKind::Poll,
+            queued_request_id,
+        )
+        .expect("install the poll hold");
+
+    let poller = thread::spawn(move || {
+        let started = Instant::now();
+        let new_token = loop {
+            assert!(started.elapsed() < bound, "expiry transfer timed out");
+            let poll = second.request(RuntimeOperation::PollQueuedLease { queued_request_id });
+            let receipt = second.send(&poll);
+            match receipt.result() {
+                Some(RuntimeResult::LeaseGranted { token }) => break token.clone(),
+                Some(RuntimeResult::LeasePending { .. }) => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                other => panic!("unexpected expiry transfer result: {other:?}"),
+            }
+        };
+        (second, new_token)
+    });
+    control.wait_until_paused();
+    let polled = if fixed {
+        // The hold outlasts the old budget: a 2 s read on an idle connection gives up first.
+        let mut witness = TestClient::connect(&host);
+        assert!(matches!(
+            read_frame(&mut witness.stream, DEFAULT_RUNTIME_MAX_FRAME_BYTES),
+            Ok(FrameRead::Idle)
+        ));
+        control.resume();
+        poller.join()
+    } else {
+        // The hold lasts until the client's own read has given up.
+        let polled = poller.join();
+        control.resume();
+        polled
+    };
+    let (mut second, new_token) = polled.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    assert_input_denied(&mut first, expired_token, RuntimeErrorCode::LeaseMismatch);
+    assert_eq!(
+        event_types_for_correlation(&mut second, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    let release = second.request(RuntimeOperation::ReleaseLease { token: new_token });
+    assert_eq!(
+        second.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(first);
+    drop(second);
+    host.close().expect("close host");
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+}
+
+/// One-off R1, expected red: the old 2 s budgets fail at `support/runtime.rs:180` with
+/// `test_receipt_missing`, `frame_read=Idle`, as in CI run 39202589530.
+#[test]
+fn one_off_r1_old_budgets_fail_on_a_receipt_held_past_two_seconds() {
+    one_off_expiry_transfer_with_a_held_receipt(false);
+}
+
+/// One-off C1, expected green: the fixed 10 s budgets outlast the same hold.
+#[test]
+fn one_off_c1_fixed_budgets_outlast_a_receipt_held_past_two_seconds() {
+    one_off_expiry_transfer_with_a_held_receipt(true);
+}
+
 #[test]
 fn exact_lease_expiry_checkpoint_promotes_queue_once_and_replays() {
     let root = TempDir::new().expect("tempdir");
