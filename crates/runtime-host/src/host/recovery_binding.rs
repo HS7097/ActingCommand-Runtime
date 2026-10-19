@@ -48,7 +48,8 @@ pub(crate) const fn recovery_binding_use(
     entry_checked: bool,
     ladder: bool,
 ) -> Option<UnusedRecoveryBinding> {
-    let entry = !prerequisite_chain && entry_checked;
+    // one-off red proof, M3: (a) ignores the chain.
+    let entry = entry_checked;
     if entry || ladder {
         None
     } else if prerequisite_chain {
@@ -85,20 +86,29 @@ impl HostShared {
         prepared: &PreparedContainedTask,
         prerequisites: &[PreparedContainedTask],
     ) -> Result<(), RequestFailure> {
-        if task_request.recovery().is_none() {
-            return Ok(());
-        }
+        // one-off red proof (never merged): one mutation per new test, each restricted to the
+        // case its test drives so that none masks another.
+        let chain = !prerequisites.is_empty();
         let entry_checked = prepared.required_entry_pages().is_some()
             && !(prepared.has_post_admission_ocr() && prepared.maximum_executed_steps() == 0);
         let ladder = self.direct_run_ladder_possible(resolved)?;
-        match recovery_binding_use(!prerequisites.is_empty(), entry_checked, ladder) {
-            None => Ok(()),
-            Some(unused) => Err(RequestFailure::request(
+        let refused = |unused| {
+            Err(RequestFailure::request(
                 recovery_binding_unused_error(prepared.package_label(), unused),
                 RuntimeReceiptState::Denied,
                 None,
-            )),
+            ))
+        };
+        // M5: refuse without a binding (the early return is gone).
+        if task_request.recovery().is_none() {
+            return recovery_binding_use(chain, entry_checked, ladder).map_or(Ok(()), refused);
         }
+        // M1: drop the check (an unchecked entry with no ladder passes).
+        if !entry_checked && !ladder {
+            return Ok(());
+        }
+        // M2: refuse checked entries too (without a chain); M4: ignore (b).
+        recovery_binding_use(chain, chain && entry_checked, false).map_or(Ok(()), refused)
     }
 
     /// (b): whether a failed direct run on `resolved` may start a stuck-recovery ladder under the
