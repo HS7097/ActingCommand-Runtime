@@ -309,16 +309,18 @@ number of remedy requests per blocked layer and round (`1..=8`); `scheduling.rem
 host-wide list of remedy choice rows, objects of the shape of the instance fact
 `session.remedy.choices` (`{"row": "allow", "need", "capability"}`, `{"row": "none", "need"}`,
 `{"row": "parameter", "capability", "parameter", "value"}`; tokens `^[a-z][a-z0-9_]{0,63}$`,
-`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, at most
-256 rows). Per instance, `instance.<instance id>.scheduling.remedy.choices` (in the file the
-entry's `scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
+`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, no two
+values for one parameter of a capability, at most 256 rows). Per instance,
+`instance.<instance id>.scheduling.remedy.choices` (in the file the entry's
+`scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
 set, it replaces the section's list as a whole. All four are settable; their defaults live only
 in `actingd.defaults.json`, never as code constants. A row that breaks the shape refuses the
 configuration as `config_value_invalid` (`config_key`) at load, in `check-config` and in
 `ConfigureSettings`, with `config_value_problem` `wrong_type` (a row that is no object; a `row` or
 field missing or not a string; a member its kind does not have), `out_of_range` (an unknown `row`;
-a name outside the charset; `none` as a capability; more than 256 rows) or `section_check` (a row
-twice; a `none` with an `allow` of the same need); a row whose names the bound packages do not
+a name outside the charset; `none` as a capability; more than 256 rows) or `section_check`, at the
+later row (a row twice; a `none` with an `allow` of the same need; two `parameter` rows of the same
+capability and parameter with different values); a row whose names the bound packages do not
 declare is not refused here but is a check-config note `policy_remedy_declaration_unusable` and, at use, a stop for a person
 (slices R4 and R7). The section rows are recorded in `config.parameters.scheduling`, the
 per-instance rows in `config.parameters.instance`. The four keys raise `actingd-config` to

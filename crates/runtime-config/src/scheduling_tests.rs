@@ -720,6 +720,16 @@ fn b15c_malformed_rows_are_refused_with_their_pointer() {
             ConfigValueProblem::SectionCheck,
         ),
         (
+            "two values for one parameter",
+            json!([
+                parameter_row("cap_x", "param_p", "opt_1"),
+                allow("need_a", "cap_x"),
+                parameter_row("cap_x", "param_p", "opt_2")
+            ]),
+            "/2",
+            ConfigValueProblem::SectionCheck,
+        ),
+        (
             "more than 256 rows",
             Value::Array(too_many),
             "/256",
@@ -762,6 +772,44 @@ fn b15c_malformed_rows_are_refused_with_their_pointer() {
             assert_eq!(refused.problem(), Some(problem), "{case}: {key}");
             assert_eq!(refused.pointer(), Some(pointer), "{case}: {key}");
         }
+    }
+
+    // No conflict: two different parameters of one capability are taken, in either list, at
+    // start and through an instruction.
+    let rows = json!([
+        parameter_row("cap_x", "param_p", "opt_1"),
+        parameter_row("cap_x", "param_q", "opt_2")
+    ]);
+    let taken = ["param_p", "param_q"]
+        .into_iter()
+        .zip(["opt_1", "opt_2"])
+        .map(|(parameter, value)| RemedyChoiceRow::Parameter {
+            capability: "cap_x".to_owned(),
+            parameter: parameter.to_owned(),
+            value: value.to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let at_start = [
+        from_file(json!({"remedy": {"choices": rows.clone()}}), json!({})),
+        from_file(
+            json!({}),
+            json!({"scheduling": {"remedy": {"choices": rows.clone()}}}),
+        ),
+    ];
+    let by_instruction = [REMEDY_CHOICES, own_key.as_str()].map(|key| {
+        running
+            .apply(&[set(key, rows.clone())], &stamp(), &context())
+            .unwrap_or_else(|failure| panic!("{key}: {failure:?}"))
+            .config
+    });
+    for config in at_start.into_iter().chain(by_instruction) {
+        config
+            .check(&context())
+            .expect("two parameters of one capability");
+        assert_eq!(
+            config.remedy(INSTANCE_A).map(|remedy| remedy.rows),
+            Ok(taken.clone())
+        );
     }
 }
 
