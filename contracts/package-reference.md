@@ -275,8 +275,11 @@ is removed.
 root the bundle makes is read by the one structure check every reader runs
 (`read_standard_pack_root`, "Standard package root" below: a refused file is
 `standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem` and
-`json_pointer`), and its packages are cross-checked for the parts the files name them for, as
-the Runtime checks them when a run first uses them:
+`json_pointer`), and its packages are cross-checked. Every package of the registry
+(`bundle.json`) is admitted, once, by its directory, with or without the navigation files
+`pages.json`, `interrupts.json` and `navigation.json` (Workflow #411 A25); a package already
+admitted by its path is not admitted again, and none is skipped. The packages the files name are
+checked for their parts, as the Runtime checks them when a run first uses them:
 
 1. each feature package of `pages.json` is a `recognize_only` package of the game and its bundle
    server whose pages are exactly the listed pages (its admission checks the REC-M static budget
@@ -315,10 +318,16 @@ root files are copied byte for byte last.
 `actinglab standard-pack check --root <game root>` runs the same checks on an installed game
 root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
 directories its `bundle.json` lists): the root files it holds, the cross-check and the report.
-It only reads. Its answer is `{status: "checked", root, game, root_files, pack_count,
-warnings}`, where `warnings` is the report (empty when there is nothing to report; its
-entry-page entries need `pages.json`); a root without any root file is `standard_pack_root_invalid` `bundle_missing`, a
-listed package without its directory `admission_failed`.
+It only reads. Every package of the registry is admitted, once, by its directory, with or
+without the navigation files (Workflow #411 A25): a package a root file names first for its
+part, every other package of the registry after them. Its answer is `{status: "checked", root,
+game, root_files, pack_count, warnings}`, given only once every package of the registry was
+admitted; `pack_count` is the registry's length, and `warnings` is the report (empty when there
+is nothing to report; its entry-page entries need `pages.json`). A root without any root file is
+`standard_pack_root_invalid` `bundle_missing`; a package a root file names that cannot be
+admitted (its directory missing too) is `admission_failed` for its part; any other package of the
+registry that fails admission, or whose directory is missing, is `package_invalid` naming its
+directory (exit 2).
 
 The bundle index v4 (`actingcommand_contract::BundleIndex`, checked by `validate()`) is a file
 format only and is never recorded in the ledger:

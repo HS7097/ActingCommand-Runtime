@@ -1602,7 +1602,7 @@ tests = [
 ]
 incident = ["#411 Lab L7"]
 
-# #411 Lab B-2 (v0.12.x; register §1.131, no persisted ledger shape; G8 offline; coordinator decisions Q1, Q7, Q9, Q11 of 2026-10-19; related: exec 96, 100): offline --scene may be given 1 to 5 times, oldest first, the last the current frame, on observe, do --dry-run, ensure, wait, detect-page, current-page, recognize and is-visible; page detection and every target are evaluated over all the frames, so a target consensus of k = 2 of 3 is recognised on (A, B, A) and not on (B, B, A), and each answer carries recognition_coverage {provided_frames, required_frames, aggregation: production_owner} when the package declares target consensus; frame_source, the observation's frame and frame_coordinates are the last frame's; a candidate layout is projected over its last required frames (candidate_coverage.provided_frames 2 for a two-frame layout given three); more than 5 frames, fewer than the consensus requires, a matched page's layout needing more frames, several frames for a package without multi-frame agreement, one path twice and frames of different sizes are refused before evaluation with validation_failed (exit 2) naming --scene with out_of_range, repeated or unusable and their details; every other option a Lab2 path takes once, given twice, is refused as repeated
+# #411 Lab B-2 (v0.12.x; register §1.131, no persisted ledger shape; G8 offline; coordinator decisions Q1, Q7, Q9, Q11 of 2026-10-19; related: exec 96, 100): offline --scene may be given 1 to 5 times, oldest first, the last the current frame, on observe, do --dry-run, ensure, wait, detect-page, current-page, recognize and is-visible; page detection and every target are evaluated over all the frames, so a target consensus of k = 2 of 3 is recognised on (A, B, A) and not on (B, B, A), and each answer carries recognition_coverage {provided_frames, required_frames, aggregation: production_owner} when the package declares target consensus; frame_source, the observation's frame and frame_coordinates are the last frame's; a candidate layout is projected over its last required frames (candidate_coverage.provided_frames 2 for a two-frame layout given three); more than 5 frames, fewer than the consensus requires, a matched page's layout needing more frames, several frames for a package without multi-frame agreement, one path twice and frames of different sizes are refused before evaluation with validation_failed (exit 2) naming --scene with out_of_range, repeated or unusable and their details; every other option a Lab2 path takes once, given twice, is refused as repeated, and so is every option but --scene of recognize, is-visible, detect-page and current-page and every option of tap-target and navigate, --scene included (one frame), before anything is read
 [[gate]]
 key = "107"
 coverage = "Y"
@@ -1613,5 +1613,17 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_a_layout_is_projected_over_its_last_frames",
     "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_scene_counts_and_sizes_are_refused_before_evaluation",
     "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_a_repeated_option_is_refused_on_every_lab2_path",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_b2::b2_recognize_is_visible_tap_target_and_navigate_refuse_a_repeated_option",
 ]
 incident = ["#411 Lab B-2"]
+
+# #411 A25 (v0.12.x; register §1.140; no persisted ledger shape; contracts/package-reference.md "Standard-pack root files"; related: exec 80, 102): standard-pack check admits every package of the registry (bundle.json) once, by its directory, with or without pages.json, interrupts.json and navigation.json, by the cross-check's admission (describe_navigation_path); on a root whose only root file is bundle.json, a package that fails admission (a task.json cut off half way; a package admission refuses and the remedy report's metadata reader reads, whichever registry package it is) or whose directory is missing is refused package_invalid naming its directory, and the root is checked, with pack_count the registry's length and nothing to report, only once every package was admitted
+[[gate]]
+key = "113"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_411_a25::a25_a_registry_package_that_fails_admission_is_refused_without_navigation_files",
+    "actingcommand-resource-tooling::lib::gate_411_a25::a25_every_registry_package_is_admitted_without_navigation_files",
+    "actingcommand-resource-tooling::lib::gate_411_a25::a25_a_missing_registry_directory_is_refused_without_navigation_files",
+]
+incident = ["#411 A25"]

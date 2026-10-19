@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::lab2_cli::refuse_repeated_options;
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, RecognitionEvaluator, Scene,
     finish_semantic_result_with_ledger, parse_optional_duration_ms, read_user_config,
@@ -49,6 +50,7 @@ pub(super) fn run_recognize_artifact(args: &[String]) -> CliOutcome<Value> {
 pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    refuse_repeated_options(&flags, "recognize", &FRAME_SET_REPEATS)?;
     let target = flags.required("--target")?;
     let prepared = prepare_frame_input(global, &flags, false)?;
     require_ocr_target(&prepared.input, &target)?;
@@ -65,6 +67,7 @@ pub(super) fn run_recognize(global: &GlobalOptions, args: &[String]) -> CliOutco
 pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    refuse_repeated_options(&flags, "detect-page", &FRAME_SET_REPEATS)?;
     let mut ledger = semantic_ledger_context("detect-page", global, args);
     let result = (|| -> CliOutcome<Value> {
         let prepared = prepare_frame_input(global, &flags, true)?;
@@ -89,6 +92,7 @@ pub(super) fn run_detect_page(global: &GlobalOptions, args: &[String]) -> CliOut
 pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    refuse_repeated_options(&flags, "current-page", &FRAME_SET_REPEATS)?;
     let prepared = prepare_frame_input(global, &flags, true)?;
     super::offline_ocr::require_pages(&prepared.input.resources)?;
     let mut lab = super::env_detection::build_readonly_lab_for_capture(
@@ -103,6 +107,7 @@ pub(super) fn run_current_page(global: &GlobalOptions, args: &[String]) -> CliOu
 pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
+    refuse_repeated_options(&flags, "is-visible", &FRAME_SET_REPEATS)?;
     let prepared = prepare_frame_input(global, &flags, false)?;
     let target = target_argument(&flags, "is-visible")?;
     require_ocr_target(&prepared.input, &target)?;
@@ -115,6 +120,12 @@ pub(super) fn run_is_visible(global: &GlobalOptions, args: &[String]) -> CliOutc
     };
     serialize_response(lab.is_visible(request)?)
 }
+
+/// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): the only option `recognize`,
+/// `detect-page`, `current-page` and `is-visible` take more than once is `--scene`, their frame set
+/// (R1, up to five frames); every other option of theirs given twice is refused as `repeated`
+/// before anything is read, never last-wins.
+const FRAME_SET_REPEATS: [&str; 1] = ["--scene"];
 
 struct PreparedReadonlyInput {
     input: ReadonlyRecognitionInput,

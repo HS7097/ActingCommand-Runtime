@@ -27,7 +27,10 @@ with `argument_problem` `repeated`, instead of the last one winning; only the of
 `--scene` may be given one to five times, oldest first, the last the current frame, as may the
 `--scene` of `recognize`, `detect-page`, `current-page` and `is-visible`
 ([business-identity-consensus.md](business-identity-consensus.md); MCP's `sample_scenes` are
-the earlier frames, passed before `scene`'s; #411 Lab B-2).
+the earlier frames, passed before `scene`'s; #411 Lab B-2). `recognize`, `is-visible`,
+`detect-page` and `current-page` refuse every other repeated option the same way, and
+`tap-target` and `navigate`, which read one frame, every repeated option, `--scene` included,
+each before it reads anything.
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with

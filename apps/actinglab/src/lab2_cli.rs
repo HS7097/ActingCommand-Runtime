@@ -1479,7 +1479,8 @@ fn refuse_unread_flags(flags: &FlagArgs, path: &Lab2Path, verb: &[&Lab2Path]) ->
         })
         .collect::<Vec<_>>();
     let Some((first, problem)) = refused.first().copied() else {
-        return refuse_repeated_flags(flags, path);
+        // #411 Lab B-2 R7: `path.repeats` (`--scene` offline) is taken up to its own bound.
+        return refuse_repeated_options(flags, path.name, path.repeats);
     };
     let names = refused
         .iter()
@@ -1500,24 +1501,29 @@ fn refuse_unread_flags(flags: &FlagArgs, path: &Lab2Path, verb: &[&Lab2Path]) ->
     })))
 }
 
-/// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): an option `path` takes once that is
-/// given more than once is refused with `validation_failed` (exit 2) before anything is loaded,
+/// #411 Lab B-2 R7 (coordinator decision Q9 of 2026-10-19): an option `command` takes once that
+/// is given more than once is refused with `validation_failed` (exit 2) before anything is loaded,
 /// captured or pressed, instead of the last one winning: the details name the first such option
 /// (in name order) as `argument` with `argument_problem` `repeated`, and every one in `arguments`.
-/// `path.repeats` (`--scene` offline) is taken up to its own bound.
-fn refuse_repeated_flags(flags: &FlagArgs, path: &Lab2Path) -> CliOutcome<()> {
+/// The options in `repeats` are taken more than once, each up to its own bound. Used by every path
+/// of `observe`, `do`, `ensure` and `wait`, and by `recognize`, `is-visible`, `detect-page`,
+/// `current-page`, `tap-target` and `navigate`.
+pub(super) fn refuse_repeated_options(
+    flags: &FlagArgs,
+    command: &str,
+    repeats: &[&str],
+) -> CliOutcome<()> {
     let repeated = flags
         .flags
         .iter()
-        .filter(|(flag, values)| values.len() > 2 && !path.repeats.contains(&flag.as_str()))
+        .filter(|(flag, values)| values.len() > 2 && !repeats.contains(&flag.as_str()))
         .map(|(flag, _)| flag.as_str())
         .collect::<Vec<_>>();
     let Some(first) = repeated.first().copied() else {
         return Ok(());
     };
     Err(CliError::usage(format!(
-        "{} takes {} once; a repeated option is refused, never last-wins",
-        path.name,
+        "{command} takes {} once; a repeated option is refused, never last-wins",
         repeated.join(", ")
     ))
     .with_details(json!({

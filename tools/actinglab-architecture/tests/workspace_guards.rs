@@ -6360,6 +6360,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
             glue_fn("FlagArgs::bool"),
             glue_fn("FlagArgs::optional"),
             glue_fn("FlagArgs::values"),
+            glue_fn("FlagArgs::count"),
             glue_fn("FlagArgs::without_first_positional"),
             glue_fn("FlagArgs::required"),
             glue_fn("FlagArgs::optional_path"),
@@ -6417,6 +6418,7 @@ const GLUE_DECLARATIONS: &[GlueDeclaration] = &[
                 "FlagArgs::values",
                 "fn values(&self, name: &str) -> Vec<String>",
             ),
+            glue_invariant("FlagArgs::count", "fn count(&self, name: &str) -> usize"),
             glue_invariant(
                 "FlagArgs::without_first_positional",
                 "fn without_first_positional(&self) -> Self",
