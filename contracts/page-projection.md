@@ -128,8 +128,8 @@ on the same scene with the Lab's provider for OCR and NN ([lab-recording.md](lab
 "OCR in the Lab"; #411 Lab L6): an OCR target or a value test when OCR is
 available, an NN target when the provider holds its model; otherwise the target
 is not evaluated (`dynamic_target_not_evaluated`). Offline `observe` fills the
-values (`fields`) of the OCR targets it evaluated as the online observation fills
-every evaluated target's: from the targets of every page in page order, then each
+values (`fields`) of every target it evaluated, of every kind, as the online
+observation fills them: from the targets of every page in page order, then each
 target `--targets` names that no page evaluated (an optional target of no page),
 one entry per target whose `value` is `{evaluations: [{evaluation_index, page,
 group_index, target_index, role, evaluation}]}`, and one more per field an

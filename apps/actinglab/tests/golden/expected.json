@@ -4385,7 +4385,7 @@
         },
         "frame_path": "observe.png",
         "observation": {
-          "content_sha256": "27b881724b35167aa13686852a5ad4e31d23082639e3ee95d2c548078cdb25a0",
+          "content_sha256": "dc3d1ee0d15324db3a2880782932cfc5199ae40bc157b0b3e953df249feade12",
           "elements": [],
           "frame": {
             "height": 1,
@@ -4396,14 +4396,14 @@
           "matched": true,
           "metrics": {
             "emitted_count": 0,
-            "entry_count": 1,
+            "entry_count": 4,
             "matched_page_count": 1,
             "missing_count": 0,
             "recognized_count": 1,
             "sample_scope": "single_offline_observation",
             "unscoped_control_count": 0
           },
-          "omitted_count": 1,
+          "omitted_count": 4,
           "output_truncated": true,
           "page": "arknights/home",
           "page_window_completeness": "unknown",
