@@ -472,11 +472,13 @@ fn write_text(output: &mut impl Write, text: &str) -> io::Result<()> {
 // Workflow #387 D1b, D1-M8: actingctl config set|clear and ac_config_set send the same changes.
 // Workflow #389 MCP-8: ac_overview's truncation order.
 // Workflow #386 SR-3: ac_diagnose's suspended task packages.
+// Workflow #411 B15 R7: ac_diagnose's stopped remedy rounds.
 #[cfg(test)]
 mod tests {
     mod clock_slots;
     mod gate_386_sr3;
     mod gate_387_d1b;
+    mod gate_411_b15w2;
     mod gate_mcp8;
     // Workflow #411 A8: lab::tests::gate_rc2_a8 takes its unreached deadline.
     pub(super) mod gate_mcpt1;

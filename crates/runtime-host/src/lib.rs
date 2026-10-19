@@ -51,6 +51,10 @@ mod recovery_timing;
 mod remedy;
 // Workflow #411 B15 R6: the write rule of an instance's remedy choices.
 mod remedy_choices;
+// Workflow #411 B15 R7: what `actingd check-config` notes about declared remedies.
+pub use remedy::{
+    RemedyChoiceList, RemedyDeclarationNote, RemedyDeclarationNotes, remedy_declaration_notes,
+};
 // Workflow #384 D2-S3.
 mod resource_adjustment;
 mod strategy;

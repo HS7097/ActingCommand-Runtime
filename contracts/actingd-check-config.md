@@ -438,7 +438,23 @@ What the check noted is not a member of `report`: each is one `note` link of
   `pack_admission_suspended` note (`package_id`, `actual_digest` its content
   hash measured right after the refusal, `failure_code`, `runtime_commit`); any
   other refusal gives no note (the dispatch reports it). Nothing is written
-  ([policy-suspension.md](policy-suspension.md), "Task package suspension").
+  ([policy-suspension.md](policy-suspension.md), "Task package suspension");
+- Workflow #411 B15 R7 ([remedies.md](remedies.md) sections 7.1 and 10): with a
+  policy, the remedy table is built from the packages `policy.procedure_manifest`
+  locates, for the instances of the policy inputs, and each finding is one
+  `policy_remedy_declaration_unusable` note (`remedy_problem`
+  `capability_unbound`, `cycle` or `parameters_mismatch`, with `task_id`,
+  `outcome_key`, `need`, and `capability`, `instance_id`, `package_id` where
+  known); then each row of `scheduling.remedy.choices` and of each
+  `instance.<instance id>.scheduling.remedy.choices` the file sets whose names
+  the bound packages do not declare is one such note: `choice_invalid` with
+  `need` (and `capability` when the need is declared but does not list it),
+  `parameter_invalid` with `capability`, and `instance_id` for an instance's own
+  list; each row's note also writes a developer line on stderr naming the list's
+  key and the row. A package that cannot be read gives no note (the dispatch
+  reports it) but, as at run time, the developer line
+  `actingd remedy_table unreadable code=<code> tasks=<tasks> path=<path>` on
+  stderr. Nothing is written.
 
 A note is not a failure, even one whose own category is `error` (a MuMu
 resolution failure, a standard-pack problem, `pack_admission_suspended`): the

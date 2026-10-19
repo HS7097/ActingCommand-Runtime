@@ -262,6 +262,9 @@ mod gate_411_b15r;
 // Workflow #411 B15 R6 (host key 115), register §1.116: an instance's remedy choices, their
 // family, their write rule and their identity.
 mod gate_411_b15w;
+// Workflow #411 B15 R7 (host key 116), register §1.117: `actingd suspended` lists the stopped
+// remedy rounds; check-config notes the remedies that cannot be used.
+mod gate_411_b15w2;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;
