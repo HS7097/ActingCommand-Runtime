@@ -750,24 +750,15 @@ impl RuntimeHostError {
         result
     }
 
-    /// A contained task's first capture lost to an unreachable ADB baseline (#316-P4): the
-    /// kernel code stays, projected as a nonfatal `CaptureFailed`.
-    pub(crate) fn adb_unreachable_capture(
-        operation: impl Into<Location>,
-        error: &ExecutionKernelError,
-    ) -> Self {
-        let mut result = Self::execution(operation, error);
-        if error.resource_quiescence() != Some(ResourceQuiescence::Unconfirmed) {
-            *result.projection =
-                RuntimeErrorProjection::new(RuntimeErrorCode::CaptureFailed, false);
-        }
-        result
-    }
-
-    /// A contained task's first capture failed on a device session kept from an earlier lease
-    /// while the ADB baseline answers (Workflow #191 H): the idle session went stale. The kernel
-    /// code stays, projected as a nonfatal `CaptureFailed`; an unconfirmed close stays fatal.
-    pub(crate) fn reused_session_capture(
+    /// A contained task's capture failed on its instance's own capture (#411 A7, Alice
+    /// 2026-10-19): the instance's capture backend or paired session would not open, an
+    /// operation on an open session failed, or the frame is no usable image, on any capture of
+    /// the run. That includes a first capture lost with an unreachable ADB baseline (#316-P4)
+    /// and a first capture on a device session kept from an earlier lease that went stale while
+    /// adbd answers (Workflow #191 H; the session is closed with the failure and the next
+    /// capture opens a new one). Only that run fails: the kernel code stays, projected as a
+    /// nonfatal `CaptureFailed`; an unconfirmed close stays fatal.
+    pub(crate) fn instance_capture(
         operation: impl Into<Location>,
         error: &ExecutionKernelError,
     ) -> Self {
@@ -831,7 +822,7 @@ impl RuntimeHostError {
     /// device failure as the condition that ended its work, the handset's device link no longer
     /// `device`: `device_link_lost` on top with the handset's label and link state, and this
     /// failure, as it was, its `caused_by` link. The lost link explains the device failure, as
-    /// an unreachable adb does (`adb_unreachable_capture`): the projection keeps its code and
+    /// an unreachable adb does (`instance_capture`): the projection keeps its code and
     /// is nonfatal, unless a resource close stayed unconfirmed. The instance, resources and
     /// diagnostics it carries stay as they were.
     pub(crate) fn into_device_link_lost(

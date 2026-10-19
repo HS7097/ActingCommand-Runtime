@@ -54,8 +54,13 @@ fn policy_dispatch_crash_child_process() {
                 .transient_capture_failure
                 .store(true, Ordering::Release);
         }
+        // #411 A7 (v0.12.2): an instance's own capture failure fails only its run, nonfatal, so
+        // the severe case is a capture failure that stays fatal: the capture service's own frame
+        // memory (a capture open whose frame owner is missing).
         Some("task-severe") => {
-            state.fail_capture.store(true, Ordering::Release);
+            *state.capture_open_error.lock().expect("capture open error") = Some(
+                DeviceError::frame_memory(actingcommand_device::FrameMemoryFailure::Owner),
+            );
         }
         Some("lease-expired") => {}
         _ if outcome_crash => {
@@ -761,12 +766,12 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
 
 #[test]
 fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() {
-    let mut recovered_task_failure_code = None;
     // Ledger revision 3 (#378 A3): a failed run's class comes from its terminal through
     // `scheduled_failure_class` (the failure point's `failure_severe` verdict, or an
     // always-severe code), never from the terminal's severity, which is now the code's
     // category. Scheduling keeps today's classes (model section 8.1; coordinator ruling 9,
-    // 2026-10-13): a transient device failure is Recoverable, a fatal one Severe.
+    // 2026-10-13): a nonfatal failure is Recoverable, a fatal one Severe. #411 A7 (v0.12.2): an
+    // instance's own capture failure is nonfatal; the capture service's own failure stays fatal.
     for (case, expected_terminal, expected_class) in [
         ("success", Some(EventType::TaskCompleted), None),
         (
@@ -1019,13 +1024,19 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                 );
                 assert_eq!(failure.outcome.code(), code);
                 assert_eq!(failure.failure_identity, None);
-                match &recovered_task_failure_code {
-                    Some(expected) => assert_eq!(
-                        code, expected,
-                        "structured severity must not depend on the failure code"
-                    ),
-                    None => recovered_task_failure_code = Some(code.clone()),
-                }
+                // #411 A7 (v0.12.2): the recoverable case keeps the instance's transient capture
+                // failure; the severe case is the capture service's own frame-memory failure.
+                assert_eq!(
+                    code.as_str(),
+                    if case == "task-recoverable" {
+                        actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed
+                            .as_str()
+                    } else {
+                        actingcommand_contract::codes::SharedCode::FrameMemoryOwnerMissingOrMismatched
+                            .as_str()
+                    },
+                    "{case}: the failure code"
+                );
             }
             ("lease-expired", PolicyExecutionOutcome::Failed { failure }) => {
                 assert_eq!(

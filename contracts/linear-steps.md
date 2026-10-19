@@ -351,9 +351,10 @@ foreground gate, which records `application.foreground`.
 **First frame after a restart.** When an application-entry package runs as the task of its
 own run (a startup package, a recovery ladder rung), the run's first capture follows the
 restart, so the host's first-capture rule (`application-lifecycle.md`, #316-P4) applies to
-that frame. A page-graph application package takes its initial frame before the restart, and
-the frame after it is not the first, except in such a run: there a page-graph application entry
-begins with its effect too (Workflow #390 EXEC-3, `application-lifecycle.md`).
+that frame: a failure of the instance's capture there fails only the run, nonfatal, after one
+ADB baseline probe (#411 A7). A page-graph application package takes its initial frame before
+the restart, and the frame after it is not the first, except in such a run: there a page-graph
+application entry begins with its effect too (Workflow #390 EXEC-3, `application-lifecycle.md`).
 
 **Severity.** An adb failure of the effect is `application_backend_operation_failed` on the
 host's `application.failed` chain. The device error is fatal, so the task's terminal severity

@@ -105,7 +105,7 @@ climbs by the section it was admitted with (§4.7).
 | `recovery_ladder.trigger_defaults.start` | `immediately` \| `after_performance_release` | `immediately` |
 | `recovery_ladder.trigger_defaults.start_rung` | integer 1..=3 | `1` |
 | `recovery_ladder.trigger_defaults.respect_cooldown` | boolean | `true` |
-| `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `navigation_exhausted` (`start_rung` 3), `pack_logic`, `stability_burst`, `preparation_backend` |
+| `recovery_ladder.triggers` | list of trigger items `{id, stages, classes?, codes?, count?, window_ms?, start?, start_rung?, respect_cooldown?}` | `navigation_exhausted` (`start_rung` 3), `pack_logic`, `stability_burst`, `preparation_backend`, `task_capture_backend` |
 | `recovery_ladder.exclude_codes` | list of codes or `prefix*` | `contained_task_prerequisite_*`, `contained_task_return_home_entry_unmatched` |
 | `recovery_ladder.rules.direct_runs` | `exempt` \| `trigger` | `exempt` |
 | `recovery_ladder.rules.preparation_superseded` | `suppress` \| `keep` | `suppress` |

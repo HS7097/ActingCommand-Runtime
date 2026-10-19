@@ -35,6 +35,16 @@
           "paired_backend_open_failed",
           "capture_backend_operation_failed"
         ]
+      },
+      {
+        "id": "task_capture_backend",
+        "stages": ["task"],
+        "codes": [
+          "capture_backend_open_failed",
+          "paired_backend_open_failed",
+          "capture_backend_operation_failed",
+          "capture_frame_invalid"
+        ]
       }
     ],
     "exclude_codes": [

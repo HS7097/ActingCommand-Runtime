@@ -369,7 +369,8 @@ the backend self-check facts (source `device-proxy` or `capture`).
   a Nemu session still delivers frames, because ADB is the only health anchor.
   Slice #316-P4 adds the second `adb_unreachable` invalidation point: a physical
   instance's first contained-task capture that fails while one ADB baseline
-  probe fails too invalidates this key and `application.foreground` the same way.
+  probe fails too invalidates this key and `application.foreground` the same way
+  (#411 A7: for any of the instance's capture codes; the run fails nonfatal).
   Workflow #398 RD-2: for a bound handset the device-link watch writes it too:
   `false` when the handset leaves `device` for a state adb reports, `true` when
   the watch's first list finds it prepared at `device` and when its restore

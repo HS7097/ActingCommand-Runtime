@@ -1686,7 +1686,8 @@ outcome code and changes no interface revision of §6: `actingctl status`,
 wire change, a later release). [runtime-interface.md](runtime-interface.md) (the `ac_overview`
 row) and [emulator-control.md](emulator-control.md) ("Client and CLI"; "Preparation stages")
 are the contract. A fresh-backend capture failure on the task path (#316-P4,
-[application-lifecycle.md](application-lifecycle.md)) is not changed; it waits for a ruling.
+[application-lifecycle.md](application-lifecycle.md)) is not changed here; §1.106 (A7T-1)
+rules it.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -1776,6 +1777,25 @@ recovery is unchanged.
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | A16-1 | `contained_task_home_recovery_terminal_outside_entry` (`error`, `ladder_class` `pack_logic_mismatch`, `since` 0.12.1, pending) with `page_ids` (required), `package_id` (required), `page_id` (optional) | new outcome code and an earlier refusal (host 107) | A16 | A16 | after the recovery package's existing checks and before `EntryRecoveryPackageAdmitted`: when none of the package's declared final pages (its `target_page` or target page set, resolved to its pages) is a page of the required entry set, the run fails closed with no input, no `EntryRecoveryPackageAdmitted` and no `EntryRecoveryCompleted`; the fail-closed `entry_target_disposition`, the terminal and the receipt carry the values (`page_ids` the required entry pages as recorded, `package_id` the recovery package, `page_id` its declared final page when it declares exactly one); the registry's `linear_steps` return-home package is not compared and still runs to the recheck; a package with a declared final page in the set runs as before and A1's `contained_task_home_recovery_terminal_non_home` still fails it when it ends elsewhere; the class is the one this case gave until now (A1's code) |
+
+### 1.106 Slice A7T (v0.12.2): a contained task's capture failure is that instance's failure, not the Runtime's (#411 A7 task path; Alice 2026-10-19, pending item 13 = A)
+
+A7 parts 1 and 2 (§1.98) left the task path's capture failure to a ruling. Alice ruled that an
+instance whose capture cannot be opened during a task fails that task, is marked abnormal and
+goes to the recovery ladder, which restarts that emulator, while the other instances go on;
+only a broken capture service as a whole is fatal. "The capture service as a whole" is every
+cause outside the instance's four capture codes with confirmed disposal (coordinator decision 1
+of 2026-10-19). [application-lifecycle.md](application-lifecycle.md) (the contained task's
+capture), [emulator-control.md](emulator-control.md) (the defaults) and
+[runtime-config.md](runtime-config.md) are the contract. No record, wire shape, configuration
+key, outcome code or interface revision of §6 changes; the four codes' pending catalog text is
+written in full (`contract.json`, category, `ladder_class` and values unchanged).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A7T-1 | a contained task's capture failure of the instance | rule (no shape change; replaces §1.98's "waits for a ruling") | A7T | A7T (host 108) | after the unconfirmed-resource settlement answered confirmed, a failure whose kernel code is `capture_backend_open_failed`, `paired_backend_open_failed`, `capture_backend_operation_failed` or `capture_frame_invalid` fails only that run, on every capture of the run and every execution provenance: the receipt is `Failed` with the kernel code, projected as a nonfatal `capture_failed`; `capture.failed`, then `task.failed` (not severe, its severity the code's category) and the lease released; the host is not fatal and later requests are not answered `runtime_halted`; a failed open has written the instance's `backend.selfcheck.capture.status = failed`; any other code and resources released unconfirmed that no registered instance owns keep their fatality |
+| A7T-2 | the shipped trigger item `task_capture_backend` | default value (no new key) | A7T | A7T (host 108) | `{"id": "task_capture_backend", "stages": ["task"], "codes": [the four codes]}` after `preparation_backend` in `actingd.defaults.json`, with the trigger defaults (`immediately`, rung 1, cool-down respected); a scheduled run on an instance with stuck recovery on that fails by A7T-1 starts a ladder by it; with the capture self-check failed its `return_home` and `application_restart` rungs are skipped `capture_unavailable` and `emulator_restart` is the first rung tried; a direct run starts none (`rules.direct_runs = exempt`) |
+| A7T-3 | the first capture's ADB probe child | rule (no shape change) | A7T | A7T (host 108) | the one ADB baseline probe of a physical instance's first capture (task deadline) still runs for the four codes; a failed probe with confirmed cleanup invalidates `device.connected`, `application.foreground` and `task.page` with `adb_unreachable` as before; a probe whose adb child is unconfirmed is settled by the #403 rule (`settle_unconfirmed_adb`): the instance is fenced and the run fails nonfatal with `instance_resources_fenced`, and only where no registered instance owns it is the owner retained and the Runtime fatal; the probe's answer no longer decides the capture failure's fatality |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

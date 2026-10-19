@@ -463,9 +463,14 @@ Workflow #373 M-373 §15 ruling 1); `pack_logic` (stage `task`, class `pack_logi
 `stability_burst` (stage `stability_warnings`, classes `stability_warning` and
 `environment_fault`, 3 records within 600 000 ms); `preparation_backend` (the two preparation
 stages, codes `input_backend_open_failed`, `capture_backend_open_failed`,
-`paired_backend_open_failed`, `capture_backend_operation_failed`); exclusions
-`contained_task_prerequisite_*` and `contained_task_return_home_entry_unmatched` (the gate codes
-of `contracts/linear-steps.md`, "Prerequisite packages" and "Return-home fallback").
+`paired_backend_open_failed`, `capture_backend_operation_failed`); `task_capture_backend`
+(stage `task`, codes `capture_backend_open_failed`, `paired_backend_open_failed`,
+`capture_backend_operation_failed`, `capture_frame_invalid`: a contained task's capture failure
+of the instance, which fails only that run, #411 A7; with the capture self-check failed its
+`return_home` and `application_restart` rungs are skipped `capture_unavailable`, so the climb
+reaches the emulator restart); exclusions `contained_task_prerequisite_*` and
+`contained_task_return_home_entry_unmatched` (the gate codes of `contracts/linear-steps.md`,
+"Prerequisite packages" and "Return-home fallback").
 `contained_task_navigation_entry_unconfirmed` is not excluded (Workflow #373 NAV-5, wave-17
 acceptance ruling 7, in place of M-373 §9.4's proposal): the page list says the run reached its
 entry and the package's own check says it did not, so the Runtime does not know where it is,
