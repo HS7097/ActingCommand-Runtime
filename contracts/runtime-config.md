@@ -230,8 +230,11 @@ configuration nor any installer writes a performance key.
 Frozen scheduling model v1.4.2 §9 and [v012-register.md](v012-register.md) §5: every key is
 parsed, checked and defaulted from v0.12.0 on, all settable, default `file` (but
 `fact_refresh.overdue_ms`, which has none); the Runtime reads
-`scheduling.recognition.sample_timeout_retries` at each step of a contained run (the kernel's
-`step_pacing()`), the others take effect with the 0.12.x slices that read them. Their meaning is
+`scheduling.recognition.sample_timeout_retries` and the instance's pacing factor in effect
+(`performance.pacing.mode`, Workflow #385 P-k; see
+[performance-control.md](performance-control.md), "Step pacing") at each step of a contained
+run (the kernel's `step_pacing()`), the others take effect with the 0.12.x slices that read
+them. Their meaning is
 in [policy-suspension.md](policy-suspension.md) (`recognition`, `rerun`),
 [cost-commit.md](cost-commit.md) (`cost_commit`) and [scheduling-blackout.md](scheduling-blackout.md)
 (`blackout`); `feature_lock.*` (how long a recorded locked feature stays valid, and the codes

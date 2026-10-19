@@ -2346,6 +2346,8 @@ pub(crate) mod test_spellings {
             ObserveShutdownSettleForTest => "observe_shutdown_settle_for_test",
             ObserveTestPerformanceControl => "observe_test_performance_control",
             PersistContainedTaskStabilityComparison => "persist_contained_task_stability_comparison",
+            // #385 P-k: a test pins the pacing factor an instance's runs are handed.
+            PinPacingFactorForTest => "pin_pacing_factor_for_test",
             PolicyOutcomeKeySnapshotForTest => "policy_outcome_key_snapshot_for_test",
             ProcessTestRequest => "process_test_request",
             QueryTestPersistedEvents => "query_test_persisted_events",

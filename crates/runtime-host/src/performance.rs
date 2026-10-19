@@ -1820,6 +1820,17 @@ impl PerformanceMonitor {
         };
         self.pacing.status(now, settings, instances, health)
     }
+
+    /// #385 P-k (PERF v1.4.2 §5.6 item 2): the pacing factor in effect for `instance_alias`,
+    /// read at the start of each step of its contained runs. A monitor without counters has
+    /// never evaluated: 1 000.
+    pub(crate) fn pacing_factor_milli(&self, instance_alias: &str) -> u32 {
+        if self.counters_enabled() {
+            self.pacing.effective_factor_milli(instance_alias)
+        } else {
+            actingcommand_contract::MIN_PACING_FACTOR_MILLI
+        }
+    }
 }
 
 fn next_streak_sample(samples: u16) -> RuntimeHostResult<u16> {

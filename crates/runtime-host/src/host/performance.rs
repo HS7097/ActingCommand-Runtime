@@ -576,6 +576,28 @@ impl HostShared {
         })
     }
 
+    /// #385 P-k (PERF v1.4.2 §4.6, §5.6 item 2): the pacing factor in effect for
+    /// `instance_alias`, which a contained run hands each of its steps (`step_pacing()`): the
+    /// last evaluation's, 1 000 under `observe`, before the first evaluation, without counters
+    /// or without a row. It is read under the performance lock alone, the last lock the status
+    /// read takes; a poisoned lock is fatal.
+    pub(super) fn pacing_factor_milli(&self, instance_alias: &str) -> RuntimeHostResult<u32> {
+        #[cfg(test)]
+        if let Some(factor_milli) = lock(
+            &self.pacing_factor_pins_for_test,
+            crate::codes::test_spellings::TestLocation::PinPacingFactorForTest,
+        )?
+        .get(instance_alias)
+        .copied()
+        {
+            return Ok(factor_milli);
+        }
+        Ok(
+            lock(&self.performance, HostLocation::ReadPerformanceStatus)?
+                .pacing_factor_milli(instance_alias),
+        )
+    }
+
     /// Workflow #385 P-m: whether the host timer probe runs, and how: only beside an enabled
     /// monitor and with `host_probe.timer.enabled`.
     pub(super) fn timer_probe_settings(

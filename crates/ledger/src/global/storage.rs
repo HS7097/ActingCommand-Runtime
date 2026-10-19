@@ -627,7 +627,11 @@ impl<B: DurableStorage> EventStore<B> {
             ));
         }
         let first_new_sequence = self.next_sequence;
-        let execution_draft = scheduled_policy_execution_recovery_draft(&execution)?;
+        // Workflow #385 P-k (register P6): a settlement the live run already recorded on its
+        // budget time keeps its wall and budget time, which the policy's projection does not
+        // carry; the recovered draft is then that record again.
+        let elapsed = self.recorded_execution_elapsed(&execution.decision_id);
+        let execution_draft = scheduled_policy_execution_recovery_draft(&execution, elapsed)?;
         self.append_recovered_policy_execution(execution_draft)?;
         let completion_draft =
             self.scheduled_policy_completion_recovery_draft(&execution.decision_id)?;
@@ -639,6 +643,27 @@ impl<B: DurableStorage> EventStore<B> {
             .cloned()
             .collect();
         Ok((completion, appended))
+    }
+
+    /// Workflow #385 P-k (register P6): the wall and budget time of the one execution record of
+    /// `decision_id` that carries them; `None` without one (the settlement compared wall time).
+    fn recorded_execution_elapsed(&self, decision_id: &str) -> Option<(u64, u64)> {
+        let mut recorded = self
+            .events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                    if payload.decision_id() == decision_id =>
+                {
+                    Some(payload)
+                }
+                _ => None,
+            });
+        let first = recorded.next()?;
+        if recorded.next().is_some() {
+            return None;
+        }
+        first.wall_elapsed_ms().zip(first.budget_elapsed_ms())
     }
 
     fn scheduled_policy_completion_recovery_draft(
@@ -1820,13 +1845,25 @@ impl SegmentStorage {
 
 fn scheduled_policy_execution_recovery_draft(
     execution: &PolicyExecutionEventData,
+    elapsed: Option<(u64, u64)>,
 ) -> GlobalLedgerResult<SanitizedEventDraft> {
     // The stored severity is the record's category (ledger revision 3, Workflow #378 A3): a
     // failure's outcome's, a success's event type's (Workflow #378 A2-P).
     scheduled_policy_recovery_draft(
         execution.observed_at_unix_ms,
         EventSeverity::Info,
-        PolicyPayloadDraft::execution_recorded(execution.clone(), AuditInput::new()).into(),
+        match elapsed {
+            Some((wall_elapsed_ms, budget_elapsed_ms)) => {
+                PolicyPayloadDraft::execution_recorded_with_elapsed(
+                    execution.clone(),
+                    wall_elapsed_ms,
+                    budget_elapsed_ms,
+                    AuditInput::new(),
+                )
+            }
+            None => PolicyPayloadDraft::execution_recorded(execution.clone(), AuditInput::new()),
+        }
+        .into(),
     )
 }
 
