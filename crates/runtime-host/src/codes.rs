@@ -2666,8 +2666,10 @@ actingcommand_contract::outcome_codes! {
         PolicyRemedyRoundClosed => "policy_remedy_round_closed": info / none,
         /// Warning. A check-config note: a remedy a bound package declares cannot be used as
         /// configured, or a configuration row names a need, capability, parameter or option the
-        /// packages do not declare (keys `task_id`, `outcome_key`, `need`, `remedy_problem`;
-        /// optional `capability`, `instance_id`, `package_id`; R7).
+        /// packages do not declare (key `remedy_problem`; optional `task_id`, `outcome_key`,
+        /// `need`, `capability`, `instance_id`, `package_id`: a blocked mapping names all of the
+        /// first three, a configuration row with an unknown need `need` only, a parameter row
+        /// none of them; R7).
         PolicyRemedyDeclarationUnusable => "policy_remedy_declaration_unusable": warning / none,
         /// Error. A write of `session.remedy.choices` breaks its rules; the request is refused
         /// and nothing is appended (keys `fact_key`, `field`; optional `instance_id`; R6).

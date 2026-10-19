@@ -21756,10 +21756,10 @@
       "layer": "host",
       "uncertain": false,
       "values": {
-        "task_id": "required",
-        "outcome_key": "required",
-        "need": "required",
         "remedy_problem": "required",
+        "task_id": "optional",
+        "outcome_key": "optional",
+        "need": "optional",
         "capability": "optional",
         "instance_id": "optional",
         "package_id": "optional",
@@ -21772,9 +21772,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.3",
-      "description": "Workflow #411 B15 (contracts/remedies.md): an actingd check-config note: a remedy a bound package declares cannot be used as configured (remedy_problem capability_unbound: its capability has no provider task; cycle: it lies on a cycle of blocked and provider tasks; parameters_mismatch: its providers disagree on their parameters), or a configuration row names a need, capability, parameter or option the packages do not declare (choice_invalid, parameter_invalid; instance_id for a per-instance list). task_id and outcome_key name the blocked mapping, package_id the package concerned. The outcome stays check_config_passed and nothing is written.",
-      "common_causes": "A provider package missing from the catalog; a configuration written for other packages.",
-      "handling": "Bind a provider task, break the cycle, align the providers, or fix the rows. Until then a blocked task with this remedy stops for a person."
+      "description": "Workflow #411 B15 (contracts/remedies.md): an actingd check-config note: a remedy a bound package declares cannot be used as configured (remedy_problem capability_unbound: its capability has no provider task; cycle: it lies on a cycle of blocked and provider tasks; parameters_mismatch: its providers disagree on their parameters), or a configuration row names a need, capability, parameter or option the packages do not declare (choice_invalid, parameter_invalid). Which values are present depends on what the finding concerns: a finding on a blocked mapping names all of task_id, outcome_key and need (and package_id, and capability when it concerns one); a configuration row with an unknown need names need only of the three; a parameter row names none of the three, and capability when the row names one, while the developer detail names the row. instance_id is present for a per-instance configuration list. The outcome stays check_config_passed and nothing is written.",
+      "common_causes": "A provider package missing from the catalog (a note on the blocked mapping, with task_id, outcome_key and need); a configuration written for other packages (a note on the row: need for an unknown need, none of the three for a parameter row).",
+      "handling": "With task_id, outcome_key and need: bind a provider task, break the cycle or align the providers of that blocked mapping; until then a blocked task with this remedy stops for a person. With need only, or none of the three: fix the configuration row the need or the developer detail names (scheduling.remedy.choices, or the instance's list when instance_id is present)."
     },
     "session_remedy_choices_invalid": {
       "category": "error",

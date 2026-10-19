@@ -510,7 +510,7 @@ the expected one is the key's remedy declaration. No third effect value is neede
 | `policy_remedy_expired` | policy | warning | `task_id`, `instance_id`, `decision_id`, `outcome_key`, `need`, `window_end_unix_ms` (`gate_code`) | R2, R4 |
 | `policy_dispatch_parameters` | policy | info | `run_parameters` | R2 (B8 adds its values) |
 | `policy_remedy_round_closed` | runtime-host | info | `task_id`, `instance_id`, `decision_id` | R4 |
-| `policy_remedy_declaration_unusable` | runtime-host | warning | `task_id`, `outcome_key`, `need`, `remedy_problem` (`capability`, `instance_id`, `package_id`) | R7 |
+| `policy_remedy_declaration_unusable` | runtime-host | warning | `remedy_problem` (`task_id`, `outcome_key`, `need`, `capability`, `instance_id`, `package_id`: a finding on a blocked mapping names all of `task_id`, `outcome_key` and `need`; a configuration row with an unknown need names `need` only of the three; a `parameter` row names none of them, and the developer detail names the row) | R7 |
 | `session_remedy_choices_invalid` | runtime-host | error | `fact_key`, `field` (`instance_id`) | R6 |
 | `session_dispatch_key_reserved` | runtime-host | error | `fact_key` | R5 |
 | `package_bundle_remedy_invalid` | resource-tooling | warning | `package_id`, `remedy_problem` (`need`, `capability`, `outcome_key`) | R1 |
