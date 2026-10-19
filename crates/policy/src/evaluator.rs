@@ -15,7 +15,7 @@ use actingcommand_selection_policy::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::codes::{PolicyCode, SchedulingRulePolicyCode};
+use crate::codes::{FactTimeProblem, PolicyCode, SchedulingRulePolicyCode};
 use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
@@ -3956,6 +3956,54 @@ fn evaluate_predicate(
                 fresh_until_unix_ms: fresh_until,
             })
         }
+        // Workflow #405 W1: true once the time the fact holds plus `offset_ms` has come. A fact
+        // that gives no time makes it false, not unknown: the time is a package's output, so no
+        // fact refresh is asked for.
+        PredicateSpec::FactTimeReached {
+            scope,
+            fact_key,
+            offset_ms,
+            max_age_ms,
+        } => {
+            let (at, fresh_until) = match fact_time(facts, scope, fact_key, *max_age_ms, time)? {
+                Ok(reading) => reading,
+                Err(problem) => {
+                    reasons.push(reason_with(
+                        Outcome::new(PolicyCode::FactTimeUnavailable)
+                            .fact_key(fact_key.as_str())
+                            .fact_time_problem(problem),
+                        format!(
+                            "fact '{}:{fact_key}' gives no time: {problem}",
+                            scope_key(scope)
+                        ),
+                    ));
+                    return Ok(PredicateEvaluation::known(false, None));
+                }
+            };
+            // Signed, without overflow; a target before the epoch counts as 0.
+            let target = at.saturating_add_signed(*offset_ms);
+            let freshness_wake = fresh_until
+                .and_then(|expiration| expiration.checked_add(1))
+                .filter(|expiration| *expiration > time.unix_ms);
+            if time.unix_ms >= target {
+                let mut result = PredicateEvaluation::known(true, freshness_wake);
+                result.fresh_until_unix_ms = fresh_until;
+                return Ok(result);
+            }
+            reasons.push(reason_with(
+                Outcome::new(PolicyCode::FactTimePending)
+                    .fact_key(fact_key.as_str())
+                    .next_eligible_unix_ms(target),
+                format!(
+                    "fact '{}:{fact_key}' holds {at}; with offset {offset_ms} ms the time comes at {target}",
+                    scope_key(scope)
+                ),
+            ));
+            let mut result =
+                PredicateEvaluation::known(false, min_wake(Some(target), freshness_wake));
+            result.fresh_until_unix_ms = fresh_until;
+            Ok(result)
+        }
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
@@ -4257,6 +4305,59 @@ fn compare_ordered(
             "comparison is not ordered",
         )),
     }
+}
+
+/// Workflow #405 W1: the time the fact at (`scope`, `fact_key`) holds and the end of its
+/// freshness, read with `fact`'s rules (missing, confidence 0, `max_age_ms`, its own expiry), or
+/// why it gives no time.
+fn fact_time(
+    facts: &EvaluationFacts,
+    scope: &ScopeSelector,
+    fact_key: &str,
+    max_age_ms: Option<u64>,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<Result<(u64, Option<u64>), FactTimeProblem>> {
+    let Some(observation) = facts
+        .facts
+        .iter()
+        .find(|fact| fact.scope == *scope && fact.fact_key == fact_key)
+    else {
+        return Ok(Err(FactTimeProblem::Missing));
+    };
+    if observation.confidence_milli == 0 {
+        return Ok(Err(FactTimeProblem::LowConfidence));
+    }
+    let max_age_expiration = max_age_ms
+        .map(|max_age| {
+            observation
+                .observed_at_unix_ms
+                .checked_add(max_age)
+                .ok_or_else(|| {
+                    PolicyEvaluationError::overflow(format!(
+                        "fact '{}:{}' expiration overflowed",
+                        scope_key(scope),
+                        fact_key
+                    ))
+                })
+        })
+        .transpose()?;
+    let fresh_until = min_wake(max_age_expiration, observation.expires_at_unix_ms);
+    if fresh_until.is_some_and(|expiration| time.unix_ms > expiration) {
+        return Ok(Err(
+            if observation
+                .expires_at_unix_ms
+                .is_some_and(|expiration| time.unix_ms > expiration)
+            {
+                FactTimeProblem::Expired
+            } else {
+                FactTimeProblem::Stale
+            },
+        ));
+    }
+    let FactValue::TimestampMs(at) = &observation.value else {
+        return Ok(Err(FactTimeProblem::NotATime));
+    };
+    Ok(Ok((*at, fresh_until)))
 }
 
 fn fact_kind(value: &FactValue) -> &'static str {
@@ -4622,6 +4723,7 @@ fn collect_clock_schedules<'a>(predicate: &'a PredicateSpec, clocks: &mut Vec<Co
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
         | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. }
         | PredicateSpec::DependencyCompleted { .. }
         | PredicateSpec::Outcome { .. } => {}
     }
@@ -4645,6 +4747,7 @@ fn counted_clocks_due(trigger: &PredicateSpec) -> PredicateSpec {
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
         | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. }
         | PredicateSpec::DependencyCompleted { .. }
         | PredicateSpec::Outcome { .. } => trigger.clone(),
     }

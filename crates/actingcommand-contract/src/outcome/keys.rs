@@ -518,4 +518,7 @@ outcome_keys! {
     found_after_first: boolean,
     unformatted: list(path),
     // ---- Workflow #411 RV-1: end ----
+    // ---- Workflow #405 W1 (fact-time wake, contracts/scheduling/README.md): begin ----
+    fact_time_problem: vocab(fact_time_problem),
+    // ---- Workflow #405 W1: end ----
 }

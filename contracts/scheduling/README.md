@@ -722,6 +722,11 @@ Eligibility Age" below) and `policy_instance_fact_missing` (value `fact_key`)
 ([`instance-fact-store.md`](../instance-fact-store.md), "Explanation"). These follow the
 evaluator's reasons and do not replace the reason that settled the decision.
 
+A `fact_time_reached` predicate that is false adds its own reason before `trigger_false` when it
+decides the trigger (Workflow #405, "Fact-time wake" below): `fact_time_pending` (info;
+`fact_key`, `next_eligible_unix_ms`) while the time its fact holds plus its offset has not come,
+and `fact_time_unavailable` (info; `fact_key`, `fact_time_problem`) when its fact gives no time.
+
 ## Settlement Feedback And Eligibility Age
 
 In the Runtime (Workflow #308 slice 5b) every `TaskRuntimeSnapshot` the host
@@ -943,6 +948,17 @@ A due clock occurrence that is not dispatched leaves one trace (Workflow #372). 
   - A record is written only while the pair is live: its task is placed on the instance, and its trigger, evaluated with the evaluation's facts once every counted clock is counted due, is true. A follower whose head failed or a task outside its timeline window gets none. A pair that was never dispatched gets none either: R7's grace bounds its first run, and K2's owed record carries `first_run`. While the Runtime runs, the first evaluation after `O + grace_ms` or O′ comes within one cycle; after a Runtime gap, liveness reads the facts at the restart.
   - Each is written once per (pair, O), its `signal_id` `signal:clock_slot:<expired|superseded>:<hex>` with K2's digest, checked against the projection before it is written.
 - **Not recorded.** An occurrence a catalog skips by making its trigger false, and the occurrences of a pair that was never dispatched.
+
+## Fact-time wake (Workflow #405)
+
+A task that is due when earlier work ends, at an instant a package read and published as a fact, names the predicate `{"kind": "fact_time_reached", "scope": …, "fact_key": …, "offset_ms": N, "max_age_ms": M}` (`actingcommand.scheduling.v2` only; [v2/README.md](v2/README.md)). The scheduler wakes at that instant instead of polling.
+
+- **True** when the fact at (`scope`, `fact_key`) exists, its confidence is above 0, it is fresh exactly as for `fact` (observed no longer ago than `max_age_ms` when M is not null, and not past its own `expires_at_unix_ms`), its value is a `timestamp_ms` T, and the evaluation is at or after `T + N`. The sum is signed and never overflows; a sum below 0 counts as 0. While the predicate is true, its freshness is the fact's and it wakes the evaluation one millisecond after that freshness ends, as `fact` does.
+- **False, not reached**, before `T + N`: the predicate adds the info reason `fact_time_pending` {`fact_key`, `next_eligible_unix_ms` = `T + N`} and wakes the evaluation at `T + N`, or one millisecond after the fact's freshness ends when that comes first. A newer reading of the fact wakes the scheduler as every fact publication does, and the next evaluation reads the new time.
+- **False, no time**: the fact is missing, its confidence is 0, it is older than M, it is past its own expiry, or its value is not a `timestamp_ms`. The predicate adds the info reason `fact_time_unavailable` {`fact_key`, `fact_time_problem`: `missing`, `low_confidence`, `stale`, `expired` or `not_a_time`} and no wake. Unlike `fact` it is false, not Unknown: the time is the output of the package that ran the work, which the instance's recognition maintenance package cannot read, so the predicate never asks for a fact refresh ("Fact Refresh") and gives no detection suggestion.
+- **Minimum interval.** Once T + N has passed, the predicate stays true until a newer reading moves the time. The least time between two dispatches of the task is its `cooldown_ms` ("Task Execution Fields"); the predicate has no interval of its own.
+- **Fallback.** A catalog may write the predicate and a clock in one `any`: whichever is true first makes the task due, so the clock still runs it while the fact gives no time. Under `all` and `not` the predicate combines as any other, and every other predicate evaluates as before. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason.
+- It is no counted clock for the clock-slot records (above) and references no outcome key.
 
 ## Runtime Boundary
 

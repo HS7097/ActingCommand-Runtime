@@ -140,9 +140,15 @@ fn instance_fact_reads<'a>(predicate: &'a PredicateSpec, reads: &mut Vec<(&'a st
             scope: ScopeSelector::Instance { instance_id },
             fact_key,
             ..
+        }
+        | PredicateSpec::FactTimeReached {
+            scope: ScopeSelector::Instance { instance_id },
+            fact_key,
+            ..
         } => reads.push((instance_id.as_str(), fact_key.as_str())),
         PredicateSpec::Fact { .. }
         | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. }
         | PredicateSpec::Clock { .. }
         | PredicateSpec::TimelineActive { .. }
         | PredicateSpec::ResourceProjection { .. }

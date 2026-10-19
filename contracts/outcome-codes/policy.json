@@ -1995,6 +1995,50 @@
       "description": "Workflow #411 B15 (contracts/remedies.md, section 4): the read-only parameters this policy dispatch hands to its run: run_parameters holds one record per parameter the task's package declares, with the value resolved from the target record, the configuration or the package default and the source that gave it. The run reads each as the instance fact session.dispatch.parameter.<parameter_name> in its snapshots, an overlay that is never stored. Shared with Workflow #411 B8, which adds its own values to this reason.",
       "common_causes": "The task's package declares parameters (or a catalog opts in to Workflow #411 B8's values).",
       "handling": "None."
+    },
+    "fact_time_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): a `fact_time_reached` predicate is false because the time its fact holds (a `timestamp_ms` value) plus the predicate's `offset_ms` has not come yet. next_eligible_unix_ms is that instant; the evaluation wakes at it. When the predicate decides the trigger, the decision ends with trigger_false.",
+      "common_causes": "The work the fact describes has not finished yet.",
+      "handling": "None. The task becomes due at next_eligible_unix_ms, or earlier when a newer reading moves the time."
+    },
+    "fact_time_unavailable": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "fact_time_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.5",
+      "description": "Scheduling decision reason (Workflow #405): a `fact_time_reached` predicate is false because its fact gives no time: it is missing, its confidence is 0, it is older than the predicate's max_age_ms, it is past its own expiry, or its value is not a timestamp_ms value (fact_time_problem). Unlike a `fact` predicate it is false, not unknown, so no fact refresh is requested; a catalog that also names a clock in an `any` still runs the task at the clock.",
+      "common_causes": "The package that publishes the time has not run since the instance facts were created, or ran longer ago than max_age_ms; the catalog names a key the package does not publish, or the package publishes it with another value type.",
+      "handling": "Check that the package publishes the key as timestamp_ms and that max_age_ms covers the time between its runs. The fallback clock covers the gap."
     }
   }
 }
