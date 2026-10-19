@@ -240,8 +240,33 @@ pub(crate) fn load_lab(state_dir: &Path, old: &OldRecordView) -> LabResult<LabFi
             )));
         }
     };
-    let Ok(recording) = serde_json::from_str::<LabRecording>(&text) else {
-        return Ok(LabFile::Unavailable("lab_recording_unreadable"));
+    // one-off red proof for #925: three mutations of the A10 change, one per new test.
+    let recording: LabRecording = match serde_json::from_str(&text) {
+        Ok(recording) => recording,
+        // M1: a file cut off mid-object is the error of f163bf89 again.
+        Err(error) if error.is_eof() => {
+            return Err(with_details(
+                blocked(
+                    "record_lab_unavailable",
+                    format!("failed to parse {}: {error}", path.display()),
+                ),
+                json!({"reason": "lab_recording_unreadable", "path": path.display().to_string()}),
+            ));
+        }
+        Err(_) => {
+            // M3: the identity is read leniently, so another session's file is a mismatch.
+            if let Ok(lenient) = serde_json::from_str::<Value>(&text)
+                && (lenient["record_id"] != json!(old.record_id)
+                    || lenient["record_started_at_unix_ms"] != json!(old.started_at_unix_ms)
+                    || lenient["task_id"] != json!(old.task_id)
+                    || lenient["instance"] != json!(old.instance))
+            {
+                return Ok(LabFile::Unavailable("lab_recording_mismatch"));
+            }
+            // M2: the unreadable file is moved aside before the Lab part is unavailable.
+            let _ = fs::rename(&path, path.with_extension("json.unreadable"));
+            return Ok(LabFile::Unavailable("lab_recording_unreadable"));
+        }
     };
     if recording.schema_version != LAB_RECORDING_SCHEMA
         || recording.record_id != old.record_id
