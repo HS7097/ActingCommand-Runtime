@@ -548,12 +548,14 @@ frame attachment or recording persistence. The global parser handles the flag at
   - A click that was sent but could not be recorded is
     `record_append_failed_after_input` (exit 3) with the operation summary.
 - Workflow #390 LAB-2: on a step that declares a drag or a long press ("Drags and long
-  presses"), `do --capture --record` executes it as one swipe through the same Runtime
-  operation. A drag goes from the center of its rectangle to the center of its destination over
-  its duration (`rect_center`), or along `--swipe x1,y1,x2,y2,ms`, which must start in the one
-  and end in the other (`record_click_outside_step_rect`) and last the declared duration
-  (`record_click_rect_conflict`), rule `explicit`. A long press is a swipe that ends where it
-  began, at the center of its click box, over its duration (`rect_center`); `--swipe` on it is
+  presses"), `do --capture --record` executes it through the same Runtime operation, a drag as
+  one swipe and a long press as one long tap. A drag goes from the center of its rectangle to
+  the center of its destination over its duration (`rect_center`), or along
+  `--swipe x1,y1,x2,y2,ms`, which must start in the one and end in the other
+  (`record_click_outside_step_rect`) and last the declared duration
+  (`record_click_rect_conflict`), rule `explicit`. A long press is a `LongTap` at the center of
+  its click box over its duration (`rect_center`; #411 Lab L3, as the kernel holds the
+  `long_press` click the recording generates); `--swipe` on it is
   `record_click_rect_conflict`. `--tap` and `--tap-rect` on such a step are
   `record_click_rect_conflict`; `--swipe` on a tap step is `record_click_rect_conflict`, and on
   a step without a declared click `record_step_click_missing` (declare the drag with `record

@@ -99,7 +99,13 @@ reach (game-qualified, in name order) instead of one `to_page`. An edge names ex
 navigation element of the page projection like any other, and no route passes it (the drive
 graph and actinglab's navigation tools leave it out), since its click does not decide which page
 comes. A `long_press` navigation click is read as a drag that does not move (one point held for
-its `duration_ms`).
+its `duration_ms`). #411 Lab L3: wherever the Lab presses it (online `do <element-id>`, a route
+of `ensure`, `navigate` or `session recover`), it sends `InputAction::LongTap` at that point over the duration, as
+the kernel presses a pack's long press, and every other drag one `InputAction::Swipe`; a `drag`
+whose two rectangles are the same is pressed as a long tap too. Each input of an `ensure
+--capture` route names the Runtime frame its edge's guard was decided on (the frame reference of
+that capture), as online `do` names its before frame, so the route also runs on an instance whose
+input is `nemu_ipc`, which presses only on a frame the Runtime captured.
 
 #411 Lab L2 (the Lab loads every click kind the Runtime runs): both navigation readers, the
 kernel's drive reader and actinglab's, read a segmented drag, the click

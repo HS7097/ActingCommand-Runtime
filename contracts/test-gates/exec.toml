@@ -1522,6 +1522,22 @@ tests = [
 ]
 incident = ["#411 B15"]
 
+# #411 Lab L3 (v0.12.x; register §1.119, no persisted ledger shape; G3, G4; related: exec 72, 90, 98): the Lab presses gestures as the kernel does; a long press (the readers' drag that does not move, one point in one rectangle) is sent as one LongTap at its point over its duration and every other drag as one Swipe, wherever the Lab presses: do --capture --record on a long-press step, online do <element-id> whose projected input is such a drag, the routes of ensure --capture (and navigate, through the kernel drive input); LabOperationSelection::Coordinates accepts LongTap and resolve maps that geometry to LongTap on both sides, so the Runtime's preparation and the evidence verifier agree and the prepared geometry stays a drag; each input of an ensure --capture route names the frame reference of the capture its guard used, so its taps run on an instance whose input is nemu_ipc
+[[gate]]
+key = "97"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::lab_l3::l3_explicit_coordinates_take_a_long_tap_and_resolve_it_as_one",
+    "actingcommand-contract::gate::lab_l3::l3_an_element_drag_that_does_not_move_resolves_to_a_long_tap",
+    "actingcommand-execution-kernel::lib::tests::gate_lab_l3::l3_navigate_presses_a_long_press_as_a_long_tap_and_a_drag_as_a_swipe",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_lab_l3::l3_do_capture_record_presses_a_long_press_step_as_a_long_tap",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_lab_l3::l3_ensure_presses_a_long_press_edge_as_a_long_tap",
+    "actingcommand-actinglab::runtime_input_proxy::l3_ensure_capture_taps_on_a_nemu_input_instance_with_its_guard_frame",
+    "actingcommand-actinglab::runtime_input_proxy::l3_ensure_capture_presses_a_long_press_edge_as_a_long_tap",
+    "actingcommand-actinglab::runtime_input_proxy::l3_do_capture_on_a_long_press_element_sends_a_long_tap_and_its_evidence_verifies",
+]
+incident = ["#411 Lab L3"]
+
 # #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
 [[gate]]
 key = "101"
