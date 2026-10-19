@@ -59,6 +59,20 @@ const MAX_FRAME_BYTES: usize = 1024 * 1024;
 #[test]
 fn gate_actingctl_runs_and_ac_runs_answer_the_same_run_list_for_the_same_arguments() {
     let ledger = Ledger::build();
+    // #411 A24b: the scripted ledger's upper time bound is exclusive, as in the contract: an
+    // event recorded at the bound is not selected, one recorded before it is.
+    let bounded = &ledger.events[0];
+    assert_eq!(
+        [bounded.timestamp_unix_ms, bounded.timestamp_unix_ms + 1].map(|to| matches(
+            &EventQuery {
+                to_timestamp_unix_ms: Some(to),
+                ..EventQuery::default()
+            },
+            bounded,
+        )),
+        [false, true],
+        "the scripted ledger's upper time bound is not exclusive"
+    );
     let root = TempDir::new().expect("tempdir");
     let runtime = ScriptedRuntime::start(root.path(), Arc::clone(&ledger));
     let mut mcp = McpServer::spawn_with_tier(root.path(), None);
@@ -748,6 +762,7 @@ fn event_page(
 
 /// Whether `event` matches `query`. This ledger serves the time and sequence bounds, one event
 /// type or a set of them and the run links; a query with any other filter is refused.
+/// #411 A24b: the upper time bound is exclusive, as in the contract and the ledger's own query.
 fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
     let unserved = EventQuery {
         from_timestamp_unix_ms: None,
@@ -775,7 +790,7 @@ fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
         .is_none_or(|from| event.timestamp_unix_ms >= from)
         && query
             .to_timestamp_unix_ms
-            .is_none_or(|to| event.timestamp_unix_ms <= to)
+            .is_none_or(|to| event.timestamp_unix_ms < to)
         && query
             .from_sequence
             .is_none_or(|from| event.sequence >= from)
