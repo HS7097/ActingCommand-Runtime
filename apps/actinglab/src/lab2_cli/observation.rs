@@ -441,6 +441,13 @@ pub(super) fn project(
         let bytes = serde_json::to_vec(&projected)
             .map_err(|error| CliError::device(error.to_string()))?
             .len();
+        // Red proof mutation 3: the cut also runs outside Min, whenever the answer is over the
+        // hard limit.
+        if bytes > actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
+            && omit_last_near_miss(&mut payload, &mut omitted_near_misses)
+        {
+            continue;
+        }
         if request.verbosity != ProjectionVerbosity::Min
             || bytes <= actingcommand_ledger::MIN_PROJECTION_SOFT_LIMIT_BYTES
         {
@@ -460,18 +467,17 @@ pub(super) fn project(
         if observation.reduce_for_min()? {
             continue;
         }
+        // Red proof mutation 2: the cut runs before the hard-limit check, so it also cuts an
+        // answer that already fits.
+        if omit_last_near_miss(&mut payload, &mut omitted_near_misses) {
+            continue;
+        }
         if bytes <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES {
             return Ok(projected);
         }
         // #391 MCP-391b: the one resolvable element Min keeps does not fit either, so it is
         // omitted too and the identity answers alone, marked truncated with its counts.
         if observation.reduce_to_identity()? {
-            continue;
-        }
-        // #411 A9: an unknown page's near-miss `candidates` are a transport member, not the
-        // identity (contracts/page-projection.md), so Min removes them from the end before the
-        // identity is judged; only an identity that alone does not fit fails.
-        if omit_last_near_miss(&mut payload, &mut omitted_near_misses) {
             continue;
         }
         return Err(identity_limit_exceeded(bytes));
@@ -486,9 +492,11 @@ fn omit_last_near_miss(payload: &mut Value, omitted: &mut usize) -> bool {
     let Some(candidates) = payload.get_mut("candidates").and_then(Value::as_array_mut) else {
         return false;
     };
-    if candidates.pop().is_none() {
+    // Red proof mutation 4: the whole list is removed at once.
+    if candidates.is_empty() {
         return false;
     }
+    candidates.clear();
     let kept = candidates.len();
     *omitted += 1;
     if let Some(suspected) = payload
@@ -497,7 +505,8 @@ fn omit_last_near_miss(payload: &mut Value, omitted: &mut usize) -> bool {
     {
         suspected.truncate(kept);
     }
-    payload["candidates_truncated"] = json!(true);
+    // Red proof mutation 1: the cut is not marked truncated.
+    payload["candidates_truncated"] = json!(false);
     payload["candidates_omitted_count"] = json!(*omitted);
     true
 }
