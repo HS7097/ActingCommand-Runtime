@@ -3953,8 +3953,9 @@ impl RuntimeHost {
         region: &actingcommand_contract::InputSamplingRegion,
     ) -> RuntimeHostResult<Vec<(i32, i32)>> {
         let shared = self.shared_ref(HostLocation::DeriveContainedTaskActionSeed)?;
+        let _ = &shared.touch_history;
         Ok(lock(
-            &shared.touch_history,
+            crate::touch_history::global(),
             HostLocation::DeriveContainedTaskActionSeed,
         )?
         .points(instance_alias, region))

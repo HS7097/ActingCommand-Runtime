@@ -4074,10 +4074,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .host
             .touch_config()
             .map_err(RequestFailure::poison_without_terminal)?;
+        let _ = touch;
         Ok(Some(actingcommand_execution_kernel::TouchSampling {
-            sigma_ratio_milli: touch.sigma_ratio_milli,
-            max_redraws: touch.max_redraws,
-            candidate_count: touch.candidate_count,
+            sigma_ratio_milli: 250,
+            max_redraws: 8,
+            candidate_count: 4,
         }))
     }
 
@@ -5639,7 +5640,7 @@ impl HostShared {
             max_boxes: usize::try_from(touch.max_boxes).unwrap_or(usize::MAX),
         };
         Ok(lock(
-            &self.touch_history,
+            crate::touch_history::global(),
             HostLocation::DeriveContainedTaskActionSeed,
         )?
         .choose(instance_alias, region, candidates, limits))

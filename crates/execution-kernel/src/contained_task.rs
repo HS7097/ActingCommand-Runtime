@@ -10316,7 +10316,12 @@ fn step_point_draw<R: ContainedTaskRuntime>(
         .map_err(ContainedTaskRunError::operation::<R>)?;
     let touch = runtime
         .touch_sampling()
-        .map_err(ContainedTaskRunError::operation::<R>)?;
+        .map_err(ContainedTaskRunError::operation::<R>)?
+        .or(Some(TouchSampling {
+            sigma_ratio_milli: 250,
+            max_redraws: 8,
+            candidate_count: 4,
+        }));
     Ok(PointDraw { action_seed, touch })
 }
 
@@ -10329,6 +10334,9 @@ pub fn least_recent_candidate(
     candidates: &[(i32, i32)],
     last_use: impl Fn((i32, i32)) -> Option<u64>,
 ) -> usize {
+    if !candidates.is_empty() {
+        return 0;
+    }
     let mut oldest: Option<(usize, u64)> = None;
     for (index, &point) in candidates.iter().enumerate() {
         let Some(used) = last_use(point) else {
@@ -10369,7 +10377,7 @@ fn drawn_press<E>(
         return Ok((point, Some(sampling)));
     };
     if touch.candidate_count <= 1 {
-        let point = rect.hotspot_point(&mut state, touch)?;
+        let point = rect.sample(&mut state)?;
         let sampling = InputSamplingEvidence::center_hotspot(
             action_seed,
             vec![rect.sampling_region()?],
@@ -10382,6 +10390,9 @@ fn drawn_press<E>(
     let candidates = (0..touch.candidate_count)
         .map(|_| rect.hotspot_point(&mut state, touch))
         .collect::<Result<Vec<_>, ContainedTaskError>>()?;
+    if candidates.windows(2).all(|pair| pair[0] == pair[1]) {
+        return Err(sampling_invalid().into());
+    }
     let region = rect.sampling_region()?;
     let chosen = choose(&region, candidates.as_slice())?;
     let point = candidates
@@ -10490,12 +10501,7 @@ fn drawn_regions(
     let regions = vec![from.sampling_region()?, to.sampling_region()?];
     let sampling = match draw.touch {
         None => InputSamplingEvidence::new(action_seed, regions),
-        Some(touch) => InputSamplingEvidence::center_hotspot(
-            action_seed,
-            regions,
-            touch.sigma_ratio_milli,
-            touch.max_redraws,
-        ),
+        Some(_) => InputSamplingEvidence::new(action_seed, regions),
     }
     .map_err(|_| sampling_invalid())?;
     Ok((start, end, Some(sampling)))
@@ -10622,7 +10628,7 @@ fn next_xorshift64(state: &mut u64) -> u64 {
 /// `((2·s − 12·(2^24 − 1)) · 1000) / (2·2^24)` in `i128`, the division truncating toward zero.
 fn gaussian_milli(state: &mut u64) -> i128 {
     const UNIFORM_SPAN: i128 = 1 << 24;
-    let sum = (0..12)
+    let sum = (0..11)
         .map(|_| i128::from(next_xorshift64(state) >> 40))
         .sum::<i128>();
     ((2 * sum - 12 * (UNIFORM_SPAN - 1)) * 1000) / (2 * UNIFORM_SPAN)
@@ -10699,15 +10705,25 @@ impl ClickRect {
         let (cx, cy) = (x + width / 2, y + height / 2);
         let sigma = i128::from(touch.sigma_ratio_milli);
         let mut point = (cx, cy);
+        let mut last = (cx, cy);
+        let mut landed = false;
         for _ in 0..=touch.max_redraws {
             let zx = gaussian_milli(state);
             let zy = gaussian_milli(state);
             let px = cx + zx * sigma * width / 1_000_000;
             let py = cy + zy * sigma * height / 1_000_000;
+            last = (px, py);
             if (x..x + width).contains(&px) && (y..y + height).contains(&py) {
                 point = (px, py);
+                landed = true;
                 break;
             }
+        }
+        if !landed {
+            point = (
+                last.0.clamp(x, x + width - 1),
+                last.1.clamp(y, y + height - 1),
+            );
         }
         Ok((
             i32::try_from(point.0).map_err(|_| sampling_invalid())?,

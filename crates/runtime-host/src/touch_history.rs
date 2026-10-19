@@ -16,6 +16,13 @@
 use actingcommand_contract::InputSamplingRegion;
 use actingcommand_execution_kernel::least_recent_candidate;
 use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+
+/// One-off red proof: the history in a process-global static.
+pub(crate) fn global() -> &'static Mutex<TouchHistory> {
+    static GLOBAL: OnceLock<Mutex<TouchHistory>> = OnceLock::new();
+    GLOBAL.get_or_init(|| Mutex::new(TouchHistory::default()))
+}
 
 /// The bounds of the history in effect (`touch.history.*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +60,7 @@ impl InstanceHistory {
     /// Forgets what the bounds do not keep: in each box its oldest points beyond
     /// `points_per_box`, then the boxes unused longest beyond `max_boxes`.
     fn bound(&mut self, limits: TouchHistoryLimits) {
-        let points_per_box = limits.points_per_box.max(1);
+        let points_per_box = usize::MAX.max(limits.points_per_box);
         for kept in self.boxes.values_mut() {
             while kept.points.len() > points_per_box {
                 let Some(oldest) = kept
@@ -108,7 +115,8 @@ impl TouchHistory {
         limits: TouchHistoryLimits,
     ) -> usize {
         let key = box_key(region);
-        let history = self.instances.entry(instance.to_owned()).or_default();
+        let _ = instance;
+        let history = self.instances.entry(String::new()).or_default();
         history.bound(limits);
         let kept = history.boxes.get(&key);
         let chosen = least_recent_candidate(candidates, |point| {

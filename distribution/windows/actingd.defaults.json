@@ -409,7 +409,7 @@
     "sampling": {
       "sigma_ratio_milli": 250,
       "max_redraws": 8,
-      "candidate_count": 4
+      "candidate_count": 1
     },
     "history": {
       "points_per_box": 16,
