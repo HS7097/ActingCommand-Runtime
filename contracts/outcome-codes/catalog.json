@@ -1965,8 +1965,7 @@
     },
     "unformatted": {
       "type": "list<path>",
-      "relative": true,
-      "description": "The files of a content directory that are not in the canonical serialization, relative to the directory (Workflow #411 RV-1)."
+      "description": "The files of a content directory that are not in the canonical serialization, each a /-separated path relative to that directory, not an absolute path (Workflow #411 RV-1)."
     }
   },
   "vocabularies": {
