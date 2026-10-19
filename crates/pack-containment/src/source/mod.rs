@@ -3172,12 +3172,7 @@ pub fn validate_phases_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &operations,
         &scheduling,
     )
-    .map_err(|refusal| {
-        CliError::package_invalid(match &refusal.location {
-            Some(location) => format!("{}: {}", refusal.code.as_str(), location.detail()),
-            None => refusal.code.as_str().to_owned(),
-        })
-    })
+    .map_err(|refusal| CliError::package_invalid(refusal.code.as_str()))
 }
 
 /// The pages a task's `entry_page` names: one page, or each page of an entry page set

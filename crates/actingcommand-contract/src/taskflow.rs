@@ -219,7 +219,7 @@ fn locate_task_phases(
             )));
         }
         let mut operations = std::collections::BTreeSet::new();
-        for (member, id) in phase.operations.iter().enumerate() {
+        for id in phase.operations.iter() {
             let problem = if !operations.insert(id) {
                 TaskPhaseProblem::OperationRepeated
             } else if !operation_ids.contains(&id.as_str()) {
@@ -228,7 +228,7 @@ fn locate_task_phases(
                 continue;
             };
             return Err(refused(
-                at(problem, format!("operations/{member}")).pack_operation(Some(id.as_str())),
+                at(problem, "operations".to_owned()).pack_operation(Some(id.as_str())),
             ));
         }
         if phase.target_pages.is_empty() || phase.target_pages.len() > 256 {
@@ -591,7 +591,7 @@ fn validate_phased_route_from(
                             .iter()
                             .any(|target| canonical(target) == destination),
                     );
-                pending.push_back((next_index, destination, next_completed, Some(operation.id)));
+                pending.push_back((next_index, destination, next_completed, None));
             }
             let may_be_capped = member.is_some_and(|member| reach.may_be_capped(member, completed));
             if !may_be_capped && !operation.may_be_passed_over {
@@ -602,10 +602,7 @@ fn validate_phased_route_from(
         }
     }
     if terminals == 0 {
-        return Err(TaskPhaseRefusal::located(
-            TaskflowCode::TaskPhasesUnreachable,
-            stage_location(TaskPhaseProblem::NoTerminal, entry.phase).page(start),
-        ));
+        return Err(TaskflowCode::TaskPhasesUnreachable.code().into());
     }
     Ok(())
 }
