@@ -516,7 +516,7 @@ fn b15w2_check_config_notes_an_unbound_capability_and_an_invalid_configuration_r
         },
     ];
 
-    let notes = crate::remedy_declaration_notes(&host, &catalog(), &lists);
+    let notes = crate::remedy_declaration_notes(&host, &catalog(), &lists).notes;
     let unusable = || Outcome::new(RemedyHostCode::PolicyRemedyDeclarationUnusable);
     assert_eq!(
         notes
@@ -553,4 +553,36 @@ fn b15w2_check_config_notes_an_unbound_capability_and_an_invalid_configuration_r
             "the developer detail names the row: {notes:#?}"
         );
     }
+}
+
+// Fail Loud (coordinator acceptance of #989): a bound package whose remedy declarations cannot be
+// read is never silent in check-config. `t_main`'s source package provides `cap_x`, the
+// capability its own remedy names, which the reader's source parser refuses
+// (`resource_declaration_invalid`, remedies.md section 2.4 rules 1 and 2). It gives the developer
+// line the running Runtime writes for it,
+// `actingd remedy_table unreadable code=<code> tasks=<tasks> path=<path>`, and no note: the
+// configuration stays valid.
+#[test]
+fn b15w2_check_config_names_an_unreadable_package() {
+    let root = TempDir::new().expect("tempdir");
+    let (main, sink) = (root.path().join("main"), root.path().join("sink"));
+    write_package(
+        &main,
+        MAIN_PACKAGE,
+        Some(json!({"need": NEED, "capabilities": ["cap_x"]})),
+        Some(json!([{"capability": "cap_x"}])),
+    );
+    write_package(&sink, SINK_PACKAGE, None, None);
+    let host = config(&root).with_procedure_manifest(manifest(&main, &sink));
+
+    let checked = crate::remedy_declaration_notes(&host, &catalog(), &[]);
+    assert_eq!(
+        checked.unreadable,
+        vec![format!(
+            "actingd remedy_table unreadable code=resource_declaration_invalid tasks={MAIN_TASK} path={}",
+            main.to_string_lossy()
+        )],
+        "{checked:#?}"
+    );
+    assert!(checked.notes.is_empty(), "{checked:#?}");
 }

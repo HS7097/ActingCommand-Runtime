@@ -1380,7 +1380,7 @@ tests = [
 ]
 incident = ["#411 B15"]
 
-# Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-1, B15W2-3; no persisted ledger shape; contracts/policy-suspension.md `remedies`, contracts/remedies.md section 10; key assigned by the coordinator; the MCP half is apps 75): actingd suspended lists under remedies one entry per signal:remedy:stopped: record still in effect or lifted within 48 h of the ledger's latest event, newest first, {code, remedy_problem, task_id, instance_id, outcome_key, need, recorded_sequence, recorded_at_unix_ms} with lifted {sequence, at_unix_ms} once a later signal:remedy:lifted: record of the same round exists; a record whose outcome does not read back is {parse_state: unparsed, signal_id, code} with no warning; check-config builds the remedy table over the bound packages and notes each finding and each configuration row whose names the packages do not declare as policy_remedy_declaration_unusable (capability_unbound with task, key, need, capability, instance and package; choice_invalid naming need only for an undeclared need; parameter_invalid naming the capability and, for an instance's own list, its instance_id), a row's note with a developer detail naming the row
+# Workflow #411 B15 R7 (v0.12.3; register §1.117 B15W2-1, B15W2-3; no persisted ledger shape; contracts/policy-suspension.md `remedies`, contracts/remedies.md section 10; key assigned by the coordinator; the MCP half is apps 75): actingd suspended lists under remedies one entry per signal:remedy:stopped: record still in effect or lifted within 48 h of the ledger's latest event, newest first, {code, remedy_problem, task_id, instance_id, outcome_key, need, recorded_sequence, recorded_at_unix_ms} with lifted {sequence, at_unix_ms} once a later signal:remedy:lifted: record of the same round exists; a record whose outcome does not read back is {parse_state: unparsed, signal_id, code} with no warning; check-config builds the remedy table over the bound packages and notes each finding and each configuration row whose names the packages do not declare as policy_remedy_declaration_unusable (capability_unbound with task, key, need, capability, instance and package; choice_invalid naming need only for an undeclared need; parameter_invalid naming the capability and, for an instance's own list, its instance_id), a row's note with a developer detail naming the row; a package whose remedy declarations cannot be read gives no note but the developer line the running Runtime writes for it (actingd remedy_table unreadable code, tasks, path), the configuration valid
 [[gate]]
 key = "116"
 coverage = "Y"
@@ -1388,5 +1388,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_suspended_lists_a_stopped_remedy_until_it_is_lifted",
     "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_an_unreadable_remedy_signal_is_listed_unparsed",
     "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_check_config_notes_an_unbound_capability_and_an_invalid_configuration_row",
+    "actingcommand-runtime-host::lib::tests::gate_411_b15w2::b15w2_check_config_names_an_unreadable_package",
 ]
 incident = ["#411 B15"]
