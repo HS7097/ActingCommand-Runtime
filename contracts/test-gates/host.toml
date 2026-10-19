@@ -1302,6 +1302,19 @@ tests = [
 ]
 incident = ["#385 P-k"]
 
+# #411 B15 R3 b15c (v0.12.3; register §1.113; model-b15 §5.1, §5.2): scheduling.remedy.enabled (default true), scheduling.remedy.max_per_round (1..=8, default 2) and scheduling.remedy.choices (default []) default from the shipped defaults file and per instance instance.<id>.scheduling.remedy.choices defaults to the section's list and, when set, replaces it as a whole (EffectiveConfig::remedy(instance) gives {enabled, max_per_round, rows}); a choice row that breaks the session.remedy.choices shape (an object; row allow, none or parameter with exactly its fields; tokens ^[a-z][a-z0-9_]{0,63}$; none never a capability; no row twice; no none with an allow of the same need; at most 256 rows) and a max_per_round outside 1..=8 are config_value_invalid with the key (and the row's pointer) at load, in check-config and in ConfigureSettings; all four keys are settable and recorded in config.parameters.scheduling and config.parameters.instance with value and source
+[[gate]]
+key = "112"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_remedy_keys_default_from_the_shipped_file",
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_an_instance_list_replaces_the_section_list_as_a_whole",
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_malformed_rows_are_refused_with_their_pointer",
+    "actingcommand-runtime-config::lib::scheduling_tests::b15c_max_per_round_out_of_bounds_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::b15c_remedy_keys_are_settable_and_recorded_as_rows",
+]
+incident = ["#411 B15"]
+
 # #411 A22 (v0.12.3; register §1.124): a direct run that binds a recovery package no path of it can use is denied in its preparation with contained_task_recovery_binding_unused (package_id the run's package, location check_recovery_binding, invalid_request; native detail reason=entry_not_checked or reason=prerequisite_gate): no task.requested, no lease.requested or lease.granted, no task record, no input; the binding is used, and the run goes on as before, when the run has no prerequisite chain and its entry is checked (an entry page set started off its entry admits the bound package) or when a failed direct run may start a ladder (recovery_ladder.rules.direct_runs = trigger, the instance's stuck recovery on, a physical instance); a run without a binding is unchanged; a non-Home-start task never receives recovery (#241)
 [[gate]]
 key = "117"
@@ -1327,3 +1340,25 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a23::a23_a_package_that_runs_its_own_step_after_its_prerequisite_is_judged_on_that_step",
 ]
 incident = ["#411 A23"]
+
+# Workflow #411 B15 R1 (v0.12.3; register §1.111 R1-5; no persisted ledger shape; contracts/remedies.md sections 2.2, 2.4; key assigned by the coordinator; the kernel's own provides tests stay exec 95): a source package directory whose control.json provides two capabilities, one irreversible with two parameters, and whose mapping declares a remedy is admitted by kernel admission by path (describe_path answers its package id), and the metadata reader read_remedy_declarations reads it by path without preparing it: its package id, its remedy with the mapping's outcome key, and every provided capability with its irreversible marker and its parameters' names, options and defaults, as declared
+[[gate]]
+key = "119"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_b15p_host::b15p_provides_with_parameters_is_admitted_and_read_without_preparing",
+]
+incident = ["#411 B15 R1"]
+
+# #385 P-k2 (v0.12.x; register §1.108 PK2-1, PK2-3, PK2-4; performance model v1.4.2 §4.1, §4.4, §5.2, §5.3, §5.4, §5.6): the shadow measurement keeps per instance the extra rounds of its curve reading (the lower neighbour's extra_retries, at least pressure_floor.extra_retries under a floor pressure), in effect 0 under observe and the reading under pace and full; step_pacing() hands beside the factor extra_wait_rounds, sample_timeout_retries = the configured base + the rounds and pre_input_wait = pre_input_wait_base_ms x (f - 1000) / 1000 (zero at 1000); a step's steps[] entry carries extra_wait_rounds, the rounds it used, and a step at 1000 that used none has no entry; once a run had a factor above 1000 each of its waits ends by its host deadline, so a direct run is cancelled deadline_exceeded and a scheduled run fails contained_task_deadline_exceeded inside the heartbeat reserve, its lease released and none lapsed (no lease_mismatch)
+[[gate]]
+key = "111"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_the_step_pacing_carries_the_stages_extra_rounds_and_pre_input_wait",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_steps_used_rounds_are_recorded",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_paced_wait_ends_by_the_host_deadline",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_the_pre_input_wait_ends_by_the_host_deadline",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline",
+]
+incident = ["#385 P-k"]

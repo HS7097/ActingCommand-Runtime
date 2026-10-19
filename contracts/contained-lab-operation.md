@@ -2,10 +2,20 @@
 
 `RuntimeDebugSession::run_contained_lab_operation` submits the Lab-only
 `RunContainedLabOperation` request. The request selects exactly one current
-projection element ID or an explicit `InputAction::Tap` / `InputAction::Swipe`.
+projection element ID or an explicit `InputAction::Tap` / `InputAction::LongTap` /
+`InputAction::Swipe`.
 It contains an absolute package path, external expected SHA-256, and optional
 source projection sequence/content hash hints. Hints are recorded; resolution
 uses only the newly captured Runtime projection.
+
+The Runtime presses the selection as the kernel presses a pack's click (#411 Lab L3). A tap is
+`InputAction::Tap`. A drag that does not move, `from` equal to `to` in the same rectangle (the
+form a projection element and an explicit long tap give a long press), is `InputAction::LongTap`
+at that point over its `duration_ms`; every other drag is one `InputAction::Swipe`. The Runtime's
+preparation and the evidence verifier resolve by the same rule, so the prepared `geometry` stays
+a `drag` and its `action` is the long tap. A pack `drag` whose two rectangles are the same, and
+`--swipe x,y,x,y,ms`, therefore also press a long tap; on adb it is the same command as a
+zero-length swipe.
 
 An optional typed `after` condition supplies an exact package page ID and
 `timeout_ms`. Online `do --capture` exposes it as `--after-page <full-page-id>`

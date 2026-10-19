@@ -3100,7 +3100,9 @@ fn lab2_observe_projects_contained_page_elements() {
     );
     assert!(!missing.iter().any(|entry| entry["id"] == "forbidden"));
     assert_eq!(observation["metrics"]["recognized_count"], 3);
-    assert_eq!(observation["metrics"]["entry_count"], 7);
+    // 3 elements, the unscoped control and 3 missing, and (#411 Lab L6) one value entry for each
+    // of the 5 targets the page evaluated, none with a declared field: 3 + 1 + 3 + 5.
+    assert_eq!(observation["metrics"]["entry_count"], 12);
     assert_eq!(observation["page_window_completeness"], "unknown");
     assert_eq!(
         observation["schema_version"],
@@ -3234,10 +3236,23 @@ fn lab2_observe_bounds_observation_in_min() {
             if verbosity.is_none() {
                 assert!(serde_json::to_vec(data).unwrap().len() <= 2048);
             }
+            // #411 Lab L6: beside the `count` operations, the page's one target `anchor` has its
+            // value entry (no declared field); it is emitted only when the limits leave room.
+            let values = observation["fields"].as_array().map_or(0, Vec::len);
+            assert!(values <= 1, "{observation}");
+            if values == 1 {
+                assert_eq!(observation["fields"][0]["target_id"], "anchor");
+            }
             assert_eq!(observation["metrics"]["recognized_count"], count);
-            assert_eq!(observation["metrics"]["entry_count"], count);
-            assert_eq!(observation["metrics"]["emitted_count"], entries.len());
-            assert_eq!(observation["omitted_count"], count - entries.len());
+            assert_eq!(observation["metrics"]["entry_count"], count + 1);
+            assert_eq!(
+                observation["metrics"]["emitted_count"],
+                entries.len() + values
+            );
+            assert_eq!(
+                observation["omitted_count"],
+                count + 1 - entries.len() - values
+            );
             assert_eq!(observation["truncated"], true);
             assert_eq!(observation["page_window_completeness"], "unknown");
             assert_eq!(

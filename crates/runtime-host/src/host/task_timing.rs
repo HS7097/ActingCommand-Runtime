@@ -22,6 +22,10 @@ pub(super) struct TaskTimingObserver {
     context: Option<ContainedTaskTimingContext>,
     input_completion: Option<BoundaryStart>,
     effect_completion: Option<BoundaryStart>,
+    /// #385 P-k (register P5): the step the run started last, whose `steps[]` entry an extra
+    /// wait round counts in, and the rounds before the run's first step, which count in it.
+    current_step: Option<u32>,
+    rounds_before_first_step: u32,
 }
 
 impl TaskTimingObserver {
@@ -53,6 +57,8 @@ impl TaskTimingObserver {
             context: None,
             input_completion: None,
             effect_completion: None,
+            current_step: None,
+            rounds_before_first_step: 0,
         }
     }
 
@@ -147,27 +153,64 @@ impl TaskTimingObserver {
     /// #385 P-k (PERF v1.4.2 §5.6 item 4, register P5): the step `step_index` started with the
     /// pacing factor `factor_milli`. A factor above 1000 is the step's one `steps[]` entry, in
     /// step order; a later attempt of the step keeps that entry. At 1000 nothing is recorded.
+    /// The step is the one later extra wait rounds count for; the rounds before the run's first
+    /// step count for it.
     pub(super) fn step_factor(&mut self, step_index: u32, factor_milli: u32) {
-        if factor_milli <= MIN_PACING_FACTOR_MILLI {
-            return;
+        self.current_step = Some(step_index);
+        if factor_milli > MIN_PACING_FACTOR_MILLI {
+            let entry = self.step_entry(step_index);
+            if entry.pacing_factor_milli.is_none() {
+                entry.pacing_factor_milli = Some(factor_milli);
+            }
         }
-        if let Err(position) = self
+        let rounds = std::mem::take(&mut self.rounds_before_first_step);
+        if rounds > 0 {
+            self.count_rounds(step_index, rounds);
+        }
+    }
+
+    /// #385 P-k (PERF v1.4.2 §5.4 item 1, register P5): a wait started one more round. It counts
+    /// in `extra_wait_rounds` of the `steps[]` entry of the step the run started last (the entry
+    /// written when the step has none); before the run's first step, in its first step's. A step
+    /// that used no round carries no `extra_wait_rounds`.
+    pub(super) fn extra_wait_round(&mut self) {
+        match self.current_step {
+            Some(step_index) => self.count_rounds(step_index, 1),
+            None => {
+                self.rounds_before_first_step = self.rounds_before_first_step.saturating_add(1);
+            }
+        }
+    }
+
+    fn count_rounds(&mut self, step_index: u32, rounds: u32) {
+        let entry = self.step_entry(step_index);
+        entry.extra_wait_rounds = Some(entry.extra_wait_rounds.unwrap_or(0).saturating_add(rounds));
+    }
+
+    /// The `steps[]` entry of `step_index`, inserted in step order when there is none.
+    fn step_entry(&mut self, step_index: u32) -> &mut TaskTimingStepPacing {
+        let position = match self
             .value
             .steps
             .binary_search_by_key(&step_index, |step| step.step_index)
         {
-            self.value.steps.insert(
-                position,
-                TaskTimingStepPacing {
-                    step_index,
-                    page_settle_ms: None,
-                    pacing_band: None,
-                    pressure_level: None,
-                    pacing_factor_milli: Some(factor_milli),
-                    extra_wait_rounds: None,
-                },
-            );
-        }
+            Ok(position) => position,
+            Err(position) => {
+                self.value.steps.insert(
+                    position,
+                    TaskTimingStepPacing {
+                        step_index,
+                        page_settle_ms: None,
+                        pacing_band: None,
+                        pressure_level: None,
+                        pacing_factor_milli: None,
+                        extra_wait_rounds: None,
+                    },
+                );
+                position
+            }
+        };
+        &mut self.value.steps[position]
     }
 
     pub(super) fn capture_recognition(&mut self, sample: TaskTimingSample) {

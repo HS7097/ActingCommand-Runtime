@@ -2539,6 +2539,162 @@ fn scheduling_outcome_declaration_is_finite_unique_and_identifier_closed() {
     }
 }
 
+// Workflow #411 B15 R1 (contracts/remedies.md section 2.1; exec key 95): a mapping may declare a
+// `remedy` with a need, its capabilities and a package default; the declaration validates, reads
+// back what it declares and serializes it back; a mapping without `remedy` serializes byte for
+// byte as before, and an empty package default is no package default.
+#[test]
+fn b15p_remedy_on_a_mapping_parses_validates_and_round_trips() {
+    let declared = serde_json::json!({
+        "mappings": [
+            {"outcome_key": "done", "effect": "no_designated_effect", "terminal_pages": ["result"]},
+            {"outcome_key": "blocked_k", "effect": "no_designated_effect",
+             "terminal_pages": ["page_b"],
+             "remedy": {"need": "need_a", "capabilities": ["cap_x", "cap_y"],
+                        "default": ["cap_x"]}}
+        ]
+    });
+    let declaration: SchedulingOutcomeDeclaration =
+        serde_json::from_value(declared.clone()).expect("a remedy on a mapping reads");
+    declaration.validate().expect("a valid remedy");
+    let mappings = declaration.mappings();
+    assert_eq!(
+        mappings[0].remedy(),
+        None,
+        "the first mapping declares none"
+    );
+    let remedy = mappings[1].remedy().expect("the second mapping's remedy");
+    assert_eq!(remedy.need(), "need_a");
+    assert_eq!(remedy.capabilities(), ["cap_x", "cap_y"]);
+    assert_eq!(remedy.default_capabilities(), ["cap_x"]);
+    assert_eq!(
+        serde_json::to_value(&declaration).expect("declaration JSON"),
+        declared,
+        "the remedy serializes back as declared"
+    );
+
+    let before = r#"{"mappings":[{"outcome_key":"done","effect":"no_designated_effect","terminal_pages":["result"]}]}"#;
+    let declaration: SchedulingOutcomeDeclaration =
+        serde_json::from_str(before).expect("a mapping without remedy");
+    declaration.validate().expect("a valid declaration");
+    assert_eq!(
+        serde_json::to_string(&declaration).expect("declaration JSON"),
+        before,
+        "a mapping without remedy serializes byte for byte as before"
+    );
+
+    for default in [None, Some(serde_json::json!([]))] {
+        let mut remedy = serde_json::json!({"need": "need_a", "capabilities": ["cap_x"]});
+        if let Some(default) = &default {
+            remedy["default"] = default.clone();
+        }
+        let declaration: SchedulingOutcomeDeclaration = serde_json::from_value(serde_json::json!({
+            "mappings": [{"outcome_key": "blocked_k", "effect": "no_designated_effect",
+                          "terminal_pages": ["page_b"], "remedy": remedy}]
+        }))
+        .expect("a remedy without a package default reads");
+        declaration.validate().expect("a valid remedy");
+        let remedy = declaration.mappings()[0].remedy().expect("the remedy");
+        assert!(
+            remedy.default_capabilities().is_empty(),
+            "{default:?} is no package default"
+        );
+    }
+}
+
+// Workflow #411 B15 R1 (contracts/remedies.md section 2.1; exec key 95): each rule of a remedy
+// refuses the declaration with `invalid_scheduling_outcome_declaration` and the member as its
+// field: the need is a token `^[a-z][a-z0-9_]{0,63}$`; the capabilities are 1 to 8 unique tokens
+// of that charset and never `none`; the package default names each of them at most once and only
+// them. A member the remedy does not have is refused when the declaration is read.
+#[test]
+fn b15p_remedy_violations_are_refused_with_their_field() {
+    let capabilities = |count: usize| {
+        (0..count)
+            .map(|index| format!("cap_{index}"))
+            .collect::<Vec<_>>()
+    };
+    let cases = [
+        (
+            "a need that is no token",
+            serde_json::json!({"need": "Need_a", "capabilities": ["cap_x"]}),
+            "remedy.need",
+        ),
+        (
+            "a need that starts with a digit",
+            serde_json::json!({"need": "1_need", "capabilities": ["cap_x"]}),
+            "remedy.need",
+        ),
+        (
+            "no capability",
+            serde_json::json!({"need": "need_a", "capabilities": []}),
+            "remedy.capabilities",
+        ),
+        (
+            "nine capabilities",
+            serde_json::json!({"need": "need_a", "capabilities": capabilities(9)}),
+            "remedy.capabilities",
+        ),
+        (
+            "a capability named twice",
+            serde_json::json!({"need": "need_a", "capabilities": ["cap_x", "cap_x"]}),
+            "remedy.capabilities",
+        ),
+        (
+            "the capability none",
+            serde_json::json!({"need": "need_a", "capabilities": ["none"]}),
+            "remedy.capabilities",
+        ),
+        (
+            "a capability that is no token",
+            serde_json::json!({"need": "need_a", "capabilities": ["cap-x"]}),
+            "remedy.capabilities",
+        ),
+        (
+            "a default the capabilities do not list",
+            serde_json::json!({"need": "need_a", "capabilities": ["cap_x"], "default": ["cap_y"]}),
+            "remedy.default",
+        ),
+        (
+            "a default named twice",
+            serde_json::json!({"need": "need_a", "capabilities": ["cap_x", "cap_y"],
+                               "default": ["cap_x", "cap_x"]}),
+            "remedy.default",
+        ),
+    ];
+    let mapping = |remedy: serde_json::Value| {
+        serde_json::json!({
+            "mappings": [{"outcome_key": "blocked_k", "effect": "no_designated_effect",
+                          "terminal_pages": ["page_b"], "remedy": remedy}]
+        })
+    };
+    for (case, remedy, field) in cases {
+        let declaration: SchedulingOutcomeDeclaration =
+            serde_json::from_value(mapping(remedy)).expect("the remedy's shape reads");
+        let error = declaration.validate().expect_err(case);
+        assert_eq!(
+            (error.code(), error.field()),
+            (
+                SanitizationCode::InvalidSchedulingOutcomeDeclaration.code(),
+                field
+            ),
+            "{case}"
+        );
+    }
+    let declaration: SchedulingOutcomeDeclaration = serde_json::from_value(mapping(
+        serde_json::json!({"need": "need_a", "capabilities": capabilities(8), "default": []}),
+    ))
+    .expect("eight capabilities read");
+    declaration
+        .validate()
+        .expect("eight capabilities are allowed");
+
+    serde_json::from_value::<SchedulingOutcomeDeclaration>(mapping(serde_json::json!({
+        "need": "need_a", "capabilities": ["cap_x"], "order": ["cap_x"]
+    })))
+    .expect_err("a member the remedy does not have is refused");
+}
+
 #[test]
 fn resource_authoring_payloads_preserve_phase_and_publish_only_path_count() {
     let phases = [

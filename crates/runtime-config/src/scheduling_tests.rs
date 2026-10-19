@@ -13,8 +13,9 @@ use crate::scheduling::{
     BLACKOUT_STOP_IN_FLIGHT_AT_START, COST_COMMIT_MARGIN_MS, COST_COMMIT_MAX_STAGE,
     COST_COMMIT_PROMOTE, FEATURE_LOCK_CODES, FEATURE_LOCK_LOCKED_VALID_FOR_MS,
     NOT_RUN_DIAGNOSE_ROWS, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
-    RERUN_CONDITION_CODES, RERUN_EXPIRES, RERUN_MAX_PER_OCCURRENCE, RERUN_PROMOTE,
-    RERUN_REFUND_COUNTS, RERUN_RESUME_SETTLE_MS, RERUN_RESUME_STAGE, SAMPLE_TIMEOUT_RETRIES,
+    REMEDY_CHOICES, REMEDY_ENABLED, REMEDY_MAX_PER_ROUND, RERUN_CONDITION_CODES, RERUN_EXPIRES,
+    RERUN_MAX_PER_OCCURRENCE, RERUN_PROMOTE, RERUN_REFUND_COUNTS, RERUN_RESUME_SETTLE_MS,
+    RERUN_RESUME_STAGE, SAMPLE_TIMEOUT_RETRIES,
 };
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, RuntimeConfigManifest,
@@ -434,5 +435,431 @@ fn sr1_c3_an_instance_random_delay_is_checked_as_the_pair_in_effect() {
     assert_eq!(
         applied.settings[0].source,
         ConfigParameterSource::Instruction
+    );
+}
+
+// ---- Workflow #411 B15 R3 (model-b15 §5.1, §5.2; register §1.113; host key 112) ----
+// The remedy keys: `scheduling.remedy.enabled` (default `true`), `.max_per_round` (`1..=8`,
+// default 2), `.choices` (default `[]`) and each instance's `scheduling.remedy.choices`, whose
+// default is the section's list and which, when set, replaces it as a whole. Rows keep the shape
+// of `session.remedy.choices`. Names are neutral placeholders.
+
+const INSTANCE_B: &str = "instance_fedcba9876543210fedcba9876543210";
+
+fn allow(need: &str, capability: &str) -> Value {
+    json!({"row": "allow", "need": need, "capability": capability})
+}
+
+fn decline(need: &str) -> Value {
+    json!({"row": "none", "need": need})
+}
+
+fn parameter_row(capability: &str, parameter: &str, value: &str) -> Value {
+    json!({"row": "parameter", "capability": capability, "parameter": parameter, "value": value})
+}
+
+fn allowed(need: &str, capability: &str) -> RemedyChoiceRow {
+    RemedyChoiceRow::Allow {
+        need: need.to_owned(),
+        capability: capability.to_owned(),
+    }
+}
+
+// The configuration of a file whose `scheduling` member is `scheduling` and whose entries of
+// instances A and B carry `a` and `b` as their own `scheduling` members (`null`: none).
+fn two_instances(scheduling: Value, a: Value, b: Value) -> EffectiveConfig {
+    let entry = |instance: &str, alias: &str, own: Value| {
+        let mut entry = json!({"instance_id": instance, "alias": alias});
+        if !own.is_null() {
+            entry["scheduling"] = own;
+        }
+        entry
+    };
+    let parameters = render_parameters(
+        &mechanism_rows(),
+        &[INSTANCE_A.to_owned(), INSTANCE_B.to_owned()],
+        &shipped(),
+        &json!({"scheduling": scheduling,
+                "instances": [entry(INSTANCE_A, "node.a", a), entry(INSTANCE_B, "node.b", b)]}),
+        &|_| None,
+    )
+    .expect("every key resolves");
+    EffectiveConfig::from_manifest(&RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    })
+    .expect("every key is in the key table")
+}
+
+// Requirement 1: the three section keys and the instance's list default from the shipped
+// defaults file (the instance's through the section's key), source `default`, all settable; the
+// accessor gives the same values; a defaults file without them leaves the keys without a value
+// (no code constant stands in).
+#[test]
+fn b15c_remedy_keys_default_from_the_shipped_file() {
+    let parameters = render(json!({}), json!({})).expect("the defaults resolve");
+    let own_key = instance_key(INSTANCE_A, REMEDY_CHOICES);
+    for (key, value, default) in [
+        (
+            REMEDY_ENABLED,
+            FactScalar::Boolean(true),
+            DefaultSource::File,
+        ),
+        (
+            REMEDY_MAX_PER_ROUND,
+            FactScalar::Integer(2),
+            DefaultSource::File,
+        ),
+        (
+            REMEDY_CHOICES,
+            FactScalar::String("[]".to_owned()),
+            DefaultSource::File,
+        ),
+        (
+            own_key.as_str(),
+            FactScalar::String("[]".to_owned()),
+            DefaultSource::Section(REMEDY_CHOICES),
+        ),
+    ] {
+        let parameter = parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .unwrap_or_else(|| panic!("no parameter {key}"));
+        assert_eq!(parameter.value, value, "{key}");
+        assert_eq!(parameter.source, ConfigParameterSource::Default, "{key}");
+        assert!(parameter.settable, "{key}");
+        let (row, _) = find_row(key).unwrap_or_else(|| panic!("{key} is in the key table"));
+        assert_eq!(row.default, default, "{key}");
+    }
+
+    let config = from_file(json!({}), json!({}));
+    config
+        .check(&context())
+        .expect("the defaults pass the check");
+    let shipped_remedy = RemedyConfig {
+        enabled: true,
+        max_per_round: 2,
+        rows: Vec::new(),
+    };
+    assert_eq!(config.remedy(INSTANCE_A), Ok(shipped_remedy.clone()));
+    assert_eq!(
+        config.scheduling().map(|section| section.remedy),
+        Ok(shipped_remedy)
+    );
+
+    let mut defaults = shipped();
+    defaults["scheduling"]
+        .as_object_mut()
+        .expect("the defaults file's scheduling section")
+        .remove("remedy");
+    let refused = render_parameters(
+        &mechanism_rows(),
+        &[INSTANCE_A.to_owned()],
+        &defaults,
+        &json!({"instances": [{"instance_id": INSTANCE_A, "alias": "node.a"}]}),
+        &|_| None,
+    )
+    .expect_err("no remedy default outside the defaults file");
+    assert_eq!(refused.failure_code(), ConfigCode::ConfigValueInvalid);
+    assert_eq!(refused.config_key(), REMEDY_ENABLED);
+}
+
+// Requirements 1 and 3: an instance that sets its own list has exactly that list in effect, never
+// the section's rows added to it; an instance without one has the section's; a new section list
+// reaches only the instances without their own; an empty list an instance sets is its list too.
+// The switch and the request bound are the section's for every instance.
+#[test]
+fn b15c_an_instance_list_replaces_the_section_list_as_a_whole() {
+    let section = json!([
+        allow("need_a", "cap_x"),
+        parameter_row("cap_x", "param_p", "opt_1")
+    ]);
+    let config = two_instances(
+        json!({"remedy": {"max_per_round": 3, "choices": section}}),
+        json!({"remedy": {"choices": [allow("need_b", "cap_y")]}}),
+        Value::Null,
+    );
+    config.check(&context()).expect("both lists keep the rules");
+    let section_rows = vec![
+        allowed("need_a", "cap_x"),
+        RemedyChoiceRow::Parameter {
+            capability: "cap_x".to_owned(),
+            parameter: "param_p".to_owned(),
+            value: "opt_1".to_owned(),
+        },
+    ];
+    let own_rows = vec![allowed("need_b", "cap_y")];
+    let in_effect = |config: &EffectiveConfig, instance: &str| {
+        config
+            .remedy(instance)
+            .unwrap_or_else(|failure| panic!("{instance}: {failure:?}"))
+    };
+    assert_eq!(
+        in_effect(&config, INSTANCE_A),
+        RemedyConfig {
+            enabled: true,
+            max_per_round: 3,
+            rows: own_rows.clone(),
+        }
+    );
+    assert_eq!(
+        in_effect(&config, INSTANCE_B),
+        RemedyConfig {
+            enabled: true,
+            max_per_round: 3,
+            rows: section_rows,
+        }
+    );
+    let manifest = config.manifest();
+    let source = |instance: &str| {
+        let key = instance_key(instance, REMEDY_CHOICES);
+        manifest
+            .parameters
+            .iter()
+            .find(|parameter| parameter.key == key)
+            .map(|parameter| parameter.source)
+    };
+    assert_eq!(source(INSTANCE_A), Some(ConfigParameterSource::Explicit));
+    assert_eq!(source(INSTANCE_B), Some(ConfigParameterSource::Default));
+
+    let changed = config
+        .apply(
+            &[set(REMEDY_CHOICES, json!([decline("need_c")]))],
+            &stamp(),
+            &context(),
+        )
+        .expect("a new section list")
+        .config;
+    assert_eq!(
+        in_effect(&changed, INSTANCE_B).rows,
+        vec![RemedyChoiceRow::NoRemedy {
+            need: "need_c".to_owned()
+        }]
+    );
+    assert_eq!(in_effect(&changed, INSTANCE_A).rows, own_rows);
+
+    let emptied = changed
+        .apply(
+            &[set(&instance_key(INSTANCE_B, REMEDY_CHOICES), json!([]))],
+            &stamp(),
+            &context(),
+        )
+        .expect("an empty instance list")
+        .config;
+    assert_eq!(in_effect(&emptied, INSTANCE_B).rows, Vec::new());
+    assert_eq!(in_effect(&emptied, INSTANCE_A).rows, own_rows);
+}
+
+// Requirement 2: one case per rule of the row shape. Each is `config_value_invalid` with the key
+// and the pointer of the row (and member) in the key's value: in the section's list and in an
+// instance's own list as a start and check-config check them, and through an instruction on
+// either key.
+#[test]
+fn b15c_malformed_rows_are_refused_with_their_pointer() {
+    let too_many = (0..257)
+        .map(|index| allow("need_a", &format!("cap_{index}")))
+        .collect::<Vec<_>>();
+    let cases = [
+        (
+            "two values for one parameter",
+            json!([
+                parameter_row("cap_x", "param_p", "opt_1"),
+                allow("need_a", "cap_x"),
+                parameter_row("cap_x", "param_p", "opt_2")
+            ]),
+            "/2",
+            ConfigValueProblem::SectionCheck,
+        ),
+        (
+            "a row that is no object",
+            json!(["allow"]),
+            "/0",
+            ConfigValueProblem::WrongType,
+        ),
+        (
+            "a row kind that does not exist",
+            json!([{"row": "deny", "need": "need_a"}]),
+            "/0/row",
+            ConfigValueProblem::OutOfRange,
+        ),
+        (
+            "a field of the kind missing",
+            json!([{"row": "allow", "need": "need_a"}]),
+            "/0/capability",
+            ConfigValueProblem::WrongType,
+        ),
+        (
+            "a member the kind does not have",
+            json!([{"row": "none", "need": "need_a", "capability": "cap_x"}]),
+            "/0/capability",
+            ConfigValueProblem::WrongType,
+        ),
+        (
+            "a field that is no text",
+            json!([{"row": "parameter", "capability": "cap_x", "parameter": "param_p",
+                    "value": 1}]),
+            "/0/value",
+            ConfigValueProblem::WrongType,
+        ),
+        (
+            "a name outside the token charset",
+            json!([allow("need_a", "cap_x"), allow("need_b", "Cap-y")]),
+            "/1/capability",
+            ConfigValueProblem::OutOfRange,
+        ),
+        (
+            "none as a capability",
+            json!([allow("need_a", "none")]),
+            "/0/capability",
+            ConfigValueProblem::OutOfRange,
+        ),
+        (
+            "a row twice",
+            json!([
+                allow("need_a", "cap_x"),
+                parameter_row("cap_x", "param_p", "opt_1"),
+                allow("need_a", "cap_x")
+            ]),
+            "/2",
+            ConfigValueProblem::SectionCheck,
+        ),
+        (
+            "none with an allow of the same need",
+            json!([allow("need_a", "cap_x"), decline("need_a")]),
+            "/1",
+            ConfigValueProblem::SectionCheck,
+        ),
+        (
+            "more than 256 rows",
+            Value::Array(too_many),
+            "/256",
+            ConfigValueProblem::OutOfRange,
+        ),
+    ];
+    let own_key = instance_key(INSTANCE_A, REMEDY_CHOICES);
+    let running = from_file(json!({}), json!({}));
+    for (case, rows, pointer, problem) in cases {
+        let at_start = [
+            (
+                from_file(json!({"remedy": {"choices": rows.clone()}}), json!({})),
+                REMEDY_CHOICES,
+            ),
+            (
+                from_file(
+                    json!({}),
+                    json!({"scheduling": {"remedy": {"choices": rows.clone()}}}),
+                ),
+                own_key.as_str(),
+            ),
+        ]
+        .into_iter()
+        .map(|(config, key)| (config.check(&context()).expect_err(case), key));
+        let by_instruction = [REMEDY_CHOICES, own_key.as_str()].into_iter().map(|key| {
+            (
+                running
+                    .apply(&[set(key, rows.clone())], &stamp(), &context())
+                    .expect_err(case),
+                key,
+            )
+        });
+        for (refused, key) in at_start.chain(by_instruction) {
+            assert_eq!(
+                refused.failure_code(),
+                ConfigCode::ConfigValueInvalid,
+                "{case}: {key}"
+            );
+            assert_eq!(refused.config_key(), key, "{case}");
+            assert_eq!(refused.problem(), Some(problem), "{case}: {key}");
+            assert_eq!(refused.pointer(), Some(pointer), "{case}: {key}");
+        }
+    }
+
+    // No conflict: two different parameters of one capability are taken, in either list, at
+    // start and through an instruction.
+    let rows = json!([
+        parameter_row("cap_x", "param_p", "opt_1"),
+        parameter_row("cap_x", "param_q", "opt_2")
+    ]);
+    let taken = ["param_p", "param_q"]
+        .into_iter()
+        .zip(["opt_1", "opt_2"])
+        .map(|(parameter, value)| RemedyChoiceRow::Parameter {
+            capability: "cap_x".to_owned(),
+            parameter: parameter.to_owned(),
+            value: value.to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let at_start = [
+        from_file(json!({"remedy": {"choices": rows.clone()}}), json!({})),
+        from_file(
+            json!({}),
+            json!({"scheduling": {"remedy": {"choices": rows.clone()}}}),
+        ),
+    ];
+    let by_instruction = [REMEDY_CHOICES, own_key.as_str()].map(|key| {
+        running
+            .apply(&[set(key, rows.clone())], &stamp(), &context())
+            .unwrap_or_else(|failure| panic!("{key}: {failure:?}"))
+            .config
+    });
+    for config in at_start.into_iter().chain(by_instruction) {
+        config
+            .check(&context())
+            .expect("two parameters of one capability");
+        assert_eq!(
+            config.remedy(INSTANCE_A).map(|remedy| remedy.rows),
+            Ok(taken.clone())
+        );
+    }
+}
+
+// Requirement 1: `max_per_round` is `1..=8`; a value outside is `config_value_invalid`
+// (`out_of_range`, with the range) as the file layer is rendered and through an instruction; the
+// two bounds themselves are taken.
+#[test]
+fn b15c_max_per_round_out_of_bounds_is_refused() {
+    let running = from_file(json!({}), json!({}));
+    for value in [0, 9] {
+        let at_start = render(json!({"remedy": {"max_per_round": value}}), json!({}))
+            .expect_err("a request bound outside 1..=8 in the file");
+        let by_instruction = running
+            .apply(
+                &[set(REMEDY_MAX_PER_ROUND, json!(value))],
+                &stamp(),
+                &context(),
+            )
+            .expect_err("a request bound outside 1..=8 by an instruction");
+        for refused in [at_start, by_instruction] {
+            assert_eq!(
+                refused.failure_code(),
+                ConfigCode::ConfigValueInvalid,
+                "{value}"
+            );
+            assert_eq!(refused.config_key(), REMEDY_MAX_PER_ROUND, "{value}");
+            assert_eq!(
+                refused.problem(),
+                Some(ConfigValueProblem::OutOfRange),
+                "{value}"
+            );
+            let outcome = refused.outcome();
+            assert_eq!(outcome.value("range_min"), Some(&json!(1)), "{value}");
+            assert_eq!(outcome.value("range_max"), Some(&json!(8)), "{value}");
+        }
+    }
+    let highest = from_file(json!({"remedy": {"max_per_round": 8}}), json!({}));
+    highest.check(&context()).expect("eight requests a round");
+    assert_eq!(
+        highest
+            .remedy(INSTANCE_A)
+            .map(|remedy| remedy.max_per_round),
+        Ok(8)
+    );
+    let lowest = running
+        .apply(&[set(REMEDY_MAX_PER_ROUND, json!(1))], &stamp(), &context())
+        .expect("one request a round")
+        .config;
+    assert_eq!(
+        lowest.remedy(INSTANCE_A).map(|remedy| remedy.max_per_round),
+        Ok(1)
     );
 }

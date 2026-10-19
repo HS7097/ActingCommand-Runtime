@@ -1325,6 +1325,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.step_pacing()
     }
 
+    /// #385 P-k: the run's extra wait rounds count in its own evidence.
+    fn observe_extra_wait_round(&mut self) {
+        self.inner.observe_extra_wait_round();
+    }
+
     fn record_candidate_evaluation(
         &mut self,
         target_id: &str,
@@ -1633,6 +1638,27 @@ impl RuntimeContainedTask<'_> {
         Ok(Instant::now()
             .checked_add(left)
             .map_or(deadline, |kernel| deadline.min(kernel)))
+    }
+
+    /// #385 P-k2 (register §1.108 PK2-4; PERF v1.4.2 §5.3, §5.6): the kernel's wait `wait`, cut
+    /// to the Runtime-clock time left before the run's host deadline; none once the deadline
+    /// has passed, and whole for a run without one. A failed clock read is kept, as the
+    /// kernel's own reads keep theirs, so the run's next capture, input or record ends it with
+    /// that failure; the wait is then none.
+    fn wait_within_host_deadline(&mut self, wait: Duration) -> Duration {
+        let deadline_ms = self.control.deadline();
+        if deadline_ms == 0 {
+            return wait;
+        }
+        match self.host.monotonic_ms() {
+            Ok(now_ms) => wait.min(Duration::from_millis(deadline_ms.saturating_sub(now_ms))),
+            Err(error) => {
+                if self.kernel_clock_failure.is_none() {
+                    self.kernel_clock_failure = Some(error);
+                }
+                Duration::ZERO
+            }
+        }
     }
 
     /// Test plan E-3 (EXEC-I3): the failed read of the kernel's Runtime clock, if one was kept.
@@ -3353,7 +3379,23 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     /// Test plan E-3: every wait of the kernel is the Runtime clock's (`RuntimeClock::pause`).
+    ///
+    /// #385 P-k2 (register §1.108 PK2-4; PERF v1.4.2 §5.3, §5.6): once the run had a factor
+    /// segment above 1000, every wait the kernel asks for (post-input and retry delays, capture,
+    /// arrival and confirmation waits, sampling intervals and resamples, the pre-input wait,
+    /// extra rounds, entry and `linear_steps` waits) ends no later than the run's host deadline
+    /// ([`Self::wait_within_host_deadline`]). The run's next check then ends it
+    /// `contained_task_deadline_exceeded` while its lease still holds: the lease lasts the
+    /// heartbeat reserve past that deadline and is not renewed while the run runs, direct,
+    /// scheduled and host package runs alike, so a stretched wait that outlasted it let the lease
+    /// sweep take the lease before the terminal was written (`lease_mismatch`, fatal). A run whose
+    /// every factor was 1000 waits exactly as before and reads no clock for it.
     fn pause(&mut self, duration: Duration) {
+        let duration = if self.pacing.reduction.is_some() {
+            self.wait_within_host_deadline(duration)
+        } else {
+            duration
+        };
         self.host.kernel_pause(duration);
     }
 
@@ -3369,27 +3411,44 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     /// Workflow #386 SR-1 (scheduling model §2.1 item 4): the configured base of observe-only
-    /// retries (`scheduling.recognition.sample_timeout_retries`), read at each step; the pacing
-    /// curve's extra retries join with performance slice P-k S5.
+    /// retries (`scheduling.recognition.sample_timeout_retries`), read at each step, plus the
+    /// pacing curve's extra retries of the step's stage (#385 P-k, PERF v1.4.2 §5.4 item 2).
     ///
     /// #385 P-k (PERF v1.4.2 §5.6 item 2, Tk-10): and the factor in effect for the run's
     /// instance (`performance.pacing.mode`; 1000 under `observe`). The answer starts the run's
-    /// next factor segment, which its budget time and settlement read.
+    /// next factor segment, which its budget time and settlement read. With it (§5.2, §5.4): the
+    /// extra wait rounds in effect (0 under `observe`) and the pre-input wait
+    /// `pre_input_wait_base_ms × (f − 1000) / 1000`, whose base is read only for a factor above
+    /// 1000.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
             .sample_timeout_retries()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let factor_milli = self
+        let effective = self
             .host
-            .pacing_factor_milli(self.instance_alias)
+            .effective_pacing(self.instance_alias)
             .map_err(RequestFailure::poison_without_terminal)?;
+        let pre_input_wait_base_ms =
+            if effective.factor_milli > actingcommand_contract::MIN_PACING_FACTOR_MILLI {
+                self.host
+                    .pre_input_wait_base_ms()
+                    .map_err(RequestFailure::poison_without_terminal)?
+            } else {
+                0
+            };
         let now = self
             .pacing
-            .reads_clock(factor_milli)
+            .reads_clock(effective.factor_milli)
             .then(|| self.monotonic_now());
-        self.pacing.hand(factor_milli, now);
-        Ok(StepPacing::new(retries).with_factor_milli(factor_milli))
+        self.pacing.hand(effective.factor_milli, now);
+        Ok(effective.step_pacing(retries, pre_input_wait_base_ms))
+    }
+
+    /// #385 P-k (PERF v1.4.2 §5.4 item 1, register P5): a wait of the run started one more
+    /// round; it counts for the step in progress in the run's task timing evidence.
+    fn observe_extra_wait_round(&mut self) {
+        self.task_timing.extra_wait_round();
     }
 
     /// Workflow #373 NAV-6: the run's shared interrupt pages (`host/standard_pack.rs`).

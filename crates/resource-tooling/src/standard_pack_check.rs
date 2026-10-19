@@ -25,9 +25,16 @@
 //! compared with the resolution of that server's feature package, which every run of the server
 //! that navigates or handles a shared interrupt page uses.
 //!
-//! Last, the report "entry page not in the list" (M-373 §4.4, §10.1 NAV-4): one
+//! Then the report "entry page not in the list" (M-373 §4.4, §10.1 NAV-4): one
 //! `package_bundle_entry_page_unlisted` warning per package whose entry pages, as the Runtime's
 //! entry gate reads them when its game has navigation data, are not all listed in `pages.json`.
+//!
+//! Last, with or without `pages.json`, the remedy report (Workflow #411 B15, contracts/remedies.md
+//! section 10): every package of the root is read by the Runtime's metadata reader, and one
+//! `package_bundle_remedy_invalid` warning reports each capability a remedy names that no package
+//! of the root provides (`capability_unprovided`), each package on a cycle of remedies and
+//! provided capabilities (`cycle`) and each provider of a capability whose providers declare
+//! different parameters (`parameters_mismatch`). Nothing is refused.
 
 use crate::codes::ResourceToolingCode;
 use crate::package_directory::PACK_DEADLINE;
@@ -36,14 +43,16 @@ use crate::{
     StandardPackRootFiles,
 };
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
     InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem, NavigationRole,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_PAGES_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
-    StandardPackRootIssue, read_standard_pack_root,
+    ProvidedCapability, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, StandardPackProblem, StandardPackRoot,
+    StandardPackRootBytes, StandardPackRootIssue, read_standard_pack_root,
 };
-use actingcommand_execution_kernel::{NavigationPackageDescriptor, PreparedContainedTask};
+use actingcommand_execution_kernel::{
+    NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
+};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -208,8 +217,22 @@ pub fn check_standard_pack_root(
 
 /// The cross-check of one game root (module doc): the report's warnings, or the first package
 /// that does not fit its part. `pack_directory` is where a registry entry's directory lies;
-/// `admitted` holds the packages the caller already admitted by their path.
+/// `admitted` holds the packages the caller already admitted by their path. Workflow #411 B15:
+/// the remedy report follows, with or without `pages.json`.
 pub(crate) fn cross_check(
+    game: &str,
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+    admitted: BTreeMap<String, NavigationPackageDescriptor>,
+) -> LabResult<Vec<Outcome>> {
+    let mut warnings = navigation_check(game, root, pack_directory, admitted)?;
+    warnings.extend(remedy_report(root, pack_directory)?);
+    Ok(warnings)
+}
+
+/// The cross-check of the parts `pages.json`, `navigation.json` and `interrupts.json` name and
+/// the report "entry page not in the list"; nothing without `pages.json`.
+fn navigation_check(
     game: &str,
     root: &StandardPackRoot,
     pack_directory: &dyn Fn(&str) -> PathBuf,
@@ -327,6 +350,171 @@ pub(crate) fn cross_check(
         }
     }
     Ok(warnings)
+}
+
+/// Workflow #411 B15 (contracts/remedies.md section 10; contracts/package-reference.md, item 5 of
+/// the cross-check): each package of the root's registry, in registry order, read by the
+/// Runtime's metadata reader ([`PreparedContainedTask::read_remedy_declarations`]), then the
+/// findings of [`remedy_findings`]. A package the reader refuses names its directory.
+fn remedy_report(
+    root: &StandardPackRoot,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> LabResult<Vec<Outcome>> {
+    let mut packages = Vec::new();
+    for package_id in root.registry.package_ids() {
+        let entry = root.registry.get(package_id).ok_or_else(|| {
+            LabError::package_invalid(format!("{package_id} is no package of the bundle"))
+        })?;
+        let path = pack_directory(&entry.directory);
+        let declarations = PreparedContainedTask::read_remedy_declarations(
+            CHECK_LABEL,
+            &path,
+            Instant::now() + PACK_DEADLINE,
+        )
+        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
+        packages.push((package_id, declarations));
+    }
+    Ok(remedy_findings(&packages))
+}
+
+/// The remedy findings across the packages of one game root, each one
+/// `package_bundle_remedy_invalid` (a warning; nothing is refused, the Runtime stops such a
+/// remedy for a person at run time). The names are compared for equality only:
+/// - `capability_unprovided`: a capability a remedy names that no package of the root provides,
+///   one entry per remedy and capability, with the remedy's `need` and `outcome_key`;
+/// - `cycle`: a package whose remedy names a capability a package provides from which the first
+///   package is reached again through the packages' remedies and provided capabilities, one entry
+///   per package on a cycle, with the first such remedy and capability;
+/// - `parameters_mismatch`: a capability whose providers do not all declare the same parameters
+///   (each parameter by its name, with its set of options and its default), one entry per provider
+///   of it.
+fn remedy_findings(packages: &[(&str, RemedyDeclarations)]) -> Vec<Outcome> {
+    let code = ResourceToolingCode::PackageBundleRemedyInvalid;
+    let mut providers = BTreeMap::<&str, Vec<(usize, &ProvidedCapability)>>::new();
+    for (index, (_, declarations)) in packages.iter().enumerate() {
+        for provided in &declarations.provides {
+            providers
+                .entry(provided.capability())
+                .or_default()
+                .push((index, provided));
+        }
+    }
+    // Each remedy capability of a package, in declaration order, with the packages that provide
+    // it (never the package itself, which admission refuses).
+    let remedies = packages
+        .iter()
+        .enumerate()
+        .map(|(index, (_, declarations))| {
+            declarations
+                .remedies
+                .iter()
+                .flat_map(|(outcome_key, remedy)| {
+                    remedy
+                        .capabilities()
+                        .iter()
+                        .map(move |capability| (outcome_key.as_str(), remedy, capability.as_str()))
+                })
+                .map(|(outcome_key, remedy, capability)| {
+                    let served_by = providers
+                        .get(capability)
+                        .into_iter()
+                        .flatten()
+                        .map(|(provider, _)| *provider)
+                        .filter(|provider| *provider != index)
+                        .collect::<Vec<_>>();
+                    (outcome_key, remedy, capability, served_by)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    for ((package_id, _), remedies) in packages.iter().zip(&remedies) {
+        for (outcome_key, remedy, capability, _) in remedies {
+            if !providers.contains_key(capability) {
+                warnings.push(
+                    Outcome::new(code)
+                        .package_id(*package_id)
+                        .remedy_problem(RemedyProblem::CapabilityUnprovided)
+                        .need(remedy.need())
+                        .capability(*capability)
+                        .outcome_key(*outcome_key),
+                );
+            }
+        }
+    }
+    // The packages each package reaches through one or more remedy-to-provider steps.
+    let reached = (0..packages.len())
+        .map(|start| {
+            let mut reached = BTreeSet::new();
+            let mut pending = vec![start];
+            while let Some(package) = pending.pop() {
+                for (_, _, _, served_by) in &remedies[package] {
+                    for provider in served_by {
+                        if reached.insert(*provider) {
+                            pending.push(*provider);
+                        }
+                    }
+                }
+            }
+            reached
+        })
+        .collect::<Vec<_>>();
+    for (index, ((package_id, _), remedies)) in packages.iter().zip(&remedies).enumerate() {
+        let on_cycle = remedies.iter().find(|(_, _, _, served_by)| {
+            served_by
+                .iter()
+                .any(|provider| reached[*provider].contains(&index))
+        });
+        if let Some((outcome_key, remedy, capability, _)) = on_cycle {
+            warnings.push(
+                Outcome::new(code)
+                    .package_id(*package_id)
+                    .remedy_problem(RemedyProblem::Cycle)
+                    .need(remedy.need())
+                    .capability(*capability)
+                    .outcome_key(*outcome_key),
+            );
+        }
+    }
+    for (capability, provided) in &providers {
+        let first = declared_parameters(provided[0].1);
+        if provided
+            .iter()
+            .any(|(_, other)| declared_parameters(other) != first)
+        {
+            for (provider, _) in provided {
+                warnings.push(
+                    Outcome::new(code)
+                        .package_id(packages[*provider].0)
+                        .remedy_problem(RemedyProblem::ParametersMismatch)
+                        .capability(*capability),
+                );
+            }
+        }
+    }
+    warnings
+}
+
+/// The parameters a provided capability declares, as the providers of one capability must agree
+/// on them: each by its name, with its set of options and its default.
+fn declared_parameters(provided: &ProvidedCapability) -> BTreeMap<&str, (BTreeSet<&str>, &str)> {
+    provided
+        .parameters()
+        .iter()
+        .map(|parameter| {
+            (
+                parameter.name(),
+                (
+                    parameter
+                        .options()
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
+                    parameter.default_option(),
+                ),
+            )
+        })
+        .collect()
 }
 
 /// The packages of one game root, each admitted once by its path.

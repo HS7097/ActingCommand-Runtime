@@ -555,7 +555,7 @@ pub(crate) fn evaluate_mark(
 ) -> LabResult<(SelfTest, Option<Value>)> {
     let count = u32::try_from(frames.len()).unwrap_or(u32::MAX);
     match mark.family {
-        MarkFamily::Ocr => match ocr.provider() {
+        MarkFamily::Ocr => match ocr.ocr_provider() {
             Some(provider) => evaluate_ocr(mark, frames, count, provider),
             // Workflow #396 LAB-3: without an OCR model the mark is not evaluated, under the
             // registered reason; not evaluated is never reported as passed.

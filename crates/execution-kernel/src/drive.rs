@@ -134,6 +134,20 @@ impl DriveSemanticInput {
                     "target_offset semantic input must be resolved before execution",
                 ));
             }
+            // #411 Lab L3: a drag that does not move (one point in one rectangle, the reader's form
+            // of a long press) is pressed as a long tap over its duration, as the kernel presses a
+            // pack's long press; every other drag is one swipe.
+            Self::Drag {
+                from_rect,
+                to_rect,
+                from,
+                to,
+                duration_ms,
+            } if from == to && from_rect == to_rect => InputAction::LongTap {
+                x: from.x,
+                y: from.y,
+                duration_ms: *duration_ms,
+            },
             Self::Drag {
                 from,
                 to,
@@ -1091,7 +1105,8 @@ mod tests {
     }
 
     // Workflow #390 LAB-2: a long press holds its one point for its duration, a drag that does
-    // not move.
+    // not move; #411 Lab L3: it is pressed as a long tap there, as the kernel presses a pack's
+    // long press.
     #[test]
     fn lab2_a_long_press_navigation_input_holds_its_point() {
         let input = parse_navigation_input(&serde_json::json!({
@@ -1101,11 +1116,9 @@ mod tests {
 
         assert_eq!(
             input.resolved_input_action().expect("action"),
-            InputAction::Swipe {
-                x1: 30,
-                y1: 40,
-                x2: 30,
-                y2: 40,
+            InputAction::LongTap {
+                x: 30,
+                y: 40,
                 duration_ms: 800
             }
         );

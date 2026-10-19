@@ -1508,6 +1508,50 @@ tests = [
 ]
 incident = ["#411 Lab L4"]
 
+# Workflow #411 B15 R1 (v0.12.3; register §1.111; no persisted ledger shape; contracts/remedies.md sections 2.1, 2.2, 2.4): a mapping of scheduling_outcome may declare a remedy (need a token ^[a-z][a-z0-9_]{0,63}$; 1 to 8 unique capability tokens, never none; a package default that names only them, each once; refused invalid_scheduling_outcome_declaration with the field remedy.need, remedy.capabilities or remedy.default), and a mapping without one serializes byte for byte as before; control.json may declare provides (1 to 8 unique capability tokens, never none; irreversible optional; at most 8 parameters, at least one when irreversible; parameter names unique across provides; 1 to 16 unique option tokens with a default among them; refused contained_task_control_invalid reason=provides_invalid or reason=provides_parameters_invalid); a package that provides a capability one of its own remedies names is refused reason=provides_own_remedy; kernel admission takes a valid provides and a prepared package answers each declared parameter's default (the kernel's packages built in memory; the readers by path are host 119); the source parser accepts both members and refuses the same violations as resource_declaration_invalid at the member's JSON pointer
+[[gate]]
+key = "95"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::tests::b15p_remedy_on_a_mapping_parses_validates_and_round_trips",
+    "actingcommand-contract::lib::event::tests::b15p_remedy_violations_are_refused_with_their_field",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b15p::b15p_provides_violations_are_refused_with_their_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b15p::b15p_a_package_providing_its_own_remedy_capability_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_411_b15p::b15p_declared_parameter_defaults_are_answered_by_a_prepared_task",
+    "actingcommand-pack-containment::lib::source::declarations::tests::b15p_source_parser_accepts_and_refuses_the_remedy_members",
+]
+incident = ["#411 B15"]
+
+# #411 Lab L3 (v0.12.x; register §1.119, no persisted ledger shape; G3, G4; related: exec 72, 90, 98): the Lab presses gestures as the kernel does; a long press (the readers' drag that does not move, one point in one rectangle) is sent as one LongTap at its point over its duration and every other drag as one Swipe, wherever the Lab presses: do --capture --record on a long-press step, online do <element-id> whose projected input is such a drag, the routes of ensure --capture (and navigate, through the kernel drive input); LabOperationSelection::Coordinates accepts LongTap and resolve maps that geometry to LongTap on both sides, so the Runtime's preparation and the evidence verifier agree and the prepared geometry stays a drag; each input of an ensure --capture route names the frame reference of the capture its guard used, so its taps run on an instance whose input is nemu_ipc
+[[gate]]
+key = "97"
+coverage = "Y"
+tests = [
+    "actingcommand-contract::gate::lab_l3::l3_explicit_coordinates_take_a_long_tap_and_resolve_it_as_one",
+    "actingcommand-contract::gate::lab_l3::l3_an_element_drag_that_does_not_move_resolves_to_a_long_tap",
+    "actingcommand-execution-kernel::lib::tests::gate_lab_l3::l3_navigate_presses_a_long_press_as_a_long_tap_and_a_drag_as_a_swipe",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_lab_l3::l3_do_capture_record_presses_a_long_press_step_as_a_long_tap",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_lab_l3::l3_ensure_presses_a_long_press_edge_as_a_long_tap",
+    "actingcommand-actinglab::runtime_input_proxy::l3_ensure_capture_taps_on_a_nemu_input_instance_with_its_guard_frame",
+    "actingcommand-actinglab::runtime_input_proxy::l3_ensure_capture_presses_a_long_press_edge_as_a_long_tap",
+    "actingcommand-actinglab::runtime_input_proxy::l3_do_capture_on_a_long_press_element_sends_a_long_tap_and_its_evidence_verifies",
+]
+incident = ["#411 Lab L3"]
+
+# #411 Lab L6 (v0.12.x; register §1.121, no persisted ledger shape; G10, G11 and coordinator decision 10 of 2026-10-19; related: exec 47, 90, 101): a vision root whose model folders hold NN models and no OCR model gives the offline tools a provider that serves its NN models, while OCR stays unavailable (lab_ocr_unavailable caused by lab_ocr_model_missing) and a command refuses an OCR target as before; offline observe evaluates an action's NN target when the provider holds its model (recognised by target_evaluation, no input; target_not_matched when it does not pass) and leaves it not evaluated (dynamic_target_not_evaluated) otherwise; it fills observation.fields with the values of every target it evaluated, of every kind, as the online observation fills them (every page's targets in page order, then each --targets target no page evaluated as an optional target of no page; one entry of the evaluations per target and one per declared fields_v1 field), equal to the online observation's entries for the same package and frame; without OCR an action's OCR target stays not evaluated and named in ocr.not_evaluated, also beside an NN-only provider; the whole-package replay reports readings (one entry per frame handed to recognition: its position in the sequence, the readings that held, the marks that gave none with their reading_problem) and fields (the run's fields report, each personal field redacted), each absent when the run took none
+[[gate]]
+key = "99"
+coverage = "Y"
+tests = [
+    "actingcommand-lab::lib::ocr::gate_lab_l6::l6_a_vision_root_with_nn_models_and_no_ocr_model_gives_a_provider_for_nn_targets",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l6::l6_observe_evaluates_an_action_nn_target_with_the_provider_that_holds_its_model",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l6::l6_observe_fills_the_values_of_every_target_it_evaluated_as_online",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l6::l6_offline_value_entries_equal_the_online_observations_for_the_same_package_and_frame",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_l6::l6_without_ocr_an_action_ocr_target_stays_not_evaluated_beside_nn_models",
+    "actingcommand-execution-kernel::lib::contained_task::gate_lab_l6::l6_replay_reports_the_readings_and_fields_its_run_took",
+]
+incident = ["#411 Lab L6"]
+
 # #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
 [[gate]]
 key = "101"
@@ -1521,3 +1565,27 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_411_a21::a21_a_failed_capture_observe_carries_req_id_and_the_runtime_outcome",
 ]
 incident = ["#411 A21"]
+
+# Workflow #411 B15 R1 (v0.12.3; register §1.111; no persisted ledger shape; contracts/remedies.md section 10, contracts/package-reference.md item 5; the next free key of the fragment that holds gate_373_navt): across the packages of a game root, package bundle (with a root file) and standard-pack check report one package_bundle_remedy_invalid warning per finding, nothing refused: a capability a remedy names that no package of the root provides (capability_unprovided, with need, capability and outcome_key), each package on a cycle of remedies and provided capabilities (cycle, both packages of a two-package cycle), each provider of a capability whose providers declare different parameters (parameters_mismatch, with capability); a root whose remedies are all provided reports nothing new
+[[gate]]
+key = "102"
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_a_remedy_capability_no_package_provides_is_reported",
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_a_provider_cycle_over_two_packages_is_reported_for_both",
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_providers_disagreeing_on_parameters_are_reported",
+    "actingcommand-resource-tooling::lib::gate_411_b15b::b15b_a_root_whose_remedies_are_all_provided_reports_nothing_new",
+]
+incident = ["#411 B15"]
+
+# #385 P-k2 (v0.12.x; register §1.108 PK2-1..PK2-3; performance model v1.4.2 §5.2, §5.4; test rows Tk-6, Tk-7, Tk-8, Tk-12): a wait without an input that reached its limit (budget clock) without a declared failure or a terminal page starts one more full round of captures (a new limit of the same length, the same interval), at most StepPacing.extra_wait_rounds times, before it fails as before; the post-input confirmation's rounds come before the failure decision, so a destination that arrives in one needs no second input; rounds never add an input (max_attempts and every clicking retry unchanged); the observe-only resamples are the configured base plus the rounds; the pre-input wait (StepPacing.pre_input_wait, as given) lies between the step's recognition and its effect intent on the page-graph and linear_steps paths, and is absent when zero
+[[gate]]
+key = "92"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_an_extra_round_finds_a_late_target_without_a_second_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_extra_rounds_never_add_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_extra_sample_retries_resample_without_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_385_pk1::pk2_the_pre_input_wait_sits_between_recognition_and_the_effect_intent",
+]
+incident = ["#385 P-k"]

@@ -198,7 +198,7 @@ configuration nor any installer writes a performance key.
 |---|---|---|
 | `performance.monitor.*`, `performance.load.*`, `performance.pressure.*`, `performance.pressure_start_samples`, `performance.pressure_end_samples` (`src/performance/monitor.rs`) | PERF §10.1, 15 keys: sampling period (1 000..=5 000 ms), context window, summary interval, sample bounds, process coverage, failures, control freshness, stutter gap, heavy load threshold, the two pressure streaks (1..=30), `pressure.thresholds` and `pressure.severity` (objects), `pressure.gpu_aggregate` (`max_engine_type` \| `sum`) | every key, read once by the start-up assembly (`MonitorSettings`, Workflow #385 PM-CFG) and handed to the performance monitor, its host sampler (process thresholds and coverage) and the performance controller (`load.heavy_threshold_milli`, which the controller's resource overlay hands to the policy evaluator, so both judge heavy work by it); the streaks keep their file members |
 | `performance.responsiveness.*` (`src/performance/responsiveness.rs`) | PERF §10.2, 37 keys: window, smoothing, staleness, the timer and message probes, the capture, touch, recognition and page-settle signals (per-backend initial baselines are objects with a `default` member), the baseline | P-m |
-| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*` | `heavy_dispatch_limit.*` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants); the rest: P-m, P-k, P-s, P-h |
+| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*` | `heavy_dispatch_limit.*` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants); `pre_input_wait_base_ms`, `curve[].extra_retries` and `pressure_floor.extra_retries`: P-k (the pre-input wait and the extra wait rounds each step is handed, Workflow #385 P-k S5); the rest: P-m, P-k, P-s, P-h |
 | `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | P-a |
 
 - **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5); every other
@@ -305,25 +305,30 @@ instance's own or the section's) is checked: `min_ms` above `max_ms` is `config_
 (`section_check`) for the instance's `min_ms` key, so a change of one side alone is checked
 against the other. No slice reads them before #405.
 
-**Remedies (Workflow #411 B15, [remedies.md](remedies.md); written ahead of slice R3, which parses
-them).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
+**Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
+v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a
 plain named outcome again, the package checks still run); `scheduling.remedy.max_per_round` is the
 number of remedy requests per blocked layer and round (`1..=8`); `scheduling.remedy.choices` is the
 host-wide list of remedy choice rows, objects of the shape of the instance fact
 `session.remedy.choices` (`{"row": "allow", "need", "capability"}`, `{"row": "none", "need"}`,
 `{"row": "parameter", "capability", "parameter", "value"}`; tokens `^[a-z][a-z0-9_]{0,63}$`,
-`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, at most
-256 rows). Per instance, `instance.<instance id>.scheduling.remedy.choices` (in the file the
-entry's `scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
+`none` never a capability, no duplicate row, no `none` with an `allow` of the same need, no two
+values for one parameter of a capability, at most 256 rows). Per instance,
+`instance.<instance id>.scheduling.remedy.choices` (in the file the entry's
+`scheduling.remedy.choices` member), default `section:scheduling.remedy.choices`: when
 set, it replaces the section's list as a whole. All four are settable; their defaults live only
 in `actingd.defaults.json`, never as code constants. A row that breaks the shape refuses the
 configuration as `config_value_invalid` (`config_key`) at load, in `check-config` and in
-`ConfigureSettings`; a row whose names the bound packages do not declare is not refused here but
-is a check-config note `policy_remedy_declaration_unusable` and, at use, a stop for a person
+`ConfigureSettings`, with `config_value_problem` `wrong_type` (a row that is no object; a `row` or
+field missing or not a string; a member its kind does not have), `out_of_range` (an unknown `row`;
+a name outside the charset; `none` as a capability; more than 256 rows) or `section_check`, at the
+later row (a row twice; a `none` with an `allow` of the same need; two `parameter` rows of the same
+capability and parameter with different values); a row whose names the bound packages do not
+declare is not refused here but is a check-config note `policy_remedy_declaration_unusable` and, at use, a stop for a person
 (slices R4 and R7). The section rows are recorded in `config.parameters.scheduling`, the
 per-instance rows in `config.parameters.instance`. The four keys raise `actingd-config` to
 revision 6 in the release that carries them (once per release, whichever slice of the release
-needs it first). The chain depth (3) is no key.
+needs it first): v0.12.3 declares [5, 6]. The chain depth (3) is no key.
 
 ## The `ledger_observer` section (Workflow #383 AO-1)
 

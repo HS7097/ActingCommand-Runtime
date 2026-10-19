@@ -46,6 +46,13 @@ struct FakeState {
     // Test plan E-3 G11: the host's manual Runtime clock, and how far each capture moves it.
     clock: OnceLock<Arc<ManualClock>>,
     clock_ms_per_capture: AtomicU64,
+    // #411 Lab L3: the long taps and swipes the fake performed; a long tap starts the transition
+    // after a press as a tap does.
+    long_taps: AtomicUsize,
+    swipes: AtomicUsize,
+    // #411 Lab L3: the instance's configured input is `nemu_ipc` (the Runtime then presses only on
+    // a frame it captured); its fake backends stay the same.
+    nemu_input: AtomicBool,
 }
 
 // Test plan E-3 G11 (§3.10): a manual Runtime clock. It moves only when a capture (or a wait of
@@ -1500,6 +1507,238 @@ fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
     assert_eq!(stored["capture_backend"], "adb_screencap", "{recording}");
 }
 
+// #411 Lab L3 (exec key 97): a neutral navigation package on the fake's 1x1 frames: `neutral/home`
+// (a red frame) and `neutral/page_a` (a blue one), and one edge from home to page_a that presses
+// `click`.
+fn write_l3_navigation_package(path: &Path, click: &str) {
+    let navigation = format!(
+        r#"{{"schema_version":"0.3","game":"neutral","server":"test","navigation":[{{"id":"home_to_page_a","from_page":"neutral/home","to_page":"neutral/page_a","click":{click}}}],"destructive_actions":[]}}"#
+    );
+    write_zip(
+        path,
+        &[
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task"}"#,
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+            ),
+            ("resources/operations/task/task.json", br#"{}"#),
+            (
+                "resources/recognition/neutral.test.pack.json",
+                br#"{"schema_version":"0.3","coordinate_space":{"width":1,"height":1},"targets":[{"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},{"type":"color","id":"page_a_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}]}"#,
+            ),
+            (
+                "resources/recognition/neutral.test.pages.json",
+                br#"{"schema_version":"0.3","pages":[{"id":"neutral/home","required":["home_anchor"]},{"id":"neutral/page_a","required":["page_a_anchor"]}]}"#,
+            ),
+            (
+                "resources/navigation/neutral.test.navigation.json",
+                navigation.as_bytes(),
+            ),
+        ],
+    );
+}
+
+// #411 Lab L3: a Runtime host over the fake for one test, with the instance `node.a`.
+fn l3_host(runtime_root: &Path, state: &Arc<FakeState>, label: &[u8]) -> RuntimeHost {
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    RuntimeHost::start(
+        RuntimeHostConfig::new(runtime_root, label),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: Arc::clone(state),
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host")
+}
+
+/// #411 Lab L3 (exec key 97; R2): each input of an `ensure --capture` route names the Runtime
+/// frame its edge's guard was decided on, so the route taps on an instance whose input is
+/// `nemu_ipc`, which presses only on a frame the Runtime captured and committed last; without the
+/// frame the Runtime refuses the input (`nemu_input_frame_required`).
+#[test]
+fn l3_ensure_capture_taps_on_a_nemu_input_instance_with_its_guard_frame() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let package = root.path().join("navigation.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_l3_navigation_package(&package, r#"{"kind":"point","x":0,"y":0}"#);
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    state.nemu_input.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-l3-nemu-ensure");
+
+    let ensure = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "ensure",
+            "--capture",
+            "--to",
+            "neutral/page_a",
+            "--step-timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            package.to_str().expect("package path"),
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(ensure["data"]["state"], "arrived", "{ensure}");
+    assert_eq!(ensure["data"]["executed"], true, "{ensure}");
+    assert_eq!(ensure["data"]["page"], "neutral/page_a", "{ensure}");
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+}
+
+/// #411 Lab L3 (exec key 97; R1): a route of `ensure --capture` presses a `long_press` edge as
+/// one long tap at the centre of its box, as the kernel presses a pack's long press, not as a
+/// swipe that does not move.
+#[test]
+fn l3_ensure_capture_presses_a_long_press_edge_as_a_long_tap() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let package = root.path().join("navigation.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_l3_navigation_package(
+        &package,
+        r#"{"kind":"long_press","x":0,"y":0,"width":1,"height":1,"duration_ms":800}"#,
+    );
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    let host = l3_host(&runtime_root, &state, b"lab-l3-long-press-ensure");
+
+    let ensure = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "ensure",
+            "--capture",
+            "--to",
+            "neutral/page_a",
+            "--step-timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            package.to_str().expect("package path"),
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(ensure["data"]["state"], "arrived", "{ensure}");
+    assert_eq!(ensure["data"]["page"], "neutral/page_a", "{ensure}");
+    assert_eq!(state.long_taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.swipes.load(Ordering::Acquire), 0);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+}
+
+/// #411 Lab L3 (exec key 97; R1): online `do <element-id> --capture` on an element whose
+/// projected input is a long press (a drag that does not move) sends one long tap at its point
+/// over its duration; the prepared geometry stays that drag, and the client's verification of the
+/// operation's evidence, which resolves the selection again, passes.
+#[test]
+fn l3_do_capture_on_a_long_press_element_sends_a_long_tap_and_its_evidence_verifies() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let package = root.path().join("navigation.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_l3_navigation_package(
+        &package,
+        r#"{"kind":"long_press","x":0,"y":0,"width":1,"height":1,"duration_ms":800}"#,
+    );
+    let state = Arc::new(FakeState::default());
+    let host = l3_host(&runtime_root, &state, b"lab-l3-long-press-do");
+
+    let observe = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--verbose",
+        ],
+    );
+    let elements = observe["data"]["observation"]["elements"]
+        .as_array()
+        .unwrap_or_else(|| panic!("observation elements: {observe}"));
+    assert_eq!(elements.len(), 1, "the home page's one edge: {observe}");
+    let element = elements[0]["id"]
+        .as_str()
+        .expect("the long press element")
+        .to_string();
+    let action = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "do",
+            &element,
+            "--capture",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--verbose",
+        ],
+    );
+    host.close().expect("close host");
+
+    assert_eq!(action["data"]["executed"], true, "{action}");
+    assert_eq!(action["data"]["effect"], "performed", "{action}");
+    let operation: actingcommand_contract::ContainedLabOperationResult =
+        serde_json::from_value(action["data"]["operation_record"].clone())
+            .expect("the verified operation record");
+    let prepared = &operation.record.prepared;
+    assert_eq!(
+        serde_json::to_value(&prepared.action).expect("action JSON"),
+        json!({"kind": "long_tap", "x": 0, "y": 0, "duration_ms": 800})
+    );
+    assert_eq!(
+        serde_json::to_value(&prepared.geometry).expect("geometry JSON"),
+        json!({"type": "drag",
+               "from_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+               "to_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+               "from": {"x": 0, "y": 0}, "to": {"x": 0, "y": 0},
+               "duration_ms": 800})
+    );
+    assert!(operation.record.failure.is_none(), "{action}");
+    assert_eq!(state.long_taps.load(Ordering::Acquire), 1);
+    assert_eq!(state.swipes.load(Ordering::Acquire), 0);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+}
+
 struct FakeBackend {
     state: Arc<FakeState>,
     closed: bool,
@@ -1528,6 +1767,7 @@ impl InputBackend for FakeBackend {
         _y: i32,
         _duration_ms: u64,
     ) -> DeviceResult<()> {
+        self.state.long_taps.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
@@ -1540,6 +1780,7 @@ impl InputBackend for FakeBackend {
         _y2: i32,
         _duration_ms: u64,
     ) -> DeviceResult<()> {
+        self.state.swipes.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
@@ -1602,7 +1843,8 @@ impl CaptureBackend for FakeCapture {
             clock.advance(self.state.clock_ms_per_capture.load(Ordering::Acquire));
         }
         let color = if self.state.transition_after_tap.load(Ordering::Acquire)
-            && self.state.taps.load(Ordering::Acquire) > 0
+            && (self.state.taps.load(Ordering::Acquire) > 0
+                || self.state.long_taps.load(Ordering::Acquire) > 0)
         {
             [0, 0, 255]
         } else {
@@ -1671,8 +1913,26 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == self.instance_alias)
-            .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-test>"))
+        (instance_alias == self.instance_alias).then(|| {
+            let resolved = ResolvedExecutionInstance::new(self.instance_id, "<sealed-test>");
+            if !self.state.nemu_input.load(Ordering::Acquire) {
+                return resolved;
+            }
+            // #411 Lab L3: an instance configured as a Nemu one (neutral test values).
+            resolved.with_configuration(actingcommand_contract::EffectiveDeviceConfiguration {
+                input_backend: "nemu_ipc".to_string(),
+                capture_backend: "nemu_ipc".to_string(),
+                input_adb: "<sealed-test>".to_string(),
+                capture_adb: "<sealed-test>".to_string(),
+                configured_serial: None,
+                resolved_serial: "TESTSERIAL0001".to_string(),
+                input_command_timeout_ms: 5_000,
+                capture_command_timeout_ms: 5_000,
+                capture_timeout_ms: 5_000,
+                configured_mumu_root: None,
+                configured_capture_dll: None,
+            })
+        })
     }
 
     fn open_input(

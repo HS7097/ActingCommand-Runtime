@@ -8,6 +8,7 @@ use std::sync::Once;
 
 mod a2a;
 mod c1;
+mod lab_l3;
 mod rd1a;
 
 /// Installs this binary's one outcome diagnostic sink, which drops the text. Cutting an

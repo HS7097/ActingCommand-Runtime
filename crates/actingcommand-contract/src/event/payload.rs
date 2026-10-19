@@ -35,6 +35,9 @@ pub use display_map::*;
 // Workflow #390 OUT-2: designated effect sets.
 mod designated_effects;
 pub use designated_effects::*;
+// Workflow #411 B15 (contracts/remedies.md section 2): declared remedies and provided capabilities.
+mod remedies;
+pub use remedies::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -4552,6 +4555,11 @@ pub struct SchedulingOutcomeMapping {
     outcome_key: String,
     effect: SchedulingEffectCondition,
     terminal_pages: Vec<String>,
+    /// Workflow #411 B15 (contracts/remedies.md section 2.1): a run that ends on this key is a
+    /// success whose business result is not the expected one, and serving the remedy's need may
+    /// make it reachable. Absent, the mapping serializes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remedy: Option<RemedyDeclaration>,
 }
 
 impl SchedulingOutcomeMapping {
@@ -4565,6 +4573,11 @@ impl SchedulingOutcomeMapping {
 
     pub fn terminal_pages(&self) -> &[String] {
         &self.terminal_pages
+    }
+
+    /// Workflow #411 B15: the remedy the mapping declares, if any.
+    pub const fn remedy(&self) -> Option<&RemedyDeclaration> {
+        self.remedy.as_ref()
     }
 }
 
@@ -4674,6 +4687,10 @@ impl SchedulingOutcomeDeclaration {
                         "mapping_overlap",
                     ));
                 }
+            }
+            // Workflow #411 B15: a remedy keeps the rules of contracts/remedies.md section 2.1.
+            if let Some(remedy) = &mapping.remedy {
+                remedy.validate()?;
             }
         }
         Ok(())

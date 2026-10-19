@@ -2511,7 +2511,8 @@ pub(crate) fn plan_click(
             json!({"step": index}),
         ));
     }
-    // Workflow #390 LAB-2: a step that declares a drag or a long press is executed as one swipe.
+    // Workflow #390 LAB-2: a step that declares a drag is executed as one swipe, and (#411 Lab L3)
+    // one that declares a long press as one long tap.
     if let Some((click, gesture)) = step
         .click
         .as_ref()

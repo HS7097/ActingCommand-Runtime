@@ -405,6 +405,26 @@ pub(crate) enum SemanticInput {
     },
 }
 
+impl SemanticInput {
+    /// #411 Lab L3: a long press, the reader's drag that does not move (one point in one
+    /// rectangle), with the point it holds and its duration. The Lab presses it as a long tap
+    /// there, as the kernel presses a pack's long press; every other drag is one swipe.
+    pub(crate) fn long_press(&self) -> Option<(SemanticPoint, u64)> {
+        match self {
+            Self::Drag {
+                from_rect,
+                to_rect,
+                from,
+                to,
+                duration_ms,
+            } if from.x == to.x && from.y == to.y && from_rect == to_rect => {
+                Some((*from, *duration_ms))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// #411 Lab L2: the click kind of a segmented drag, the gesture the kernel runs as
 /// `InputAction::SingleTouchDragWithVerticalBrakeV1`.
 const SEGMENTED_DRAG_KIND: &str = "single_touch_drag_with_vertical_brake_v1";
@@ -1696,7 +1716,11 @@ fn send_semantic_input(
             to,
             duration_ms,
             ..
-        } => backend.swipe(from.x, from.y, to.x, to.y, *duration_ms),
+        } => match input.long_press() {
+            // #411 Lab L3: a long press is held as a long tap, as the kernel presses it.
+            Some((point, held_ms)) => backend.long_tap(point.x, point.y, held_ms),
+            None => backend.swipe(from.x, from.y, to.x, to.y, *duration_ms),
+        },
     };
     let close = backend.close();
     combine_operation_and_close(operation, close)

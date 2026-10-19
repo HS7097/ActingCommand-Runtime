@@ -420,6 +420,14 @@ self-test, `record stop`'s first decision and cross-check, `observe`, `recognize
 `detect-page`, `current-page`, the guard target of `do`/`wait` and the `package dry-run` replay
 evaluate OCR targets with it.
 
+#411 Lab L6: the provider serves the root's NN model folders as well, so the same commands
+evaluate NN targets with it; `observe` evaluates an action's NN target when the provider holds
+its model, and otherwise leaves it not evaluated (`dynamic_target_not_evaluated`), as before. A
+root whose folders hold NN models and no OCR model gives the provider too, as the Runtime accepts
+such a root: NN targets evaluate, while OCR is unavailable as below, caused by
+`lab_ocr_model_missing`. `observe` also fills the values (`fields`) of every target it
+evaluated, as the online observation does ([page-projection.md](page-projection.md)).
+
 Without a usable OCR model OCR is unavailable: `lab_ocr_unavailable`, whose `caused_by` link says
 why (`lab_ocr_vision_unconfigured`, a configuration read or decode code,
 `vision_root_unavailable`, `vision_models_empty`, `lab_ocr_model_missing` or
@@ -432,7 +440,8 @@ purpose is to evaluate an OCR target:
   the OCR target as `target_id`) before evaluating anything;
 - an OCR mark's self-test and `record stop`'s first decision report it as their reason;
 - an `observe` action whose target is an OCR target or a value test is not evaluated, as before,
-  and the output names it in `ocr.not_evaluated`;
+  and the output names it in `ocr.not_evaluated`, also beside a provider that serves NN models
+  only;
 - `package dry-run` keeps its decision and exit code; `capabilities`, `package dry-run` and that
   `observe` output report the OCR state (`available`, `execution_provider: "cpu"`, `vision_root`,
   and `unavailable` with the outcome).
@@ -548,12 +557,14 @@ frame attachment or recording persistence. The global parser handles the flag at
   - A click that was sent but could not be recorded is
     `record_append_failed_after_input` (exit 3) with the operation summary.
 - Workflow #390 LAB-2: on a step that declares a drag or a long press ("Drags and long
-  presses"), `do --capture --record` executes it as one swipe through the same Runtime
-  operation. A drag goes from the center of its rectangle to the center of its destination over
-  its duration (`rect_center`), or along `--swipe x1,y1,x2,y2,ms`, which must start in the one
-  and end in the other (`record_click_outside_step_rect`) and last the declared duration
-  (`record_click_rect_conflict`), rule `explicit`. A long press is a swipe that ends where it
-  began, at the center of its click box, over its duration (`rect_center`); `--swipe` on it is
+  presses"), `do --capture --record` executes it through the same Runtime operation, a drag as
+  one swipe and a long press as one long tap. A drag goes from the center of its rectangle to
+  the center of its destination over its duration (`rect_center`), or along
+  `--swipe x1,y1,x2,y2,ms`, which must start in the one and end in the other
+  (`record_click_outside_step_rect`) and last the declared duration
+  (`record_click_rect_conflict`), rule `explicit`. A long press is a `LongTap` at the center of
+  its click box over its duration (`rect_center`; #411 Lab L3, as the kernel holds the
+  `long_press` click the recording generates); `--swipe` on it is
   `record_click_rect_conflict`. `--tap` and `--tap-rect` on such a step are
   `record_click_rect_conflict`; `--swipe` on a tap step is `record_click_rect_conflict`, and on
   a step without a declared click `record_step_click_missing` (declare the drag with `record

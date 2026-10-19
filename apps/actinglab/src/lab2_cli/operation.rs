@@ -7,8 +7,8 @@ use actingcommand_contract::{
     LabOperationStage, LabProjectionHint,
 };
 use actingcommand_lab::{
-    ClickEffect, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest, PlannedSwipe,
-    RecordPoint, RecordingLock, record_commit_click, record_plan_click,
+    ClickEffect, ClickGesture, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest,
+    PlannedSwipe, RecordPoint, RecordingLock, record_commit_click, record_plan_click,
 };
 
 pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -21,25 +21,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         None
     };
     let selection = match &recording {
-        // Workflow #390 LAB-2: a step's drag or long press is one swipe from its point to its
-        // end point over its duration (a long press ends where it began).
-        Some((_, plan)) => match (plan.gesture, plan.to_point) {
-            (Some(gesture), Some(to)) => LabOperationSelection::Coordinates {
-                action: InputAction::Swipe {
-                    x1: plan.point.x,
-                    y1: plan.point.y,
-                    x2: to.x,
-                    y2: to.y,
-                    duration_ms: gesture.duration_ms(),
-                },
-            },
-            _ => LabOperationSelection::Coordinates {
-                action: InputAction::Tap {
-                    x: plan.point.x,
-                    y: plan.point.y,
-                },
-            },
-        },
+        Some((_, plan)) => recorded_click_selection(plan)?,
         None => selection(flags)?,
     };
     let after = flags
@@ -239,6 +221,37 @@ fn arrival_last(mut answer: Value) -> Value {
     answer
 }
 
+/// The input `do --capture --record` presses for the open step's planned click, as the kernel
+/// presses the click the recording generates for it: a tap at its point; a drag (Workflow #390
+/// LAB-2) as one swipe from its point to its end point over its duration; a long press (#411 Lab
+/// L3) as a long tap at its point over its duration.
+fn recorded_click_selection(plan: &ClickPlan) -> CliOutcome<LabOperationSelection> {
+    let action = match (plan.gesture, plan.to_point) {
+        (None, _) => InputAction::Tap {
+            x: plan.point.x,
+            y: plan.point.y,
+        },
+        (Some(ClickGesture::LongPress { duration_ms }), _) => InputAction::LongTap {
+            x: plan.point.x,
+            y: plan.point.y,
+            duration_ms,
+        },
+        (Some(ClickGesture::Drag { duration_ms, .. }), Some(to)) => InputAction::Swipe {
+            x1: plan.point.x,
+            y1: plan.point.y,
+            x2: to.x,
+            y2: to.y,
+            duration_ms,
+        },
+        (Some(ClickGesture::Drag { .. }), None) => {
+            return Err(CliError::usage(
+                "do --capture --record: the planned drag of the open step names no end point",
+            ));
+        }
+    };
+    Ok(LabOperationSelection::Coordinates { action })
+}
+
 fn selection(flags: &FlagArgs) -> CliOutcome<LabOperationSelection> {
     let tap = flags.values("--tap");
     let swipe = flags.values("--swipe");
@@ -436,3 +449,9 @@ fn commit_record_click(
 #[cfg(test)]
 #[path = "../tests/gate_0122_a19.rs"]
 mod gate_0122_a19;
+
+// #411 Lab L3 (exec key 97): `do --capture --record` and `ensure` press a long press as a long
+// tap.
+#[cfg(test)]
+#[path = "../tests/gate_lab_l3.rs"]
+mod gate_lab_l3;

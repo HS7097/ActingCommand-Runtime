@@ -1026,9 +1026,10 @@ pub struct ClickPlan {
     pub point_rule: String,
     pub source: String,
     pub declares_click: bool,
-    /// Workflow #390 LAB-2: the step's drag or long press, and the point it ends at; the Runtime
-    /// executes it as one swipe from `point` to `to_point` over its duration (a long press ends
-    /// where it began).
+    /// Workflow #390 LAB-2: the step's drag or long press, and the point it ends at (a long press
+    /// ends where it began). The Runtime executes a drag as one swipe from `point` to `to_point`
+    /// over its duration and (#411 Lab L3) a long press as one long tap at `point` over its
+    /// duration, as the kernel presses the `drag` and `long_press` clicks the recording generates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gesture: Option<ClickGesture>,
     #[serde(skip_serializing_if = "Option::is_none")]

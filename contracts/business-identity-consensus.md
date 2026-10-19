@@ -176,7 +176,7 @@ length, within the task deadline, without repeating any input: before the input 
 is captured and guarded or selected again (a selection writes another record; `StepStarted` is
 not written again), after the input the wait for the destination observes again. The number of
 retries is the step's pacing, `scheduling.recognition.sample_timeout_retries` (default 2) plus
-the pacing curve's extra retries once performance pacing provides them. Once they are spent
+the pacing curve's extra retries of the step's stage (Workflow #385 P-k). Once they are spent
 the run ends with `recognition_sample_deadline_exceeded` or `candidate_sample_deadline_exceeded`
 and `attempts` (the retries made), `timeout_ms` (the window) and `stage` (which observation:
 `observation_entry`, `observation_before_input`, `observation_after_input` or

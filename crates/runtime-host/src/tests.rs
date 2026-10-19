@@ -250,6 +250,9 @@ mod gate_403;
 // #411 A23 (host key 118), register §1.125: a run whose own package dispatched no step after its
 // prerequisite layer is judged on its own recognition.
 mod gate_411_a23;
+// Workflow #411 B15 R1 (host key 119): kernel admission by path and the metadata reader of the
+// remedy declarations take a package that provides capabilities with parameters.
+mod gate_411_b15p_host;
 mod gate_epoch_close;
 // Test plan v2.2 E-4 G4b (exec key 12): bundle v3's offline verdict and the Runtime's admission.
 mod gate_e4;

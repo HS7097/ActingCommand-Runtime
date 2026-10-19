@@ -321,6 +321,11 @@
       "check_in_check_config": true,
       "check_after_start": true,
       "suspend_codes": ["recognition_sample_budget_invalid"]
+    },
+    "remedy": {
+      "enabled": true,
+      "max_per_round": 2,
+      "choices": []
     }
   },
   "ledger_observer": {
