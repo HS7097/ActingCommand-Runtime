@@ -79,13 +79,16 @@ pub(super) fn run_resource(
                 "command": sub
             }))
         }
-        "check-release" => Ok(json!({
-            "repo": repo.display().to_string(),
-            "resource_root": resource_root.root.display().to_string(),
-            "resource_layout": resource_root.layout,
-            "exists": repo.is_dir(),
-            "status": if repo.is_dir() { "checked" } else { "missing" }
-        })),
+        // Workflow #411 RV-1 (O5): the stub answered `checked` without checking anything.
+        "check-release" => Err(CliError::new(
+            crate::ErrorKind::UsageValidation,
+            crate::codes::ActinglabCode::ResourceCheckReleaseRetired.as_str(),
+            "resource check-release is retired: it reported a check it never made; run \
+             resource verify, which checks the repository's commit as its CI does",
+            &[],
+        )),
+        // Workflow #411 RV-1: one repository commit checked as its CI checks it.
+        "verify" => crate::resource_verify::run_resource_verify(global, &flags),
         _ => Err(CliError::usage(format!("unknown resource command: {sub}"))),
     }
 }

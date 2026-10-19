@@ -56,7 +56,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 138,
+  "command_count": 139,
   "commands": [
     "help",
     "version",
@@ -147,6 +147,7 @@
     "resource import-alas",
     "resource drift-alas",
     "resource check-release",
+    "resource verify",
     "standard-pack check",
     "runtime reset",
     "runtime observe",

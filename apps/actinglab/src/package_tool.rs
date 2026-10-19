@@ -61,19 +61,7 @@ pub(super) fn run_fmt(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Va
         )?;
     }
     let root = content_directory(flags, "package fmt")?;
-    let entries = snapshot(&root)?;
-    let mut json_files = 0_usize;
-    let mut changes = Vec::new();
-    for (relative, bytes) in &entries {
-        if !is_json(relative) {
-            continue;
-        }
-        json_files += 1;
-        let canonical = canonical_bytes(&parse_document(relative, bytes)?)?;
-        if canonical != *bytes {
-            changes.push((relative.clone(), canonical));
-        }
-    }
+    let (json_files, changes) = canonical_changes(&root)?;
     let changed = changes
         .iter()
         .map(|(relative, _)| relative.clone())
@@ -111,6 +99,30 @@ pub(super) fn run_fmt(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Va
         "json_files": json_files,
         "reformatted": changed,
     }))
+}
+
+/// The JSON files that are not canonical, each with its canonical bytes.
+pub(super) type CanonicalChanges = Vec<(String, Vec<u8>)>;
+
+/// The check of `package fmt`: every JSON file of the content directory `root`, read once as
+/// admission reads it, and the canonical bytes of each one that is not canonical, by its
+/// `/`-separated relative path. Nothing is written. Workflow #411 RV-1: `resource verify` checks
+/// every pack with it.
+pub(super) fn canonical_changes(root: &Path) -> CliOutcome<(usize, CanonicalChanges)> {
+    let entries = snapshot(root)?;
+    let mut json_files = 0_usize;
+    let mut changes = Vec::new();
+    for (relative, bytes) in &entries {
+        if !is_json(relative) {
+            continue;
+        }
+        json_files += 1;
+        let canonical = canonical_bytes(&parse_document(relative, bytes)?)?;
+        if canonical != *bytes {
+            changes.push((relative.clone(), canonical));
+        }
+    }
+    Ok((json_files, changes))
 }
 
 /// One edit: an RFC 6902 `add` or `replace` operation on the JSON file `file` of the package,

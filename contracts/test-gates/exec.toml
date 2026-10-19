@@ -1641,3 +1641,23 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_411_a25::a25_a_missing_registry_directory_is_refused_without_navigation_files",
 ]
 incident = ["#411 A25"]
+
+# #411 RV-1 (0.12.x; register §1.126, no persisted ledger shape; contracts/resource-verify.md; plan-rv §11 RV-1 lines 1-12): actinglab resource verify checks one resource repository commit as its CI does and writes the report actinglab.resource-verify.v1 bound to the commit, its tree, its base and the build: a clean fixture passes with every step and its counts; one seeded failure per step names the step and its registered code as a cause with step (a refused pack also fails bundle); failures in two steps and two invalid declarations are all named, the second found_after_first; a modified, untracked, ignored or filter-differing file is resource_verify_checkout_dirty with the content steps not_run; --commit other than HEAD and a base off its history are refused; an existing output is refused before anything is read; --dry-run, --instance and an unknown flag are refused; the declaration selection follows git with and without --base, a deletion validated as a removal; the bundle step checks the installed root and carries the remedy report; a build manifest naming other bytes is resource_verify_tools_mismatch; the capability, help and dry-run tables list the command with report_schema; no list file is written into the repository
+[[gate]]
+key = "103"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_a_clean_fixture_passes_with_its_bindings",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_one_seeded_failure_per_step_names_the_step_and_its_code",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_failures_in_two_steps_and_two_declarations_are_all_named",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_a_dirty_checkout_is_refused_before_any_content_step",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_a_commit_other_than_head_or_a_base_off_its_history_is_refused",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_an_existing_output_is_refused_before_anything_is_read",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_dry_run_device_options_and_unknown_flags_are_refused",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_the_declaration_selection_follows_git_with_and_without_a_base",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_the_bundle_step_checks_the_installed_root",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_a_build_manifest_naming_other_bytes_is_a_tools_mismatch",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_capability_help_and_dry_run_tables_list_resource_verify",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rv1::rv1_no_list_file_is_written_into_the_repository",
+]
+incident = ["#411 RV-1"]

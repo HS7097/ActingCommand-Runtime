@@ -497,4 +497,25 @@ outcome_keys! {
     parameter_value: token,
     run_parameters: records(parameter_name, parameter_value, remedy_source),
     // ---- Workflow #411 B15 R0: end ----
+    // ---- Workflow #411 RV-1 (actinglab resource verify, contracts/resource-verify.md): begin ----
+    step: vocab(resource_verify_step),
+    step_count: integer,
+    failed_step_count: integer,
+    git_command: vocab(git_command),
+    repo: path,
+    checkout_problem: vocab(checkout_problem),
+    path_count: integer,
+    first_path: path,
+    dirty_problem: vocab(dirty_problem),
+    base: name,
+    base_problem: vocab(base_problem),
+    manifest_path: path,
+    tools_problem: vocab(tools_problem),
+    layout_problem: vocab(layout_problem),
+    member: name,
+    bundle_problem: vocab(bundle_problem),
+    readback_problem: vocab(readback_problem),
+    found_after_first: boolean,
+    unformatted: list(path),
+    // ---- Workflow #411 RV-1: end ----
 }

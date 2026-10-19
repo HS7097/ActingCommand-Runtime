@@ -34,6 +34,9 @@ mod gate_lab_l7;
 // and a Lab2 path refuses an option it takes once given twice.
 #[path = "gate_lab_b2.rs"]
 mod gate_lab_b2;
+// #411 RV-1 (exec key 103): `resource verify` checks a resource repository commit as its CI does.
+#[path = "gate_rv1.rs"]
+mod gate_rv1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

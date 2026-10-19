@@ -4,6 +4,7 @@
 
 use crate::codes::ActinglabCode;
 use crate::{CliError, CliOutcome, FlagArgs};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleMaintenance, LabErrorClass, ResourceAdjustmentDeclaration, ResourceDeclarationIssue,
     ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE,
@@ -105,35 +106,114 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
             "resource validate requires --changed-path or --changed-paths-file",
         ));
     }
+    let selected = selected
+        .into_iter()
+        .map(|(path, deleted)| (PathBuf::from(path), deleted))
+        .collect();
+    validate_selection(reader, selected)
+        .map(|validated| validated.answer)
+        .map_err(|failure| failure.error)
+}
+
+/// Workflow #411 RV-1: a selection `resource validate` read in full: its answer, and what
+/// `resource verify` counts of it.
+pub(crate) struct ValidatedSelection {
+    /// The answer `resource validate` prints.
+    pub(crate) answer: Value,
+    /// One entry per selected path, as the answer lists them.
+    pub(crate) entries: Vec<Value>,
+    pub(crate) read_files: BTreeSet<String>,
+    pub(crate) read_bytes: u64,
+    /// The answer's warnings, as outcomes.
+    pub(crate) warnings: Vec<Outcome>,
+}
+
+/// Workflow #411 RV-1: a selection `resource validate` refused: its refusal, the selected path
+/// it stopped at (none when it refused the selection as a whole), and what it had read before.
+pub(crate) struct SelectionFailure {
+    pub(crate) error: CliError,
+    pub(crate) failed: Option<PathBuf>,
+    pub(crate) entries: Vec<Value>,
+    pub(crate) read_files: BTreeSet<String>,
+    pub(crate) read_bytes: u64,
+    pub(crate) warnings: Vec<Outcome>,
+}
+
+impl SelectionFailure {
+    fn before(error: CliError) -> Self {
+        Self {
+            error,
+            failed: None,
+            entries: Vec::new(),
+            read_files: BTreeSet::new(),
+            read_bytes: 0,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+/// Workflow #411 RV-1: `resource validate`'s reading of a selection of repository-relative paths,
+/// each with whether Git deletes it, as `--changed-path` and `--changed-paths-file` give it. The
+/// same reader and the same rules: it stops at the first path it refuses.
+pub(crate) fn validate_declaration_selection(
+    repo: &Path,
+    selected: Vec<(PathBuf, bool)>,
+) -> Result<ValidatedSelection, SelectionFailure> {
+    let reader = DeclarationReader::new(repo).map_err(SelectionFailure::before)?;
+    validate_selection(reader, selected)
+}
+
+fn validate_selection(
+    mut reader: DeclarationReader,
+    selected: Vec<(PathBuf, bool)>,
+) -> Result<ValidatedSelection, SelectionFailure> {
     if selected.len() > MAX_PATHS {
-        return Err(CliError::usage(
+        return Err(SelectionFailure::before(CliError::usage(
             "changed declaration selection exceeds 4096 paths",
-        ));
+        )));
     }
     let mut paths = BTreeMap::new();
     for (path, deleted) in selected {
-        validate_relative_path(Path::new(&path))?;
-        if let Some(previous) = paths.insert(PathBuf::from(&path), deleted)
+        validate_relative_path(&path).map_err(SelectionFailure::before)?;
+        if let Some(previous) = paths.insert(path.clone(), deleted)
             && previous != deleted
         {
-            return Err(invalid(
-                Path::new(&path),
+            return Err(SelectionFailure::before(invalid(
+                &path,
                 "changed path has conflicting Git statuses",
-            ));
+            )));
         }
     }
     let mut entries = Vec::new();
     for (path, deleted) in paths {
-        if deleted && exclusion(&path).is_none() {
-            if reader.existing_file(&path)? {
-                return Err(invalid(
+        let entry = if deleted && exclusion(&path).is_none() {
+            match reader.existing_file(&path) {
+                Ok(true) => Err(invalid(
                     &path,
                     "Git deletion still exists in the selected resource tree",
-                ));
+                )),
+                Ok(false) => reader.removal(&path),
+                Err(error) => Err(error),
             }
-            entries.push(reader.removal(&path)?);
         } else {
-            entries.push(reader.validate(&path)?);
+            reader.validate(&path)
+        };
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(error) => {
+                return Err(SelectionFailure {
+                    error,
+                    failed: Some(path),
+                    entries,
+                    read_files: reader.read_files.clone(),
+                    read_bytes: reader.read_bytes,
+                    warnings: reader
+                        .pool_warnings
+                        .iter()
+                        .map(PoolProducerWarning::outcome)
+                        .collect(),
+                });
+            }
         }
     }
     // Workflow #390 nine6: a warning leaves the validation valid; the developer line makes it
@@ -152,7 +232,7 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
             warning.fact_key
         );
     }
-    Ok(json!({
+    let answer = json!({
         "schema_version": "actinglab.resource-declarations.v1",
         "scope": "declarations_only",
         "repo": reader.root,
@@ -161,7 +241,18 @@ pub(crate) fn run_resource_validation(repo: &Path, flags: &FlagArgs) -> CliOutco
         "warnings": warnings,
         "read_files": reader.read_files,
         "read_bytes": reader.read_bytes,
-    }))
+    });
+    Ok(ValidatedSelection {
+        answer,
+        entries,
+        warnings: reader
+            .pool_warnings
+            .iter()
+            .map(PoolProducerWarning::outcome)
+            .collect(),
+        read_files: reader.read_files,
+        read_bytes: reader.read_bytes,
+    })
 }
 
 /// Workflow #390 nine6: one `resource_pool_producer_missing` warning, a `ledger_fact` pool of
@@ -181,6 +272,14 @@ impl PoolProducerWarning {
             "json_pointer": self.json_pointer,
             "fact_key": self.fact_key,
         })
+    }
+
+    /// Workflow #411 RV-1: the warning as `resource verify` reports it.
+    fn outcome(&self) -> Outcome {
+        Outcome::new(ActinglabCode::ResourcePoolProducerMissing)
+            .path(&self.path)
+            .json_pointer(self.json_pointer.as_str())
+            .fact_key(self.fact_key.as_str())
     }
 }
 

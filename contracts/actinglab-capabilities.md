@@ -11,6 +11,11 @@ Both `record mark` aliases and the L4 `record stop` aliases declare a `dry_run` 
 `resource catalog`, `package preflight` and `package check` declare `no_effect`. Their metadata
 is shared by capabilities, help and command listing. `package check` (Workflow #411 A5) needs
 `offline` and `read_only` and is `available`.
+`resource verify` (Workflow #411 RV-1, [resource-verify.md](resource-verify.md)) needs `offline`,
+is `available` and declares `refused` (`dry_run_unsupported`); its entry carries one more
+member, `report_schema: "actinglab.resource-verify.v1"`, the schema of the report it writes, so a
+repository wrapper reads from `capabilities` whether the Tools it pins can verify.
+`resource check-release` is `retired`, with `reason_code` `resource_check_release_retired`.
 The six device `--record` forms declare `refused`. Capture and its session alias use
 `dry_run_unsupported`; observe/do with `--capture --record` and both session application
 recording forms use `record_flag_unsupported`, before recording locks or Runtime access.
