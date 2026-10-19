@@ -18,6 +18,7 @@
 // Nothing provides `cap_y`. Every expected value is the brief's requirement or model-b15's.
 
 use super::*;
+use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{
     EventId, FactKeyFamily, FactObservation, FactPayload, FactScalar, REMEDY_CHOICES_FACT_KEY,
     fact_key_family, remedy_choices_snapshot_id,
@@ -746,7 +747,9 @@ fn b15w_two_writes_of_the_same_rows_are_two_versions() {
 // `PublishFact`, whatever its rows (names the bound packages declare, a `none` row, or the empty
 // list that would withdraw it): `session_remedy_choices_invalid` with `fact_key`, `field`
 // `/scope` and no `instance_id`; nothing is appended. The same declared rows at the game scope of
-// the fixture's instance are taken.
+// the fixture's instance are taken. Every request asks for the full receipt detail: the console's
+// class default (`source: ui`) is codes only, which leaves out `fact_key` and `field` (Workflow
+// #378 model section 7.1).
 #[test]
 fn b15w_a_server_scoped_record_is_refused() {
     let fixture = Fixture::new();
@@ -777,7 +780,7 @@ fn b15w_a_server_scoped_record_is_refused() {
                 publish(record.clone()),
                 RuntimeOperation::PublishFact { record },
             ] {
-                let request = writer(&client, operation);
+                let request = writer(&client, operation).with_detail(Detail::Full);
                 let receipt = client.send(&request);
                 assert_eq!(
                     receipt.state(),
