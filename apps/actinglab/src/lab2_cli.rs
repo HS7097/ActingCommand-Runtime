@@ -2305,6 +2305,9 @@ fn write_frame_if_requested(flags: &FlagArgs, scene: &Lab2Scene) -> CliOutcome<O
     Ok(Some(path))
 }
 
+/// `observe`'s `targets`, and the evaluations of the targets `--targets` names, by target id.
+type ObservedTargets = (Vec<Value>, Vec<(String, TargetEvaluation)>);
+
 /// `observe`'s `targets`, and the evaluations of the targets `--targets` names (#411 Lab L6: the
 /// projection takes their values, as the online observation takes its explicit targets').
 fn observe_targets(
@@ -2312,7 +2315,7 @@ fn observe_targets(
     scene: &Scene,
     flags: &FlagArgs,
     outcome: &PageDetectionOutcome,
-) -> CliOutcome<(Vec<Value>, Vec<(String, TargetEvaluation)>)> {
+) -> CliOutcome<ObservedTargets> {
     let requested = target_list(flags);
     if !requested.is_empty() {
         let mut targets = Vec::new();

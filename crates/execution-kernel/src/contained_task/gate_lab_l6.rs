@@ -9,7 +9,8 @@
 //
 // A frame's first pixel marks the page `operator`; the provider reads the count "42" in column 1,
 // in column 2 the stock, the red value of that column's pixel (so each frame shows its own
-// stock), "n/a" in column 3 and the code "1234" in column 4, every read at confidence 0.75.
+// stock), "n/a" in column 3 and the code "1234" in column 4, every read at confidence 0.75, each
+// read its own invocation of one CPU stream, as a provider gives it.
 
 use super::*;
 use crate::{OfflineReplayEnd, OfflineReplayFacts, OfflineReplayResult, replay_contained_task};
@@ -22,6 +23,7 @@ use actingcommand_recognition_pack::{
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MODEL_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WIDTH: u32 = 8;
@@ -29,8 +31,11 @@ const OPERATOR: [u8; 3] = [255, 0, 0];
 // The stock the k-th frame of the sequence shows (from 1).
 const STOCK_BASE: u8 = 10;
 
-#[derive(Debug)]
-struct ColumnText;
+// `reads` numbers the provider's reads: a fields read refuses an invocation it has already taken.
+#[derive(Debug, Default)]
+struct ColumnText {
+    reads: AtomicU64,
+}
 
 impl VisionProvider for ColumnText {
     fn require_ocr_model(
@@ -84,7 +89,7 @@ impl VisionProvider for ColumnText {
                 detection: None,
             },
             execution: Some(OcrProviderExecutionEvidence {
-                invocation_id: "replay-ocr".to_owned(),
+                invocation_id: format!("replay-ocr-{}", self.reads.fetch_add(1, Ordering::Relaxed)),
                 session_id: "replay-session".to_owned(),
                 session_generation: 1,
                 requested_provider: OcrExecutionProviderKind::Cpu,
@@ -194,7 +199,7 @@ fn fields_task(readings: bool) -> PreparedContainedTask {
     let evaluator = RecognitionEvaluator::with_vision_provider(
         pack,
         Arc::new(FsAssetResolver::new(PathBuf::new())),
-        Arc::new(ColumnText),
+        Arc::new(ColumnText::default()),
     )
     .expect("recognition evaluator");
     let pages: PageSet = serde_json::from_value(json!({"schema_version": "0.6", "pages": [
