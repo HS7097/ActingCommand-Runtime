@@ -253,6 +253,7 @@ fn value_fields(
     let mut evaluations = outcome
         .evaluations
         .iter()
+        .filter(|page| page.matched)
         .flat_map(|page| {
             page.target_results
                 .iter()
@@ -262,7 +263,7 @@ fn value_fields(
     for (target_id, evaluation) in explicit {
         if evaluations
             .iter()
-            .any(|(_, value)| value.target_id == *target_id)
+            .any(|(page, value)| page.is_none() && value.target_id == *target_id)
         {
             continue;
         }
