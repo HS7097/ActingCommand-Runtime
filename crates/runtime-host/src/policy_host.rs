@@ -907,7 +907,7 @@ impl RandomDelayTable {
                 entry
             }
         };
-        if entry.planned_start_unix_ms <= now_unix_ms || entry.delay_ms > 0 {
+        if entry.planned_start_unix_ms <= now_unix_ms || delay.enabled {
             return Ok(CandidateEligibility::Eligible);
         }
         let reason = DecisionReason {
