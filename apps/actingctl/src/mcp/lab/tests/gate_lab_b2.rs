@@ -90,7 +90,12 @@ fn b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene() {
             "zip": "neutral.zip",
         })),
     )
-    .expect("ac_lab_observe with sample_scenes");
+    .unwrap_or_else(|error| {
+        panic!(
+            "ac_lab_observe with sample_scenes was refused: {}",
+            error.to_value()
+        )
+    });
     assert_eq!(
         observed,
         words(&[
@@ -115,7 +120,12 @@ fn b2_ac_lab_observe_and_do_pass_sample_scenes_before_scene() {
             "dry_run": true,
         })),
     )
-    .expect("ac_lab_do with sample_scenes");
+    .unwrap_or_else(|error| {
+        panic!(
+            "ac_lab_do with sample_scenes was refused: {}",
+            error.to_value()
+        )
+    });
     assert_eq!(
         planned,
         words(&[

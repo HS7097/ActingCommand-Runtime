@@ -13,7 +13,9 @@
 //   (exit 2) naming `--scene` and its `argument_problem`.
 // - R4: `recognition_coverage` gives the frames provided whenever the package declares target
 //   consensus; `candidate_coverage` the frames the layout used.
-// - R7: every other option of a Lab2 path given more than once is refused as `repeated`.
+// - R7: every other option of a Lab2 path, of `recognize`, `is-visible`, `detect-page` and
+//   `current-page`, and every option of `tap-target` and `navigate` (`--scene` included) given
+//   more than once is refused as `repeated`.
 // Every expected value comes from those requirement lines. Packages and frames are synthetic and
 // neutral, and no Runtime or device is involved.
 
@@ -617,6 +619,69 @@ fn b2_a_repeated_option_is_refused_on_every_lab2_path() {
             details["arguments"],
             json!([{"argument": "--package", "argument_problem": "repeated"}]),
             "{path}: {details}"
+        );
+    }
+}
+
+/// R7 (decision Q9): `recognize`, `is-visible`, `detect-page` and `current-page`, whose only
+/// repeated option is the `--scene` frame set, and `tap-target` and `navigate`, which read one
+/// frame, refuse an option they take once that is given twice, `validation_failed` (exit 2)
+/// naming it as `repeated`, before anything is read, instead of taking the last one; on
+/// `tap-target` and `navigate` that includes `--scene`.
+#[test]
+fn b2_recognize_is_visible_tap_target_and_navigate_refuse_a_repeated_option() {
+    let context = Isolated::new();
+    let absent = |name: &str| context.files.path().join(name).display().to_string();
+    let (first, second, earlier, current) = (
+        absent("first-package"),
+        absent("second-package"),
+        absent("earlier.png"),
+        absent("current.png"),
+    );
+    let (first, second, earlier, current) = (
+        first.as_str(),
+        second.as_str(),
+        earlier.as_str(),
+        current.as_str(),
+    );
+    let verbs: [(&str, &[&str]); 6] = [
+        ("recognize", &["recognize", "--target", "ui/free"]),
+        ("is-visible", &["is-visible", "ui/free"]),
+        ("detect-page", &["detect-page"]),
+        ("current-page", &["current-page"]),
+        ("tap-target", &["--dry-run", "tap-target", "ui/free"]),
+        ("navigate", &["--dry-run", "navigate", "--to", ENTRY_PAGE]),
+    ];
+    let assert_repeated = |what: &str, words: &[&str], options: &[&str], argument: &str| {
+        let line = ["--json"]
+            .iter()
+            .chain(words)
+            .chain(options)
+            .map(|word| (*word).to_string())
+            .collect::<Vec<_>>();
+        let details = refusal(&run_cli(line, true), "validation_failed", 2, what);
+        assert_eq!(details["argument"], argument, "{what}: {details}");
+        assert_eq!(details["argument_problem"], "repeated", "{what}: {details}");
+        assert_eq!(
+            details["arguments"],
+            json!([{"argument": argument, "argument_problem": "repeated"}]),
+            "{what}: {details}"
+        );
+    };
+    for (verb, words) in verbs {
+        assert_repeated(
+            &format!("{verb} with --package twice"),
+            words,
+            &["--scene", current, "--package", first, "--package", second],
+            "--package",
+        );
+    }
+    for &(verb, words) in &verbs[4..] {
+        assert_repeated(
+            &format!("{verb} with --scene twice"),
+            words,
+            &["--scene", earlier, "--scene", current, "--zip", first],
+            "--scene",
         );
     }
 }
