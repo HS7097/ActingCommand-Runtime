@@ -4324,10 +4324,10 @@ impl RuntimeRequest {
                 RuntimeContractCode::InvalidSchedulingPauseOrigin,
             ));
         }
-        // Fact publication (Workflow #308 slice 4a-2): an observation whose every key is a
-        // manual priority offset may also come from the person (Ui) or the operator (Cli);
-        // every other key stays Agent/Adapter only, and offsets never share an observation
-        // with other keys.
+        // Fact publication (Workflow #308 slice 4a-2; Workflow #411 B15 R6): an observation
+        // whose every key belongs to a family with the origin exception (manual priority
+        // offsets, remedy choices) may also come from the person (Ui) or the operator (Cli);
+        // every other key stays Agent/Adapter only, and no observation mixes two families.
         let fact_keys = match &self.operation {
             RuntimeOperation::PublishFact { record } => Some(vec![record.key.as_str()]),
             RuntimeOperation::PublishFacts { observation } => Some(
@@ -4340,11 +4340,11 @@ impl RuntimeRequest {
             _ => None,
         };
         if let Some(keys) = fact_keys {
-            let offsets = keys
+            let families = keys
                 .iter()
-                .filter(|key| crate::priority_offset_task_id(key).is_some())
-                .count();
-            if offsets > 0 && offsets < keys.len() {
+                .map(|key| crate::fact_key_family(key))
+                .collect::<std::collections::BTreeSet<_>>();
+            if families.len() > 1 {
                 return Err(RuntimeContractError::new(
                     RuntimeContractCode::FactOriginMixed,
                 ));
@@ -4354,7 +4354,10 @@ impl RuntimeRequest {
                 (self.actor, self.source),
                 (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
             );
-            if !(agent || (offsets > 0 && person)) {
+            let excepted = families
+                .first()
+                .is_some_and(|family| family.takes_origin_exception());
+            if !(agent || (excepted && person)) {
                 return Err(RuntimeContractError::new(
                     RuntimeContractCode::InvalidAgentDispatcherOrigin,
                 ));

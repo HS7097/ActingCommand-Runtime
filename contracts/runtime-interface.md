@@ -332,12 +332,14 @@ of five families:
   Until then the function knows offset and the rest, as the contract does today.
 - U-6 deletes only the by-origin half of today's rule (agent versus person); the
   content rules (offset checks, `session_pack_schedule_invalid` and the like) stay.
-- The remedy choices family (Workflow #411 B15, [remedies.md](remedies.md); written
-  ahead of slice R6) has no code yet either: R6 adds it to the function, with the content
-  rule `session_remedy_choices_invalid`
-  ([instance-fact-store.md](instance-fact-store.md), "Remedy choice facts"). Its writers
-  are actingctl `remedy set|get|lift` and the MCP general tools `ac_remedy_set` and
-  `ac_remedy_get`.
+- The remedy choices family (Workflow #411 B15, [remedies.md](remedies.md)) is built (slice
+  R6): `fact_key_family` returns it for `session.remedy.choices`, with the content rule
+  `session_remedy_choices_invalid` ([instance-fact-store.md](instance-fact-store.md), "Remedy
+  choice facts"). `validate()` refuses any observation whose keys belong to two families as
+  `fact_origin_mixed`; until U-6 a family with the origin exception (offsets, remedy choices)
+  is taken from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`, and its `fact.published`
+  event keeps the writer's origin. Its writers are actingctl `remedy set|get|lift` and the MCP
+  general tools `ac_remedy_set` and `ac_remedy_get`.
 - The prefix `session.dispatch.` is reserved for a run's read-only parameters (Workflow
   #411 B15 R5): it is no family, since nothing may write it; `PublishFact` and
   `PublishFacts` of such a key are refused from every origin as

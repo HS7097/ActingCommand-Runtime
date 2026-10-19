@@ -648,9 +648,8 @@ which values a provider's parameters take. The state is stored in this store as 
 `session.` family per scope; it is the "target record" of the remedy resolution, consulted before
 the configuration and the package defaults.
 
-**Status.** Written ahead of its code (B15 R0); slice R6 implements the family, the write rule and
-the writers, slice R4 reads it. Until then a `session.remedy.choices` record is an ordinary
-`session.` record that nothing reads.
+**Status.** Built: slice R6 (register section 1.116) implements the family, the write rule and the
+writers; slice R4 reads the record.
 
 | Key | Value | Scope |
 | --- | --- | --- |
@@ -668,17 +667,28 @@ record replaces the server and game records entirely.
 
 **Write rule.** Refused as the non-fatal request error `session_remedy_choices_invalid`
 (`fact_key`, `field` pointing at the row and member, and `instance_id` for a meaning error), before
-the fact write gate, with nothing appended:
+the fact write gate, with nothing appended. `field` is a JSON pointer into the row list:
+`/<row>/<member>` for a member, `/<row>` for a row as a whole (a row twice or a conflict, at the
+later row), `""` for the list as a whole (not an inline `record_list`), and `/invalidate_on` for
+the record's invalidating events. The shape is checked first, row by row; then the meaning, per
+covered instance in the policy inputs' order, row by row; the first broken rule answers:
 
 - shape: a `record_list`; `row` is `allow`, `none` or `parameter`, with exactly its fields; every
   name is a token `^[a-z][a-z0-9_]{0,63}$` and `none` is never a capability; no row twice; no
-  `none` together with an `allow` of the same need; at most 256 rows (the `record_list` bound);
-  scope `instance`, `server` or `game`; no `invalidate_on` events;
+  `none` together with an `allow` of the same need; no two `parameter` rows of the same
+  capability and parameter with different values (which value holds would be unsaid; the
+  configuration's rows refuse the same, [runtime-config.md](runtime-config.md)); at most 256 rows
+  (the `record_list` bound, which the request's own validation already refuses); scope
+  `instance`, `server` or `game`; no `invalidate_on` events;
 - meaning, against the remedy table ([remedies.md](remedies.md), section 7.1) of every instance
   the scope covers: an `allow` whose need no bound remedy declares, or whose capability that need's
   remedies do not list; a `parameter` row whose capability no bound provider declares, whose
   parameter that capability does not declare, or whose value is not one of its options. Unknown
-  names are refused, never ignored.
+  names are refused, never ignored. The bound packages are those the active catalog's tasks
+  covering the instance bind, read when the write arrives (without an active catalog, none); an
+  instance scope covers its instance even when the policy inputs do not name it (it then has no
+  bound package), a server or game scope every instance of the policy inputs on that server or
+  game. `none` rows name nothing a package must declare.
 
 **Writing.** One observation writes a scope's whole list, atomically; publishing an empty list
 withdraws the scope's choices. The publisher chooses the lifetime: no `expires_at_unix_ms` never
@@ -694,6 +704,19 @@ key is a family of its own, "remedy choices" (`fact_key_family`,
 family is refused as `fact_origin_mixed`; until #389's slice U-6 removes the origin exception it is
 accepted like a priority offset, from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. A write
 goes through a running actingd; there is no offline writer.
+
+The CLI and MCP answer the same objects: a write `{event_id, scope, key, source_snapshot_id,
+observed_at_unix_ms, rows_total}`, a lift that and `previous_source_snapshot_id` (`null` without an
+instance record), a read `{instance_alias, read_at_unix_ms, records, in_effect}` where each record
+is `{scope, observed_at_unix_ms, expires_at_unix_ms?, source_snapshot_id, rows, in_effect}` and
+`in_effect` the scope of the most specific record not expired at the read (`null` when none is).
+The CLI writes with its `(cli, cli)` origin, MCP with `(agent, adapter)`. The CLI line's outcome is
+the completed receipt's code of the request the command made: `request_publish_facts_completed`
+for `set` and `lift`, `request_instance_fact_snapshot_completed` for `get`; a refused write prints
+the Runtime's denied receipt beside its outcome and exits non-zero. A lift keeps the record's rows
+and, when it has one, the length of its lifetime; its observation is strictly newer than the one
+it replaces. An empty instance record, as any instance record, replaces the server and game
+records for that instance.
 
 **Identity.** The record's `source_snapshot_id` is `remedy-choices:<sha256 hex of (scope,
 canonical rows, observed_at_unix_ms)>`, so every write, the same rows included, is a new version

@@ -49,6 +49,8 @@ mod mcp_pkgs4;
 mod mcp_run_evidence_parity;
 mod mcp_runs_parity;
 mod mcp_shell;
+// Workflow #411 B15 R6: `actingctl remedy set|get|lift` ↔ `ac_remedy_set`, `ac_remedy_get`.
+mod remedy_choices;
 
 #[allow(dead_code)]
 #[path = "../../../../tests/support/c4_runtime.rs"]
