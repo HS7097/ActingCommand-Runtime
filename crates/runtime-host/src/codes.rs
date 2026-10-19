@@ -2464,9 +2464,6 @@ actingcommand_contract::outcome_codes! {
         /// Error. A `session.feature.*` record breaks the feature-lock fact rules; the request
         /// is refused (keys `fact_key`; SR-5a).
         SessionFeatureFactInvalid => "session_feature_fact_invalid": error / none,
-        /// Info. An instance has no due task; its not-running row names the earliest wake
-        /// (keys `instance_id`, and `next_eligible_unix_ms` when known; SR-6).
-        DueTaskMissing => "due_task_missing": info / none,
         /// Info. A candidate with an entry-cost step waits because the instance's pacing stage
         /// is above the entry-cost stage limit (keys `instance_id`, `pacing_stage`, and
         /// `next_eligible_unix_ms` when known; SR-10).

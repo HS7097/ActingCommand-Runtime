@@ -7,7 +7,7 @@
 //! it was, and a start begins with none. Nothing here reaches the ledger and no decision reads
 //! it: only the read `ScheduleExplanation` does.
 
-use crate::codes::HostCode;
+use actingcommand_contract::codes::ScheduleExplanationRowCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     MAX_SCHEDULE_EXPLANATION_CANDIDATES, MAX_SCHEDULE_EXPLANATION_REASONS,
@@ -280,7 +280,7 @@ fn not_running_row(
             row.next_wake_unix_ms,
         ),
         None => {
-            let why = Outcome::new(HostCode::DueTaskMissing).instance_id(alias);
+            let why = Outcome::new(ScheduleExplanationRowCode::DueTaskMissing).instance_id(alias);
             let why = match next_wake_unix_ms {
                 Some(wake) => why.next_eligible_unix_ms(wake),
                 None => why,
