@@ -3749,15 +3749,18 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     // failure goes to the recovery ladder by the configuration
                     // (`task_capture_backend`). Every other cause keeps its fatality: that is the
                     // capture service as a whole.
-                    if spelled(
-                        error.code().as_str(),
-                        &[
-                            DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
-                            DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
-                            SharedCode::CaptureBackendOperationFailed.code(),
-                            SharedCode::CaptureFrameInvalid.code(),
-                        ],
-                    ) {
+                    // one-off red proof, M2: the rule only on the run's first capture.
+                    if self.last_frame_id.is_none()
+                        && spelled(
+                            error.code().as_str(),
+                            &[
+                                DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
+                                DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
+                                SharedCode::CaptureBackendOperationFailed.code(),
+                                SharedCode::CaptureFrameInvalid.code(),
+                            ],
+                        )
+                    {
                         // #316-P4: a physical instance's first capture probes the ADB baseline
                         // once (task deadline). A probe that fails too is the baseline lost:
                         // the ADB facts are invalidated. Its own adb child left unconfirmed
@@ -3769,35 +3772,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 == ExecutionBackendProvenance::PhysicalDevice
                         {
                             let host = self.host;
-                            let instance_id = self.token.instance_id();
-                            if let Err(probe) = host.execution()?.probe_adb_baseline_until(
+                            // one-off red proof: M4 skips `invalidate_adb_baseline`; M5 ignores
+                            // an unconfirmed probe child (no #403 settlement).
+                            let _ignored = host.execution()?.probe_adb_baseline_until(
                                 self.instance_alias,
                                 self.geometry_operation_deadline()?,
                                 &|| host.fatal.is_shutdown_requested(),
-                            ) {
-                                if probe.resource_quiescence()
-                                    == Some(ResourceQuiescence::Unconfirmed)
-                                {
-                                    return Err(
-                                        match host.settle_unconfirmed_adb(
-                                            RuntimeHostError::execution(
-                                                HostLocation::RunContainedTaskCapture,
-                                                &probe,
-                                            ),
-                                            instance_id,
-                                            links.clone(),
-                                        ) {
-                                            Ok(fence) => {
-                                                RequestFailure::fence_without_terminal(fence)
-                                            }
-                                            Err(fatal) => {
-                                                RequestFailure::poison_without_terminal(fatal)
-                                            }
-                                        },
-                                    );
-                                }
-                                host.invalidate_adb_baseline(instance_id)?;
-                            }
+                            );
                         }
                         runtime_error = RuntimeHostError::instance_capture(
                             HostLocation::RunContainedTaskCapture,
@@ -3836,7 +3817,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     Err(RequestFailure {
                         state: RuntimeReceiptState::Failed,
                         terminal: Some(terminal(&failed)),
-                        poison_runtime: runtime_error.is_fatal(),
+                        // one-off red proof, M1: the poison follows the device severity again.
+                        poison_runtime: runtime_error.is_fatal() || error.is_fatal(),
                         task_failure: Some(TaskFailureEvidence {
                             outcome: runtime_error.outcome(),
                             severe: runtime_error.is_fatal(),
