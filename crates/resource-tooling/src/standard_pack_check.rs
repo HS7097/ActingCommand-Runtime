@@ -375,12 +375,15 @@ fn remedy_report(
             LabError::package_invalid(format!("{package_id} is no package of the bundle"))
         })?;
         let path = pack_directory(&entry.directory);
-        let declarations = PreparedContainedTask::read_remedy_declarations(
+        // A25 red proof, mutation 2 (do not merge): the remedy report passes over a package its
+        // reader cannot read, as Tools v0.12.3 had no remedy report.
+        let Ok(declarations) = PreparedContainedTask::read_remedy_declarations(
             CHECK_LABEL,
             &path,
             Instant::now() + PACK_DEADLINE,
-        )
-        .map_err(|error| LabError::package_invalid(format!("{}: {error}", path.display())))?;
+        ) else {
+            continue;
+        };
         packages.push((package_id, declarations));
     }
     Ok(remedy_findings(&packages))
