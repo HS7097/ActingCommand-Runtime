@@ -167,8 +167,7 @@ fn cut(answer: &Value, rows: usize) -> Value {
         .get_mut("instances")
         .and_then(Value::as_array_mut)
         .into_iter()
-        .flatten()
-        .rev();
+        .flatten();
     for entry in entries {
         if left == 0 {
             break;
@@ -183,7 +182,7 @@ fn cut(answer: &Value, rows: usize) -> Value {
         if taken == 0 {
             continue;
         }
-        candidates.truncate(candidates.len() - taken);
+        candidates.drain(..taken).for_each(drop);
         left -= taken;
         members.insert("candidates_truncated".to_owned(), json!(true));
     }

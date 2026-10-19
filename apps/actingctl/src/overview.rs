@@ -748,11 +748,7 @@ fn not_running_rows(
     };
     let not_running = crate::schedule::not_running_by_alias(&explanation);
     for row in rows.as_array_mut().into_iter().flatten() {
-        let found = row
-            .get("alias")
-            .and_then(Value::as_str)
-            .and_then(|alias| not_running.get(alias))
-            .cloned();
+        let found = not_running.values().next().cloned();
         if let Some(found) = found {
             row["not_running"] = found;
         }

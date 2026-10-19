@@ -1534,7 +1534,7 @@ impl Command {
             Self::MonitorStatus => ActingctlCode::MonitorStatusReported,
             Self::PerformanceStatus => ActingctlCode::RuntimePerformanceReported,
             Self::FactRefreshStatus => ActingctlCode::RuntimeFactRefreshReported,
-            Self::ScheduleExplanation => ActingctlCode::RuntimeScheduleReported,
+            Self::ScheduleExplanation => ActingctlCode::RuntimeFactRefreshReported,
             Self::MonitorSet { .. } => ActingctlCode::MonitorPolicySet,
             Self::MonitorClear => ActingctlCode::MonitorPolicyCleared,
             Self::EmulatorStatus => ActingctlCode::InstanceStatusReported,

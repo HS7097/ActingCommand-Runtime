@@ -81,10 +81,10 @@ fn deferred_rows(explanation: &RuntimeScheduleExplanation, bound: usize) -> NotR
     let mut rows = Vec::new();
     let mut total = 0;
     for entry in &explanation.instances {
-        let deferred = entry
-            .candidates
-            .iter()
-            .filter(|row| row.state == ScheduleCandidateState::Deferred);
+        let deferred = entry.candidates.iter().filter(|row| {
+            row.state == ScheduleCandidateState::Deferred
+                || row.state == ScheduleCandidateState::Blocked
+        });
         for (index, row) in deferred.enumerate() {
             total += 1;
             if index < bound {
