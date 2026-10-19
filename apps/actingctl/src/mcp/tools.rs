@@ -1480,56 +1480,6 @@ fn diagnose_result() -> Value {
             "clock_slots": {"type": "array", "items": {"type": "object"}},
             "clock_slots_truncated": {"type": "boolean"},
             "clock_slots_total": {"type": "integer"},
-            // Workflow #386 SR-6b, MCP-19b: the deferred rows of the latest evaluation.
-            "not_run": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "instance_alias": {"type": "string"},
-                        "task_id": {"type": "string"},
-                        "why": {"type": "object"},
-                    },
-                    "required": ["instance_alias", "task_id", "why"],
-                },
-            },
-            "not_run_truncated": {"type": "boolean"},
-            "not_run_total": {"type": "integer"},
-            "suspended_report": {"type": "object"},
-            // Workflow #389 MCP-7 (command table §4.8).
-            "runs_grouped": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "catalog_task_id": {"type": "string"},
-                        "final_page": {"type": "string"},
-                        "count": {"type": "integer"},
-                        "first_seq": {"type": "integer"},
-                        "last_seq": {"type": "integer"},
-                        "latest_request_id": {"type": ["string", "null"]},
-                        "instances": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["count", "first_seq", "last_seq", "latest_request_id", "instances"],
-                },
-            },
-            "runs_grouped_truncated": {"type": "boolean"},
-            "failures_grouped": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "type": {"type": "string"},
-                        "catalog_task_id": {"type": "string"},
-                        "count": {"type": "integer"},
-                        "first_seq": {"type": "integer"},
-                        "last_seq": {"type": "integer"},
-                    },
-                    "required": ["type", "code", "count", "first_seq", "last_seq"],
-                },
-            },
-            "failures_grouped_truncated": {"type": "boolean"},
-            "incomplete": {"type": "boolean"},
         },
         "required": [
             "window",
@@ -1547,6 +1497,59 @@ fn diagnose_result() -> Value {
             "failures_grouped",
         ],
     });
+    // The rows from not_run on follow the literal, in their order: in it they reached serde_json's
+    // macro recursion limit (as Lab B-2's help did).
+    let properties = &mut result["properties"];
+    // Workflow #386 SR-6b, MCP-19b: the deferred rows of the latest evaluation.
+    properties["not_run"] = json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "instance_alias": {"type": "string"},
+                "task_id": {"type": "string"},
+                "why": {"type": "object"},
+            },
+            "required": ["instance_alias", "task_id", "why"],
+        },
+    });
+    properties["not_run_truncated"] = json!({"type": "boolean"});
+    properties["not_run_total"] = json!({"type": "integer"});
+    properties["suspended_report"] = json!({"type": "object"});
+    // Workflow #389 MCP-7 (command table §4.8).
+    properties["runs_grouped"] = json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "catalog_task_id": {"type": "string"},
+                "final_page": {"type": "string"},
+                "count": {"type": "integer"},
+                "first_seq": {"type": "integer"},
+                "last_seq": {"type": "integer"},
+                "latest_request_id": {"type": ["string", "null"]},
+                "instances": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["count", "first_seq", "last_seq", "latest_request_id", "instances"],
+        },
+    });
+    properties["runs_grouped_truncated"] = json!({"type": "boolean"});
+    properties["failures_grouped"] = json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string"},
+                "catalog_task_id": {"type": "string"},
+                "count": {"type": "integer"},
+                "first_seq": {"type": "integer"},
+                "last_seq": {"type": "integer"},
+            },
+            "required": ["type", "code", "count", "first_seq", "last_seq"],
+        },
+    });
+    properties["failures_grouped_truncated"] = json!({"type": "boolean"});
+    properties["incomplete"] = json!({"type": "boolean"});
     // Workflow #389 MCP-7: a group's codes, members of its row like final_page (as ac_runs adds a
     // row's failure_code).
     result["properties"]["runs_grouped"]["items"]["properties"]["failure_code"] =
