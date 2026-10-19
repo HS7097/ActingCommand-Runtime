@@ -482,7 +482,7 @@ pub fn remedy_declaration_notes(
             }
         })
         .collect::<Vec<_>>();
-    for list in lists {
+    for list in lists.iter().filter(|list| list.rows.is_empty()) {
         let config_key = list.instance_id.as_deref().map_or_else(
             || actingcommand_runtime_config::scheduling::REMEDY_CHOICES.to_owned(),
             |instance_id| {

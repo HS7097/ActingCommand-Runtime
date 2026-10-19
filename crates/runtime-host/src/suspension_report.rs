@@ -1312,13 +1312,9 @@ fn remedies(snapshot: &Snapshot<'_>) -> Result<(Vec<Value>, Option<usize>), Susp
                 need,
                 recorded_sequence: event.sequence(),
                 recorded_at_unix_ms: event.timestamp_unix_ms(),
-                lifted,
+                lifted: None,
             }),
-            _ => wire(&UnparsedClockSlot {
-                parse_state: ParseState::Unparsed,
-                signal_id: payload.signal_id(),
-                code: outcome.code(),
-            }),
+            _ => continue,
         });
     }
     let total = entries.len();

@@ -1072,7 +1072,7 @@ pub(crate) fn remedy_rows(document: &Value, instance: Option<(&str, &Value)>) ->
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
-                .filter(|row| of_instance(row, instance))
+                .filter(|row| !of_instance(row, instance))
                 .cloned()
                 .collect()
         })
