@@ -201,6 +201,12 @@ mod policy_wake;
 mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
+// Workflow #411 A22: a direct run refuses a recovery binding that no path of it can use.
+mod recovery_binding;
+#[cfg(test)]
+pub(crate) use recovery_binding::{
+    UnusedRecoveryBinding, recovery_binding_unused_error, recovery_binding_use,
+};
 mod recovery_ladder;
 pub use recovery_ladder::recovery_ladder_device_bounds;
 mod requests;

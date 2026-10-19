@@ -1301,3 +1301,18 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk1b_a_stretched_policy_run_is_settled_on_its_budget_time",
 ]
 incident = ["#385 P-k"]
+
+# #411 A22 (v0.12.3; register §1.124): a direct run that binds a recovery package no path of it can use is denied in its preparation with contained_task_recovery_binding_unused (package_id the run's package, location check_recovery_binding, invalid_request; native detail reason=entry_not_checked or reason=prerequisite_gate): no task.requested, no lease.requested or lease.granted, no task record, no input; the binding is used, and the run goes on as before, when the run has no prerequisite chain and its entry is checked (an entry page set started off its entry admits the bound package) or when a failed direct run may start a ladder (recovery_ladder.rules.direct_runs = trigger, the instance's stuck recovery on, a physical instance); a run without a binding is unchanged; a non-Home-start task never receives recovery (#241)
+[[gate]]
+key = "117"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a22::a22_an_unchecked_entry_with_a_recovery_binding_is_refused_before_any_lease",
+    "actingcommand-runtime-host::lib::tests::gate_411_a22::a22_a_checked_entry_still_uses_its_recovery_binding",
+    "actingcommand-runtime-host::lib::tests::gate_411_a22::a22_a_prerequisite_gate_refuses_a_recovery_binding",
+    "actingcommand-runtime-host::lib::tests::gate_411_a22::a22_the_ladder_rule_trigger_accepts_the_binding",
+    "actingcommand-runtime-host::lib::tests::gate_411_a22::a22_a_run_without_a_binding_is_unchanged",
+    "actingcommand-runtime-host::lib::tests::gate_411_a22::a22_the_binding_is_refused_only_when_neither_the_entry_nor_the_ladder_can_use_it",
+    "actingcommand-runtime-host::lib::tests::home_entry::non_home_start_task_never_receives_recovery_and_refuses_an_unusable_binding",
+]
+incident = ["#411 A22"]

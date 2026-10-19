@@ -388,7 +388,8 @@ recognizes nothing before its effect, so there is no first step to lead to), and
 `contained_task_control_invalid`, `reason=prerequisite_requires_page_entry`. A `navigable_route`
 package that declares one always has its entry checked first: its entry page set, or its entry
 page whatever page it is (the page-graph home entry otherwise checks a single entry page only
-with stages, or for `home` with `any_of`). Only a
+with stages, or for `home` with `any_of`; a direct run that binds a recovery package to a
+package whose entry it does not check is refused, see "Resolution" below). Only a
 hand-written `control.json` or `record stop --requires` (`lab-recording.md`) carries the field: `package build`
 writes a fixed set of control fields, and `lab run` ignores the field and never runs a
 prerequisite package.
@@ -423,8 +424,12 @@ scheduled run's refusal is recorded with the policy's lease released, as any oth
 refusal. The admission deadline of a prerequisite package is the run's deadline (for a scheduled
 run, the one the run derives from its request and lease). A prerequisite package's
 `scheduling_outcome` without a designated operation is allowed and ignored. A request's
-`--recovery-package` binding plays no part: it still goes to the stuck-recovery ladder only,
-which only a scheduled run starts (Workflow #369-3: a direct task run never starts one). A
+`--recovery-package` binding plays no part: it acts only in the home entry of a package whose
+entry is checked (no prerequisite chain) and on the stuck-recovery ladder's `return_home` rung,
+which a direct run starts only under `recovery_ladder.rules.direct_runs = trigger` (Workflow
+#387 D1c B1). A direct run that binds a recovery package neither can use is refused before any
+lease with `contained_task_recovery_binding_unused` (`package_id`; detail
+`reason=entry_not_checked` or `prerequisite_gate`) (Workflow #411 A22). A
 game root the run needs that is broken refuses it with the root's own code
 (`standard_pack_root_invalid` or `standard_pack_root_unreadable`), as a preparation refusal.
 

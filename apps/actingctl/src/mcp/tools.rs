@@ -664,7 +664,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_run_pack",
         title: "Run a task package",
         tier: Tier::Operator,
-        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path, and a recovery package is recovery_package, its path; no digest is given or computed. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.job_result.error as the Runtime's lease_queue_expired, class safety; for exclusive use call ac_pause before and ac_resume after. If this call is interrupted before it answers, call ac_overview before submitting again.",
+        description: "Runs one task package on one instance, as actingctl task-run does, and answers at once with {handle, correlation_id, phase: submitting}; handle is the run's Runtime request_id: follow it with ac_get_run (wait_s) until the state is terminal. package is a package path, and a recovery package is recovery_package, its path; no digest is given or computed. deadline_s (60-1800, default 1800) bounds the run. It never pauses scheduling: on a busy instance the run waits for its turn in the instance's queue, at most min(60 s, its deadline minus 30 s); not granted in time it comes back in ac_get_run's job.job_result.error as the Runtime's lease_queue_expired, class safety; for exclusive use call ac_pause before and ac_resume after. recovery_package is used only when the package's entry is checked (an entry page set, stages, home with any_of) or when a failed direct run may start the stuck-recovery ladder (recovery_ladder.rules.direct_runs = trigger); otherwise the run is refused with contained_task_recovery_binding_unused, which ac_get_run shows as the job's error. If this call is interrupted before it answers, call ac_overview before submitting again.",
         read_only: false,
         destructive: false,
         idempotent: false,
@@ -1560,7 +1560,7 @@ fn run_pack_input() -> Value {
         "properties": {
             "instance": instance_argument(),
             "package": {"type": "string", "minLength": 1, "description": "The task package's path."},
-            "recovery_package": {"type": "string", "minLength": 1, "description": "The recovery package's path."},
+            "recovery_package": {"type": "string", "minLength": 1, "description": "The recovery package's path; used only when the package's entry is checked or recovery_ladder.rules.direct_runs = trigger, otherwise the run is refused with contained_task_recovery_binding_unused."},
             "deadline_s": {"type": "integer", "minimum": 60, "maximum": 1800, "default": 1800},
         },
         "required": ["instance", "package"],

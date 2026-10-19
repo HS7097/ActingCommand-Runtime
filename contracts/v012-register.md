@@ -1934,6 +1934,19 @@ without explicit targets, follows the same rule.
 | A21-2 | the failure of an online observation over the budget | rule (no shape change) (exec 101) | A21 | A21 | only a tier-1 row that does not fit either collection fails: a candidate sample ends its projection with `candidate_sample_record_failed` (partial), a candidate projection row or a consensus sample fails the observation with `observation_fact_failed` (`operation: encode_observation_fact`), with today's cause texts; until now an optional page or target row could crowd out a required one, and the check read the controlled collection only |
 | A21-3 | a failed `actinglab observe --capture` → `device_error`, exit 4, with `details {error, state: "failed", req_id, receipt_state, runtime_outcome, correlation_id, hint: "inspect-runtime-ledger"}` | answer details added (exec 101) | A21 | A21 | `error` the Runtime outcome's code, `req_id` and `receipt_state` from the failed receipt when the client error carries one (absent otherwise), `runtime_outcome` the client error's typed outcome; the failed terminal ledger append keeps its message and gains the same details; the code and exit code are unchanged (lab-recording.md); MCP `ac_lab_observe` then answers `lab_tool_failed {exit_code: 4, req_id}` caused by `device_error` and a `foreign_other_error` holding the details, and records its `client.action` (no MCP change) |
 
+### 1.124 Slice A22 (v0.12.3): a direct run refuses a recovery binding no path can use (#411 A22)
+
+A22: a direct run refuses a recovery binding no path can use; new code
+`contained_task_recovery_binding_unused` and location `check_recovery_binding`. No persisted
+ledger shape, no wire, key or configuration change; the request shape is unchanged.
+[linear-steps.md](linear-steps.md) ("Prerequisite packages", "Resolution"),
+[package-reference.md](package-reference.md) ("Consumers") and
+[runtime-state-observation.md](runtime-state-observation.md) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A22-1 | `contained_task_recovery_binding_unused` (`error`, `ladder_class` `declaration_error`, `since` 0.12.3, pending) with `package_id` (required) at the new location `check_recovery_binding`, `invalid_request` (MCP class `usage`), receipt `Denied`, native detail `reason=entry_not_checked` or `reason=prerequisite_gate` | new outcome code and location, an earlier refusal (host 117) | A22 | A22 | a direct run (`run_contained_task`: CLI and console task-run, MCP `ac_run_pack`) that binds a recovery package is refused after its prerequisite chain is resolved and before any record, claim or lease when neither (a) its home entry can use the binding (empty chain, required entry pages, not a zero-step package with post-admission reading) nor (b) a ladder after its failed end can (`recovery_ladder.rules.direct_runs = trigger`, the instance's stuck recovery on, a physical instance; the configuration in effect); it writes no `task.*` record, takes no lease, sends no input and starts no ladder; `reason=prerequisite_gate` when the chain is not empty, else `entry_not_checked`; a request without a binding, a binding (a) or (b) can use, scheduled runs, startup packages, ladder rungs and Lab runs are unchanged; the MCP `ac_run_pack` description and its `recovery_package` schema text say so (no argument, member or class change) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

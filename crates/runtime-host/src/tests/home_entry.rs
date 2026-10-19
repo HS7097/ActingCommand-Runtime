@@ -668,8 +668,11 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
 }
 
 // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+// #411 A22: a non-Home-start task still never receives recovery; a recovery binding it cannot use
+// is refused before any lease (`contained_task_recovery_binding_unused`) instead of being
+// ignored, and without a binding it runs as before (`gate_411_a22`).
 #[test]
-fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
+fn non_home_start_task_never_receives_recovery_and_refuses_an_unusable_binding() {
     let root = TempDir::new().expect("tempdir");
     let target = neutral_non_home_start_contained_task_package(true);
     let target_path = root.path().join("neutral-target.zip");
@@ -709,8 +712,12 @@ fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
     );
 
     let receipt = client.send(&request);
-    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
-    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    assert_eq!(
+        receipt.outcome().code().as_str(),
+        "contained_task_recovery_binding_unused"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
     let events = projected_events(
         &mut client,
         EventQuery {
@@ -719,6 +726,13 @@ fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
         },
     );
     assert!(entry_preflight_facts(&events).is_empty());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskRequested)
+            .count(),
+        0
+    );
     drop(client);
     host.close().expect("close runtime host");
 }
