@@ -1843,6 +1843,26 @@ vocabularies are catalog entries, not rows (§7); the package members ride `pack
 | B15-10 | `task.json` mapping member `remedy {need, capabilities, default?}`; `control.json` member `provides [{capability, irreversible?, parameters?}]` | package members (`package` revision 4, §6; not ledger) | R1 | R1 | absent members serialize byte for byte as before; refusals `invalid_scheduling_outcome_declaration` (field) and `contained_task_control_invalid` (`provides_invalid`, `provides_parameters_invalid`, `provides_own_remedy`) |
 | B15-11 | the terminal's `scheduling_disposition` (`task.completed`) | read only (shape unchanged) | R4 | — | the settlement reads its `outcome_key` whatever the catalog references; a remedy key is a success: no failure identity, the streak cleared |
 
+### 1.112 Slice R2 b15e (v0.12.3): the evaluator plans declared remedies (#411 B15; model-b15 §5.3, §6, §7, §8, §9.2, §11; [remedies.md](remedies.md) sections 3.3, 4, 5 and 6)
+
+The pure policy crate plans the remedies of section 1.110: `plan_remedies` folds every round from
+the pairs' journal, resolves the allowed capabilities (target record, configuration, package
+default) and the run parameters, and returns per pair a trigger override (a request or the one
+retry), a deferral (a hold or a stop) and the stop, lift and expiry signals;
+`evaluate_with_remedies` applies the plan. The host fills the inputs and appends the signals
+(R4); the overlay is R5's. **No persisted ledger shape** (model-b15 §10): the reasons ride the
+existing dispatch chains (B15-3), the signals are the existing `goal_missed` planning signals
+(B15-4), `PolicyEvaluation` keeps its members, and the slice adds no code, key or vocabulary token
+(all are R0's, §1.110 B15-1, B15-2). Gate: policy key 52.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B15E-1 | `plan_remedies(catalog, facts, time, &RemedyInputs) -> Result<RemedyPlan>`; `RemedyInputs {enabled, max_per_round, table {remedies, providers, refused_edges}, journal, stops, signals_seen, configuration, persistent_gates}` (`crates/policy/src/remedy.rs`) | new pure interface (memory only, never persisted) | R2 | R4 | remedies off or an empty table: an empty plan; `max_per_round` outside 1..=8, a journal over 64 runs or given twice, a remedy without capabilities or a table name that is not a token refuse the evaluation (`policy_evaluation_input_invalid`); `persistent_gates` carries the host's persistent gate codes (`policy_task_paused`, `pack_admission_suspended`), since the policy crate may not spell another owner's codes (outcome guard G5); the three placement codes are the crate's own |
+| B15E-2 | `evaluate_with_remedies(…, fact_refresh, &RemedyPlan, eligibility)` | new entry point (output shape unchanged) | R2 | R4 | a request or retry is triggered and past its cooldown and promoted; its reasons join the decision and the chain; a selected pair with run parameters carries `policy_dispatch_parameters` before `placement_selected`; a plan deferral applies when the callback answered `Eligible`; after the allocation a requesting layer's hold names its provider's gate, or its root stops `provider_unavailable`; with an empty plan the evaluation equals `evaluate_with_fact_refresh` byte for byte; the existing entries are unchanged |
+| B15E-3 | `RemedyPlan::signals_after(&PolicyEvaluation)` | new function | R2 | R4 | the plan's signals plus the stops the evaluation decided (every requested provider behind a persistent gate), none whose id `signals_seen` holds, ordered by id |
+| B15E-4 | the plan's values | rules (no shape) | R2 | R4 | a stop names the round's root task and the key and need of the layer that stopped; an expiry the top layer's; `policy_remedy_requested.count` is the request's number in the layer, `policy_remedy_retry.count` the layer's requests so far, both with `limit_count` = `max_per_round`; a hold wakes at its round's window end, a stop never |
+| B15E-5 | the plan's decisions where the model leaves room | rules (no shape) | R2 | R4 | an unreadable target record or configuration list decides every need `choice_invalid`; a provider whose package's parameters do not all resolve (an undeclared parameter, two values in one source, a value outside the options) is not requestable and its dispatches carry no `policy_dispatch_parameters`; a provider held by another round makes the layer wait; nothing requestable: `parameter_invalid`, then `parameters_mismatch`, then `cycle` (a provider exists but only in the chain or on a refused edge), else the table's problem for the mapping or `capability_unbound`; a recorded stop whose round is no longer the pair's latest root is lifted; `remedy_inputs_digest` hashes the target records that apply (scope, observation, expiry, rows), the configuration rows, the root key's remedy, its capabilities' providers on the instance with their declarations, the edges refused from the root task and the catalog hash |
+
 ### 1.120 Slice Lab L4 (v0.12.x): backend facts where the shape already exists (#411 Lab L4; Alice 2026-10-19, 「Lab的资源制作应当包含所有可用后端的识别以及触控」)
 
 A Lab recording names the backend that captured a Runtime frame, and the offline capability
