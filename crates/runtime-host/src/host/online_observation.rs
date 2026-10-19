@@ -270,7 +270,7 @@ impl HostShared {
         )?;
         // #411 Lab L5b: the input check covers the whole observation, from its first capture to
         // the last capture of its series.
-        if let Some(last_sequence) = last_sequence {
+        if let Some(_series_end) = last_sequence {
             self.check_observation_sample_inputs(
                 request,
                 resolved.instance_id(),
@@ -279,7 +279,7 @@ impl HostShared {
                     .map_or(completed.requested_sequence, |first| {
                         first.requested_sequence
                     }),
-                last_sequence,
+                completed.terminal.sequence(),
             )?;
         }
         let evidence = ContainedObservationEvidence {

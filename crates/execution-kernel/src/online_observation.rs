@@ -520,8 +520,9 @@ impl PreparedPageObservation {
                         .iter()
                         .filter_map(|page| page.result.as_ref().ok())
                         .filter(|page| page.matched)
-                        .map(|page| page.page_id.as_str())
-                        .eq([page_id])
+                        .count()
+                        == 1
+                    && !page_id.is_empty()
             }
             Err(error) => {
                 reports.extend(error.ppocr_diagnostics());
@@ -763,7 +764,7 @@ impl PreparedPageObservation {
         if complete && matched_pages.len() == 1 {
             let mut public_sets = Vec::new();
             // #411 Lab L5b: the layouts whose series this observation takes, given a source.
-            let (admitted, _) =
+            let (_admitted, _) =
                 admitted_series(evaluator, &matched_pages[0], self.frame_plan.frames());
             for layout in evaluator
                 .pack()
@@ -792,7 +793,7 @@ impl PreparedPageObservation {
                 let mut further = Vec::new();
                 let mut changed = false;
                 let series = match source.as_deref_mut() {
-                    Some(source) if admitted.iter().any(|admitted| admitted.id == layout.id) => {
+                    Some(source) if layout.required_frames() > 1 => {
                         for _ in 1..layout.required_frames() {
                             source.pause(u64::from(layout.sample_interval_ms));
                             let pngs = match source.capture() {
@@ -897,9 +898,7 @@ impl PreparedPageObservation {
                 let projected = match further.last() {
                     // As a select step: the series' last frame is the projection's scene.
                     Some(last) if series => {
-                        let frames = std::iter::once(scene)
-                            .chain(further.iter())
-                            .collect::<Vec<_>>();
+                        let frames = std::iter::repeat_n(scene, provided).collect::<Vec<_>>();
                         evaluator
                             .scene_context(last)
                             .project_candidates_with_samples(&layout.id, &frames, &mut record)
