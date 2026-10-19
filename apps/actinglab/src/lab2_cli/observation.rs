@@ -515,17 +515,9 @@ pub(super) fn runtime_observe_failure(
     receipt: Option<&RuntimeReceipt>,
     correlation_id: CorrelationId,
 ) -> CliError {
-    let mut details = serde_json::Map::new();
-    details.insert("error".to_string(), json!(outcome.code().as_str()));
-    details.insert("state".to_string(), json!("failed"));
-    if let Some(receipt) = receipt {
-        details.insert("req_id".to_string(), json!(receipt.request_id()));
-        details.insert("receipt_state".to_string(), json!(receipt.state()));
-    }
-    details.insert("runtime_outcome".to_string(), json!(outcome));
-    details.insert("correlation_id".to_string(), json!(correlation_id));
-    details.insert("hint".to_string(), json!("inspect-runtime-ledger"));
-    CliError::device(message).with_details(Value::Object(details))
+    // Red proof M6: the failure carries no details.
+    let _ = (outcome, receipt, correlation_id);
+    CliError::device(message)
 }
 
 fn identity_limit_exceeded(actual_bytes: usize) -> CliError {

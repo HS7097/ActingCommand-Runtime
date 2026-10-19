@@ -475,9 +475,8 @@ impl PreparedPageObservation {
                     }
                     let row = json!({"kind":"candidate_sample", "target_id":target, "evaluation":result, "elapsed_us":crate::observe_instant_span(started, ended)});
                     let public = redact_row(row.clone(), metadata);
-                    if !rows.require_before(row, public, 1, &reserve).map_err(|error| CandidateProjectionFailure::recording_failed(error.to_string()))? {
-                        return Err(CandidateProjectionFailure::recording_failed("candidate sample evidence exceeds observation budget"));
-                    }
+                    // Red proof M4: a sample that does not fit is omitted without failing the projection.
+                    rows.require_before(row, public, 1, &reserve).map_err(|error| CandidateProjectionFailure::recording_failed(error.to_string()))?;
                     Ok(())
                 });
                 let (private, public) = match projected {
@@ -752,8 +751,8 @@ impl TieredFacts {
             omitted_target_evaluation_count,
             truncated,
         } = facts;
-        let mut ordered = positions.into_iter().zip(rows).collect::<Vec<_>>();
-        ordered.sort_by_key(|(position, _)| *position);
+        // Red proof M3: the admitted rows stay in admission order.
+        let ordered = positions.into_iter().zip(rows).collect::<Vec<_>>();
         ObservationFacts {
             rows: ordered.into_iter().map(|(_, row)| row).collect(),
             item_count,
@@ -838,11 +837,19 @@ impl ObservationFactRows {
         target_count: usize,
     ) -> usize {
         let position = self.next_position();
+        // Red proof M5: the public collection admits every row as it is produced.
+        let _ = self.public.admit(position, public, target_count);
+        // Red proof M1 (the other rows) and M2 (the requested rows, as the other rows): admitted
+        // as they are produced, before the required rows that follow them.
+        if tier >= DeferredTier::Requested {
+            let _ = self.private.admit(position, private, target_count);
+            return usize::MAX;
+        }
         self.deferred.push(DeferredFact {
             tier,
             position,
             private,
-            public,
+            public: Value::Null,
             target_count,
         });
         self.deferred.len() - 1
