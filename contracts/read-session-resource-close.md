@@ -183,7 +183,9 @@ A contained task's first capture that fails with `capture_backend_operation_fail
 a session kept from an earlier lease (no backend open in that capture) while the ADB
 baseline probe answers is a stale idle session: it is closed as every capture failure
 is, the task fails nonfatal (`CaptureFailed`, `task.failed` Warning) and the next
-capture opens a new session. The same failure on a newly opened backend stays fatal.
+capture opens a new session. Since #411 A7 (Alice 2026-10-19) every capture failure of the
+instance's own capture with confirmed disposal fails only its run, nonfatal, a newly opened
+backend and a later capture included (`application-lifecycle.md`).
 
 A kept session keeps the owner journal's `InUse` disposition across leases;
 `ConfirmedClosed` is written when every instance is closed. The retention of frames

@@ -1267,6 +1267,19 @@ tests = [
 ]
 incident = ["#411 A16"]
 
+# #411 A7 task path (v0.12.2; register §1.106 A7T-1 to A7T-3; Alice 2026-10-19, pending item 13 = A): a contained task's capture failure with one of the instance's capture codes (capture_backend_open_failed, paired_backend_open_failed, capture_backend_operation_failed, capture_frame_invalid) and confirmed disposal fails only that run on every capture of the run (receipt Failed with the kernel code, nonfatal capture_failed, host not fatal, the other instance runs); a scheduled run's such failure starts the shipped trigger item task_capture_backend at stage task, whose return_home and application_restart rungs the failed capture self-check skips; a physical instance's first capture still probes the ADB baseline once, a failed probe invalidates device.connected, application.foreground and task.page with adb_unreachable, and a probe whose adb child is unconfirmed fences the instance (#403)
+[[gate]]
+key = "108"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0122_a7t::a7t_a_task_capture_open_failure_fails_only_that_run_and_the_other_instance_runs",
+    "actingcommand-runtime-host::lib::tests::gate_0122_a7t::a7t_a_later_capture_failure_fails_only_that_run",
+    "actingcommand-runtime-host::lib::tests::gate_0122_a7t::a7t_a_scheduled_run_whose_capture_open_fails_starts_the_task_capture_backend_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_0122_a7t::a7t_a_first_capture_failure_with_adb_lost_invalidates_the_adb_facts",
+    "actingcommand-runtime-host::lib::tests::gate_0122_a7t::a7t_a_first_capture_probe_whose_adb_child_is_unconfirmed_fences_the_instance",
+]
+incident = ["#411 A7"]
+
 # #411 A16, Alice's 10-19 ruling on declared prerequisite packages (v0.12.2; no register section, no product change; related: host 90, host 107): a navigable_route package whose entry is not home and that declares a page-graph prerequisite package leading from home to its entry reaches its entry through the gate: the prerequisite is admitted (role prerequisite), its own unmatched checked entry falls back to the registry's return-home package (role return_home), the return-home package completes on home and the prerequisite on the entry, the package's recheck matches and it runs to success, with no contained_task_home_recovery_* outcome and no home-entry decision; a prerequisite package whose own run meets an unknown page fails the scheduled run with its own contained_task_page_unknown (no contained_task_prerequisite_* code), its EntryRecoveryFailed carries role prerequisite, and the instance's ladder starts by the shipped item pack_logic at stage task
 [[gate]]
 key = "109"
