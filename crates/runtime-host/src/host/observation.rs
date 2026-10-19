@@ -239,7 +239,7 @@ impl HostShared {
         RequestFailure,
     > {
         let mut samples = Vec::with_capacity(plan.frames() - 1);
-        for _ in 1..plan.frames() {
+        for _ in 1..plan.frames().max(2) {
             samples.push(self.capture_readonly_observation(
                 request,
                 instance_alias,

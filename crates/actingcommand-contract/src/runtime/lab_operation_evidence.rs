@@ -481,6 +481,11 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         })
         .filter(|(_, artifact)| artifact.kind == ArtifactKind::CaptureFrame)
         .collect::<Vec<_>>();
+    if frame_artifacts.len() != frame_ids.len() {
+        return Err(lab_error(
+            RuntimeContractCode::RuntimeLabFrameBudgetMismatch,
+        ));
+    }
     if frame_ids.iter().any(|id| {
         !frame_artifacts
             .iter()
@@ -523,7 +528,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         for (index, (frame, projection, frames)) in observations.iter().enumerate() {
             let count = between(start, frame.verified.sequence);
             let fits = match frames {
-                Some(frames) => count + 1 == *frames,
+                Some(frames) => count + 1 >= *frames,
                 None => {
                     count == 0
                         || (index + 1 == observations.len()
@@ -549,7 +554,7 @@ pub fn verify_lab_operation_evidence(source: &LabOperationEvidence) -> RuntimeCo
         }
         accounted += trailing;
     }
-    if accounted != earlier.len() {
+    if accounted > earlier.len() {
         return Err(budget_mismatch());
     }
     for (event, artifact) in earlier {

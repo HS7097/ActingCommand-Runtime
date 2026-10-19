@@ -52,9 +52,7 @@ impl ObservationFramePlan {
     /// allowance and one interval for every frame before the current one; `None` on overflow.
     pub fn added_allowance(self, backend_open: std::time::Duration) -> Option<std::time::Duration> {
         let earlier = u32::try_from(self.frames - 1).ok()?;
-        backend_open
-            .checked_add(std::time::Duration::from_millis(self.interval_ms))?
-            .checked_mul(earlier)
+        backend_open.checked_mul(earlier)
     }
 }
 

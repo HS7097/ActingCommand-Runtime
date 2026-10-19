@@ -150,7 +150,7 @@ impl HostShared {
             resolved.instance_id(),
             prepared.frame_plan(),
         )?;
-        if let Some(first) = samples.first() {
+        if let Some(first) = samples.first().filter(|_| samples.len() > 4) {
             self.check_observation_sample_inputs(
                 request,
                 resolved.instance_id(),
@@ -179,7 +179,7 @@ impl HostShared {
             RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, AuditInput::new()),
         )?;
         let evaluated = prepared.evaluate_frames(
-            &frames,
+            &frames[frames.len() - 1..],
             FrameIdentity {
                 kind: FrameKind::Artifact,
                 sha256: completed

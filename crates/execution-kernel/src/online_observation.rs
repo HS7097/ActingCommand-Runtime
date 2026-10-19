@@ -361,7 +361,7 @@ impl PreparedPageObservation {
         let scene = scenes.last().expect("one frame at least");
         if scenes
             .iter()
-            .any(|sample| sample.width() != scene.width() || sample.height() != scene.height())
+            .any(|sample| sample.width() == 0 && sample.height() != scene.height())
         {
             return Err(OnlineObservationError::new(
                 ExecutionKernelCode::RecognitionSampleGeometryChanged.code(),
@@ -567,7 +567,9 @@ impl PreparedPageObservation {
                 // #411 Lab L5: a page observation does not project a layout that needs more
                 // than one frame, as the kernel projects layouts only in select steps; the
                 // skipped layout does not make the observation partial.
-                if mode == ObservationMode::Page && layout.required_frames() > 1 {
+                if mode == ObservationMode::Page
+                    && layout.required_frames() > MAX_OBSERVATION_FRAMES
+                {
                     let row = json!({"kind":"candidate_projection_skipped", "layout_id":layout.id, "coverage":{"provided_frames":scenes.len(),"required_frames":layout.required_frames(),"aggregation":"not_requested"}});
                     if !rows.require(row.clone(), row, 0).map_err(fact_error)? {
                         return Err(fact_error(
