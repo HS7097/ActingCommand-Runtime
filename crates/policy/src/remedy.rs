@@ -1345,7 +1345,7 @@ impl<'a> InstanceContext<'a> {
                     }
                     // Resolved: the layer below is served by this run.
                     None if index == 0 => {
-                        round.layers.truncate(0);
+                        round.layers.clear();
                         round.end = Some(RoundEnd::Resolved);
                     }
                     None => {
