@@ -19,9 +19,9 @@
 
 use super::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
-    ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, PageObservation,
-    PostAdmissionOcrCollector, PostconditionResolution, PreparedContainedTask, SampleRetries,
-    TaskControl, TaskOperation, budget_now, budget_observation_now, sample_retry,
+    ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ExtraRounds,
+    PageObservation, PostAdmissionOcrCollector, PostconditionResolution, PreparedContainedTask,
+    SampleRetries, TaskControl, TaskOperation, budget_now, budget_observation_now, sample_retry,
 };
 use crate::codes::ExecutionKernelCode;
 use crate::{RunFailureStage, RunOperationFailureDecision, RunOperationPolicy, RunStateMachine};
@@ -335,6 +335,10 @@ impl PreparedContainedTask {
     /// number of consecutive frames of one destination; a window that ends first fails the run
     /// with `contained_task_observation_stability_unconfirmed`. A frame whose sampling timed out
     /// is observed again in a new window of `budget` (Workflow #386 SR-1), as `retries` allows.
+    /// #385 P-k (performance model v1.4.2 §5.4 item 1): a window that ends that way, within the
+    /// task's budget, starts the step's extra rounds (`rounds`) first, captures only: `stable`
+    /// another window of `window_ms` from now, `window_end` another `budget` from now in which a
+    /// frame that shows a destination ends it.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn observe_window<R: ContainedTaskRuntime>(
         &self,
@@ -345,7 +349,7 @@ impl PreparedContainedTask {
         arrived: PageObservation,
         (interval, budget): (Duration, Duration),
         timing: ContainedTaskTimingContext,
-        retries: &mut SampleRetries,
+        (retries, mut rounds): (&mut SampleRetries, ExtraRounds),
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
@@ -367,6 +371,9 @@ impl PreparedContainedTask {
                     if held >= frames {
                         return Ok(PostconditionResolution::Reached(current));
                     }
+                    if now >= end && rounds.another(runtime, Some((pace, task_deadline))) {
+                        end = now + Duration::from_millis(window_ms);
+                    }
                     if now >= end {
                         return Err(ContainedTaskError::valued(
                             ExecutionKernelCode::ContainedTaskObservationStabilityUnconfirmed
@@ -384,6 +391,9 @@ impl PreparedContainedTask {
                 TaskObservationWindow::WindowEnd { .. } => {
                     if now >= end && latest {
                         return Ok(PostconditionResolution::Reached(current));
+                    }
+                    if now >= end + budget && rounds.another(runtime, Some((pace, task_deadline))) {
+                        end = now;
                     }
                     let limit = end + budget;
                     if now >= limit {

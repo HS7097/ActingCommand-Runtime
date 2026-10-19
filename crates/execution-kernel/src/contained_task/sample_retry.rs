@@ -11,11 +11,64 @@
 //! recognition ends at that observation's own budget check, before any capture
 //! (`recognition_sample_budget_insufficient`, `candidate_sample_budget_insufficient`, §2.1 item
 //! 5). A retry is no failure and never reaches the recovery ladder (§2.1 item 7).
+//!
+//! #385 P-k (performance model v1.4.2 §5.4 item 1): beside them, the extra rounds of one wait
+//! without an input ([`ExtraRounds`]): a wait that reached its limit starts one more full round
+//! of captures, never an input, as many times as the step's stage says.
 
-use super::{ContainedTaskError, ContainedTaskRunError, StepPacing};
+use super::{
+    ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, PaceClock, StepPacing,
+    budget_now,
+};
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::outcome::Outcome;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// #385 P-k (performance model v1.4.2 §5.4 item 1): the extra rounds one wait without an input
+/// may still start, from its step's [`StepPacing::extra_wait_rounds`]. A wait that reached its
+/// limit (budget clock) without a declared failure or a terminal page having ended it starts
+/// another full round while one is left and the task's budget is not spent: a new limit of the
+/// same length, the same interval, captures only, never an input. Each round started is told to
+/// the runtime ([`ContainedTaskRuntime::observe_extra_wait_round`]); once they are spent the wait
+/// ends as it does without them. The waits of a clicking retry take none
+/// ([`Self::NONE`]), so a round never leads to another input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ExtraRounds {
+    left: u32,
+}
+
+impl ExtraRounds {
+    /// No extra round.
+    pub(super) const NONE: Self = Self { left: 0 };
+
+    /// The extra rounds the step's `pacing` gives one of its waits.
+    pub(super) const fn of(pacing: StepPacing) -> Self {
+        Self {
+            left: pacing.extra_wait_rounds,
+        }
+    }
+
+    /// Whether the wait starts another round now: one is left and, for a wait within a task,
+    /// its `task_deadline` (a budget instant on the run's budget clock) has not passed. The
+    /// caller starts the round's new limit itself. Without a round left nothing is read.
+    pub(super) fn another<R: ContainedTaskRuntime>(
+        &mut self,
+        runtime: &mut R,
+        task_deadline: Option<(PaceClock, Instant)>,
+    ) -> bool {
+        if self.left == 0 {
+            return false;
+        }
+        if let Some((pace, deadline)) = task_deadline
+            && budget_now(runtime, pace) >= deadline
+        {
+            return false;
+        }
+        self.left -= 1;
+        runtime.observe_extra_wait_round();
+        true
+    }
+}
 
 /// The sampling timeouts an observe-only retry answers.
 const TIMEOUTS: [ExecutionKernelCode; 2] = [

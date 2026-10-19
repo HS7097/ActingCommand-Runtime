@@ -28,7 +28,7 @@ use actingcommand_contract::{
 // #411 A20: a phased route's refusal names the refused member.
 use actingcommand_contract::{TaskPhaseRefusal, validate_task_phases_located};
 use observation_window::{InputRecheck, RecheckedInput};
-use sample_retry::SampleRetries;
+use sample_retry::{ExtraRounds, SampleRetries};
 use timing::PaceClock;
 // Workflow #373 NAV-3b: entry page sets.
 use actingcommand_contract::{
@@ -2115,7 +2115,8 @@ pub struct SharedInterruptFrame<'a> {
 pub struct StepPacing {
     /// How often an observation whose sampling timed out is observed again, never repeating an
     /// input: the configured base (`scheduling.recognition.sample_timeout_retries`) plus the
-    /// pacing curve's extra retries (none until performance slice P-k S5).
+    /// pacing curve's extra retries of the step's stage (#385 P-k, performance model v1.4.2 §5.4
+    /// item 2; [`Self::with_extra_wait_rounds`]).
     pub sample_timeout_retries: u32,
     /// #385 P-k (performance model v1.4.2 §5.1–§5.3, §5.6): the step's pacing factor, in
     /// thousandths. It holds from the `step_pacing()` call that answered it until the next one:
@@ -2124,21 +2125,36 @@ pub struct StepPacing {
     /// clock. 1000 (the default) is the unpaced step; a factor below 1000 is never used, and the
     /// kernel ends the run with `contained_task_state_invalid`.
     pub factor_milli: u32,
+    /// #385 P-k (performance model v1.4.2 §4.1, §5.4 item 1): the extra rounds of the step's
+    /// stage. A wait of the step that has no input (a page wait, the confirmation after its
+    /// input before the failure decision, an entry wait, an observation window, a `linear_steps`
+    /// transition or arrival wait) and reached its limit without a declared failure or a
+    /// terminal page having ended it starts one more full round, captures only, at most this
+    /// many times; no input, attempt or clicking retry is ever added. 0 (the default) adds none.
+    pub extra_wait_rounds: u32,
+    /// #385 P-k (performance model v1.4.2 §5.2): the pause between a step's recognition and its
+    /// effect intent, as the runtime gives it (the configured base × (factor − 1000) / 1000); the
+    /// kernel waits exactly this long, on the budget clock like any wait, and recognizes nothing
+    /// again after it. Zero (the default) is no pause.
+    pub pre_input_wait: Duration,
 }
 
 impl Default for StepPacing {
-    /// No observe-only retry, factor 1000.
+    /// No observe-only retry, factor 1000, no extra round and no pre-input wait.
     fn default() -> Self {
         Self::new(0)
     }
 }
 
 impl StepPacing {
-    /// `sample_timeout_retries` observe-only retries at the factor 1000.
+    /// `sample_timeout_retries` observe-only retries at the factor 1000, without an extra round
+    /// or a pre-input wait.
     pub const fn new(sample_timeout_retries: u32) -> Self {
         Self {
             sample_timeout_retries,
             factor_milli: actingcommand_contract::MIN_PACING_FACTOR_MILLI,
+            extra_wait_rounds: 0,
+            pre_input_wait: Duration::ZERO,
         }
     }
 
@@ -2146,6 +2162,40 @@ impl StepPacing {
     pub const fn with_factor_milli(self, factor_milli: u32) -> Self {
         Self {
             factor_milli,
+            ..self
+        }
+    }
+
+    /// #385 P-k (performance model v1.4.2 §5.4): the same pacing with the stage's
+    /// `extra_wait_rounds` extra wait rounds; the observe-only retries grow by as many (§5.4
+    /// item 2): `sample_timeout_retries` becomes the base [`Self::new`] took plus
+    /// `extra_wait_rounds`.
+    pub const fn with_extra_wait_rounds(self, extra_wait_rounds: u32) -> Self {
+        let base = self
+            .sample_timeout_retries
+            .saturating_sub(self.extra_wait_rounds);
+        Self {
+            sample_timeout_retries: base.saturating_add(extra_wait_rounds),
+            extra_wait_rounds,
+            ..self
+        }
+    }
+
+    /// #385 P-k (performance model v1.4.2 §5.2): the same pacing with the pre-input wait
+    /// `pre_input_wait`.
+    pub const fn with_pre_input_wait(self, pre_input_wait: Duration) -> Self {
+        Self {
+            pre_input_wait,
+            ..self
+        }
+    }
+
+    /// The same pacing without extra wait rounds and with the same observe-only retries: the
+    /// waits of a clicking retry (a failure decision's confirmation, a `linear_steps` retry
+    /// decision) take no extra round, so that a round never leads to another input.
+    const fn without_extra_wait_rounds(self) -> Self {
+        Self {
+            extra_wait_rounds: 0,
             ..self
         }
     }
@@ -2265,6 +2315,11 @@ pub trait ContainedTaskRuntime {
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         Ok(StepPacing::default())
     }
+
+    /// #385 P-k (performance model v1.4.2 §5.4 item 1; register P5 `extra_wait_rounds`): a wait
+    /// reached its limit and started one more round ([`StepPacing::extra_wait_rounds`]), captures
+    /// only. A runtime counts it for the step in progress; the default does nothing.
+    fn observe_extra_wait_round(&mut self) {}
 
     /// Test plan E-3 (EXEC-I3, test plan §3.10): the monotonic instant every timer of the
     /// contained-task kernel reads: task and step deadlines, waits, observation windows and the
@@ -3187,9 +3242,13 @@ impl PreparedContainedTask {
         runtime: &mut R,
         pages: &[&str],
     ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
-        // #385 P-k (performance model v1.4.2 §5.3): the check's limits are compared on its
-        // budget clock; before a `step_pacing()` answer the factor is 1000.
-        let mut pace = PaceClock::UNPACED;
+        // #385 P-k (performance model v1.4.2 §5.3, §5.4 item 1): the check takes its own
+        // `step_pacing()` answer; its limits are compared on its budget clock, and its wait that
+        // reached its limit starts the answer's extra rounds.
+        let pacing = runtime
+            .step_pacing()
+            .map_err(ContainedTaskRunError::operation::<R>)?;
+        let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut started = budget_now(runtime, pace);
         let budget = Duration::from_millis(
             self.control
@@ -3209,10 +3268,6 @@ impl PreparedContainedTask {
         if !self.evaluator.pack().target_consensus.is_empty() {
             // Workflow #386 SR-1 (scheduling model §2.1): a consensus verdict whose sampling
             // timed out is observed again in a new window.
-            let pacing = runtime
-                .step_pacing()
-                .map_err(ContainedTaskRunError::operation::<R>)?;
-            pace = paced_step(runtime, pace, pacing)?;
             let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
             timing = window(budget_observation_now(runtime, pace), pace);
             loop {
@@ -3239,6 +3294,7 @@ impl PreparedContainedTask {
             }
         }
         let interval = Duration::from_millis(self.control.capture_interval().milliseconds);
+        let mut rounds = ExtraRounds::of(pacing);
         loop {
             let boundary = actingcommand_contract::TaskTimingBoundary::CapturePage;
             let identity = runtime.task_boundary_identity(boundary);
@@ -3257,14 +3313,20 @@ impl PreparedContainedTask {
                 EntryFrame::Matched(page) => return Ok(Some(page)),
                 EntryFrame::Unmatched(scene) => scene,
             };
-            let elapsed = budget_elapsed_since(runtime, pace, started);
+            let mut elapsed = budget_elapsed_since(runtime, pace, started);
             if elapsed >= budget {
                 if self.offer_shared_interrupt(runtime, &scene)?.is_some() {
                     started = budget_now(runtime, pace);
                     timing = window(started, pace);
                     continue;
                 }
-                return Ok(None);
+                // #385 P-k (§5.4 item 1): another round of the same length, captures only.
+                if !runtime.sampling_supported() || !rounds.another(runtime, None) {
+                    return Ok(None);
+                }
+                started = budget_now(runtime, pace);
+                timing = window(started, pace);
+                elapsed = Duration::ZERO;
             }
             // Workflow #386 SR-1 (scheduling model §2.2): a runtime without sampling keeps the
             // single frame; the checkpoint itself only answers cancellation.
@@ -3432,6 +3494,7 @@ impl PreparedContainedTask {
             .map_err(ContainedTaskRunError::operation::<R>)?;
         let pace = paced_step(runtime, PaceClock::UNPACED, pacing)?;
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
+        let mut rounds = ExtraRounds::of(pacing);
         let mut window_started = budget_observation_now(runtime, pace);
         let mut timing =
             ContainedTaskTimingContext::new(window_started, window_started + budget, origin)
@@ -3488,7 +3551,19 @@ impl PreparedContainedTask {
                 .with_pace(pace);
                 continue;
             }
-            let elapsed = budget_elapsed_since(runtime, pace, started);
+            let mut elapsed = budget_elapsed_since(runtime, pace, started);
+            // #385 P-k (§5.4 item 1): another round of the same length, captures only.
+            if elapsed >= budget && rounds.another(runtime, None) {
+                started = budget_now(runtime, pace);
+                window_started = budget_observation_now(runtime, pace);
+                timing = ContainedTaskTimingContext::new(
+                    window_started,
+                    window_started + budget,
+                    origin,
+                )
+                .with_pace(pace);
+                elapsed = Duration::ZERO;
+            }
             if elapsed >= budget {
                 let (code, return_home) = match return_home {
                     Some(package_id) => (
@@ -4626,6 +4701,15 @@ impl PreparedContainedTask {
                             if let Some(fresh) = rechecked {
                                 observation = Some(fresh);
                             }
+                            // #385 P-k (performance model v1.4.2 §5.2): the action is generated
+                            // and its sampling check passed; the step's pre-input wait comes
+                            // before the effect intent, and nothing is recognized again after it.
+                            self.wait_pre_input(
+                                runtime,
+                                pacing.pre_input_wait,
+                                pace,
+                                task_deadline,
+                            )?;
                             runtime
                                 .record(ContainedTaskTrace::EffectIntent {
                                     step_index,
@@ -4738,6 +4822,9 @@ impl PreparedContainedTask {
                             Duration::from_millis(timing.timeout.milliseconds);
                         let confirmation_interval =
                             Duration::from_millis(timing.interval.milliseconds);
+                        // #385 P-k (performance model v1.4.2 §5.4 item 1): the confirmation's
+                        // extra rounds come before the failure decision below, so a destination
+                        // that arrives in one needs no second input.
                         let resolution = self.await_postcondition(
                             runtime,
                             ocr_collector,
@@ -4856,6 +4943,8 @@ impl PreparedContainedTask {
                                     ended: wait_ended,
                                     succeeded: true,
                                 });
+                                // #385 P-k (§5.4): the failure decision's confirmation decides
+                                // whether the step clicks again, so it takes no extra round.
                                 match self.await_postcondition(
                                     runtime,
                                     ocr_collector,
@@ -4863,7 +4952,7 @@ impl PreparedContainedTask {
                                     confirmation_timeout,
                                     confirmation_interval,
                                     observation_timing,
-                                    pacing,
+                                    pacing.without_extra_wait_rounds(),
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = Some(reached);
@@ -5579,6 +5668,37 @@ impl PreparedContainedTask {
         }
     }
 
+    /// #385 P-k (performance model v1.4.2 §5.2): the step's pre-input wait `wait`, after its
+    /// action is generated and its sampling check passed, before its effect intent, on the page
+    /// graph and `linear_steps` paths alike. It lasts `wait` of the runtime's clock as the runtime
+    /// gave it (never multiplied by the factor again) and runs on the budget clock `pace` like any
+    /// wait, cut at the task deadline `task_deadline`; a task budget it spends ends the run with
+    /// `contained_task_timeout` before the effect intent. Nothing is recognized again after it.
+    /// A zero wait (every step at the factor 1000) is no pause and reads no clock.
+    fn wait_pre_input<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        wait: Duration,
+        pace: PaceClock,
+        task_deadline: Instant,
+    ) -> Result<(), ContainedTaskError> {
+        if wait.is_zero() {
+            return Ok(());
+        }
+        let left = task_deadline.saturating_duration_since(budget_now(runtime, pace));
+        runtime.pause(wait.min(pace.wall_span(left)));
+        if budget_now(runtime, pace) >= task_deadline {
+            return Err(self.task_timeout_error(
+                runtime,
+                TaskTimingStage::BeforeInput,
+                task_deadline,
+                None,
+                pace,
+            ));
+        }
+        Ok(())
+    }
+
     /// A wait for any page of the package, up to `timeout`. Workflow #386 SR-1 (scheduling model
     /// §2.1): an observation whose sampling timed out is made again in a new window of
     /// `timeout`, as `retries` (the step's pacing and which observation this is) allows.
@@ -5595,6 +5715,9 @@ impl PreparedContainedTask {
         let base_timing = timing;
         // #385 P-k (performance model v1.4.2 §5.3): the wait's limits are budget time.
         let pace = timing.pace();
+        // #385 P-k (§5.4 item 1): a wait that ran out of its window starts the step's extra
+        // rounds, one window each, before it fails.
+        let mut rounds = ExtraRounds::of(retries.0);
         let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
@@ -5628,7 +5751,13 @@ impl PreparedContainedTask {
                     pace,
                 )?
             {
-                break;
+                if !rounds.another(runtime, Some((pace, task_deadline))) {
+                    break;
+                }
+                started = budget_now(runtime, pace);
+                window_started = budget_observation_now(runtime, pace);
+                missed = false;
+                continue;
             }
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
                 Ok(observation) => observation,
@@ -5665,8 +5794,15 @@ impl PreparedContainedTask {
                 window_started += paused;
                 continue;
             }
-            if budget_elapsed_since(runtime, pace, started) >= timeout {
-                break;
+            let now = budget_now(runtime, pace);
+            if now.saturating_duration_since(started) >= timeout {
+                // The next round keeps the interval: its first frame comes one interval on.
+                if !rounds.another(runtime, Some((pace, task_deadline))) {
+                    break;
+                }
+                started = now;
+                window_started = budget_observation_now(runtime, pace);
+                missed = false;
             }
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
@@ -5765,6 +5901,7 @@ impl PreparedContainedTask {
             }
         };
         let mut retries = SampleRetries::new(pacing, ExecutionKernelLocation::ObservationEntry);
+        let mut rounds = ExtraRounds::of(pacing);
         // #385 P-k (performance model v1.4.2 §5.3): the entry's budget is budget time.
         let pace = timing.pace();
         let mut window = entry_window(budget_observation_now(runtime, pace));
@@ -5788,13 +5925,7 @@ impl PreparedContainedTask {
                 return Err(unmatched().into());
             }
             let now = budget_now(runtime, pace);
-            let expired = now >= deadline;
-            if !expired {
-                runtime
-                    .candidate_sampling_checkpoint()
-                    .map_err(ContainedTaskRunError::operation::<R>)?;
-            }
-            if expired {
+            if now >= deadline {
                 // Workflow #373 NAV-6 (§4.4, §6.1 point 1): the entry's verdict is unmatched; its
                 // last frame is offered to the shared interrupt pages, and after a handled one
                 // the entry check starts again.
@@ -5802,14 +5933,22 @@ impl PreparedContainedTask {
                     deadline = (budget_now(runtime, pace) + budget).min(timing.deadline());
                     continue;
                 }
-                runtime
-                    .record(ContainedTaskTrace::EntryRecognition {
-                        required_pages: pages.to_vec(),
-                        matched_page: None,
-                    })
-                    .map_err(ContainedTaskRunError::Boundary)?;
-                return Err(unmatched().into());
+                // #385 P-k (§5.4 item 1): another round of the same length within the task's
+                // budget, captures only.
+                if !rounds.another(runtime, Some((pace, timing.deadline()))) {
+                    runtime
+                        .record(ContainedTaskTrace::EntryRecognition {
+                            required_pages: pages.to_vec(),
+                            matched_page: None,
+                        })
+                        .map_err(ContainedTaskRunError::Boundary)?;
+                    return Err(unmatched().into());
+                }
+                deadline = (now + budget).min(timing.deadline());
             }
+            runtime
+                .candidate_sampling_checkpoint()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
             let boundary = actingcommand_contract::TaskTimingBoundary::PageRecognitionWait;
             let identity = runtime.task_boundary_identity(boundary);
             let wait_started = runtime.monotonic_now();
@@ -6383,7 +6522,9 @@ impl PreparedContainedTask {
 
     /// The wait for the step's destination after its input. Workflow #386 SR-1 (scheduling model
     /// §2.1 item 1): an observation whose sampling timed out is made again in a new window of
-    /// `timeout`, as the step's `pacing` allows; the input is never repeated.
+    /// `timeout`, as the step's `pacing` allows; the input is never repeated. #385 P-k (§5.4
+    /// item 1): a wait that ran out of its window without an error page starts the extra rounds
+    /// of `pacing`, one window each, before it fails; its observation window takes its own.
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -6401,6 +6542,7 @@ impl PreparedContainedTask {
         let pace = timing.pace();
         let mut retries =
             SampleRetries::new(pacing, ExecutionKernelLocation::ObservationAfterInput);
+        let mut rounds = ExtraRounds::of(pacing);
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
         let mut last_observation = None;
@@ -6438,7 +6580,13 @@ impl PreparedContainedTask {
                     pace,
                 )?
             {
-                break;
+                if !rounds.another(runtime, Some((pace, task_deadline))) {
+                    break;
+                }
+                started = budget_now(runtime, pace);
+                window_started = budget_observation_now(runtime, pace);
+                missed = false;
+                continue;
             }
             let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
                 Ok(observation) => observation,
@@ -6491,7 +6639,7 @@ impl PreparedContainedTask {
                                 observation,
                                 (interval, timeout),
                                 base_timing,
-                                &mut retries,
+                                (&mut retries, ExtraRounds::of(pacing)),
                             ),
                             None => Ok(PostconditionResolution::Reached(observation)),
                         };
@@ -6521,8 +6669,15 @@ impl PreparedContainedTask {
                 window_started += paused;
                 continue;
             }
-            if budget_elapsed_since(runtime, pace, started) >= timeout {
-                break;
+            let now = budget_now(runtime, pace);
+            if now.saturating_duration_since(started) >= timeout {
+                // The next round keeps the interval: its first frame comes one interval on.
+                if !rounds.another(runtime, Some((pace, task_deadline))) {
+                    break;
+                }
+                started = now;
+                window_started = budget_observation_now(runtime, pace);
+                missed = false;
             }
             let remaining = timeout.saturating_sub(budget_elapsed_since(runtime, pace, started));
             let boundary = actingcommand_contract::TaskTimingBoundary::PostconditionWait;

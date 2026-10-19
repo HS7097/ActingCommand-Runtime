@@ -1349,3 +1349,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_b15p_host::b15p_provides_with_parameters_is_admitted_and_read_without_preparing",
 ]
 incident = ["#411 B15 R1"]
+
+# #385 P-k2 (v0.12.x; register §1.108 PK2-1, PK2-3, PK2-4; performance model v1.4.2 §4.1, §4.4, §5.2, §5.3, §5.4, §5.6): the shadow measurement keeps per instance the extra rounds of its curve reading (the lower neighbour's extra_retries, at least pressure_floor.extra_retries under a floor pressure), in effect 0 under observe and the reading under pace and full; step_pacing() hands beside the factor extra_wait_rounds, sample_timeout_retries = the configured base + the rounds and pre_input_wait = pre_input_wait_base_ms x (f - 1000) / 1000 (zero at 1000); a step's steps[] entry carries extra_wait_rounds, the rounds it used, and a step at 1000 that used none has no entry; once a run had a factor above 1000 each of its waits ends by its host deadline, so a direct run is cancelled deadline_exceeded and a scheduled run fails contained_task_deadline_exceeded inside the heartbeat reserve, its lease released and none lapsed (no lease_mismatch)
+[[gate]]
+key = "111"
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_the_step_pacing_carries_the_stages_extra_rounds_and_pre_input_wait",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_steps_used_rounds_are_recorded",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_paced_wait_ends_by_the_host_deadline",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_the_pre_input_wait_ends_by_the_host_deadline",
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline",
+]
+incident = ["#385 P-k"]

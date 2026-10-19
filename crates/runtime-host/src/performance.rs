@@ -38,7 +38,8 @@ pub(crate) use capacity::{CapacityPreflightConfig, CapacityRoots};
 // Workflow #385 P-m: the shadow measurement (PERF §3, §4, §4.6).
 mod pacing;
 pub(crate) use pacing::{
-    PacingBackendRole, PacingSample, PacingSampleSource, PacingShadow, floor_pressure,
+    EffectivePacing, PacingBackendRole, PacingSample, PacingSampleSource, PacingShadow,
+    floor_pressure,
 };
 
 const BASIS_POINTS_MAX: u16 = 10_000;
@@ -1821,14 +1822,14 @@ impl PerformanceMonitor {
         self.pacing.status(now, settings, instances, health)
     }
 
-    /// #385 P-k (PERF v1.4.2 §5.6 item 2): the pacing factor in effect for `instance_alias`,
-    /// read at the start of each step of its contained runs. A monitor without counters has
-    /// never evaluated: 1 000.
-    pub(crate) fn pacing_factor_milli(&self, instance_alias: &str) -> u32 {
+    /// #385 P-k (PERF v1.4.2 §5.6 item 2, §5.4): the pacing factor and the extra rounds in
+    /// effect for `instance_alias`, read at the start of each step of its contained runs. A
+    /// monitor without counters has never evaluated: 1 000 and none.
+    pub(crate) fn effective_pacing(&self, instance_alias: &str) -> EffectivePacing {
         if self.counters_enabled() {
-            self.pacing.effective_factor_milli(instance_alias)
+            self.pacing.effective_pacing(instance_alias)
         } else {
-            actingcommand_contract::MIN_PACING_FACTOR_MILLI
+            EffectivePacing::UNPACED
         }
     }
 }

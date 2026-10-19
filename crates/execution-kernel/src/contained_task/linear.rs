@@ -18,11 +18,12 @@
 use super::{
     ApplicationEffectSupport, ContainedTaskBoundaryTiming, ContainedTaskError,
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
-    ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, MAX_CAPTURE_INTERVAL_MS, MAX_STEP_TIMEOUT_MS,
-    MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates, PageObservation,
-    PostAdmissionOcrCollector, PreparedContainedTask, SampleRetries, StepPacing, TaskControl,
-    TaskOperation, TaskProgram, budget_elapsed_since, budget_now, budget_observation_now,
-    pace_pause, paced_step, resolve_page_reference, sample_budget_invalid, selection,
+    ContainedTaskTrace, DEFAULT_TASK_TIMEOUT_MS, ExtraRounds, MAX_CAPTURE_INTERVAL_MS,
+    MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock, PageCandidates,
+    PageObservation, PostAdmissionOcrCollector, PreparedContainedTask, SampleRetries, StepPacing,
+    TaskControl, TaskOperation, TaskProgram, budget_elapsed_since, budget_now,
+    budget_observation_now, pace_pause, paced_step, resolve_page_reference, sample_budget_invalid,
+    selection,
 };
 use crate::RunOperationPolicy;
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
@@ -1336,6 +1337,14 @@ impl PreparedContainedTask {
             }
             break (guard, action, sampling, frame.input_context.clone());
         };
+        // #385 P-k (performance model v1.4.2 §5.2): the step's pre-input wait, after the action
+        // and its sampling check, before the effect intent; nothing is recognized again after it.
+        self.wait_pre_input(
+            runtime,
+            run.pacing.pre_input_wait,
+            run.timing.pace(),
+            deadline,
+        )?;
         runtime
             .record(ContainedTaskTrace::EffectIntent {
                 step_index,
@@ -1633,6 +1642,14 @@ impl PreparedContainedTask {
         let pace = run.timing.pace();
         let mut retries =
             SampleRetries::new(run.pacing, ExecutionKernelLocation::ObservationAfterInput);
+        // #385 P-k (§5.4 item 1): a wait that gave up starts the step's extra rounds first, each
+        // `budget` from where the last one ended; a skip target already seen stays seen.
+        let mut rounds = ExtraRounds::of(run.pacing);
+        let mut round_end: Option<Instant> = None;
+        let wait_end = |started: Instant, seen: Option<Instant>, round_end: Option<Instant>| {
+            let end = seen.map_or(started + budget, |first| first + settle + budget);
+            round_end.map_or(end, |round_end| end.max(round_end))
+        };
         let mut started = budget_now(runtime, pace);
         loop {
             if budget_now(runtime, pace) >= deadline {
@@ -1646,8 +1663,7 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
-            let observation_deadline =
-                seen.map_or(started + budget, |first| first + settle + budget);
+            let observation_deadline = wait_end(started, seen, round_end);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
                 run.timing
             } else {
@@ -1662,6 +1678,7 @@ impl PreparedContainedTask {
                     retries.retry(failure, budget)?;
                     started = budget_now(runtime, pace);
                     seen = None;
+                    round_end = None;
                     continue;
                 }
             };
@@ -1704,14 +1721,20 @@ impl PreparedContainedTask {
                         if let Some(first) = &mut seen {
                             *first += paused;
                         }
+                        if let Some(end) = &mut round_end {
+                            *end += paused;
+                        }
                         continue;
                     }
                 }
             }
-            let limit = seen
-                .map_or(started + budget, |first| first + settle + budget)
-                .saturating_duration_since(started);
+            let mut limit = wait_end(started, seen, round_end).saturating_duration_since(started);
             let elapsed = budget_elapsed_since(runtime, pace, started);
+            if elapsed >= limit && rounds.another(runtime, Some((pace, deadline))) {
+                // The next round keeps the interval: its first frame comes one interval on.
+                round_end = Some(started + elapsed + budget);
+                limit = elapsed + budget;
+            }
             if elapsed >= limit {
                 return Ok(Err(LinearMiss {
                     kind: miss,
@@ -1808,7 +1831,9 @@ impl PreparedContainedTask {
     /// Captures until one of `candidates` passes, at most `budget` after the first capture;
     /// `None` once the budget is spent. A task deadline inside the wait fails the task.
     /// Workflow #386 SR-1 (scheduling model §2.1): an observation whose sampling timed out is
-    /// made again in a new window of `budget`, as the run's pacing allows.
+    /// made again in a new window of `budget`, as the run's pacing allows. #385 P-k (§5.4 item
+    /// 1): a spent budget starts the step's extra rounds first, one `budget` each, captures only;
+    /// the retry decision, whose frame decides whether the step inputs again, takes none.
     fn linear_wait<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1823,6 +1848,10 @@ impl PreparedContainedTask {
         // #385 P-k (performance model v1.4.2 §5.3): the wait's limits are budget time.
         let pace = run.timing.pace();
         let mut retries = SampleRetries::new(run.pacing, purpose.observation());
+        let mut rounds = match purpose {
+            LinearWaitPurpose::RetryDecision => ExtraRounds::NONE,
+            LinearWaitPurpose::Entry | LinearWaitPurpose::AfterInput => ExtraRounds::of(run.pacing),
+        };
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
         // Whether the window has seen a frame on which no awaited page passed.
@@ -1856,7 +1885,13 @@ impl PreparedContainedTask {
                     pace,
                 )?
             {
-                return Ok(None);
+                if !rounds.another(runtime, Some((pace, deadline))) {
+                    return Ok(None);
+                }
+                started = budget_now(runtime, pace);
+                window_started = budget_observation_now(runtime, pace);
+                missed = false;
+                continue;
             }
             let observation = match self.linear_observe_scene(runtime, candidates, timing) {
                 Ok(observation) => observation,
@@ -1893,8 +1928,15 @@ impl PreparedContainedTask {
                 window_started += paused;
                 continue;
             }
-            if budget_elapsed_since(runtime, pace, started) >= budget {
-                return Ok(None);
+            let now = budget_now(runtime, pace);
+            if now.saturating_duration_since(started) >= budget {
+                // The next round keeps the interval: its first frame comes one interval on.
+                if !rounds.another(runtime, Some((pace, deadline))) {
+                    return Ok(None);
+                }
+                started = now;
+                window_started = budget_observation_now(runtime, pace);
+                missed = false;
             }
             let boundary = purpose.boundary();
             let identity = runtime.task_boundary_identity(boundary);

@@ -13,8 +13,17 @@
 // latency, every pause moves it by its length and is recorded, and the n-th `step_pacing()` call
 // is answered with the n-th scripted factor (after the list, its last one). A page-graph run asks
 // once at its start (the factor of its first observations) and once at each step's start.
+//
+// #385 P-k2 (exec gate key 92; register §1.108; performance model v1.4.2 §5.2, §5.4; test rows
+// Tk-6, Tk-7, Tk-8, Tk-12; brief PK2 requirements 2–6): the runtime may also hand each step extra
+// wait rounds and a pre-input wait (`with_step_extras`). A wait without an input that reached its
+// limit starts one more round of the same length, captures only, at most that many times; the
+// confirmation's rounds come before the failure decision; rounds never add an input; the
+// observe-only resamples are the base plus the rounds; the pre-input wait lies between the step's
+// recognition and its effect intent, as given. Expected values come from those lines and the
+// package values below.
 
-use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
+use super::tests::scripted::{ScriptedEvent, ScriptedFrame, ScriptedRuntime};
 use super::*;
 use actingcommand_recognition_pack::RecognitionPack;
 use serde_json::{Map, Value, json};
@@ -22,6 +31,7 @@ use std::path::PathBuf;
 
 const PAGE_UNKNOWN: &str = SharedCode::ContainedTaskPageUnknown.as_str();
 const TASK_TIMEOUT: &str = ExecutionKernelCode::ContainedTaskTimeout.as_str();
+const CONFIRMATION_FAILED: &str = ExecutionKernelCode::PageConfirmationFailed.as_str();
 
 const TASK_TIMEOUT_MS: u64 = 60_000;
 const STEP_TIMEOUT_MS: u64 = 5_000;
@@ -589,4 +599,189 @@ fn pk1_gesture_durations_are_not_scaled() {
         .collect::<Vec<_>>();
     assert_eq!(durations, [SWIPE_MS, LONG_PRESS_MS]);
     assert_eq!(paced.inputs(), unpaced.inputs());
+}
+
+// #385 P-k2: a page-graph task whose one click `open` goes from `home` to `result`, confirmed every
+// `CONFIRM_INTERVAL_MS` for `CONFIRM_TIMEOUT_MS`, without a retry policy.
+fn confirmed_once(sampling: Sampling) -> PreparedContainedTask {
+    page_graph_task(
+        sampling,
+        (CAPTURE_INTERVAL_MS, STEP_TIMEOUT_MS),
+        json!([{
+            "id": "open",
+            "from": "home",
+            "to": "result",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "expect_after": {"page_id": "result", "timeout_ms": CONFIRM_TIMEOUT_MS,
+                             "interval_ms": CONFIRM_INTERVAL_MS}
+        }]),
+    )
+}
+
+type RunResult = Result<ContainedTaskOutcome, ContainedTaskRunError<&'static str>>;
+
+// Runs `task` on `screens` at the factor `factor_milli`, every step handed `extra_wait_rounds` and
+// the pre-input wait `pre_input_wait`.
+fn paced_run(
+    task: &PreparedContainedTask,
+    screens: Vec<Vec<ScriptedFrame>>,
+    factor_milli: u32,
+    (extra_wait_rounds, pre_input_wait): (u32, Duration),
+) -> (RunResult, ScriptedRuntime) {
+    let mut runtime = ScriptedRuntime::new(screens)
+        .with_step_factors(vec![factor_milli])
+        .with_step_extras(extra_wait_rounds, pre_input_wait);
+    let result = task.run(&mut runtime);
+    (result, runtime)
+}
+
+fn succeeded(result: &RunResult) -> bool {
+    matches!(result, Ok(outcome) if matches!(outcome.outcome, TaskOutcome::Success))
+}
+
+// The events of each input: from the recognition last before it to the input itself.
+fn before_each_input(events: &[ScriptedEvent]) -> Vec<Vec<ScriptedEvent>> {
+    events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| **event == ScriptedEvent::Input)
+        .map(|(input, _)| {
+            let recognized = events[..input]
+                .iter()
+                .rposition(|event| *event == ScriptedEvent::Recognized)
+                .expect("a recognition before the input");
+            events[recognized..=input].to_vec()
+        })
+        .collect()
+}
+
+// Requirements 3 and 4 (Tk-12): a package without target consensus; after the click of `open` the
+// device shows `home` on three frames, which spend the confirmation's window (frames at 0, 400 and
+// 800 ms of budget), and `result` on the fourth. At 1 500 with one extra round the fourth frame
+// falls in the second round and confirms the step: the run succeeds with one input and reports one
+// round. The same frames with no extra round end at the failure decision: the step has no retry
+// policy, so `page_confirmation_failed`.
+#[test]
+fn pk2_an_extra_round_finds_a_late_target_without_a_second_input() {
+    let task = confirmed_once(Sampling::SingleFrame);
+    let script = || {
+        vec![
+            frames(&[Screen::Home]),
+            frames(&[Screen::Home, Screen::Home, Screen::Home, Screen::Result]),
+        ]
+    };
+
+    let (result, runtime) = paced_run(&task, script(), 1_500, (1, Duration::ZERO));
+    assert!(succeeded(&result), "one extra round: {result:?}");
+    assert_eq!(runtime.inputs().len(), 1, "no second input");
+    assert_eq!(runtime.extra_rounds_started(), 1, "one round used");
+
+    let (result, runtime) = paced_run(&task, script(), 1_500, (0, Duration::ZERO));
+    assert_eq!(failure_code(result), CONFIRMATION_FAILED);
+    assert_eq!(runtime.inputs().len(), 1);
+    assert_eq!(runtime.extra_rounds_started(), 0);
+}
+
+// Requirement 6 (Tk-8): `open` is attempted at most twice (`max_attempts` 2) and its confirmation
+// never passes, the device showing `home` throughout. At 3 000 with three extra rounds the run
+// makes exactly the inputs it makes at 1 000 without any: the package's `max_attempts`.
+#[test]
+fn pk2_extra_rounds_never_add_an_input() {
+    let task = two_steps(Sampling::SingleFrame);
+    let script = || vec![frames(&[Screen::Home])];
+
+    let (paced, paced_runtime) = paced_run(&task, script(), 3_000, (3, Duration::ZERO));
+    let (unpaced, unpaced_runtime) = paced_run(&task, script(), 1_000, (0, Duration::ZERO));
+    assert!(!succeeded(&paced), "{paced:?}");
+    assert!(!succeeded(&unpaced), "{unpaced:?}");
+    assert_eq!(
+        unpaced_runtime.inputs().len(),
+        2,
+        "the package's max_attempts"
+    );
+    assert_eq!(
+        paced_runtime.inputs().len(),
+        unpaced_runtime.inputs().len(),
+        "extra rounds add no input"
+    );
+}
+
+// Requirement 2 (Tk-7): a package with target consensus (two frames per observation). After the
+// click the first frame of the confirmation's first and second observations is delivered 3 s
+// late, past the observation's 800 ms window at 2 500, so each one's sampling times out; the step
+// is handed a base of 0 observe-only retries and 2 extra rounds. The observation is made again
+// twice with no input, and the third one (two frames) confirms the step.
+#[test]
+fn pk2_extra_sample_retries_resample_without_an_input() {
+    let task = confirmed_once(Sampling::TwoFrames);
+    let late = || shown(Screen::Result).delivered_after(Duration::from_secs(3));
+    let screens = vec![
+        frames(&[Screen::Home]),
+        vec![late(), late(), shown(Screen::Result), shown(Screen::Result)],
+    ];
+
+    let (result, runtime) = paced_run(&task, screens, 2_500, (2, Duration::ZERO));
+    assert!(
+        succeeded(&result),
+        "the third observation confirms: {result:?}"
+    );
+    assert_eq!(runtime.inputs().len(), 1, "no input while observing again");
+    // Two frames of the first page, then one frame of each timed-out observation and two of the
+    // third.
+    assert_eq!(runtime.captures(), 2 + 1 + 1 + 2);
+}
+
+// Requirement 5 (Tk-6): with a pre-input wait of 300 ms (at 2 000), each input of a page-graph
+// step and of a `linear_steps` step follows, in order, the step's recognition, one pause of
+// exactly 300 ms and the effect intent; without one, the effect intent follows the recognition
+// with no pause between.
+#[test]
+fn pk2_the_pre_input_wait_sits_between_recognition_and_the_effect_intent() {
+    const PRE_INPUT_WAIT: Duration = Duration::from_millis(300);
+    let page_graph = page_graph_task(
+        Sampling::SingleFrame,
+        (CAPTURE_INTERVAL_MS, STEP_TIMEOUT_MS),
+        json!([{
+            "id": "open",
+            "from": "home",
+            "to": "result",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }]),
+    );
+    let page_graph_screens = || vec![frames(&[Screen::Home]), frames(&[Screen::Result])];
+    let linear = linear_task();
+    let linear_screens = || {
+        vec![
+            frames(&[Screen::Home]),
+            frames(&[Screen::Menu]),
+            frames(&[Screen::Away, Screen::Result]),
+        ]
+    };
+    let paced = vec![
+        ScriptedEvent::Recognized,
+        ScriptedEvent::Paused(PRE_INPUT_WAIT),
+        ScriptedEvent::EffectIntent,
+        ScriptedEvent::Input,
+    ];
+    let unpaced = vec![
+        ScriptedEvent::Recognized,
+        ScriptedEvent::EffectIntent,
+        ScriptedEvent::Input,
+    ];
+    for (pre_input_wait, expected) in [(PRE_INPUT_WAIT, &paced), (Duration::ZERO, &unpaced)] {
+        for (task, screens, inputs) in [
+            (&page_graph, page_graph_screens(), 1),
+            (&linear, linear_screens(), 2),
+        ] {
+            let (result, runtime) = paced_run(task, screens, 2_000, (0, pre_input_wait));
+            assert!(succeeded(&result), "{result:?}");
+            assert_eq!(
+                before_each_input(runtime.events()),
+                vec![expected.clone(); inputs],
+                "pre-input wait {pre_input_wait:?}"
+            );
+        }
+    }
 }

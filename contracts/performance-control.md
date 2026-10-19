@@ -202,9 +202,10 @@ a contained run takes at each step (Step pacing below). `performance.pacing.mode
   ends that phase) with the same factor. A contained run reads its instance's factor in effect
   at each step (`step_pacing()`, Workflow #385 P-k): the step's waits are that many times
   longer and its kernel limits run on a budget clock stretched by the same factor; the host's
-  deadline and lease are not stretched; a policy run is settled on its budget time. Dispatch,
-  shares and holds are unchanged (P-s, P-h). Under `observe` every factor is 1 000 and nothing
-  changes.
+  deadline and lease are not stretched; a policy run is settled on its budget time. With the
+  factor the step reads its stage's extra wait rounds and pre-input wait (Step pacing below).
+  Dispatch, shares and holds are unchanged (P-s, P-h). Under `observe` every factor is 1 000,
+  no round or pre-input wait is added and nothing changes.
 - **Records.** A changed stage of a scope is one `perf.pacing_changed` whose outcome is
   `perf_stage_changed` (info): `pacing_stage_from`, `pacing_stage_to`, `responsiveness_bp`
   (`R_eff`), `factor_milli`, `pacing_cause`, `pacing_mode`, and `instance_id` (the alias) for an
@@ -231,8 +232,10 @@ a contained run takes at each step (Step pacing below). `performance.pacing.mode
 ## Step pacing (Workflow #385 P-k)
 
 Under `pace` or `full` a contained run is stretched by its instance's pacing factor, never
-paused (PERF v1.4.2 §5.1-§5.3, §5.6; register §1.107). Under `observe` every factor is 1 000
-and every wait, limit, deadline, settlement and record is the one before pacing.
+paused (PERF v1.4.2 §5.1-§5.3, §5.6; register §1.107), and its stage's extra wait rounds and
+pre-input wait are added (PERF v1.4.2 §4.1, §4.4, §5.2, §5.4; P-k S5, register §1.108). Under
+`observe` every factor is 1 000, no round or pre-input wait is added, and every wait, limit,
+deadline, settlement and record is the one before pacing.
 
 - **One factor per step.** Each `step_pacing()` answer (at a run's start, at each step and at
   each entry check) hands the step `StepPacing::factor_milli`: the factor in effect for the
@@ -250,7 +253,11 @@ and every wait, limit, deadline, settlement and record is the one before pacing.
   its active checks and `contained_task_deadline_exceeded` stay wall-clock and identical at
   every factor. A stretched run that reaches its host deadline ends
   `contained_task_deadline_exceeded`, as before pacing; `perf_run_yielded` is not written before
-  SR-2b.
+  SR-2b. Once a run had a factor above 1 000, each of its waits (every wait of the kernel,
+  the pre-input wait and extra rounds included) ends no later than its host deadline: the host
+  cuts it to the time left. The run's next check then ends it while its lease, which lasts the
+  heartbeat reserve past that deadline and is not renewed while the run runs (direct, scheduled
+  and host package runs alike), still holds. A run whose every factor is 1 000 waits as before.
 - **Budget time and settlement.** The host keeps the run's factor segments, from one answer to
   the next or to the end of its execution. Its budget time is its wall time less the sum over
   its segments of the segment's wall time × (f − 1000) / f. A policy run with a segment above
@@ -260,8 +267,42 @@ and every wait, limit, deadline, settlement and record is the one before pacing.
   `runtime_ms`. The host's replay, its recovery check and the ledger's settlement check compare
   `budget_elapsed_ms` when the record carries it, else the wall time. A run settled from its
   terminal after a restart has no segments left and is settled on its wall time.
+- **Extra rounds of the stage (P-k S5).** The shadow measurement's evaluation keeps, per
+  instance, the extra rounds of its curve reading: the lower neighbour's `extra_retries`, under
+  `linear` and `step` alike, and at least `pressure_floor.extra_retries` while a pressure of a
+  floor kind at or above `pressure_floor.min_severity` is active. In effect they are 0 under
+  `observe` and the reading under `pace` and `full` (the learning view caps neither). No status,
+  summary or record shape carries them.
+- **What a step is handed.** Beside the factor, each `step_pacing()` answer hands
+  `StepPacing::extra_wait_rounds` (the rounds in effect), `sample_timeout_retries` = the
+  configured base (`scheduling.recognition.sample_timeout_retries`) plus those rounds, and
+  `pre_input_wait` = `performance.pacing.pre_input_wait_base_ms` × (f − 1000) / 1000, zero at
+  1 000 (the base is read with the `performance` section at start-up). The kernel reads no
+  configuration. An entry check takes its own answer, as a step does.
+- **One more round, never one more click.** A wait without an input (a page wait, the
+  confirmation after a step's input, an entry wait, an observation window, a `linear_steps`
+  transition or arrival wait) that reaches its limit on the budget clock without a declared
+  failure (an error page) or a terminal page having ended it starts one more full round while the
+  task's budget is not spent: a new limit of the same length, the same interval, captures only,
+  no input. That repeats at most `extra_wait_rounds` times; then the step fails exactly as
+  before. The confirmation's rounds come before the failure decision, so a destination that
+  arrives in one needs no second input. The waits that decide whether a step inputs again (the
+  failure decision's confirmation after its retry wait, a `linear_steps` retry decision) take no
+  round. Every round stays within the task's budget limit and the host's wall deadline.
+- **Never more inputs.** For the same frames a run's input calls never exceed those it makes
+  with no extra round at 1 000: `max_attempts` and every clicking retry are unchanged, and a
+  round can only spare a retry's input.
+- **The pre-input wait.** On the page-graph and `linear_steps` step paths, after the action is
+  generated and its sampling check passed and before `EffectIntent`, the kernel pauses
+  `pre_input_wait` as given (not multiplied by f again), on the budget clock like any wait; a
+  task budget it spends ends the run `contained_task_timeout` before the effect intent. Nothing is
+  recognized again after it. At 1 000 there is no pause and the order is unchanged. A scan's
+  drags are not preceded by it.
 - **Evidence.** A run's task timing evidence carries one `steps[]` entry (register P5) per step
-  index whose factor was above 1 000, with `pacing_factor_milli`; the attempts of one step share
-  its entry, and the entries are in step order.
+  index whose factor was above 1 000, with `pacing_factor_milli`, or that used an extra wait
+  round, with `extra_wait_rounds`, the rounds its waits started (rounds before the run's first
+  step count for that step; a step that used none carries no `extra_wait_rounds`); the attempts
+  of one step share its entry, and the entries are in step order. A step at 1 000 that used no
+  round has no entry.
 - **Not changed.** Dispatch, shares, holds and the seven-level controller do not read the mode;
   the cost-commit gate stays unimplemented (SR-10).
