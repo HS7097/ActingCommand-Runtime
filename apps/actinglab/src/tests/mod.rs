@@ -12,6 +12,9 @@ mod gate_336_pkgs5;
 // Workflow #390 nine6 (exec key 81): `resource validate` warns about a pool nothing publishes.
 #[path = "gate_390_nine6.rs"]
 mod gate_390_nine6;
+// #411 A9 (exec key 86): offline `observe` of an unknown scene answers `unknown` in Min.
+#[path = "gate_rc2_a9.rs"]
+mod gate_rc2_a9;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

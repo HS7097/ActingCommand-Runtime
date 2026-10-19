@@ -1706,6 +1706,20 @@ unchanged on a valid ledger; the refusals keep the ledger's existing codes.
 |---|---|---|---|---|---|
 | A4-1 | the `events` report's `artifact_evictions` (and each event's eviction proofs) | read behaviour of an existing member (shape unchanged) | A4 | A4 | built from the `artifact.eviction_intent` and `artifact.eviction_outcome` rows after the last row read, each checked on its own, not against a whole-ledger retention replay; each proof carries the head of the read transaction, as before, so `--through` below an eviction still lists its proof. `open`, `chain` and `export` keep the full verification, and `chain` is the full check; a segment root is read whole |
 
+### 1.101 Slice A9 (v0.12.1-rc.2): offline `observe` of an unknown page answers `unknown` in Min (#411 A9)
+
+When no page matches, offline `observe`'s near-miss `candidates` are a transport member, not
+the identity, so Min cuts them to fit its hard limit instead of failing with
+`observe_identity_limit_exceeded`. [page-projection.md](page-projection.md) ("Shared input and
+output") is the contract. It adds no code, wire or ledger shape; the pending description of
+`observe_identity_limit_exceeded` says the code now means the identity itself does not fit.
+An answer that succeeds today is unchanged, and the Normal view (`--verbose`) keeps the whole
+list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| A9-1 | `candidates_truncated: true` and `candidates_omitted_count` beside `candidates` in offline `observe`'s Min answer | two optional output members (exec 86) | A9 | A9 | present only when Min removed near-miss entries: after every existing reduction (fact rows, projection entries, the identity alone) the answer is still over the hard limit, so Min removes `candidates` entries from the end (sorted by score, the lowest last) one at a time until it fits, and the suspicion's copy of the list with them; `candidates` stays an array; the count is the entries removed; both members are kept by Min like `candidates`; with every entry removed and the identity still over the limit, `observe_identity_limit_exceeded` as before |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

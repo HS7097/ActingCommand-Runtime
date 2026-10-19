@@ -1357,3 +1357,15 @@ tests = [
     "actingcommand-pack-containment::pkg_s1::a2_a_missing_path_an_unsupported_file_and_a_file_over_the_limit_have_their_own_codes",
 ]
 incident = ["#411 A2"]
+
+# Workflow #411 A9 (v0.12.1-rc.2; register §1.101; related keys 39 and 77): offline observe on a frame no page matches answers unknown in Min (page-projection.md, "No match yields state=unknown"); after every existing reduction its near-miss candidates, a transport member and not the identity, are removed from the end (the lowest score last) until the answer fits the hard limit, marked candidates_truncated with candidates_omitted_count; an answer that fits keeps every near miss unmarked, the Normal view (--verbose) keeps the whole list, and the CLI answers exit 0 instead of observe_identity_limit_exceeded
+[[gate]]
+key = "86"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_rc2_a9::a9_min_unknown_page_over_the_hard_limit_answers_unknown_with_its_near_misses_cut",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_rc2_a9::a9_min_unknown_page_within_the_limit_keeps_every_near_miss_unmarked",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_rc2_a9::a9_verbose_unknown_page_keeps_every_near_miss",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_rc2_a9::a9_offline_observe_of_an_unknown_scene_exits_zero_in_min",
+]
+incident = ["#411 A9"]

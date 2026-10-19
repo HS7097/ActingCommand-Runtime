@@ -395,6 +395,9 @@ pub(super) fn project(
             "observation",
             "matched",
             "candidates",
+            // #411 A9: the marks of a cut near-miss list stay beside it.
+            "candidates_truncated",
+            "candidates_omitted_count",
             "recovery_hint",
             "frame_source",
             "frame_path",
@@ -429,6 +432,7 @@ pub(super) fn project(
             source["artifact"] = json!({"artifact_id":source["artifact"]["artifact_id"], "sha256":source["artifact"]["sha256"]});
         }
     }
+    let mut omitted_near_misses = 0;
     loop {
         payload["observation"] = serde_json::to_value(&observation)
             .map_err(|error| CliError::device(error.to_string()))?;
@@ -464,8 +468,38 @@ pub(super) fn project(
         if observation.reduce_to_identity()? {
             continue;
         }
+        // #411 A9: an unknown page's near-miss `candidates` are a transport member, not the
+        // identity (contracts/page-projection.md), so Min removes them from the end before the
+        // identity is judged; only an identity that alone does not fit fails.
+        if omit_last_near_miss(&mut payload, &mut omitted_near_misses) {
+            continue;
+        }
         return Err(identity_limit_exceeded(bytes));
     }
+}
+
+/// #411 A9: removes the last entry of the near-miss `candidates` (sorted by score, the lowest
+/// last) and of the suspicion's copy of that list, and marks the answer with
+/// `candidates_truncated` and the number removed so far, `candidates_omitted_count`. Returns
+/// whether an entry was left to remove.
+fn omit_last_near_miss(payload: &mut Value, omitted: &mut usize) -> bool {
+    let Some(candidates) = payload.get_mut("candidates").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    if candidates.pop().is_none() {
+        return false;
+    }
+    let kept = candidates.len();
+    *omitted += 1;
+    if let Some(suspected) = payload
+        .pointer_mut("/suspicion/candidates")
+        .and_then(Value::as_array_mut)
+    {
+        suspected.truncate(kept);
+    }
+    payload["candidates_truncated"] = json!(true);
+    payload["candidates_omitted_count"] = json!(*omitted);
+    true
 }
 
 /// #391 MCP-391b: Min's identity alone exceeds the hard byte limit.
@@ -713,6 +747,11 @@ mod tests {
 // `offset` click.
 #[cfg(test)]
 mod gate_390_navoffset;
+
+// #411 A9 (exec key 86): Min answers an unknown page as unknown, its near-miss list cut from the
+// end to fit.
+#[cfg(test)]
+mod gate_rc2_a9;
 
 #[cfg(test)]
 mod lab3_tests {

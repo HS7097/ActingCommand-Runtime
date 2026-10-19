@@ -17,7 +17,9 @@ actingcommand_contract::outcome_codes! {
         // ---- #391 MCP-391b (pending)
         /// Error. `observe`'s Min output still exceeds its hard byte limit with every fact row
         /// and every projection entry omitted, so only the identity is left and it does not
-        /// fit (keys `actual_bytes`, `limit_bytes`).
+        /// fit (keys `actual_bytes`, `limit_bytes`). An unknown page's near-miss candidates are
+        /// cut first (marked `candidates_truncated`), so it means the identity itself does not
+        /// fit (#411 A9).
         ObserveIdentityLimitExceeded => "observe_identity_limit_exceeded": error / none,
         // ---- end of #391 MCP-391b
         // ---- Workflow #308 SEL-L6a (pending): `actinglab replay --frames`.

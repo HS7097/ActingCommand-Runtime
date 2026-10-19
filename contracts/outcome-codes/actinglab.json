@@ -31,7 +31,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b).",
+      "description": "actinglab observe (offline or with --capture) printed its default Min output, and after omitting every fact row and every projection entry the output still exceeds the Min hard byte limit: the identity left (the observation identity, its source and the other members Min keeps, such as candidate sets) does not fit. It answers no result and exits 2; with --capture the Runtime has already recorded the observation. When omitting entries is enough, observe answers the identity marked truncated with its omitted counts instead (#391 MCP-391b). When no page matches, the near-miss candidates beside the identity are cut first, from the end, marked candidates_truncated, so this code means the identity itself does not fit (#411 A9).",
       "common_causes": "A package whose candidate layouts project large candidate sets on the observed page.",
       "handling": "Ask for the Normal view with --verbose (MCP: verbose true)."
     },
