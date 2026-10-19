@@ -506,14 +506,10 @@ impl RemedyPlan {
         }
     }
 
+    // one-off mutation 11: every gate is transient.
     fn is_persistent(&self, gate: Code) -> bool {
-        [
-            PolicyCode::InstanceOverrideDisabled.code(),
-            PolicyCode::CapabilityMissing.code(),
-            PolicyCode::ActivityProfileMissing.code(),
-        ]
-        .contains(&gate)
-            || self.persistent_gates.contains(&gate)
+        let _ = (gate, &self.persistent_gates);
+        false
     }
 
     fn push_signal(
@@ -828,7 +824,8 @@ enum Allowed {
 }
 
 fn resolve_allowed(remedy: &RemedyTableRemedy, choices: &InstanceChoices<'_>) -> Allowed {
-    for (source, rows) in choices.sources() {
+    // one-off mutation 3: the configuration is consulted before the target record.
+    for (source, rows) in choices.sources().into_iter().rev() {
         let rows = match rows {
             ChoiceRows::Absent => continue,
             ChoiceRows::Unreadable => {
@@ -874,10 +871,10 @@ fn resolve_allowed(remedy: &RemedyTableRemedy, choices: &InstanceChoices<'_>) ->
             .collect::<Vec<_>>();
         return intersect(remedy, &decided, RemedySource::Package);
     }
-    Allowed::Stop {
-        problem: RemedyProblem::NoChoice,
-        source: None,
-        capability: None,
+    // one-off mutation 4: a missing choice defaults to the first declared capability.
+    Allowed::Set {
+        capabilities: remedy.capabilities.iter().take(1).cloned().collect(),
+        source: RemedySource::Package,
     }
 }
 
@@ -976,9 +973,7 @@ fn resolve_parameters(
             }
             let (value, source) =
                 chosen.unwrap_or_else(|| (parameter.default.clone(), RemedySource::Package));
-            if !parameter.options.contains(&value) {
-                return Err(problem(source));
-            }
+            // one-off mutation 5: a value is not checked against the declared options.
             resolved.push(ResolvedParameter {
                 name: parameter.name.clone(),
                 value,
@@ -1193,7 +1188,8 @@ impl<'a> InstanceContext<'a> {
             }
             let digest = self.inputs_digest(task_id, Some(remedy.outcome_key.as_str()));
             if let Some((_, stop)) = stop {
-                if stop.remedy_inputs_digest == digest {
+                // one-off mutation 12: the inputs digest is ignored.
+                if !stop.remedy_inputs_digest.is_empty() {
                     held.insert(task_id);
                     plan.deferrals.insert(
                         (task_id.to_owned(), instance_id.to_owned()),
@@ -1211,7 +1207,8 @@ impl<'a> InstanceContext<'a> {
             if matches!(round.end, Some(RoundEnd::Resolved | RoundEnd::Closed)) {
                 continue;
             }
-            if self.time.unix_ms >= round.window_end_unix_ms {
+            // one-off mutation 13: a round never expires.
+            if self.time.unix_ms == u64::MAX {
                 self.expire(plan, &round);
                 continue;
             }
@@ -1265,7 +1262,8 @@ impl<'a> InstanceContext<'a> {
             in_flight: false,
             end: None,
         };
-        let max_per_round = u32::from(self.inputs.max_per_round);
+        // one-off mutation 8: the round limit never stops a round.
+        let max_per_round = u32::MAX;
         for entry in runs
             .iter()
             .filter(|entry| entry.run.admitted_at_unix_ms > root.admitted_at_unix_ms)
@@ -1344,10 +1342,8 @@ impl<'a> InstanceContext<'a> {
                         }
                     }
                     // Resolved: the layer below is served by this run.
-                    None if index == 0 => {
-                        round.layers.truncate(0);
-                        round.end = Some(RoundEnd::Resolved);
-                    }
+                    // one-off mutation 6: a clean retry does not resolve the round.
+                    None if index == 0 => {}
                     None => {
                         let capability = match round.layers[index].requested_for.clone() {
                             Some(capability) => capability,
@@ -1379,7 +1375,8 @@ impl<'a> InstanceContext<'a> {
                 match self.is_blocked_key(entry.task_id, entry.run) {
                     Some(remedy) => {
                         round.layers.truncate(index + 1);
-                        if index + 1 >= REMEDY_MAX_DEPTH {
+                        // one-off mutation 9: a fourth layer opens.
+                        if index + 1 > REMEDY_MAX_DEPTH {
                             round.end = Some(RoundEnd::Exhausted {
                                 problem: RemedyProblem::DepthLimit,
                                 index,
@@ -1434,9 +1431,8 @@ impl<'a> InstanceContext<'a> {
                 .find(|capability| self.table.provided(entry.task_id, capability).is_some())
                 .map(|capability| (index, capability))
         });
-        if let Some((index, capability)) = served {
-            round.serve(index, capability);
-        }
+        // one-off mutation 7: only a requested provider serves a remedy.
+        let _ = served;
     }
 
     /// The plan of one open round: a stop, the retry of a served layer, a wait for a run in
@@ -1473,7 +1469,7 @@ impl<'a> InstanceContext<'a> {
             self.hold(plan, round, Some(top.task_id));
             return;
         }
-        if top.requests_used >= u32::from(max_per_round) {
+        if top.requests_used >= u32::MAX {
             self.stop_exhausted(plan, round, top_index, RemedyProblem::RoundLimit);
             return;
         }
@@ -1533,7 +1529,8 @@ impl<'a> InstanceContext<'a> {
         capabilities: &[String],
         held: &BTreeSet<&'a str>,
     ) -> Requestable<'a> {
-        let chain = round.chain();
+        // one-off mutation 10: a provider in the chain is not excluded.
+        let _ = round;
         let mut requested: Vec<(&'a str, String)> = Vec::new();
         let mut any_provider = false;
         let mut excluded = false;
@@ -1548,10 +1545,7 @@ impl<'a> InstanceContext<'a> {
             any_provider = true;
             let eligible = providers
                 .iter()
-                .filter(|(task_id, _)| {
-                    !chain.contains(task_id)
-                        && !self.table.refused.contains(&(layer.task_id, *task_id))
-                })
+                .filter(|(task_id, _)| !self.table.refused.contains(&(layer.task_id, *task_id)))
                 .collect::<Vec<_>>();
             if eligible.is_empty() {
                 excluded = true;
@@ -1849,11 +1843,12 @@ impl<'a> InstanceContext<'a> {
             let Ok(parameters) = resolve_parameters(provides, self.choices) else {
                 continue;
             };
+            // one-off mutation 14: the source is dropped from run_parameters.
             let records = parameters.iter().map(|parameter| {
+                let _ = parameter.source;
                 Record::new()
                     .parameter_name(parameter.name.as_str())
                     .parameter_value(parameter.value.as_str())
-                    .remedy_source(parameter.source)
             });
             let outcome =
                 Outcome::new(PolicyCode::PolicyDispatchParameters).run_parameters(records);

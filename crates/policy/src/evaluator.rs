@@ -1192,14 +1192,31 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // Workflow #411 B15 R2: a remedy request or retry ranks among the promoted candidates.
     if let Some(plan) = remedies {
         for candidate in &mut candidates {
+            // one-off mutation 2: the plan's requests and retries are never promoted.
             if plan
                 .trigger_override(&candidate.task_id, &candidate.instance_id)
-                .is_some_and(crate::RemedyOverride::promoted)
+                .is_some_and(|_| false)
             {
                 candidate.promoted = true;
                 if let Some(record) = work[candidate.work_index].record.as_mut() {
                     record.promoted = true;
                 }
+            }
+            // one-off mutation 15: requested providers are ordered by task id, not by total.
+            if plan
+                .trigger_override(&candidate.task_id, &candidate.instance_id)
+                .is_some()
+            {
+                candidate.rank.total_score = 0;
+                candidate.tie_breaker = 0;
+            }
+        }
+    } else if refresh_inputs.is_some() {
+        // one-off mutation 1: the old entry applies the remedy promotion without a plan.
+        for candidate in &mut candidates {
+            candidate.promoted = true;
+            if let Some(record) = work[candidate.work_index].record.as_mut() {
+                record.promoted = true;
             }
         }
     }
