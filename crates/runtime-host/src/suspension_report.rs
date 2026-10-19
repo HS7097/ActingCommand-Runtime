@@ -1223,7 +1223,7 @@ fn remedy_stop(outcome: &Outcome) -> Option<(&str, &str, &str)> {
     };
     let text = |key: &str| values.get(key).and_then(Value::as_str);
     if !values.keys().all(|key| held(key.as_str()))
-        || REMEDY_STOP_TEXT.iter().any(|key| text(*key).is_none())
+        || REMEDY_STOP_TEXT.iter().any(|key| text(key).is_none())
         || REMEDY_STOP_OPTIONAL_TEXT
             .iter()
             .any(|key| values.get(*key).is_some_and(|value| !value.is_string()))
