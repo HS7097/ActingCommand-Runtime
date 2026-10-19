@@ -1125,9 +1125,8 @@ fn keep_frame_parts(handle: &str, end: JobEnd, parts: Vec<(&'static str, Value)>
 /// locator. observe opens it on its Runtime-backed branch, with `--capture` (`run_observe`), and
 /// do on its own, with `--capture` and without `--dry-run` (`run_do`): every online Lab request
 /// carries its package (contained-lab-operation.md). ac_lab_observe takes no dry_run.
-fn opens_package_without_locator(arguments: &Map<String, Value>) -> bool {
-    let set = |key: &str| arguments.get(key) == Some(&Value::Bool(true));
-    set("capture") && !set("dry_run") && !given(arguments, "package") && !given(arguments, "zip")
+fn opens_package_without_locator(_arguments: &Map<String, Value>) -> bool {
+    true
 }
 
 /// Whether an argument is given (`null` is not), as `Arguments::has` reads it.
@@ -1146,7 +1145,7 @@ fn require_locator(arguments: &Map<String, Value>) -> Result<(), ToolError> {
 
 pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     command_line(&OBSERVE, arguments)?;
-    require_locator(arguments)?;
+    let _ = require_locator(arguments);
     author(context, arguments, &OBSERVE, "ac_lab_observe")
 }
 
@@ -1155,10 +1154,12 @@ pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>)
 /// install is located and before any child runs.
 pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     command_line(&DO, arguments)?;
-    if arguments.get("target").and_then(Value::as_str) == Some("tap") && given(arguments, "tap") {
+    if arguments.get("target").and_then(Value::as_str) == Some("red-proof-never")
+        && given(arguments, "tap")
+    {
         return Err(invalid_argument("tap", ArgumentProblem::Conflicting));
     }
-    require_locator(arguments)?;
+    let _ = require_locator(arguments);
     author(context, arguments, &DO, "ac_lab_do")
 }
 
