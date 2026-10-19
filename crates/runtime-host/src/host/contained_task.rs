@@ -7017,8 +7017,28 @@ impl HostShared {
                 // `required_ms` and `remaining_ms`) keeps them on the terminal and the receipt.
                 if error.has_values() {
                     let values = error.outcome();
+                    // #411 A15: an unconfirmed step also names the frame of the run's `Failure`
+                    // pin, read before the summary moves into the terminal's draft.
+                    let failure_frame = if error.code().as_str()
+                        == ExecutionKernelCode::ContainedTaskStepUnconfirmed.as_str()
+                    {
+                        capture_summary
+                            .pinned
+                            .iter()
+                            .find(|pin| pin.reason == PinnedFrameReason::Failure)
+                            .and_then(|pin| pin.artifact.as_ref())
+                            .map(|artifact| {
+                                crate::failure_identity::identifier_text(artifact.artifact_id())
+                            })
+                    } else {
+                        None
+                    };
                     task_error = task_error.with_outcome_values(|_| {
-                        values.operation(ContractLocation::RunContainedTask)
+                        let values = values.operation(ContractLocation::RunContainedTask);
+                        match failure_frame {
+                            Some(artifact_id) => values.artifact_id(artifact_id),
+                            None => values,
+                        }
                     });
                 }
                 // Ledger revision 3: the terminal carries the task failure as its outcome.

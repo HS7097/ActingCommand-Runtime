@@ -159,6 +159,9 @@ mod tests;
 // Test plan v2.2 E-3 G3 (exec keys 5 and 21): the screen disagrees with the pack.
 #[cfg(test)]
 mod gate_382_e3;
+// #411 A15 (exec key 88): an unconfirmed step names the page of its last frame.
+#[cfg(test)]
+mod gate_rc2_a15;
 pub use linear::linear_main_interface;
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
@@ -4598,53 +4601,54 @@ impl PreparedContainedTask {
                             observation_timing,
                             pacing,
                         )?;
-                        let (failed_observation, hit_error_page, timing_failure) = match resolution
-                        {
-                            PostconditionResolution::Reached(reached) => {
-                                observation = Some(reached);
-                                // Workflow #308 SEL-L4b (S0 §1.3): the destination reads the
-                                // business ID its `choice_of` step chose.
-                                self.expect_identity(
-                                    runtime,
-                                    operation,
-                                    (step_index, &operation_id),
-                                    &mut observation,
-                                    &chosen_identities,
-                                    observation_timing,
-                                )?;
-                                if let Some(reason) = self.complete_successful_step(
-                                    runtime,
-                                    ocr_collector,
-                                    &mut machine,
-                                    &mut stability_tracker,
-                                    step_index,
-                                    &operation_id,
-                                    observation.as_ref().ok_or_else(|| {
-                                        ContainedTaskError::new(
-                                            SharedCode::ContainedTaskPageUnknown.code(),
-                                        )
-                                    })?,
-                                )? {
-                                    return self.finish_stability_termination(
+                        let (failed_observation, last_frame_page, hit_error_page, timing_failure) =
+                            match resolution {
+                                PostconditionResolution::Reached(reached) => {
+                                    observation = Some(reached);
+                                    // Workflow #308 SEL-L4b (S0 §1.3): the destination reads the
+                                    // business ID its `choice_of` step chose.
+                                    self.expect_identity(
+                                        runtime,
+                                        operation,
+                                        (step_index, &operation_id),
+                                        &mut observation,
+                                        &chosen_identities,
+                                        observation_timing,
+                                    )?;
+                                    if let Some(reason) = self.complete_successful_step(
                                         runtime,
                                         ocr_collector,
-                                        &machine,
+                                        &mut machine,
+                                        &mut stability_tracker,
+                                        step_index,
+                                        &operation_id,
                                         observation.as_ref().ok_or_else(|| {
                                             ContainedTaskError::new(
                                                 SharedCode::ContainedTaskPageUnknown.code(),
                                             )
                                         })?,
-                                        reason,
-                                    );
+                                    )? {
+                                        return self.finish_stability_termination(
+                                            runtime,
+                                            ocr_collector,
+                                            &machine,
+                                            observation.as_ref().ok_or_else(|| {
+                                                ContainedTaskError::new(
+                                                    SharedCode::ContainedTaskPageUnknown.code(),
+                                                )
+                                            })?,
+                                            reason,
+                                        );
+                                    }
+                                    break;
                                 }
-                                break;
-                            }
-                            PostconditionResolution::Failed {
-                                observation,
-                                hit_error_page,
-                                timing_failure,
-                            } => (observation, hit_error_page, timing_failure),
-                        };
+                                PostconditionResolution::Failed {
+                                    observation,
+                                    last_frame_page,
+                                    hit_error_page,
+                                    timing_failure,
+                                } => (observation, last_frame_page, hit_error_page, timing_failure),
+                            };
                         let after_page = failed_observation
                             .as_ref()
                             .map(|observation| observation.page_label.clone());
@@ -4816,6 +4820,7 @@ impl PreparedContainedTask {
                                         observation: None,
                                         hit_error_page: false,
                                         timing_failure,
+                                        ..
                                     } => {
                                         Self::finish_effect_attempt(
                                             runtime,
@@ -4858,20 +4863,37 @@ impl PreparedContainedTask {
                                     failed_observation.as_ref(),
                                 )?;
                                 // Workflow #371-2: the code says which confirmation failed.
+                                let detail = confirmation_failure_detail(
+                                    &operation_id,
+                                    attempt,
+                                    failed_observation.as_ref(),
+                                    hit_error_page,
+                                    timing_failure.as_ref(),
+                                );
+                                if hit_error_page {
+                                    return Err(ContainedTaskError::with_detail(
+                                        ERROR_PAGE_REACHED,
+                                        detail,
+                                    )
+                                    .with_timing(timing_failure)
+                                    .into());
+                                }
+                                // #411 A15: an unconfirmed step names its operation, its
+                                // destination pages, its attempts and the page the last frame of
+                                // its wait matched (none when that frame matched no page); the
+                                // detail keeps `after_page`, which the failure identity reads.
+                                let mut values = Outcome::new(STEP_UNCONFIRMED)
+                                    .pack_operation_id(operation_id.as_str())
+                                    .page_ids(destination_pages.iter().cloned())
+                                    .attempts(attempt);
+                                if let Some(page) = last_frame_page {
+                                    values = values.page_id(page);
+                                }
                                 return Err(ContainedTaskError::with_detail(
-                                    if hit_error_page {
-                                        ERROR_PAGE_REACHED
-                                    } else {
-                                        STEP_UNCONFIRMED
-                                    },
-                                    confirmation_failure_detail(
-                                        &operation_id,
-                                        attempt,
-                                        failed_observation.as_ref(),
-                                        hit_error_page,
-                                        timing_failure.as_ref(),
-                                    ),
+                                    STEP_UNCONFIRMED,
+                                    detail,
                                 )
+                                .with_values(values)
                                 .with_timing(timing_failure)
                                 .into());
                             }
@@ -6172,6 +6194,9 @@ impl PreparedContainedTask {
         let mut started = runtime.monotonic_now();
         let mut window_started = runtime.observation_now();
         let mut last_observation = None;
+        // #411 A15: the page the last frame of the wait matched, none when it matched no page
+        // (`last_observation` keeps the last frame that matched one).
+        let mut last_frame_page = None;
         // Whether the window has seen a frame that did not confirm the step.
         let mut missed = false;
         loop {
@@ -6260,16 +6285,21 @@ impl PreparedContainedTask {
                     }
                     if hit_error_page {
                         return Ok(PostconditionResolution::Failed {
+                            last_frame_page: Some(observation.page_label.clone()),
                             observation: Some(observation),
                             hit_error_page: true,
                             timing_failure: None,
                         });
                     }
                     let paused = self.offer_shared_interrupt(runtime, &observation.scene)?;
+                    last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
                     paused
                 }
-                Err(scene) => self.offer_shared_interrupt(runtime, &scene)?,
+                Err(scene) => {
+                    last_frame_page = None;
+                    self.offer_shared_interrupt(runtime, &scene)?
+                }
             };
             missed = true;
             if let Some(paused) = paused {
@@ -6301,6 +6331,7 @@ impl PreparedContainedTask {
         }
         Ok(PostconditionResolution::Failed {
             observation: last_observation,
+            last_frame_page,
             hit_error_page: false,
             timing_failure: Some(TaskTimingFailure {
                 scope: TaskTimingScope::Postcondition,
@@ -6408,6 +6439,9 @@ enum PostconditionResolution {
     Reached(PageObservation),
     Failed {
         observation: Option<PageObservation>,
+        /// #411 A15: the page the last frame of the wait matched; none when that frame matched no
+        /// page of the package (`observation` is the last frame that matched one).
+        last_frame_page: Option<String>,
         hit_error_page: bool,
         timing_failure: Option<TaskTimingFailure>,
     },

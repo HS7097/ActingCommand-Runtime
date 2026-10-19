@@ -650,6 +650,9 @@ package's failure is recorded as before, except a failed step confirmation (Work
 three get the same `runtime.failed` record, with the detail `operation=<id> attempts=<n>
 after_page=<page|<unrecognized>> hit_error_page=<bool>`; for the two new codes it is followed,
 on a confirmation timeout, by ` confirm_elapsed_ms=<e> confirm_limit_ms=<l>`.
+`contained_task_step_unconfirmed` also carries `pack_operation_id`, `page_ids`, `attempts`,
+`page_id` (the last frame's page, absent when it matched none) and `artifact_id` (the run's
+failure pin) as outcome values, on the terminal and the receipt (#411 A15).
 `contained_task_requires_scheduler` remains for a run the state machine pauses or hands to a
 successor and for the stability step limit. None of these codes starts the stuck-recovery
 ladder.

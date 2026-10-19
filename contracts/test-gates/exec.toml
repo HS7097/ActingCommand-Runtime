@@ -1402,6 +1402,18 @@ tests = [
 ]
 incident = ["#411 A12"]
 
+# #411 A15 (v0.12.1-rc.2; no register section, no persisted structure change): a page-graph step whose postcondition is not confirmed and whose operation decides to fail ends with contained_task_step_unconfirmed carrying pack_operation_id, page_ids (its destination pages), attempts and page_id, the page the last frame of the wait matched: the departure page after an ignored tap, the other page after a move elsewhere, no page_id when the last frame matched no page (the developer detail keeps after_page, the last frame that matched one); an observation window that ends without its destination names its last frame's page the same way
+[[gate]]
+key = "88"
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_an_ignored_tap_names_the_departure_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_a_move_to_another_page_names_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_an_unrecognised_last_frame_names_no_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_rc2_a15::a15_a_window_end_without_its_destination_names_the_last_page",
+]
+incident = ["#411 A15"]
+
 # Workflow #411 A17 (v0.12.1-rc.2; no register section; related: exec 83, host 103): the admission refusal contained_task_entry_pages_invalid carries its required entry_problem as a value for every entry problem and, for phase_start_missing and phase_start_ambiguous, the entry page as admission resolved it (page_id); the developer detail names the page and, for an ambiguous start, the stages that start it in declaration order; the source build gives the same detail
 [[gate]]
 key = "89"
