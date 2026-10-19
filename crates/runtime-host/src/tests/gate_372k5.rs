@@ -30,6 +30,17 @@ const SECOND_APPROVAL: &str = "approval:fixture-k5";
 // The grace of the one `missed` rule of these scenarios: two hours.
 const GRACE_MS: u64 = 7_200_000;
 
+// #411 A24 (register §1.139): `hour:minute` UTC on scenario day `day`, 1 364 whole weeks after
+// `at`'s (day 0 is 2050-01-05, a Wednesday as 2023-11-15 is). A host restart writes the ledger's
+// own prior-epoch close records, stamped with the machine clock, not the manual Runtime clock,
+// and `actingd suspended` judges its clock slots against the ledger's latest time, its maximum
+// timestamp (`contracts/ledger-observer.md`). A scenario that restarts and reads that report
+// therefore runs after the machine clock, as a Runtime's own clock does, and before the fixture
+// catalog's 2100 horizon.
+const fn after_the_machine_clock(day: u64, hour: u64, minute: u64) -> u64 {
+    at(day, hour, minute) + 1_364 * 7 * 24 * 3_600_000
+}
+
 // A UTC `daily` clock at `minutes`, with `missed: skip_after` of `grace_ms` when given.
 fn daily(minutes: &[u16], grace_ms: Option<u64>) -> Value {
     let mut clock = json!({
@@ -586,6 +597,8 @@ fn k5_t3_a_renamed_producer_s_outcome_is_read_under_the_task_that_continues_it()
 // of `fixture.b` is recorded, as the pair has its group's history.
 #[test]
 fn k5_t4_clock_slot_records_of_a_continued_id_count_for_the_task() {
+    // #411 A24: it restarts and reads `actingd suspended`.
+    let at = after_the_machine_clock;
     let first = generation(1, &[task(TASK_A, daily(&[390], None), 1)], &[]);
     let mut slots = Slots::start(&first, at(0, 23, 40));
     slots.evaluate(at(0, 23, 40));
@@ -736,6 +749,8 @@ fn k5_t5_a_merged_task_sums_its_budgets_and_reads_the_later_run() {
 // `task_not_in_catalog`.
 #[test]
 fn k5_t6_a_removed_task_keeps_its_records_and_an_added_task_starts_fresh() {
+    // #411 A24: it restarts and reads `actingd suspended`.
+    let at = after_the_machine_clock;
     let first = generation(1, &[task(TASK_A, daily(&[390], None), 2)], &[]);
     let mut slots = Slots::start(&first, at(0, 23, 40));
     slots.evaluate(at(0, 23, 40));
