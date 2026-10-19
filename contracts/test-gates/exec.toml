@@ -1464,3 +1464,16 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::a20_the_source_build_names_the_stage_page_and_operation_of_an_unreachable_route",
 ]
 incident = ["#411 A20"]
+
+# #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: apps 76, exec 93): online do --capture (not dry-run) given --no-wait, --recovery-timeout-ms, --recovery-poll-ms, --priority, --lease-id, --destructive or --allow-destructive refuses with validation_failed (exit 2) before any Runtime connection, its details naming each option (argument, argument_problem, and arguments for all of them); the options no path of a verb reads are gone from its declaration in schema and capabilities (do: --no-wait, --recovery-*, --priority, --lease-id; ensure: --no-wait, --recovery-*, --lease-id; observe: --require-fresh) and refused on every path of it as unknown; every path of observe, do, ensure and wait (scene; capture; capture with dry-run for do and ensure) refuses an option it does not read, unknown when no path of the verb reads it and conflicting when another path does, never accepting and ignoring it
+[[gate]]
+key = "96"
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l1::l1_online_do_refuses_each_option_it_does_not_read_before_any_runtime_connection",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l1::l1_removed_options_are_refused_on_every_path_of_their_verb",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l1::l1_schema_and_capabilities_no_longer_declare_the_removed_options",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l1::l1_every_path_refuses_an_option_no_path_of_its_verb_reads",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_l1::l1_a_path_refuses_an_option_only_another_path_of_its_verb_reads",
+]
+incident = ["#411 Lab L1"]

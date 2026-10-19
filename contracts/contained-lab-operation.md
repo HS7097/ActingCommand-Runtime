@@ -22,6 +22,14 @@ actinglab do --tap <x,y> --capture --zip <package>
 actinglab do --swipe <x1,y1,x2,y2,duration-ms> --capture --zip <package>
 ```
 
+Online `do --capture` reads only these forms' options (`--package` in place of `--zip`), the
+arrival condition above, the hints below, `--record` / `--tap-rect`, `--preview`, `--fields` and
+`--pretty`, besides the global options. Any other option, including
+`--destructive` and `--allow-destructive` (read only by offline and `--dry-run` planning), is
+refused with `validation_failed` (exit 2) before any Runtime connection; its details name each
+refused option (`argument`, `argument_problem`: `conflicting` when another path of `do` reads it,
+otherwise `unknown`), and nothing is accepted and ignored (#411 Lab L1).
+
 `--instance` and the existing profile selection still choose the Runtime
 instance. `--projection-sequence` and `--projection-hash` supply optional source
 hints. Element IDs are the complete `observation.elements[].id` values returned
