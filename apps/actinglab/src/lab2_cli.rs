@@ -1094,7 +1094,8 @@ struct Lab2Path {
 }
 
 /// The flags every path of the four verbs reads: the instance and the answer's projection.
-const LAB2_EVERY_PATH_READS: [&str; 4] = ["--instance", "--fields", "--pretty", "--verbose"];
+const LAB2_EVERY_PATH_READS: [&str; 5] =
+    ["--instance", "--fields", "--pretty", "--verbose", "--pages"];
 
 /// What is wrong with a refused flag, spelled as the `argument_problem` values of MCP's
 /// `arguments_invalid`.
@@ -1118,6 +1119,7 @@ impl UnreadFlag {
 const OBSERVE_SCENE: Lab2Path = Lab2Path {
     name: "observe --scene",
     reads: &[
+        "--require-fresh",
         "--capture",
         "--scene",
         "--package",
@@ -1195,6 +1197,8 @@ const DO_CAPTURE: Lab2Path = Lab2Path {
         "--record",
         "--tap-rect",
         "--preview",
+        "--allow-destructive",
+        "--destructive",
     ],
 };
 const DO_PATHS: [&Lab2Path; 3] = [&DO_SCENE, &DO_CAPTURE_DRY_RUN, &DO_CAPTURE];
@@ -1202,6 +1206,7 @@ const DO_PATHS: [&Lab2Path; 3] = [&DO_SCENE, &DO_CAPTURE_DRY_RUN, &DO_CAPTURE];
 const ENSURE_SCENE: Lab2Path = Lab2Path {
     name: "ensure --scene",
     reads: &[
+        "--step-timeout-ms",
         "--capture",
         "--scene",
         "--package",
@@ -1781,6 +1786,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
             optional: &[
                 "--targets <id,id>",
                 "--with-frame <path>",
+                "--require-fresh",
                 "--fields <field,field>",
                 "--verbose",
                 "--pretty",

@@ -248,6 +248,12 @@ static OBSERVE: LabCommand = LabCommand {
             Kind::Text,
             "--with-frame: write the observed frame to this PNG path.",
         ),
+        flag(
+            "require_fresh",
+            "--require-fresh",
+            Kind::Switch,
+            "--require-fresh.",
+        ),
         OBSERVE_FIELDS,
         flag("verbose", "--verbose", Kind::Switch, "--verbose."),
         flag("pretty", "--pretty", Kind::Switch, "--pretty."),
@@ -325,6 +331,12 @@ static DO: LabCommand = LabCommand {
             "--destructive: offline (scene) or with dry_run only; with capture and without dry_run it is refused.",
         ),
         DO_FIELDS,
+        flag(
+            "priority",
+            "--priority",
+            Kind::Text,
+            "--priority: normal or high.",
+        ),
         flag(
             "record",
             "--record",
@@ -1132,7 +1144,7 @@ pub(super) fn observe(context: &ToolContext<'_>, arguments: &Map<String, Value>)
 /// child runs: `arguments_invalid {argument, argument_problem: conflicting}` naming the first set.
 fn refuse_destructive_guard_on_capture(arguments: &Map<String, Value>) -> Result<(), ToolError> {
     let set = |key: &str| arguments.get(key) == Some(&Value::Bool(true));
-    if !set("capture") || set("dry_run") {
+    if !set("capture") || !set("dry_run") {
         return Ok(());
     }
     match DESTRUCTIVE_GUARD.into_iter().find(|&key| set(key)) {
