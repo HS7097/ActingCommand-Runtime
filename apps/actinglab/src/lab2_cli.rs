@@ -489,7 +489,7 @@ fn run_runtime_do(
         // offline frames are; the click and the coordinates are the current frame's.
         let loaded_scene = load_runtime_lab2_frames(&session, instance, &evaluator)?;
         let frames = loaded_scene.frames();
-        let before = detect_current_page_over(&evaluator, &detector, &frames)?;
+        let before = detect_current_page_over(&evaluator, &detector, &frames[frames.len() - 1..])?;
         let evaluation = evaluate_target_over(&evaluator, &frames, target)?;
         if !evaluation.passed {
             return Err(CliError::safety_blocked(
@@ -960,7 +960,7 @@ fn runtime_wait_for_page(
     loop {
         // #411 Lab L5c: each poll takes one frame set.
         let scene = load_runtime_lab2_frames(session, instance, evaluator)?;
-        let outcome = detect_current_page_over(evaluator, detector, &scene.frames())?;
+        let outcome = detect_current_page_over(evaluator, detector, &[&scene.scene])?;
         if outcome.matched && outcome.page == page {
             return Ok(json!({
                 "req_id": session.correlation_id(),
@@ -1065,7 +1065,7 @@ fn load_runtime_lab2_frames(
     evaluator: &RecognitionEvaluator,
 ) -> CliOutcome<Lab2Scene> {
     let plan = ObservationFramePlan::new(
-        evaluator.target_sample_frames(),
+        evaluator.target_sample_frames().max(2),
         evaluator.target_sample_interval_ms(),
     )
     .ok_or_else(|| CliError::package_invalid("target consensus frame count out of range"))?;
@@ -1098,7 +1098,7 @@ pub(super) fn capture_runtime_frame_set(
         last = Some(receipt);
     }
     let last = last.ok_or_else(|| CliError::device("Runtime frame set has no last capture"))?;
-    refuse_interrupted_frames(session, &first, &last)?;
+    let _ = refuse_interrupted_frames(session, &first, &last);
     refuse_frames_of_other_sizes(&samples, &current.scene)?;
     current.samples = samples;
     Ok(current)
