@@ -962,7 +962,6 @@ pub(crate) fn remedy_choices(
     let mut seen = BTreeSet::new();
     let mut allowed = BTreeSet::new();
     let mut declined = BTreeSet::new();
-    let mut parameters = BTreeSet::new();
     for (index, item) in items.iter().enumerate() {
         let row = choice_row(key, index, item)?;
         let conflict = match &row {
@@ -974,13 +973,7 @@ pub(crate) fn remedy_choices(
                 declined.insert(need.clone());
                 false
             }
-            // Two values for one parameter: nothing says which wins. (The same value again is a
-            // row twice.)
-            RemedyChoiceRow::Parameter {
-                capability,
-                parameter,
-                ..
-            } => !parameters.insert((capability.clone(), parameter.clone())),
+            RemedyChoiceRow::Parameter { .. } => false,
         };
         if conflict || !seen.insert(row.clone()) {
             return Err(choice_refused(
