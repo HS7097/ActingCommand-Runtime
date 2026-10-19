@@ -14380,9 +14380,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A device self-check failed: capture backend open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Opening an instance's capture backend failed, in a device self-check, a preparation or a contained task's capture, and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed): the Runtime and the other instances go on, the instance's capture self-check reads failed and its routine work waits for a preparation that passes.",
+      "common_causes": "The emulator's window or renderer is closed or not ready while adb still answers; the emulator stopped or is restarting; the binding names a display or instance number the capture backend cannot reach; the backend's vendor library could not be loaded.",
+      "handling": "A scheduled run's failure starts the configured recovery ladder (items preparation_backend and task_capture_backend), which restarts the emulator while the capture stays unavailable. Otherwise restart the emulator and run a self-check."
     },
     "capture_backend_operation_failed": {
       "category": "error",
@@ -14400,9 +14400,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): capture backend operation failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A capture on an open capture backend session failed. In a contained task it fails only that run (nonfatal, runtime_code capture_failed) and the session is closed, so the next capture opens a new one; the Runtime and the other instances go on.",
+      "common_causes": "The emulator stopped, restarted or lost its renderer during the run; a session kept idle from an earlier run went stale.",
+      "handling": "A scheduled run's failure starts the configured recovery ladder (item task_capture_backend); a direct run can be repeated once the emulator answers again."
     },
     "capture_check_failed": {
       "category": "error",
@@ -14463,9 +14463,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): capture frame invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The capture backend delivered a frame that is not a usable image of the instance's display, so the frame is not used. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on.",
+      "common_causes": "The emulator's display is changing (a restart, a resolution or orientation change); the renderer delivered an incomplete buffer.",
+      "handling": "A scheduled run's failure starts the configured recovery ladder (item task_capture_backend); otherwise wait until the display settles and repeat the run."
     },
     "capture_frame_stale": {
       "category": "error",
@@ -40382,9 +40382,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): lab arrival timeout.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A Lab action with an arrival condition (online `do --capture --after-page`) performed its input, but no frame sampled after it matched the requested page before the condition's timeout or the 20-frame sample budget ran out. The input's effect stands. actinglab answers it with this code (exit 3); its details are the operation's answer, with the arrival's status, elapsed time and samples last.",
+      "common_causes": "The screen had not reached the page within the timeout (a slow transition, a loading screen, an animation); the action led to another page or to a pop-up the package does not declare; the requested page's rules do not match the screen as it looks.",
+      "handling": "Read the details: after_attachment shows the last sampled frame and arrival the samples. Observe the current page before acting again: the action was performed, so do not repeat it blindly. Raise the timeout (at most 10000 ms) for a slow transition, or correct the page's rules when the screen is that page."
     },
     "lab_command_option_disabled": {
       "category": "error",
@@ -48429,9 +48429,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A device self-check failed: paired backend open failed.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on.",
+      "common_causes": "The emulator's renderer is closed, not ready or restarting while adb still answers; the binding names a display or instance number the paired session cannot reach.",
+      "handling": "As for capture_backend_open_failed: the configured recovery ladder restarts the emulator; otherwise restart it and run a self-check."
     },
     "panic_caught": {
       "category": "warning",
@@ -77255,6 +77255,9 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
+        "json_pointer": "optional",
+        "page_id": "optional",
+        "pack_operation_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -77264,9 +77267,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task flow declaration was refused: task phases invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A phased route's stage declarations are refused (source parsing, build or Runtime admission; contracts/README.md, phases): no stage or more than 32; a stage id that is blank, too long or repeated; a stage that lists no operation, more operations than the task has, one twice, or one the task does not have; target pages that are empty, more than 256, repeated, blank or any; an entry that names no page or any; or a last stage whose target pages are not the task's. json_pointer names the refused member; page_id and pack_operation_id name the page or operation it concerns; the detail adds the stage id and the rule (phase_problem).",
+      "common_causes": "A stage that lists an operation id with a typo or one removed from the task; a page listed twice in a stage's target pages; a last stage whose target pages differ from the task's target_page.",
+      "handling": "Correct the member json_pointer names as the detail's phase_problem says; for final_targets make the last stage's target pages equal the task's target pages."
     },
     "task_phases_outcome_incomplete": {
       "category": "error",
@@ -77335,6 +77338,9 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
+        "json_pointer": "optional",
+        "page_id": "optional",
+        "pack_operation_id": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -77344,9 +77350,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A task flow declaration was refused: task phases unreachable.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A phased route's static reachability check (contracts/README.md, phases) found a page that a stage reaches and cannot leave, or a start from which no terminal is reached. json_pointer names the stage (/phases/<index>); page_id is the page on which that stage has no operation (neither from the page nor from any), or the start's entry page when no terminal is reached; pack_operation_id is the operation whose destination led to that page. The detail adds the stage id and the start (entry_page).",
+      "common_causes": "A stage whose operation leads to a page from which only another stage has an operation (for example a return stage that comes back to a page the business stage uses); a destination meant to end a stage that is not in that stage's target pages; a loop with no way to the last stage's target pages.",
+      "handling": "Add an operation from the named page to the named stage, add that page to the previous stage's target pages so the stage advances there, or change the named operation to lead to a page the stage can leave."
     },
     "task_run_reported": {
       "category": "success",
